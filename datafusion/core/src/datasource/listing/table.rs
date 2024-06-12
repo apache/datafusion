@@ -547,20 +547,49 @@ impl ListingOptions {
     }
 }
 
-/// Reads data from one or more files via an
-/// [`ObjectStore`]. For example, from
-/// local files or objects from AWS S3. Implements [`TableProvider`],
-/// a DataFusion data source.
+/// Reads data from one or more files as a single table.
 ///
-/// # Features
+/// Implements [`TableProvider`], a DataFusion data source. The files are read
+/// using an  [`ObjectStore`] instance, for example from local files or objects
+/// from AWS S3.
 ///
-/// 1. Merges schemas if the files have compatible but not identical schemas
+/// For example, given the `table1` directory (or object store prefix)
 ///
-/// 2. Hive-style partitioning support, where a path such as
-/// `/files/date=1/1/2022/data.parquet` is injected as a `date` column.
+/// ```text
+/// table1
+///  ├── file1.parquet
+///  └── file2.parquet
+/// ```
 ///
-/// 3. Projection pushdown for formats that support it such as such as
-/// Parquet
+/// A `ListingTable` would read the files `file1.parquet` and `file2.parquet` as
+/// a single table, merging the schemas if the files have compatible but not
+/// identical schemas.
+///
+/// Given the `table2` directory (or object store prefix)
+///
+/// ```text
+/// table2
+///  ├── date=2024-06-01
+///  │    ├── file3.parquet
+///  │    └── file4.parquet
+///  └── date=2024-06-02
+///       └── file5.parquet
+/// ```
+///
+/// A `ListingTable` would read the files `file3.parquet`, `file4.parquet`, and
+/// `file5.parquet` as a single table, again merging schemas if necessary.
+///
+/// Given the hive style partitioning structure (e.g,. directories named
+/// `date=2024-06-01` and `date=2026-06-02`), `ListingTable` also adds a `date`
+/// column when reading the table:
+/// * The files in `table2/date=2024-06-01` will have the value `2024-06-01`
+/// * The files in `table2/date=2024-06-02` will have the value `2024-06-02`.
+///
+/// If the query has a predicate like `WHERE date = '2024-06-01'`
+/// only the corresponding directory will be read.
+///
+/// `ListingTable` also supports filter and projection pushdown for formats that
+/// support it as such as Parquet.
 ///
 /// # Example
 ///

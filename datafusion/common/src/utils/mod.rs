@@ -354,7 +354,7 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 pub fn array_into_list_array(arr: ArrayRef) -> ListArray {
     let offsets = OffsetBuffer::from_lengths([arr.len()]);
     ListArray::new(
-        Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
         offsets,
         arr,
         None,
@@ -366,7 +366,7 @@ pub fn array_into_list_array(arr: ArrayRef) -> ListArray {
 pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
     let offsets = OffsetBuffer::from_lengths([arr.len()]);
     LargeListArray::new(
-        Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
         offsets,
         arr,
         None,
@@ -379,7 +379,7 @@ pub fn array_into_fixed_size_list_array(
 ) -> FixedSizeListArray {
     let list_size = list_size as i32;
     FixedSizeListArray::new(
-        Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
         list_size,
         arr,
         None,
@@ -420,7 +420,7 @@ pub fn arrays_into_list_array(
     let data_type = arr[0].data_type().to_owned();
     let values = arr.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
     Ok(ListArray::new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::from_lengths(lens),
         arrow::compute::concat(values.as_slice())?,
         None,
@@ -435,7 +435,7 @@ pub fn arrays_into_list_array(
 /// use datafusion_common::utils::base_type;
 /// use std::sync::Arc;
 ///
-/// let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// assert_eq!(base_type(&data_type), DataType::Int32);
 ///
 /// let data_type = DataType::Int32;
@@ -458,10 +458,10 @@ pub fn base_type(data_type: &DataType) -> DataType {
 /// use datafusion_common::utils::coerced_type_with_base_type_only;
 /// use std::sync::Arc;
 ///
-/// let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// let base_type = DataType::Float64;
 /// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type);
-/// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new("item", DataType::Float64, true))));
+/// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))));
 pub fn coerced_type_with_base_type_only(
     data_type: &DataType,
     base_type: &DataType,
