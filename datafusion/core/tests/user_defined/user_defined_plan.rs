@@ -93,6 +93,9 @@ use datafusion::{
 
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::ScalarValue;
+use datafusion_expr::Filter;
 use datafusion_optimizer::analyzer::inline_table_scan::InlineTableScan;
 use datafusion_optimizer::AnalyzerRule;
 use futures::{Stream, StreamExt};
@@ -634,5 +637,39 @@ impl AnalyzerRule for MyAnalyzerRule {
 
     fn name(&self) -> &str {
         "my_analyzer_rule"
+    }
+}
+
+impl MyAnalyzerRule {
+    fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
+        plan.transform(|plan| {
+            Ok(match plan {
+                LogicalPlan::Filter(filter) => {
+                    let predicate = Self::analyze_expr(filter.predicate.clone())?;
+                    Transformed::yes(LogicalPlan::Filter(Filter::try_new(
+                        predicate,
+                        filter.input,
+                    )?))
+                }
+                _ => Transformed::no(plan),
+            })
+        })
+        .data()
+    }
+
+    fn analyze_expr(expr: Expr) -> Result<Expr> {
+        expr.transform(|expr| {
+            // closure is invoked for all sub expressions
+            Ok(match expr {
+                Expr::Literal(ScalarValue::Int64(i)) => {
+                    // transform to UInt64
+                    Transformed::yes(Expr::Literal(ScalarValue::UInt64(
+                        i.map(|i| i as u64),
+                    )))
+                }
+                _ => Transformed::no(expr),
+            })
+        })
+        .data()
     }
 }
