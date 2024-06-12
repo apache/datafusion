@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 use arrow::{
     array::{
@@ -33,12 +32,10 @@ use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, TypeSignat
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
-use datafusion_physical_expr_common::aggregate::AggregateExpr;
 use datafusion_physical_expr_common::aggregate::tdigest::{
     DEFAULT_MAX_SIZE, TDigest, TryIntoF64,
 };
 use datafusion_physical_expr_common::aggregate::utils::down_cast_any_ref;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 make_udaf_expr_and_func!(
     ApproxPercentileCont,
@@ -91,6 +88,12 @@ impl ApproxPercentileCont {
     }
 }
 
+impl PartialEq for ApproxPercentileCont {
+    fn eq(&self, other: &ApproxPercentileCont) -> bool {
+        self.signature == other.signature
+    }
+}
+
 impl PartialEq<dyn Any> for ApproxPercentileCont {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
@@ -127,7 +130,7 @@ fn validate_input_percentile_expr(expr: &Expr) -> datafusion_common::Result<f64>
     Ok(percentile)
 }
 
-fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> datafusion_common::Result<usize> {
+fn validate_input_max_size_expr(expr: &Expr) -> datafusion_common::Result<usize> {
     let lit = get_lit_value(expr)?;
     let max_size = match &lit {
         ScalarValue::UInt8(Some(q)) => *q as usize,
@@ -244,15 +247,6 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             return plan_err!("approx_percentile_cont requires numeric input types");
         }
         Ok(arg_types[0].clone())
-    }
-}
-
-impl PartialEq<dyn Any> for ApproxPercentileCont {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.eq(x))
-            .unwrap_or(false)
     }
 }
 
