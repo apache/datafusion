@@ -1395,7 +1395,9 @@ fn from_substrait_type(
                 })?;
                 let field = Arc::new(Field::new_list_field(
                     from_substrait_type(inner_type, dfs_names, name_idx)?,
-                    is_substrait_type_nullable(inner_type)?,
+                    // We ignore Substrait's nullability here to match to_substrait_literal 
+                    // which always creates nullable lists
+                    true,
                 ));
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::List(field)),
