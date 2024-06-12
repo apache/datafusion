@@ -41,8 +41,6 @@ pub enum AggregateFunction {
     Max,
     /// Average
     Avg,
-    /// Approximate distinct function
-    ApproxDistinct,
     /// Aggregation into an array
     ArrayAgg,
     /// N'th value in a group according to some ordering
@@ -95,7 +93,6 @@ impl AggregateFunction {
             Min => "MIN",
             Max => "MAX",
             Avg => "AVG",
-            ApproxDistinct => "APPROX_DISTINCT",
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
             Correlation => "CORR",
@@ -157,7 +154,6 @@ impl FromStr for AggregateFunction {
             "regr_syy" => AggregateFunction::RegrSYY,
             "regr_sxy" => AggregateFunction::RegrSXY,
             // approximate
-            "approx_distinct" => AggregateFunction::ApproxDistinct,
             "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
             "approx_percentile_cont_with_weight" => {
                 AggregateFunction::ApproxPercentileContWithWeight
@@ -194,9 +190,7 @@ impl AggregateFunction {
             })?;
 
         match self {
-            AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
-                Ok(DataType::Int64)
-            }
+            AggregateFunction::Count => Ok(DataType::Int64),
             AggregateFunction::Max | AggregateFunction::Min => {
                 // For min and max agg function, the returned type is same as input type.
                 // The coerced_data_types is same with input_types.
@@ -256,9 +250,9 @@ impl AggregateFunction {
         // note: the physical expression must accept the type returned by this function or the execution panics.
         match self {
             AggregateFunction::Count => Signature::variadic_any(Volatility::Immutable),
-            AggregateFunction::ApproxDistinct
-            | AggregateFunction::Grouping
-            | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
+            AggregateFunction::Grouping | AggregateFunction::ArrayAgg => {
+                Signature::any(1, Volatility::Immutable)
+            }
             AggregateFunction::Min | AggregateFunction::Max => {
                 let valid = STRINGS
                     .iter()

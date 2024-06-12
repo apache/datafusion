@@ -48,7 +48,7 @@ mod tests {
 
         assert_eq!(
             format!("{:?}", plan),
-            "Projection: NOT DATA.a\
+            "Projection: NOT DATA.a AS EXPR$0\
             \n  TableScan: DATA projection=[a, b, c, d, e, f]"
         );
         Ok(())

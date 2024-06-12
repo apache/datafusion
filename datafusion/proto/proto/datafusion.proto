@@ -477,7 +477,7 @@ enum AggregateFunction {
   // SUM = 2;
   AVG = 3;
   COUNT = 4;
-  APPROX_DISTINCT = 5;
+  // APPROX_DISTINCT = 5;
   ARRAY_AGG = 6;
   // VARIANCE = 7;
   // VARIANCE_POP = 8;
@@ -994,6 +994,9 @@ message CsvScanExecNode {
   string quote = 4;
   oneof optional_escape {
     string escape = 5;
+  }
+  oneof optional_comment {
+    string comment = 6;
   }
 }
 

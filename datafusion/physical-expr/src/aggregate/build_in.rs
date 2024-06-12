@@ -33,10 +33,10 @@ use arrow::datatypes::Schema;
 use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
+use crate::aggregate::average::Avg;
 use crate::aggregate::regr::RegrType;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
-
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
 pub fn create_aggregate_expr(
@@ -99,9 +99,6 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::ApproxDistinct, _) => Arc::new(
-            expressions::ApproxDistinct::new(input_phy_exprs[0].clone(), name, data_type),
-        ),
         (AggregateFunction::ArrayAgg, false) => {
             let expr = input_phy_exprs[0].clone();
             let nullable = expr.nullable(input_schema)?;
@@ -144,11 +141,9 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::Avg, false) => Arc::new(expressions::Avg::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
+        (AggregateFunction::Avg, false) => {
+            Arc::new(Avg::new(input_phy_exprs[0].clone(), name, data_type))
+        }
         (AggregateFunction::Avg, true) => {
             return not_impl_err!("AVG(DISTINCT) aggregations are not available");
         }
@@ -320,8 +315,8 @@ mod tests {
 
     use super::*;
     use crate::expressions::{
-        try_cast, ApproxDistinct, ApproxPercentileCont, ArrayAgg, Avg, BitAnd, BitOr,
-        BitXor, BoolAnd, BoolOr, DistinctArrayAgg, Max, Min,
+        try_cast, ApproxPercentileCont, ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd,
+        BoolOr, DistinctArrayAgg, Max, Min,
     };
 
     use datafusion_common::{plan_err, DataFusionError, ScalarValue};
@@ -329,11 +324,8 @@ mod tests {
     use datafusion_expr::{type_coercion, Signature};
 
     #[test]
-    fn test_arragg_approx_expr() -> Result<()> {
-        let funcs = vec![
-            AggregateFunction::ArrayAgg,
-            AggregateFunction::ApproxDistinct,
-        ];
+    fn test_approx_expr() -> Result<()> {
+        let funcs = vec![AggregateFunction::ArrayAgg];
         let data_types = vec![
             DataType::UInt32,
             DataType::Int32,
@@ -357,14 +349,6 @@ mod tests {
                     "c1",
                 )?;
                 match fun {
-                    AggregateFunction::ApproxDistinct => {
-                        assert!(result_agg_phy_exprs.as_any().is::<ApproxDistinct>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::UInt64, false),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
                     AggregateFunction::ArrayAgg => {
                         assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
                         assert_eq!("c1", result_agg_phy_exprs.name());
@@ -388,14 +372,6 @@ mod tests {
                     "c1",
                 )?;
                 match fun {
-                    AggregateFunction::ApproxDistinct => {
-                        assert!(result_distinct.as_any().is::<ApproxDistinct>());
-                        assert_eq!("c1", result_distinct.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::UInt64, false),
-                            result_distinct.field().unwrap()
-                        );
-                    }
                     AggregateFunction::ArrayAgg => {
                         assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
                         assert_eq!("c1", result_distinct.name());

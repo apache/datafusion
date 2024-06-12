@@ -1532,6 +1532,8 @@ pub struct CsvScanExecNode {
     pub quote: ::prost::alloc::string::String,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
+    #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
+    pub optional_comment: ::core::option::Option<csv_scan_exec_node::OptionalComment>,
 }
 /// Nested message and enum types in `CsvScanExecNode`.
 pub mod csv_scan_exec_node {
@@ -1540,6 +1542,12 @@ pub mod csv_scan_exec_node {
     pub enum OptionalEscape {
         #[prost(string, tag = "5")]
         Escape(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalComment {
+        #[prost(string, tag = "6")]
+        Comment(::prost::alloc::string::String),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1923,7 +1931,7 @@ pub enum AggregateFunction {
     /// SUM = 2;
     Avg = 3,
     Count = 4,
-    ApproxDistinct = 5,
+    /// APPROX_DISTINCT = 5;
     ArrayAgg = 6,
     /// VARIANCE = 7;
     /// VARIANCE_POP = 8;
@@ -1965,7 +1973,6 @@ impl AggregateFunction {
             AggregateFunction::Max => "MAX",
             AggregateFunction::Avg => "AVG",
             AggregateFunction::Count => "COUNT",
-            AggregateFunction::ApproxDistinct => "APPROX_DISTINCT",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::Correlation => "CORRELATION",
             AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
@@ -1998,7 +2005,6 @@ impl AggregateFunction {
             "MAX" => Some(Self::Max),
             "AVG" => Some(Self::Avg),
             "COUNT" => Some(Self::Count),
-            "APPROX_DISTINCT" => Some(Self::ApproxDistinct),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "CORRELATION" => Some(Self::Correlation),
             "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),

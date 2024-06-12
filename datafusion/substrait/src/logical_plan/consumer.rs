@@ -17,21 +17,25 @@
 
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{
-    DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
+    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
 use datafusion::common::{
     not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
+use substrait::proto::expression::literal::IntervalDayToSecond;
+use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
+use url::Url;
 
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
-    aggregate_function, expr::find_df_window_func, BinaryExpr, Case, EmptyRelation, Expr,
-    LogicalPlan, Operator, ScalarUDF, Values,
+    aggregate_function, expr::find_df_window_func, Aggregate, BinaryExpr, Case,
+    EmptyRelation, Expr, ExprSchemable, LogicalPlan, Operator, Projection, ScalarUDF,
+    Values,
 };
 
 use datafusion::logical_expr::{
-    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
+    col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
     Repartition, Subquery, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion::prelude::JoinType;
@@ -45,7 +49,7 @@ use datafusion::{
 use substrait::proto::exchange_rel::ExchangeKind;
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::subquery::SubqueryType;
-use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
+use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
@@ -129,14 +133,7 @@ fn scalar_function_type_from_str(
     name: &str,
 ) -> Result<ScalarFunctionType> {
     let s = ctx.state();
-    let name = match name.rsplit_once(':') {
-        // Since 0.32.0, Substrait requires the function names to be in a compound format
-        // https://substrait.io/extensions/#function-signature-compound-names
-        // for example, `add:i8_i8`.
-        // On the consumer side, we don't really care about the signature though, just the name.
-        Some((name, _)) => name,
-        None => name,
-    };
+    let name = substrait_fun_name(name);
 
     if let Some(func) = s.scalar_functions().get(name) {
         return Ok(ScalarFunctionType::Udf(func.to_owned()));
@@ -151,6 +148,18 @@ fn scalar_function_type_from_str(
     }
 
     not_impl_err!("Unsupported function name: {name:?}")
+}
+
+pub fn substrait_fun_name(name: &str) -> &str {
+    let name = match name.rsplit_once(':') {
+        // Since 0.32.0, Substrait requires the function names to be in a compound format
+        // https://substrait.io/extensions/#function-signature-compound-names
+        // for example, `add:i8_i8`.
+        // On the consumer side, we don't really care about the signature though, just the name.
+        Some((name, _)) => name,
+        None => name,
+    };
+    name
 }
 
 fn split_eq_and_noneq_join_predicate_with_nulls_equality(
@@ -217,6 +226,7 @@ pub async fn from_substrait_plan(
             None => not_impl_err!("Cannot parse empty extension"),
         })
         .collect::<Result<HashMap<_, _>>>()?;
+
     // Parse relations
     match plan.relations.len() {
         1 => {
@@ -226,7 +236,29 @@ pub async fn from_substrait_plan(
                         Ok(from_substrait_rel(ctx, rel, &function_extension).await?)
                     },
                     plan_rel::RelType::Root(root) => {
-                        Ok(from_substrait_rel(ctx, root.input.as_ref().unwrap(), &function_extension).await?)
+                        let plan = from_substrait_rel(ctx, root.input.as_ref().unwrap(), &function_extension).await?;
+                        if root.names.is_empty() {
+                            // Backwards compatibility for plans missing names
+                            return Ok(plan);
+                        }
+                        let renamed_schema = make_renamed_schema(plan.schema(), &root.names)?;
+                        if renamed_schema.equivalent_names_and_types(plan.schema()) {
+                            // Nothing to do if the schema is already equivalent
+                            return Ok(plan);
+                        }
+
+                        match plan {
+                            // If the last node of the plan produces expressions, bake the renames into those expressions.
+                            // This isn't necessary for correctness, but helps with roundtrip tests.
+                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), renamed_schema)?, p.input)?)),
+                            LogicalPlan::Aggregate(a) => {
+                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), renamed_schema)?;
+                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, a.group_expr, new_aggr_exprs)?))
+                            },
+                            // There are probably more plans where we could bake things in, can add them later as needed.
+                            // Otherwise, add a new Project to handle the renaming.
+                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), renamed_schema)?, Arc::new(plan))?))
+                        }
                     }
                 },
                 None => plan_err!("Cannot parse plan relation: None")
@@ -237,6 +269,142 @@ pub async fn from_substrait_plan(
             plan.relations.len()
         )
     }
+}
+
+/// parse projection
+pub fn extract_projection(
+    t: LogicalPlan,
+    projection: &::core::option::Option<expression::MaskExpression>,
+) -> Result<LogicalPlan> {
+    match projection {
+        Some(MaskExpression { select, .. }) => match &select.as_ref() {
+            Some(projection) => {
+                let column_indices: Vec<usize> = projection
+                    .struct_items
+                    .iter()
+                    .map(|item| item.field as usize)
+                    .collect();
+                match t {
+                    LogicalPlan::TableScan(mut scan) => {
+                        let fields = column_indices
+                            .iter()
+                            .map(|i| scan.projected_schema.qualified_field(*i))
+                            .map(|(qualifier, field)| {
+                                (qualifier.cloned(), Arc::new(field.clone()))
+                            })
+                            .collect();
+                        scan.projection = Some(column_indices);
+                        scan.projected_schema = DFSchemaRef::new(
+                            DFSchema::new_with_metadata(fields, HashMap::new())?,
+                        );
+                        Ok(LogicalPlan::TableScan(scan))
+                    }
+                    _ => plan_err!("unexpected plan for table"),
+                }
+            }
+            _ => Ok(t),
+        },
+        _ => Ok(t),
+    }
+}
+
+fn rename_expressions(
+    exprs: impl IntoIterator<Item = Expr>,
+    input_schema: &DFSchema,
+    new_schema: DFSchemaRef,
+) -> Result<Vec<Expr>> {
+    exprs
+        .into_iter()
+        .zip(new_schema.fields())
+        .map(|(old_expr, new_field)| {
+            if &old_expr.get_type(input_schema)? == new_field.data_type() {
+                // Alias column if needed
+                old_expr.alias_if_changed(new_field.name().into())
+            } else {
+                // Use Cast to rename inner struct fields + alias column if needed
+                Expr::Cast(Cast::new(
+                    Box::new(old_expr),
+                    new_field.data_type().to_owned(),
+                ))
+                .alias_if_changed(new_field.name().into())
+            }
+        })
+        .collect()
+}
+
+fn make_renamed_schema(
+    schema: &DFSchemaRef,
+    dfs_names: &Vec<String>,
+) -> Result<DFSchemaRef> {
+    fn rename_inner_fields(
+        dtype: &DataType,
+        dfs_names: &Vec<String>,
+        name_idx: &mut usize,
+    ) -> Result<DataType> {
+        match dtype {
+            DataType::Struct(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|f| {
+                        let name = next_struct_field_name(0, dfs_names, name_idx)?;
+                        Ok((**f).to_owned().with_name(name).with_data_type(
+                            rename_inner_fields(f.data_type(), dfs_names, name_idx)?,
+                        ))
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(DataType::Struct(fields))
+            }
+            DataType::List(inner) => Ok(DataType::List(FieldRef::new(
+                (**inner).to_owned().with_data_type(rename_inner_fields(
+                    inner.data_type(),
+                    dfs_names,
+                    name_idx,
+                )?),
+            ))),
+            DataType::LargeList(inner) => Ok(DataType::LargeList(FieldRef::new(
+                (**inner).to_owned().with_data_type(rename_inner_fields(
+                    inner.data_type(),
+                    dfs_names,
+                    name_idx,
+                )?),
+            ))),
+            _ => Ok(dtype.to_owned()),
+        }
+    }
+
+    let mut name_idx = 0;
+
+    let (qualifiers, fields): (_, Vec<Field>) = schema
+        .iter()
+        .map(|(q, f)| {
+            let name = next_struct_field_name(0, dfs_names, &mut name_idx)?;
+            Ok((
+                q.cloned(),
+                (**f)
+                    .to_owned()
+                    .with_name(name)
+                    .with_data_type(rename_inner_fields(
+                        f.data_type(),
+                        dfs_names,
+                        &mut name_idx,
+                    )?),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .unzip();
+
+    if name_idx != dfs_names.len() {
+        return substrait_err!(
+            "Names list must match exactly to nested schema, but found {} uses for {} names",
+            name_idx,
+            dfs_names.len());
+    }
+
+    Ok(Arc::new(DFSchema::from_field_specific_qualified_schema(
+        qualifiers,
+        &Arc::new(Schema::new(fields)),
+    )?))
 }
 
 /// Convert Substrait Rel to DataFusion DataFrame
@@ -408,7 +576,6 @@ pub async fn from_substrait_rel(
                     };
                     aggr_expr.push(agg_func?.as_ref().clone());
                 }
-
                 input.aggregate(group_expr, aggr_expr)?.build()
             } else {
                 not_impl_err!("Aggregate without an input is not valid")
@@ -489,41 +656,7 @@ pub async fn from_substrait_rel(
                 };
                 let t = ctx.table(table_reference).await?;
                 let t = t.into_optimized_plan()?;
-                match &read.projection {
-                    Some(MaskExpression { select, .. }) => match &select.as_ref() {
-                        Some(projection) => {
-                            let column_indices: Vec<usize> = projection
-                                .struct_items
-                                .iter()
-                                .map(|item| item.field as usize)
-                                .collect();
-                            match &t {
-                                LogicalPlan::TableScan(scan) => {
-                                    let fields = column_indices
-                                        .iter()
-                                        .map(|i| {
-                                            scan.projected_schema.qualified_field(*i)
-                                        })
-                                        .map(|(qualifier, field)| {
-                                            (qualifier.cloned(), Arc::new(field.clone()))
-                                        })
-                                        .collect();
-                                    let mut scan = scan.clone();
-                                    scan.projection = Some(column_indices);
-                                    scan.projected_schema =
-                                        DFSchemaRef::new(DFSchema::new_with_metadata(
-                                            fields,
-                                            HashMap::new(),
-                                        )?);
-                                    Ok(LogicalPlan::TableScan(scan))
-                                }
-                                _ => plan_err!("unexpected plan for table"),
-                            }
-                        }
-                        _ => Ok(t),
-                    },
-                    _ => Ok(t),
-                }
+                extract_projection(t, &read.projection)
             }
             Some(ReadType::VirtualTable(vt)) => {
                 let base_schema = read.base_schema.as_ref().ok_or_else(|| {
@@ -569,7 +702,42 @@ pub async fn from_substrait_rel(
 
                 Ok(LogicalPlan::Values(Values { schema, values }))
             }
-            _ => not_impl_err!("Only NamedTable and VirtualTable reads are supported"),
+            Some(ReadType::LocalFiles(lf)) => {
+                fn extract_filename(name: &str) -> Option<String> {
+                    let corrected_url =
+                        if name.starts_with("file://") && !name.starts_with("file:///") {
+                            name.replacen("file://", "file:///", 1)
+                        } else {
+                            name.to_string()
+                        };
+
+                    Url::parse(&corrected_url).ok().and_then(|url| {
+                        let path = url.path();
+                        std::path::Path::new(path)
+                            .file_name()
+                            .map(|filename| filename.to_string_lossy().to_string())
+                    })
+                }
+
+                // we could use the file name to check the original table provider
+                // TODO: currently does not support multiple local files
+                let filename: Option<String> =
+                    lf.items.first().and_then(|x| match x.path_type.as_ref() {
+                        Some(UriFile(name)) => extract_filename(name),
+                        _ => None,
+                    });
+
+                if lf.items.len() > 1 || filename.is_none() {
+                    return not_impl_err!("Only single file reads are supported");
+                }
+                let name = filename.unwrap();
+                // directly use unwrap here since we could determine it is a valid one
+                let table_reference = TableReference::Bare { table: name.into() };
+                let t = ctx.table(table_reference).await?;
+                let t = t.into_optimized_plan()?;
+                extract_projection(t, &read.projection)
+            }
+            _ => not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type),
         },
         Some(RelType::Set(set)) => match set_rel::SetOp::try_from(set.op) {
             Ok(set_op) => match set_op {
@@ -810,7 +978,8 @@ pub async fn from_substrait_agg_func(
             f.function_reference
         );
     };
-
+    // function_name.split(':').next().unwrap_or(function_name);
+    let function_name = substrait_fun_name((**function_name).as_str());
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
         Ok(Arc::new(Expr::AggregateFunction(
@@ -818,6 +987,13 @@ pub async fn from_substrait_agg_func(
         )))
     } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
     {
+        match &fun {
+            // deal with situation that count(*) got no arguments
+            aggregate_function::AggregateFunction::Count if args.is_empty() => {
+                args.push(Expr::Literal(ScalarValue::Int64(Some(1))));
+            }
+            _ => {}
+        }
         Ok(Arc::new(Expr::AggregateFunction(
             expr::AggregateFunction::new(fun, args, distinct, filter, order_by, None),
         )))
@@ -1261,6 +1437,8 @@ fn from_substrait_type(
             r#type::Kind::Struct(s) => Ok(DataType::Struct(from_substrait_struct_type(
                 s, dfs_names, name_idx,
             )?)),
+            r#type::Kind::Varchar(_) => Ok(DataType::Utf8),
+            r#type::Kind::FixedChar(_) => Ok(DataType::Utf8),
             _ => not_impl_err!("Unsupported Substrait type: {s_kind:?}"),
         },
         _ => not_impl_err!("`None` Substrait kind is not supported"),
@@ -1548,6 +1726,13 @@ fn from_substrait_literal(
         }
         Some(LiteralType::Null(ntype)) => {
             from_substrait_null(ntype, dfs_names, name_idx)?
+        }
+        Some(LiteralType::IntervalDayToSecond(IntervalDayToSecond {
+            days,
+            seconds,
+            microseconds,
+        })) => {
+            ScalarValue::new_interval_dt(*days, (seconds * 1000) + (microseconds / 1000))
         }
         Some(LiteralType::UserDefined(user_defined)) => {
             match user_defined.type_reference {

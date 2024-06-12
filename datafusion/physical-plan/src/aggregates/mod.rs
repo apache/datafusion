@@ -1197,7 +1197,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, FirstValue, LastValue, OrderSensitiveArrayAgg,
+        lit, FirstValue, LastValue, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -1816,14 +1816,6 @@ mod tests {
         let aggregates_v0: Vec<Arc<dyn AggregateExpr>> =
             vec![test_median_agg_expr(&input_schema)?];
 
-        // use slow-path in `hash.rs`
-        let aggregates_v1: Vec<Arc<dyn AggregateExpr>> =
-            vec![Arc::new(ApproxDistinct::new(
-                col("a", &input_schema)?,
-                "APPROX_DISTINCT(a)".to_string(),
-                DataType::UInt32,
-            ))];
-
         // use fast-path in `row_hash.rs`.
         let aggregates_v2: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &input_schema)?,
@@ -1833,7 +1825,6 @@ mod tests {
 
         for (version, groups, aggregates) in [
             (0, groups_none, aggregates_v0),
-            (1, groups_some.clone(), aggregates_v1),
             (2, groups_some, aggregates_v2),
         ] {
             let n_aggr = aggregates.len();

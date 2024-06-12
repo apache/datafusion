@@ -115,7 +115,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
             input: Some(*to_substrait_rel(plan, ctx, &mut extension_info)?),
-            names: plan.schema().field_names(),
+            names: to_substrait_named_struct(plan.schema())?.names,
         })),
     }];
 
