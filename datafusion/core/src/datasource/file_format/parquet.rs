@@ -455,6 +455,8 @@ async fn fetch_schema(
 }
 
 /// Read and parse the statistics of the Parquet file at location `path`
+///
+/// See [`statistics_from_parquet_meta`] for more details
 async fn fetch_statistics(
     store: &dyn ObjectStore,
     table_schema: SchemaRef,
@@ -462,11 +464,14 @@ async fn fetch_statistics(
     metadata_size_hint: Option<usize>,
 ) -> Result<Statistics> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
-    fetch_statistics_from_parquet_meta(&metadata, table_schema).await
+    statistics_from_parquet_meta(&metadata, table_schema).await
 }
 
-/// Read and parse the statistics of the ParquetMetaData
-pub async fn fetch_statistics_from_parquet_meta(
+/// Convert statistics in  [`ParquetMetaData`] into [`Statistics`]
+///
+/// The statistics are calculated for each column in the table schema
+/// using the row group statistics in the parquet metadata.
+pub async fn statistics_from_parquet_meta(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
 ) -> Result<Statistics> {
@@ -1411,7 +1416,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_statistics_from_parquet_metadata() -> Result<()> {
+    async fn test_statistics_from_parquet_metadata() -> Result<()> {
         // Data for column c1: ["Foo", null, "bar"]
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
