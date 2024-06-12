@@ -27,3 +27,4 @@ pub mod highlighter;
 pub mod object_storage;
 pub mod print_format;
 pub mod print_options;
+pub mod cli_context;

@@ -23,12 +23,13 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::str::FromStr;
 
+use crate::cli_context::CliSessionContext;
 use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
     helper::{unescape_input, CliHelper},
-    object_storage::{get_object_store, register_options},
+    object_storage::{get_object_store},
     print_options::{MaxRows, PrintOptions},
 };
 
@@ -63,7 +64,7 @@ pub async fn exec_from_commands(
 
 /// run and execute SQL statements and commands from a file, against a context with the given print options
 pub async fn exec_from_lines(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     reader: &mut BufReader<File>,
     print_options: &PrintOptions,
 ) -> Result<()> {
@@ -103,7 +104,7 @@ pub async fn exec_from_lines(
 }
 
 pub async fn exec_from_files(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     files: Vec<String>,
     print_options: &PrintOptions,
 ) -> Result<()> {
@@ -122,7 +123,7 @@ pub async fn exec_from_files(
 
 /// run and execute SQL statements and commands against a context with the given print options
 pub async fn exec_from_repl(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     print_options: &mut PrintOptions,
 ) -> rustyline::Result<()> {
     let mut rl = Editor::new()?;
@@ -205,7 +206,7 @@ pub async fn exec_from_repl(
 }
 
 pub(super) async fn exec_and_print(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     print_options: &PrintOptions,
     sql: String,
 ) -> Result<()> {
@@ -292,7 +293,7 @@ impl AdjustedPrintOptions {
 }
 
 async fn create_plan(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     statement: Statement,
 ) -> Result<LogicalPlan, DataFusionError> {
     let mut plan = ctx.state().statement_to_plan(statement).await?;
@@ -354,7 +355,7 @@ async fn create_plan(
 /// alteration fails, or if the object store cannot be retrieved and registered
 /// successfully.
 pub(crate) async fn register_object_store_and_config_extensions(
-    ctx: &SessionContext,
+    ctx: &dyn CliSessionContext,
     location: &String,
     options: &HashMap<String, String>,
     format: Option<FileType>,
@@ -369,7 +370,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     let url = table_path.as_ref();
 
     // Register the options based on the scheme extracted from the location
-    register_options(ctx, scheme);
+    ctx.register_options(scheme);
 
     // Clone and modify the default table options based on the provided options
     let mut table_options = ctx.state().default_table_options().clone();
