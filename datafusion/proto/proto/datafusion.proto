@@ -520,6 +520,7 @@ message AggregateExprNode {
 message AggregateUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
+  bool distinct = 5;
   LogicalExprNode filter = 3;
   repeated LogicalExprNode order_by = 4;
 }

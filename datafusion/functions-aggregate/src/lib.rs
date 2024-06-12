@@ -56,6 +56,7 @@
 pub mod macros;
 
 pub mod approx_distinct;
+pub mod count;
 pub mod covariance;
 pub mod first_last;
 pub mod hyperloglog;
@@ -77,6 +78,8 @@ use std::sync::Arc;
 pub mod expr_fn {
     pub use super::approx_distinct;
     pub use super::approx_median::approx_median;
+    pub use super::count::count;
+    pub use super::count::count_distinct;
     pub use super::covariance::covar_pop;
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
@@ -98,6 +101,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         sum::sum_udaf(),
         covariance::covar_pop_udaf(),
         median::median_udaf(),
+        count::count_udaf(),
         variance::var_samp_udaf(),
         variance::var_pop_udaf(),
         stddev::stddev_udaf(),
@@ -133,8 +137,8 @@ mod tests {
         let mut names = HashSet::new();
         for func in all_default_aggregate_functions() {
             // TODO: remove this
-            // sum is in intermidiate migration state, skip this
-            if func.name().to_lowercase() == "sum" {
+            // These functions are in intermidiate migration state, skip them
+            if func.name().to_lowercase() == "count" {
                 continue;
             }
             assert!(

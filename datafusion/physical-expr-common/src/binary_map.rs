@@ -19,17 +19,16 @@
 //! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
 
 use ahash::RandomState;
-use arrow_array::cast::AsArray;
-use arrow_array::types::{ByteArrayType, GenericBinaryType, GenericStringType};
-use arrow_array::{
-    Array, ArrayRef, GenericBinaryArray, GenericStringArray, OffsetSizeTrait,
+use arrow::array::cast::AsArray;
+use arrow::array::types::{ByteArrayType, GenericBinaryType, GenericStringType};
+use arrow::array::{
+    Array, ArrayRef, BooleanBufferBuilder, BufferBuilder, GenericBinaryArray,
+    GenericStringArray, OffsetSizeTrait,
 };
-use arrow_buffer::{
-    BooleanBufferBuilder, BufferBuilder, NullBuffer, OffsetBuffer, ScalarBuffer,
-};
-use arrow_schema::DataType;
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
 use std::any::type_name;
 use std::fmt::Debug;
 use std::mem;
@@ -605,8 +604,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{BinaryArray, LargeBinaryArray, StringArray};
-    use hashbrown::HashMap;
+    use arrow::array::{BinaryArray, LargeBinaryArray, StringArray};
+    use std::collections::HashMap;
 
     #[test]
     fn string_set_empty() {

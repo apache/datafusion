@@ -47,8 +47,6 @@ pub use crate::aggregate::bit_and_or_xor::{BitAnd, BitOr, BitXor, DistinctBitXor
 pub use crate::aggregate::bool_and_or::{BoolAnd, BoolOr};
 pub use crate::aggregate::build_in::create_aggregate_expr;
 pub use crate::aggregate::correlation::Correlation;
-pub use crate::aggregate::count::Count;
-pub use crate::aggregate::count_distinct::DistinctCount;
 pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::min_max::{Max, MaxAccumulator, Min, MinAccumulator};
 pub use crate::aggregate::nth_value::NthValueAgg;
