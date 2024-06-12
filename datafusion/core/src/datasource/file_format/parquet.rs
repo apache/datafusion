@@ -1434,14 +1434,16 @@ mod tests {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let (files, _file_names) = store_parquet(vec![batch1, batch2], false).await?;
 
-        let session = SessionContext::new();
-        let ctx = session.state();
+        let state = SessionContext::new().state();
         let format = ParquetFormat::default();
-        let schema = format.infer_schema(&ctx, &store, &files).await.unwrap();
+        let schema = format.infer_schema(&state, &store, &files).await.unwrap();
+
+        let null_i64 = ScalarValue::Int64(None);
+        let null_utf8 = ScalarValue::Utf8(None);
 
         // Fetch statistics for first file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = fetch_statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
         //
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
@@ -1452,42 +1454,23 @@ mod tests {
         // column c2: missing from the file so the table treats all 3 rows as null
         let c2_stats = &stats.column_statistics[1];
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
-        assert_eq!(
-            c2_stats.max_value,
-            Precision::Exact(ScalarValue::Int64(None))
-        );
-        assert_eq!(
-            c2_stats.min_value,
-            Precision::Exact(ScalarValue::Int64(None))
-        );
+        assert_eq!(c2_stats.max_value, Precision::Exact(null_i64.clone()));
+        assert_eq!(c2_stats.min_value, Precision::Exact(null_i64.clone()));
 
         // Fetch statistics for second file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[1], None).await?;
-        let stats = fetch_statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
-        //
+        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1: missing from the file so the table treats all 3 rows as null
         let c1_stats = &stats.column_statistics[0];
         assert_eq!(c1_stats.null_count, Precision::Exact(3));
-        assert_eq!(
-            c1_stats.max_value,
-            Precision::Exact(ScalarValue::Utf8(None))
-        );
-        assert_eq!(
-            c1_stats.min_value,
-            Precision::Exact(ScalarValue::Utf8(None))
-        );
+        assert_eq!(c1_stats.max_value, Precision::Exact(null_utf8.clone()));
+        assert_eq!(c1_stats.min_value, Precision::Exact(null_utf8.clone()));
         // column c2
         let c2_stats = &stats.column_statistics[1];
         assert_eq!(c2_stats.null_count, Precision::Exact(1));
-        assert_eq!(
-            c2_stats.max_value,
-            Precision::Exact(ScalarValue::Int64(Some(2)))
-        );
-        assert_eq!(
-            c2_stats.min_value,
-            Precision::Exact(ScalarValue::Int64(Some(1)))
-        );
+        assert_eq!(c2_stats.max_value, Precision::Exact(2i64.into()));
+        assert_eq!(c2_stats.min_value, Precision::Exact(1i64.into()));
 
         Ok(())
     }
