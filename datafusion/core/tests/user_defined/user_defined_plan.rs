@@ -92,6 +92,9 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
+use datafusion_common::config::ConfigOptions;
+use datafusion_optimizer::analyzer::inline_table_scan::InlineTableScan;
+use datafusion_optimizer::AnalyzerRule;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -246,10 +249,12 @@ async fn topk_plan() -> Result<()> {
 fn make_topk_context() -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(48);
     let runtime = Arc::new(RuntimeEnv::default());
-    let state = SessionState::new_with_config_rt(config, runtime)
+    let mut state = SessionState::new_with_config_rt(config, runtime)
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
         .add_optimizer_rule(Arc::new(TopKOptimizerRule {}));
-    SessionContext::new_with_state(state)
+    state.add_analyzer_rule(Arc::new(MyAnalyzerRule {}));
+    let ctx = SessionContext::new_with_state(state);
+    ctx.add_analyzer_rule(Arc::new(MyAnalyzerRule {}))
 }
 
 // ------ The implementation of the TopK code follows -----
@@ -617,5 +622,17 @@ impl Stream for TopKReader {
 impl RecordBatchStream for TopKReader {
     fn schema(&self) -> SchemaRef {
         self.input.schema()
+    }
+}
+
+struct MyAnalyzerRule {}
+
+impl AnalyzerRule for MyAnalyzerRule {
+    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
+        Self::analyze_plan(plan)
+    }
+
+    fn name(&self) -> &str {
+        "my_analyzer_rule"
     }
 }
