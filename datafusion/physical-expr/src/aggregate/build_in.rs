@@ -348,21 +348,18 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                match fun {
-                    AggregateFunction::ArrayAgg => {
-                        assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new_list(
-                                "c1",
-                                Field::new("item", data_type.clone(), true),
-                                true,
-                            ),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
+                if fun == AggregateFunction::ArrayAgg {
+                    assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
+                    assert_eq!("c1", result_agg_phy_exprs.name());
+                    assert_eq!(
+                        Field::new_list(
+                            "c1",
+                            Field::new("item", data_type.clone(), true),
+                            true,
+                        ),
+                        result_agg_phy_exprs.field().unwrap()
+                    );
+                }
 
                 let result_distinct = create_physical_agg_expr_for_test(
                     &fun,
@@ -371,21 +368,18 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                match fun {
-                    AggregateFunction::ArrayAgg => {
-                        assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
-                        assert_eq!("c1", result_distinct.name());
-                        assert_eq!(
-                            Field::new_list(
-                                "c1",
-                                Field::new("item", data_type.clone(), true),
-                                true,
-                            ),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
+                if fun == AggregateFunction::ArrayAgg {
+                    assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
+                    assert_eq!("c1", result_distinct.name());
+                    assert_eq!(
+                        Field::new_list(
+                            "c1",
+                            Field::new("item", data_type.clone(), true),
+                            true,
+                        ),
+                        result_agg_phy_exprs.field().unwrap()
+                    );
+                }
             }
         }
         Ok(())
