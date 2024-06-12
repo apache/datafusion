@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -22,12 +26,235 @@ use arrow::{
     },
     datatypes::DataType,
 };
+use arrow_schema::Field;
 
-use datafusion_common::{downcast_value, internal_err, DataFusionError, ScalarValue};
-use datafusion_expr::Accumulator;
+use datafusion_common::{DataFusionError, downcast_value, internal_err, not_impl_err, plan_err, ScalarValue};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, TypeSignature, Volatility};
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
+use datafusion_expr::utils::format_state_name;
+use datafusion_physical_expr_common::aggregate::AggregateExpr;
 use datafusion_physical_expr_common::aggregate::tdigest::{
-    TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
+    DEFAULT_MAX_SIZE, TDigest, TryIntoF64,
 };
+use datafusion_physical_expr_common::aggregate::utils::down_cast_any_ref;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+
+make_udaf_expr_and_func!(
+    ApproxPercentileCont,
+    approx_percentile_cont,
+    expression,
+    "Computes the approximate percentile continuous of a set of numbers",
+    approx_percentile_cont_udaf
+);
+
+pub struct ApproxPercentileCont {
+    signature: Signature
+}
+
+impl Debug for ApproxPercentileCont {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        f.debug_struct("ApproxPercentileCont")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+impl Default for ApproxPercentileCont {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ApproxPercentileCont {
+    /// Create a new [`ApproxPercentileCont`] aggregate function.
+    pub fn new() -> Self {
+        let mut variants =
+            Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
+        // Accept any numeric value paired with a float64 percentile
+        for num in NUMERICS {
+            variants
+                .push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
+            // Additionally accept an integer number of centroids for T-Digest
+            for int in INTEGERS {
+                variants.push(TypeSignature::Exact(vec![
+                    num.clone(),
+                    DataType::Float64,
+                    int.clone(),
+                ]))
+            }
+        }
+        Self {
+            signature: Signature::one_of(variants, Volatility::Immutable),
+        }
+    }
+}
+
+impl PartialEq<dyn Any> for ApproxPercentileCont {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.eq(x))
+            .unwrap_or(false)
+    }
+}
+
+fn get_lit_value(expr: &Expr) -> datafusion_common::Result<ScalarValue> {
+    match expr {
+        Expr::Literal(lit) => Ok(lit.clone()),
+        _ => plan_err!("Expected a literal expression"),
+    }
+}
+
+fn validate_input_percentile_expr(expr: &Expr) -> datafusion_common::Result<f64> {
+    let lit = get_lit_value(expr)?;
+    let percentile = match &lit {
+        ScalarValue::Float32(Some(q)) => *q as f64,
+        ScalarValue::Float64(Some(q)) => *q,
+        got => return not_impl_err!(
+            "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
+            got.data_type()
+        )
+    };
+
+    // Ensure the percentile is between 0 and 1.
+    if !(0.0..=1.0).contains(&percentile) {
+        return plan_err!(
+            "Percentile value must be between 0.0 and 1.0 inclusive, {percentile} is invalid"
+        );
+    }
+    Ok(percentile)
+}
+
+fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> datafusion_common::Result<usize> {
+    let lit = get_lit_value(expr)?;
+    let max_size = match &lit {
+        ScalarValue::UInt8(Some(q)) => *q as usize,
+        ScalarValue::UInt16(Some(q)) => *q as usize,
+        ScalarValue::UInt32(Some(q)) => *q as usize,
+        ScalarValue::UInt64(Some(q)) => *q as usize,
+        ScalarValue::Int32(Some(q)) if *q > 0 => *q as usize,
+        ScalarValue::Int64(Some(q)) if *q > 0 => *q as usize,
+        ScalarValue::Int16(Some(q)) if *q > 0 => *q as usize,
+        ScalarValue::Int8(Some(q)) if *q > 0 => *q as usize,
+        got => return not_impl_err!(
+            "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
+            got.data_type()
+        )
+    };
+    Ok(max_size)
+}
+
+impl AggregateUDFImpl for ApproxPercentileCont {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    #[allow(rustdoc::private_intra_doc_links)]
+    /// See [`datafusion_physical_expr_common::aggregate::tdigest::TDigest::to_scalar_state()`] for a description of the serialised
+    /// state.
+    fn state_fields(&self, args: StateFieldsArgs) -> datafusion_common::Result<Vec<Field>> {
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, "max_size"),
+                DataType::UInt64,
+                false,
+            ),
+            Field::new(
+                format_state_name(args.name, "sum"),
+                DataType::Float64,
+                false,
+            ),
+            Field::new(
+                format_state_name(args.name, "count"),
+                DataType::Float64,
+                false,
+            ),
+            Field::new(
+                format_state_name(args.name, "max"),
+                DataType::Float64,
+                false,
+            ),
+            Field::new(
+                format_state_name(args.name, "min"),
+                DataType::Float64,
+                false,
+            ),
+            Field::new_list(
+                format_state_name(args.name, "centroids"),
+                Field::new("item", DataType::Float64, true),
+                false,
+            ),
+        ])
+    }
+
+    fn name(&self) -> &str {
+        "approx_percentile_cont"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> datafusion_common::Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!(
+                "approx_percentile_cont(DISTINCT) aggregations are not available"
+            );
+        }
+
+        let percentile = validate_input_percentile_expr(&acc_args.args[1])?;
+        let tdigest_max_size = if acc_args.args.len() == 3 {
+            Some(validate_input_max_size_expr(&acc_args.args[2])?)
+        } else {
+            None
+        };
+
+        let accumulator: ApproxPercentileAccumulator = match acc_args.input_type {
+            t @ (DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64) => {
+                if let Some(max_size) = tdigest_max_size {
+                    ApproxPercentileAccumulator::new_with_max_size(percentile, t.clone(), max_size)
+                }else{
+                    ApproxPercentileAccumulator::new(percentile, t.clone())
+
+                }
+            }
+            other => {
+                return not_impl_err!(
+                    "Support for 'APPROX_PERCENTILE_CONT' for data type {other} is not implemented"
+                )
+            }
+        };
+
+        Ok(Box::new(accumulator))
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        if !arg_types[0].is_numeric() {
+            return plan_err!("approx_percentile_cont requires numeric input types");
+        }
+        Ok(arg_types[0].clone())
+    }
+}
+
+impl PartialEq<dyn Any> for ApproxPercentileCont {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.eq(x))
+            .unwrap_or(false)
+    }
+}
 
 #[derive(Debug)]
 pub struct ApproxPercentileAccumulator {
