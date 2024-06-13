@@ -1372,7 +1372,7 @@ impl SMJStream {
                                 let buffered_index = buffered_indices.value(i);
 
                                 if !pre_mask.value(i) {
-                                    // For a buffered row that is joined with streamed side but failed on the join filter,
+                                    // For a buffered row that is joined with streamed side but doesn't satisfy the join filter,
                                     buffered_batch
                                         .join_filter_failed_idxs
                                         .insert(buffered_index);
