@@ -101,7 +101,8 @@ mod tests {
     use super::*;
 
     use crate::physical_optimizer::test_utils::{
-        bounded_window_exec, memory_exec, sort_exec, sort_expr_options,
+        bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec,
+        repartition_exec, sort_exec, sort_expr_options,
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -130,7 +131,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bw_sort_requirement() -> Result<()> {
+    /// Tests that plan is valid when the sort requirements are satisfied.
+    async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
         let schema = create_test_schema();
         let source = memory_exec(&schema);
         let sort_exprs = vec![sort_expr_options(
@@ -153,7 +155,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bw_no_sort_requirement() -> Result<()> {
+    /// Tests that plan is invalid when the sort requirements are not satisfied.
+    async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
         let schema = create_test_schema();
         let source = memory_exec(&schema);
         let sort_exprs = vec![sort_expr_options(
@@ -170,6 +173,63 @@ mod tests {
             "  MemoryExec: partitions=1, partition_sizes=[0]"
         ]);
         assert_sanity_check(&bw, false);
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Tests that plan is valid when a single partition requirement
+    /// is satisfied.
+    async fn test_global_limit_single_partition() -> Result<()> {
+        let schema = create_test_schema();
+        let source = memory_exec(&schema);
+        let limit = global_limit_exec(source);
+
+        assert_plan(
+            limit.as_ref(),
+            vec![
+                "GlobalLimitExec: skip=0, fetch=100",
+                "  MemoryExec: partitions=1, partition_sizes=[0]",
+            ],
+        );
+        assert_sanity_check(&limit, true);
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Tests that plan is invalid when a single partition requirement
+    /// is not satisfied.
+    async fn test_global_limit_multi_partition() -> Result<()> {
+        let schema = create_test_schema();
+        let source = memory_exec(&schema);
+        let limit = global_limit_exec(repartition_exec(source));
+
+        assert_plan(
+            limit.as_ref(),
+            vec![
+                "GlobalLimitExec: skip=0, fetch=100",
+                "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "    MemoryExec: partitions=1, partition_sizes=[0]",
+            ],
+        );
+        assert_sanity_check(&limit, false);
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Tests that when a plan has no requirements it is valid.
+    async fn test_local_limit() -> Result<()> {
+        let schema = create_test_schema();
+        let source = memory_exec(&schema);
+        let limit = local_limit_exec(source);
+
+        assert_plan(
+            limit.as_ref(),
+            vec![
+                "LocalLimitExec: fetch=100",
+                "  MemoryExec: partitions=1, partition_sizes=[0]",
+            ],
+        );
+        assert_sanity_check(&limit, true);
         Ok(())
     }
 }
