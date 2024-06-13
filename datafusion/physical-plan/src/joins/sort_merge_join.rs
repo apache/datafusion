@@ -1138,7 +1138,7 @@ impl SMJStream {
             }
             buffered_batch.null_joined.clear();
 
-            // For buffered rows which are joined with streamed side but failed on join filter
+            // For buffered rows which are joined with streamed side but doesn't satisfy the join filter
             if output_join_filter_fail_batch {
                 let buffered_indices = UInt64Array::from_iter_values(
                     buffered_batch.join_filter_failed_idxs.iter().copied(),
