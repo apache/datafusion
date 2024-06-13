@@ -162,7 +162,8 @@ async fn main() {
                 min(col("imu_measurement").field("gps").field("altitude")),
                 count(col("imu_measurement")).alias("count"),
             ],
-            Duration::from_millis(2000),
+            Duration::from_millis(4000),
+            Some(Duration::from_millis(1000)),
         )
         .unwrap();
 
@@ -196,22 +197,24 @@ async fn main() {
     // let sink = Box::new(writer) as Box<dyn FranzSink>;
     // let _ = windowed_df.sink(sink).await;
 
-    let kafka_sink_config = KafkaSinkSettings {
-        topic: "out_topic_monitored".to_string(),
-        bootstrap_servers: bootstrap_servers.clone(),
-    };
-    let kafka_writer = KafkaSink::new(&kafka_sink_config).unwrap();
+    //let kafka_sink_config = KafkaSinkSettings {
+    //    topic: "out_topic_monitored".to_string(),
+    //    bootstrap_servers: bootstrap_servers.clone(),
+    //};
+    //let kafka_writer = KafkaSink::new(&kafka_sink_config).unwrap();
 
-    let stream_monitor_config = StreamMonitorConfig::new();
-    let stream_monitor = StreamMonitor::new(
-        &stream_monitor_config,
-        Arc::new(tokio::sync::Mutex::new(kafka_writer)),
-    )
-    .unwrap();
-    stream_monitor.start_server().await;
+    //let stream_monitor_config = StreamMonitorConfig::new();
+    //let stream_monitor = StreamMonitor::new(
+    //    &stream_monitor_config,
+    //    Arc::new(tokio::sync::Mutex::new(kafka_writer)),
+    //)
+    //.unwrap();
+    //stream_monitor.start_server().await;
 
-    let sink = Box::new(stream_monitor) as Box<dyn FranzSink>;
-    let _ = windowed_df.sink(sink).await;
+    //let sink = Box::new(stream_monitor) as Box<dyn FranzSink>;
+    //let _ = windowed_df.sink(sink).await;
+    print_stream(&windowed_df).await;
+    //let _ = windowed_df.sink(file_writer).await;
 }
 
 async fn print_stream(windowed_df: &DataFrame) {

@@ -37,9 +37,10 @@ impl DataFrame {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
         window_length: Duration,
+        slide: Option<Duration>,
     ) -> Result<Self> {
         let plan = LogicalPlanBuilder::from(self.plan)
-            .franz_window(group_expr, aggr_expr, window_length)?
+            .franz_window(group_expr, aggr_expr, window_length, slide)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
     }

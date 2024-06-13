@@ -40,7 +40,7 @@ use crate::logical_expr::{
 };
 use crate::logical_expr::{
     Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType, Repartition,
-    UserDefinedLogicalNode,
+    StreamingWindowType, UserDefinedLogicalNode,
 };
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
@@ -1508,7 +1508,7 @@ impl DefaultPhysicalPlanner {
                     aggr_expr,
                     ..
                 },
-                window_length,
+                window_type,
             ) => {
                 // Initially need to perform the aggregate and then merge the partitions
                 let input_exec = children.one()?;
@@ -1537,7 +1537,15 @@ impl DefaultPhysicalPlanner {
 
                 let (aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
                     multiunzip(agg_filter);
-
+                let franz_window_type = match window_type {
+                    StreamingWindowType::Tumbling(length) => {
+                        FranzStreamingWindowType::Tumbling(length.clone())
+                    }
+                    StreamingWindowType::Sliding(length, slide) => {
+                        FranzStreamingWindowType::Sliding(length.clone(), slide.clone())
+                    }
+                    StreamingWindowType::Session(length, key) => todo!(),
+                };
                 let initial_aggr = Arc::new(FranzStreamingWindowExec::try_new(
                     AggregateMode::Partial,
                     groups.clone(),
@@ -1545,7 +1553,7 @@ impl DefaultPhysicalPlanner {
                     filters.clone(),
                     input_exec,
                     physical_input_schema.clone(),
-                    FranzStreamingWindowType::Tumbling(window_length.clone()),
+                    franz_window_type,
                 )?);
                 initial_aggr
             }
