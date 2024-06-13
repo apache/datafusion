@@ -18,7 +18,6 @@
 //! This file has test utils for hash joins
 
 use std::sync::Arc;
-use std::usize;
 
 use crate::joins::utils::{JoinFilter, JoinOn};
 use crate::joins::{
