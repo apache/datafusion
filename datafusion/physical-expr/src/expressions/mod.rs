@@ -50,7 +50,6 @@ pub use crate::aggregate::correlation::Correlation;
 pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::min_max::{Max, MaxAccumulator, Min, MinAccumulator};
 pub use crate::aggregate::nth_value::NthValueAgg;
-pub use crate::aggregate::regr::{Regr, RegrType};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::aggregate::string_agg::StringAgg;
 pub use crate::window::cume_dist::{cume_dist, CumeDist};
