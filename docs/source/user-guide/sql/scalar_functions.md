@@ -1443,6 +1443,19 @@ position(substr in origstr)
 - **substr**: The pattern string.
 - **origstr**: The model string.
 
+### `contains`
+
+Return true if search_string is found within string.
+
+```
+contains(substr in origstr)
+```
+
+#### Arguments
+
+- **string**: The pattern string.
+- **search_string**: The model string.
+
 ## Time and Date Functions
 
 - [now](#now)
