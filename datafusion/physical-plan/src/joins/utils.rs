@@ -23,7 +23,6 @@ use std::future::Future;
 use std::ops::{IndexMut, Range};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::usize;
 
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};

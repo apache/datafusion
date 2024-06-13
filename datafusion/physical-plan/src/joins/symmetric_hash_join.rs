@@ -29,7 +29,7 @@ use std::any::Any;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{usize, vec};
+use std::vec;
 
 use crate::common::SharedMemoryReservation;
 use crate::handle_state;
