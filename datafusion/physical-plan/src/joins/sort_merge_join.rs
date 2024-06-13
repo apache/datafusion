@@ -1064,7 +1064,7 @@ impl SMJStream {
                         Some(scanning_idx),
                     );
                 } else {
-                    // Join nulls and buffered row for full join
+                    // Join nulls and buffered row for FULL join
                     self.buffered_data
                         .scanning_batch_mut()
                         .null_joined
