@@ -17,7 +17,7 @@
 
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{
-    DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
+    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
 use datafusion::common::{
     not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
@@ -29,12 +29,13 @@ use url::Url;
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
-    aggregate_function, expr::find_df_window_func, BinaryExpr, Case, EmptyRelation, Expr,
-    LogicalPlan, Operator, ScalarUDF, Values,
+    aggregate_function, expr::find_df_window_func, Aggregate, BinaryExpr, Case,
+    EmptyRelation, Expr, ExprSchemable, LogicalPlan, Operator, Projection, ScalarUDF,
+    Values,
 };
 
 use datafusion::logical_expr::{
-    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
+    col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
     Repartition, Subquery, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion::prelude::JoinType;
@@ -225,6 +226,7 @@ pub async fn from_substrait_plan(
             None => not_impl_err!("Cannot parse empty extension"),
         })
         .collect::<Result<HashMap<_, _>>>()?;
+
     // Parse relations
     match plan.relations.len() {
         1 => {
@@ -234,7 +236,29 @@ pub async fn from_substrait_plan(
                         Ok(from_substrait_rel(ctx, rel, &function_extension).await?)
                     },
                     plan_rel::RelType::Root(root) => {
-                        Ok(from_substrait_rel(ctx, root.input.as_ref().unwrap(), &function_extension).await?)
+                        let plan = from_substrait_rel(ctx, root.input.as_ref().unwrap(), &function_extension).await?;
+                        if root.names.is_empty() {
+                            // Backwards compatibility for plans missing names
+                            return Ok(plan);
+                        }
+                        let renamed_schema = make_renamed_schema(plan.schema(), &root.names)?;
+                        if renamed_schema.equivalent_names_and_types(plan.schema()) {
+                            // Nothing to do if the schema is already equivalent
+                            return Ok(plan);
+                        }
+
+                        match plan {
+                            // If the last node of the plan produces expressions, bake the renames into those expressions.
+                            // This isn't necessary for correctness, but helps with roundtrip tests.
+                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), renamed_schema)?, p.input)?)),
+                            LogicalPlan::Aggregate(a) => {
+                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), renamed_schema)?;
+                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, a.group_expr, new_aggr_exprs)?))
+                            },
+                            // There are probably more plans where we could bake things in, can add them later as needed.
+                            // Otherwise, add a new Project to handle the renaming.
+                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), renamed_schema)?, Arc::new(plan))?))
+                        }
                     }
                 },
                 None => plan_err!("Cannot parse plan relation: None")
@@ -282,6 +306,105 @@ pub fn extract_projection(
         },
         _ => Ok(t),
     }
+}
+
+fn rename_expressions(
+    exprs: impl IntoIterator<Item = Expr>,
+    input_schema: &DFSchema,
+    new_schema: DFSchemaRef,
+) -> Result<Vec<Expr>> {
+    exprs
+        .into_iter()
+        .zip(new_schema.fields())
+        .map(|(old_expr, new_field)| {
+            if &old_expr.get_type(input_schema)? == new_field.data_type() {
+                // Alias column if needed
+                old_expr.alias_if_changed(new_field.name().into())
+            } else {
+                // Use Cast to rename inner struct fields + alias column if needed
+                Expr::Cast(Cast::new(
+                    Box::new(old_expr),
+                    new_field.data_type().to_owned(),
+                ))
+                .alias_if_changed(new_field.name().into())
+            }
+        })
+        .collect()
+}
+
+fn make_renamed_schema(
+    schema: &DFSchemaRef,
+    dfs_names: &Vec<String>,
+) -> Result<DFSchemaRef> {
+    fn rename_inner_fields(
+        dtype: &DataType,
+        dfs_names: &Vec<String>,
+        name_idx: &mut usize,
+    ) -> Result<DataType> {
+        match dtype {
+            DataType::Struct(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|f| {
+                        let name = next_struct_field_name(0, dfs_names, name_idx)?;
+                        Ok((**f).to_owned().with_name(name).with_data_type(
+                            rename_inner_fields(f.data_type(), dfs_names, name_idx)?,
+                        ))
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(DataType::Struct(fields))
+            }
+            DataType::List(inner) => Ok(DataType::List(FieldRef::new(
+                (**inner).to_owned().with_data_type(rename_inner_fields(
+                    inner.data_type(),
+                    dfs_names,
+                    name_idx,
+                )?),
+            ))),
+            DataType::LargeList(inner) => Ok(DataType::LargeList(FieldRef::new(
+                (**inner).to_owned().with_data_type(rename_inner_fields(
+                    inner.data_type(),
+                    dfs_names,
+                    name_idx,
+                )?),
+            ))),
+            _ => Ok(dtype.to_owned()),
+        }
+    }
+
+    let mut name_idx = 0;
+
+    let (qualifiers, fields): (_, Vec<Field>) = schema
+        .iter()
+        .map(|(q, f)| {
+            let name = next_struct_field_name(0, dfs_names, &mut name_idx)?;
+            Ok((
+                q.cloned(),
+                (**f)
+                    .to_owned()
+                    .with_name(name)
+                    .with_data_type(rename_inner_fields(
+                        f.data_type(),
+                        dfs_names,
+                        &mut name_idx,
+                    )?),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .unzip();
+
+    if name_idx != dfs_names.len() {
+        return substrait_err!(
+            "Names list must match exactly to nested schema, but found {} uses for {} names",
+            name_idx,
+            dfs_names.len());
+    }
+
+    Ok(Arc::new(DFSchema::from_field_specific_qualified_schema(
+        qualifiers,
+        &Arc::new(Schema::new(fields)),
+    )?))
 }
 
 /// Convert Substrait Rel to DataFusion DataFrame
@@ -859,18 +982,16 @@ pub async fn from_substrait_agg_func(
     let function_name = substrait_fun_name((**function_name).as_str());
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
+        // deal with situation that count(*) got no arguments
+        if fun.name() == "COUNT" && args.is_empty() {
+            args.push(Expr::Literal(ScalarValue::Int64(Some(1))));
+        }
+
         Ok(Arc::new(Expr::AggregateFunction(
             expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by, None),
         )))
     } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
     {
-        match &fun {
-            // deal with situation that count(*) got no arguments
-            aggregate_function::AggregateFunction::Count if args.is_empty() => {
-                args.push(Expr::Literal(ScalarValue::Int64(Some(1))));
-            }
-            _ => {}
-        }
         Ok(Arc::new(Expr::AggregateFunction(
             expr::AggregateFunction::new(fun, args, distinct, filter, order_by, None),
         )))
@@ -1272,7 +1393,9 @@ fn from_substrait_type(
                 })?;
                 let field = Arc::new(Field::new_list_field(
                     from_substrait_type(inner_type, dfs_names, name_idx)?,
-                    is_substrait_type_nullable(inner_type)?,
+                    // We ignore Substrait's nullability here to match to_substrait_literal 
+                    // which always creates nullable lists
+                    true,
                 ));
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::List(field)),

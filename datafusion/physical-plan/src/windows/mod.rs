@@ -597,7 +597,6 @@ pub fn get_window_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregates::AggregateFunction;
     use crate::collect;
     use crate::expressions::col;
     use crate::streaming::StreamingTableExec;
@@ -607,6 +606,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use datafusion_execution::TaskContext;
 
+    use datafusion_functions_aggregate::count::count_udaf;
     use futures::FutureExt;
 
     use InputOrderMode::{Linear, PartiallySorted, Sorted};
@@ -749,7 +749,7 @@ mod tests {
         let refs = blocking_exec.refs();
         let window_agg_exec = Arc::new(WindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+                &WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],

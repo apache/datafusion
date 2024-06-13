@@ -642,7 +642,7 @@ pub fn parse_expr(
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,
                 parse_exprs(&pb.args, registry, codec)?,
-                false,
+                pb.distinct,
                 parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
                 parse_vec_expr(&pb.order_by, registry, codec)?,
                 None,

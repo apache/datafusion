@@ -36,7 +36,9 @@ name = "datafusion_physical_expr_common"
 path = "src/lib.rs"
 
 [dependencies]
+ahash = { workspace = true }
 arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
+hashbrown = { workspace = true }
 rand = { workspace = true }

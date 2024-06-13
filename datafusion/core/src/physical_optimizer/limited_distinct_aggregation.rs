@@ -517,10 +517,10 @@ mod tests {
         let single_agg = AggregateExec::try_new(
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
-            vec![agg.count_expr()], /* aggr_expr */
-            vec![None],             /* filter_expr */
-            source,                 /* input */
-            schema.clone(),         /* input_schema */
+            vec![agg.count_expr(&schema)], /* aggr_expr */
+            vec![None],                    /* filter_expr */
+            source,                        /* input */
+            schema.clone(),                /* input_schema */
         )?;
         let limit_exec = LocalLimitExec::new(
             Arc::new(single_agg),
@@ -554,10 +554,10 @@ mod tests {
         let single_agg = AggregateExec::try_new(
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
-            vec![agg.count_expr()], /* aggr_expr */
-            vec![filter_expr],      /* filter_expr */
-            source,                 /* input */
-            schema.clone(),         /* input_schema */
+            vec![agg.count_expr(&schema)], /* aggr_expr */
+            vec![filter_expr],             /* filter_expr */
+            source,                        /* input */
+            schema.clone(),                /* input_schema */
         )?;
         let limit_exec = LocalLimitExec::new(
             Arc::new(single_agg),
