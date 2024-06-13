@@ -1930,7 +1930,7 @@ pub enum AggregateFunction {
     Max = 1,
     /// SUM = 2;
     Avg = 3,
-    Count = 4,
+    /// COUNT = 4;
     /// APPROX_DISTINCT = 5;
     ArrayAgg = 6,
     /// VARIANCE = 7;
@@ -1972,7 +1972,6 @@ impl AggregateFunction {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
             AggregateFunction::Avg => "AVG",
-            AggregateFunction::Count => "COUNT",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::Correlation => "CORRELATION",
             AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
@@ -2004,7 +2003,6 @@ impl AggregateFunction {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
             "AVG" => Some(Self::Avg),
-            "COUNT" => Some(Self::Count),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "CORRELATION" => Some(Self::Correlation),
             "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),

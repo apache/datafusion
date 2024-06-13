@@ -116,7 +116,6 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::BitXor => Self::BitXor,
             AggregateFunction::BoolAnd => Self::BoolAnd,
             AggregateFunction::BoolOr => Self::BoolOr,
-            AggregateFunction::Count => Self::Count,
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
             AggregateFunction::Correlation => Self::Correlation,
             AggregateFunction::RegrSlope => Self::RegrSlope,
@@ -406,7 +405,6 @@ pub fn serialize_expr(
                     AggregateFunction::BoolAnd => protobuf::AggregateFunction::BoolAnd,
                     AggregateFunction::BoolOr => protobuf::AggregateFunction::BoolOr,
                     AggregateFunction::Avg => protobuf::AggregateFunction::Avg,
-                    AggregateFunction::Count => protobuf::AggregateFunction::Count,
                     AggregateFunction::Correlation => {
                         protobuf::AggregateFunction::Correlation
                     }

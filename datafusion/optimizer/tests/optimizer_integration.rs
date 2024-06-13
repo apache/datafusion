@@ -25,6 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
+use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
@@ -323,7 +324,9 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
     let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
     let statement = &ast[0];
-    let context_provider = MyContextProvider::default().with_udaf(sum_udaf());
+    let context_provider = MyContextProvider::default()
+        .with_udaf(sum_udaf())
+        .with_udaf(count_udaf());
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
@@ -345,7 +348,8 @@ struct MyContextProvider {
 
 impl MyContextProvider {
     fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
-        self.udafs.insert(udaf.name().to_string(), udaf);
+        // TODO: change to to_string() if all the function name is converted to lowercase
+        self.udafs.insert(udaf.name().to_lowercase(), udaf);
         self
     }
 }

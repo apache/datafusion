@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::aggregate::average::Avg;
@@ -61,9 +61,6 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::Count, _) => {
-            return internal_err!("Builtin Count will be removed");
-        }
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
             input_phy_exprs[0].clone(),
             name,
@@ -639,20 +636,6 @@ mod tests {
             AggregateFunction::Max.return_type(&[DataType::Decimal128(28, 13)])?;
         assert_eq!(DataType::Decimal128(28, 13), observed);
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_count_return_type() -> Result<()> {
-        let observed = AggregateFunction::Count.return_type(&[DataType::Utf8])?;
-        assert_eq!(DataType::Int64, observed);
-
-        let observed = AggregateFunction::Count.return_type(&[DataType::Int8])?;
-        assert_eq!(DataType::Int64, observed);
-
-        let observed =
-            AggregateFunction::Count.return_type(&[DataType::Decimal128(28, 13)])?;
-        assert_eq!(DataType::Int64, observed);
         Ok(())
     }
 

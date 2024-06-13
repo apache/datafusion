@@ -362,11 +362,13 @@ mod tests {
     use super::*;
     use crate::test::*;
     use datafusion_expr::expr::{self, GroupingSet};
-    use datafusion_expr::test::function_stub::{sum, sum_udaf};
+    use datafusion_expr::AggregateExt;
     use datafusion_expr::{
-        count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max, min,
-        AggregateFunction,
+        lit, logical_plan::builder::LogicalPlanBuilder, max, min, AggregateFunction,
     };
+    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::expr_fn::{count, count_distinct, sum};
+    use datafusion_functions_aggregate::sum::sum_udaf;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(
@@ -679,14 +681,11 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         // COUNT(DISTINCT a) FILTER (WHERE a > 5)
-        let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            AggregateFunction::Count,
-            vec![col("a")],
-            true,
-            Some(Box::new(col("a").gt(lit(5)))),
-            None,
-            None,
-        ));
+        let expr = count_udaf()
+            .call(vec![col("a")])
+            .distinct()
+            .filter(col("a").gt(lit(5)))
+            .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
             .build()?;
@@ -725,19 +724,16 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         // COUNT(DISTINCT a ORDER BY a)
-        let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            AggregateFunction::Count,
-            vec![col("a")],
-            true,
-            None,
-            Some(vec![col("a")]),
-            None,
-        ));
+        let expr = count_udaf()
+            .call(vec![col("a")])
+            .distinct()
+            .order_by(vec![col("a").sort(true, false)])
+            .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
             .build()?;
         // Do nothing
-        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), COUNT(DISTINCT test.a) ORDER BY [test.a]]] [c:UInt32, sum(test.a):UInt64;N, COUNT(DISTINCT test.a) ORDER BY [test.a]:Int64;N]\
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), COUNT(DISTINCT test.a) ORDER BY [test.a ASC NULLS LAST]]] [c:UInt32, sum(test.a):UInt64;N, COUNT(DISTINCT test.a) ORDER BY [test.a ASC NULLS LAST]:Int64;N]\
                             \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(plan, expected)
@@ -748,19 +744,17 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         // COUNT(DISTINCT a ORDER BY a) FILTER (WHERE a > 5)
-        let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            AggregateFunction::Count,
-            vec![col("a")],
-            true,
-            Some(Box::new(col("a").gt(lit(5)))),
-            Some(vec![col("a")]),
-            None,
-        ));
+        let expr = count_udaf()
+            .call(vec![col("a")])
+            .distinct()
+            .filter(col("a").gt(lit(5)))
+            .order_by(vec![col("a").sort(true, false)])
+            .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
             .build()?;
         // Do nothing
-        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), COUNT(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a]]] [c:UInt32, sum(test.a):UInt64;N, COUNT(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a]:Int64;N]\
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), COUNT(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a ASC NULLS LAST]]] [c:UInt32, sum(test.a):UInt64;N, COUNT(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a ASC NULLS LAST]:Int64;N]\
                             \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(plan, expected)

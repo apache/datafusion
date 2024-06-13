@@ -129,9 +129,11 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
-        col, count, lit, ColumnarValue, LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl,
-        Signature, TypeSignature,
+        col, lit, ColumnarValue, LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature,
+        TypeSignature,
     };
+
+    use datafusion_functions_aggregate::expr_fn::count;
 
     use std::sync::Arc;
 

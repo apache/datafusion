@@ -19,7 +19,7 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
-use datafusion_expr::test::function_stub::sum_udaf;
+use datafusion_expr::test::function_stub::{count_udaf, sum_udaf};
 use datafusion_expr::{col, table_scan};
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -153,7 +153,9 @@ fn roundtrip_statement() -> Result<()> {
             .try_with_sql(query)?
             .parse_statement()?;
 
-        let context = MockContextProvider::default().with_udaf(sum_udaf());
+        let context = MockContextProvider::default()
+            .with_udaf(sum_udaf())
+            .with_udaf(count_udaf());
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 

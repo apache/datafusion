@@ -33,8 +33,6 @@ use strum_macros::EnumIter;
 // https://datafusion.apache.org/contributor-guide/index.html#how-to-add-a-new-aggregate-function
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum AggregateFunction {
-    /// Count
-    Count,
     /// Minimum
     Min,
     /// Maximum
@@ -89,7 +87,6 @@ impl AggregateFunction {
     pub fn name(&self) -> &str {
         use AggregateFunction::*;
         match self {
-            Count => "COUNT",
             Min => "MIN",
             Max => "MAX",
             Avg => "AVG",
@@ -135,7 +132,6 @@ impl FromStr for AggregateFunction {
             "bit_xor" => AggregateFunction::BitXor,
             "bool_and" => AggregateFunction::BoolAnd,
             "bool_or" => AggregateFunction::BoolOr,
-            "count" => AggregateFunction::Count,
             "max" => AggregateFunction::Max,
             "mean" => AggregateFunction::Avg,
             "min" => AggregateFunction::Min,
@@ -190,7 +186,6 @@ impl AggregateFunction {
             })?;
 
         match self {
-            AggregateFunction::Count => Ok(DataType::Int64),
             AggregateFunction::Max | AggregateFunction::Min => {
                 // For min and max agg function, the returned type is same as input type.
                 // The coerced_data_types is same with input_types.
@@ -249,7 +244,6 @@ impl AggregateFunction {
     pub fn signature(&self) -> Signature {
         // note: the physical expression must accept the type returned by this function or the execution panics.
         match self {
-            AggregateFunction::Count => Signature::variadic_any(Volatility::Immutable),
             AggregateFunction::Grouping | AggregateFunction::ArrayAgg => {
                 Signature::any(1, Volatility::Immutable)
             }
