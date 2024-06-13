@@ -31,7 +31,7 @@ use crate::{
 use arrow::datatypes::{
     DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
@@ -61,6 +61,19 @@ create_func!(Sum, sum_udaf);
 pub fn sum(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new_udf(
         sum_udaf(),
+        vec![expr],
+        false,
+        None,
+        None,
+        None,
+    ))
+}
+
+create_func!(Count, count_udaf);
+
+pub fn count(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        count_udaf(),
         vec![expr],
         false,
         None,
@@ -187,5 +200,76 @@ impl AggregateUDFImpl for Sum {
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
+    }
+}
+
+/// Testing stub implementation of COUNT aggregate
+pub struct Count {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl std::fmt::Debug for Count {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Count")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+impl Default for Count {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Count {
+    pub fn new() -> Self {
+        Self {
+            aliases: vec!["count".to_string()],
+            signature: Signature::variadic_any(Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for Count {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "COUNT"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::Identical
     }
 }

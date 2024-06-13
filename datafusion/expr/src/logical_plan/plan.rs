@@ -2965,10 +2965,12 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
-    use crate::{col, count, exists, in_subquery, lit, placeholder, GroupingSet};
+    use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
 
     use datafusion_common::tree_node::TreeNodeVisitor;
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
+
+    use crate::test::function_stub::count;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![

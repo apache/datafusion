@@ -960,13 +960,14 @@ mod tests {
     use arrow_schema::DataType::Int8;
 
     use datafusion_common::TableReference;
+    use datafusion_expr::AggregateExt;
     use datafusion_expr::{
-        case, col, cube, exists,
-        expr::{AggregateFunction, AggregateFunctionDefinition},
-        grouping_set, lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan,
-        try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature,
-        Volatility, WindowFrame, WindowFunctionDefinition,
+        case, col, cube, exists, grouping_set, lit, not, not_exists, out_ref_col,
+        placeholder, rollup, table_scan, try_cast, when, wildcard, ColumnarValue,
+        ScalarUDF, ScalarUDFImpl, Signature, Volatility, WindowFrame,
+        WindowFunctionDefinition,
     };
+    use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
 
     use crate::unparser::dialect::CustomDialect;
@@ -1127,29 +1128,19 @@ mod tests {
             ),
             (sum(col("a")), r#"sum(a)"#),
             (
-                Expr::AggregateFunction(AggregateFunction {
-                    func_def: AggregateFunctionDefinition::BuiltIn(
-                        datafusion_expr::AggregateFunction::Count,
-                    ),
-                    args: vec![Expr::Wildcard { qualifier: None }],
-                    distinct: true,
-                    filter: None,
-                    order_by: None,
-                    null_treatment: None,
-                }),
+                count_udaf()
+                    .call(vec![Expr::Wildcard { qualifier: None }])
+                    .distinct()
+                    .build()
+                    .unwrap(),
                 "COUNT(DISTINCT *)",
             ),
             (
-                Expr::AggregateFunction(AggregateFunction {
-                    func_def: AggregateFunctionDefinition::BuiltIn(
-                        datafusion_expr::AggregateFunction::Count,
-                    ),
-                    args: vec![Expr::Wildcard { qualifier: None }],
-                    distinct: false,
-                    filter: Some(Box::new(lit(true))),
-                    order_by: None,
-                    null_treatment: None,
-                }),
+                count_udaf()
+                    .call(vec![Expr::Wildcard { qualifier: None }])
+                    .filter(lit(true))
+                    .build()
+                    .unwrap(),
                 "COUNT(*) FILTER (WHERE true)",
             ),
             (
@@ -1167,9 +1158,7 @@ mod tests {
             ),
             (
                 Expr::WindowFunction(WindowFunction {
-                    fun: WindowFunctionDefinition::AggregateFunction(
-                        datafusion_expr::AggregateFunction::Count,
-                    ),
+                    fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     args: vec![wildcard()],
                     partition_by: vec![],
                     order_by: vec![Expr::Sort(Sort::new(
