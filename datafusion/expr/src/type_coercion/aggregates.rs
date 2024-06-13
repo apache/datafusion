@@ -159,27 +159,6 @@ pub fn coerce_types(
             }
             Ok(vec![Float64, Float64])
         }
-        AggregateFunction::RegrSlope
-        | AggregateFunction::RegrIntercept
-        | AggregateFunction::RegrCount
-        | AggregateFunction::RegrR2
-        | AggregateFunction::RegrAvgx
-        | AggregateFunction::RegrAvgy
-        | AggregateFunction::RegrSXX
-        | AggregateFunction::RegrSYY
-        | AggregateFunction::RegrSXY => {
-            let valid_types = [NUMERICS.to_vec(), vec![Null]].concat();
-            let input_types_valid = // number of input already checked before
-                valid_types.contains(&input_types[0]) && valid_types.contains(&input_types[1]);
-            if !input_types_valid {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            Ok(vec![Float64, Float64])
-        }
         AggregateFunction::ApproxPercentileCont => {
             if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
                 return plan_err!(

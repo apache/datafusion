@@ -148,15 +148,6 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Count => Self::Count,
             protobuf::AggregateFunction::ArrayAgg => Self::ArrayAgg,
             protobuf::AggregateFunction::Correlation => Self::Correlation,
-            protobuf::AggregateFunction::RegrSlope => Self::RegrSlope,
-            protobuf::AggregateFunction::RegrIntercept => Self::RegrIntercept,
-            protobuf::AggregateFunction::RegrCount => Self::RegrCount,
-            protobuf::AggregateFunction::RegrR2 => Self::RegrR2,
-            protobuf::AggregateFunction::RegrAvgx => Self::RegrAvgx,
-            protobuf::AggregateFunction::RegrAvgy => Self::RegrAvgy,
-            protobuf::AggregateFunction::RegrSxx => Self::RegrSXX,
-            protobuf::AggregateFunction::RegrSyy => Self::RegrSYY,
-            protobuf::AggregateFunction::RegrSxy => Self::RegrSXY,
             protobuf::AggregateFunction::ApproxPercentileCont => {
                 Self::ApproxPercentileCont
             }

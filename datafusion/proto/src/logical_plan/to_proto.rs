@@ -119,15 +119,6 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Count => Self::Count,
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
             AggregateFunction::Correlation => Self::Correlation,
-            AggregateFunction::RegrSlope => Self::RegrSlope,
-            AggregateFunction::RegrIntercept => Self::RegrIntercept,
-            AggregateFunction::RegrCount => Self::RegrCount,
-            AggregateFunction::RegrR2 => Self::RegrR2,
-            AggregateFunction::RegrAvgx => Self::RegrAvgx,
-            AggregateFunction::RegrAvgy => Self::RegrAvgy,
-            AggregateFunction::RegrSXX => Self::RegrSxx,
-            AggregateFunction::RegrSYY => Self::RegrSyy,
-            AggregateFunction::RegrSXY => Self::RegrSxy,
             AggregateFunction::ApproxPercentileCont => Self::ApproxPercentileCont,
             AggregateFunction::ApproxPercentileContWithWeight => {
                 Self::ApproxPercentileContWithWeight
@@ -410,21 +401,6 @@ pub fn serialize_expr(
                     AggregateFunction::Correlation => {
                         protobuf::AggregateFunction::Correlation
                     }
-                    AggregateFunction::RegrSlope => {
-                        protobuf::AggregateFunction::RegrSlope
-                    }
-                    AggregateFunction::RegrIntercept => {
-                        protobuf::AggregateFunction::RegrIntercept
-                    }
-                    AggregateFunction::RegrR2 => protobuf::AggregateFunction::RegrR2,
-                    AggregateFunction::RegrAvgx => protobuf::AggregateFunction::RegrAvgx,
-                    AggregateFunction::RegrAvgy => protobuf::AggregateFunction::RegrAvgy,
-                    AggregateFunction::RegrCount => {
-                        protobuf::AggregateFunction::RegrCount
-                    }
-                    AggregateFunction::RegrSXX => protobuf::AggregateFunction::RegrSxx,
-                    AggregateFunction::RegrSYY => protobuf::AggregateFunction::RegrSyy,
-                    AggregateFunction::RegrSXY => protobuf::AggregateFunction::RegrSxy,
                     AggregateFunction::Grouping => protobuf::AggregateFunction::Grouping,
                     AggregateFunction::NthValue => {
                         protobuf::AggregateFunction::NthValueAgg

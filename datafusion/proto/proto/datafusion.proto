@@ -496,15 +496,15 @@ enum AggregateFunction {
   BIT_XOR = 21;
   BOOL_AND = 22;
   BOOL_OR = 23;
-  REGR_SLOPE = 26;
-  REGR_INTERCEPT = 27;
-  REGR_COUNT = 28;
-  REGR_R2 = 29;
-  REGR_AVGX = 30;
-  REGR_AVGY = 31;
-  REGR_SXX = 32;
-  REGR_SYY = 33;
-  REGR_SXY = 34;
+  // REGR_SLOPE = 26;
+  // REGR_INTERCEPT = 27;
+  // REGR_COUNT = 28;
+  // REGR_R2 = 29;
+  // REGR_AVGX = 30;
+  // REGR_AVGY = 31;
+  // REGR_SXX = 32;
+  // REGR_SYY = 33;
+  // REGR_SXY = 34;
   STRING_AGG = 35;
   NTH_VALUE_AGG = 36;
 }

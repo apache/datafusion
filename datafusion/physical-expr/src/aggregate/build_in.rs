@@ -34,7 +34,6 @@ use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::aggregate::average::Avg;
-use crate::aggregate::regr::RegrType;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 /// Create a physical aggregation expression.
@@ -157,83 +156,6 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::Correlation, true) => {
             return not_impl_err!("CORR(DISTINCT) aggregations are not available");
-        }
-        (AggregateFunction::RegrSlope, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::Slope,
-            data_type,
-        )),
-        (AggregateFunction::RegrIntercept, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::Intercept,
-            data_type,
-        )),
-        (AggregateFunction::RegrCount, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::Count,
-            data_type,
-        )),
-        (AggregateFunction::RegrR2, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::R2,
-            data_type,
-        )),
-        (AggregateFunction::RegrAvgx, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::AvgX,
-            data_type,
-        )),
-        (AggregateFunction::RegrAvgy, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::AvgY,
-            data_type,
-        )),
-        (AggregateFunction::RegrSXX, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::SXX,
-            data_type,
-        )),
-        (AggregateFunction::RegrSYY, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::SYY,
-            data_type,
-        )),
-        (AggregateFunction::RegrSXY, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::SXY,
-            data_type,
-        )),
-        (
-            AggregateFunction::RegrSlope
-            | AggregateFunction::RegrIntercept
-            | AggregateFunction::RegrCount
-            | AggregateFunction::RegrR2
-            | AggregateFunction::RegrAvgx
-            | AggregateFunction::RegrAvgy
-            | AggregateFunction::RegrSXX
-            | AggregateFunction::RegrSYY
-            | AggregateFunction::RegrSXY,
-            true,
-        ) => {
-            return not_impl_err!("{}(DISTINCT) aggregations are not available", fun);
         }
         (AggregateFunction::ApproxPercentileCont, false) => {
             if input_phy_exprs.len() == 2 {

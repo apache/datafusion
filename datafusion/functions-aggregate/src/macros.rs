@@ -32,8 +32,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-macro_rules! make_udaf_expr_and_func {
-    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+macro_rules! make_udaf_expr {
+    ($EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
         pub fn $EXPR_FN(
@@ -48,7 +48,12 @@ macro_rules! make_udaf_expr_and_func {
                 None,
             ))
         }
+    };
+}
 
+macro_rules! make_udaf_expr_and_func {
+    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+        make_udaf_expr!($EXPR_FN, $($arg)*, $DOC, $AGGREGATE_UDF_FN);
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
     ($UDAF:ty, $EXPR_FN:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
@@ -73,6 +78,9 @@ macro_rules! make_udaf_expr_and_func {
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
+        create_func!($UDAF, $AGGREGATE_UDF_FN, <$UDAF>::default());
+    };
+    ($UDAF:ty, $AGGREGATE_UDF_FN:ident, $CREATE:expr) => {
         paste::paste! {
             /// Singleton instance of [$UDAF], ensures the UDAF is only created once
             /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
@@ -86,7 +94,7 @@ macro_rules! create_func {
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<datafusion_expr::AggregateUDF> {
                 [< STATIC_ $UDAF >]
                     .get_or_init(|| {
-                        std::sync::Arc::new(datafusion_expr::AggregateUDF::from(<$UDAF>::default()))
+                        std::sync::Arc::new(datafusion_expr::AggregateUDF::from($CREATE))
                     })
                     .clone()
             }

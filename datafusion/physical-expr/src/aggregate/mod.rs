@@ -33,7 +33,6 @@ pub(crate) mod string_agg;
 #[macro_use]
 pub(crate) mod min_max;
 pub(crate) mod groups_accumulator;
-pub(crate) mod regr;
 pub(crate) mod stats;
 pub(crate) mod stddev;
 pub(crate) mod variance;
