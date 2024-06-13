@@ -1363,7 +1363,7 @@ impl SMJStream {
                         // Usually this is done by `freeze_buffered`. However, if a buffered row is joined with
                         // streamed side, it won't be outputted by `freeze_buffered`.
                         // We need to check if a buffered row is joined with streamed side and output.
-                        // If it is joined with streamed side, but finally fails on the join filter,
+                        // If it is joined with streamed side, but doesn't match the join filter,
                         // we need to output it with nulls as streamed side.
                         if matches!(self.join_type, JoinType::Full) {
                             for i in 0..pre_mask.len() {
