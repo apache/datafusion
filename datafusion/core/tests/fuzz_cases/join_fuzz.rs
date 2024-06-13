@@ -180,6 +180,9 @@ async fn test_semi_join_1k() {
     .await
 }
 
+// The test is flaky
+// https://github.com/apache/datafusion/issues/10886
+#[ignore]
 #[tokio::test]
 async fn test_semi_join_1k_filtered() {
     JoinFuzzTestCase::new(
