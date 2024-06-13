@@ -171,9 +171,13 @@ impl CommonSubexprEliminate {
         input.schema().iter().for_each(|(qualifier, field)| {
             let name = field.name();
             if name.starts_with('#') {
-                let index = name.trim_start_matches('#').parse::<usize>().unwrap_or(1);
-                let expr = Expr::from((qualifier, field));
-                common_exprs.insert(name.clone(), (expr, index));
+                match name.trim_start_matches('#').parse::<usize>() {
+                    Ok(index) => {
+                        let expr = Expr::from((qualifier, field));
+                        common_exprs.insert(name.clone(), (expr, index));
+                    }
+                    Err(_) => (), // probably user-assigned alias, skip if not numeric
+                }
             }
         });
 
@@ -342,7 +346,7 @@ impl CommonSubexprEliminate {
             Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr)
                 .map(LogicalPlan::Aggregate)
         } else {
-            let mut expr_number = common_exprs.len();
+            let mut expr_number = common_exprs.values().map(|t| t.1).max().unwrap_or(0);
 
             let mut agg_exprs = common_exprs
                 .into_iter()
