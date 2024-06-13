@@ -31,7 +31,7 @@ use datafusion_common::{plan_err, DataFusionError, Result};
 use std::any::{type_name, Any};
 
 use crate::utils::{downcast_arg, make_scalar_function};
-use arrow_schema::DataType::{FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8};
+use arrow_schema::DataType::{FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8, Dictionary};
 use datafusion_common::cast::{
     as_generic_string_array, as_large_list_array, as_list_array, as_string_array,
 };
@@ -279,6 +279,21 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                     )?;
                 }
 
+                Ok(arg)
+            }
+            Dictionary(..) => {
+                let any_dict_array = arr.as_any_dictionary_opt().ok_or_else( || {
+                    DataFusionError::Internal(
+                        format!("could not cast {} to AnyDictionaryArray", arr.data_type())
+                    )
+                })?;
+                compute_array_to_string(
+                    arg,
+                    any_dict_array.values().clone(),
+                    delimiter.clone(),
+                    null_string.clone(),
+                    with_null_string,
+                )?;
                 Ok(arg)
             }
             Null => Ok(arg),
