@@ -362,11 +362,11 @@ mod tests {
     use super::*;
     use crate::test::*;
     use datafusion_expr::expr::{self, GroupingSet};
-    use datafusion_expr::test::function_stub::{sum, sum_udaf};
     use datafusion_expr::{
-        count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max, min,
-        AggregateFunction,
+        lit, logical_plan::builder::LogicalPlanBuilder, max, min, AggregateFunction,
     };
+    use datafusion_functions_aggregate::expr_fn::{count, count_distinct, sum};
+    use datafusion_functions_aggregate::sum::sum_udaf;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(

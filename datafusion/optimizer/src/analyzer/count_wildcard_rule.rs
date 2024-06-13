@@ -121,13 +121,14 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
-    use datafusion_expr::test::function_stub::sum;
     use datafusion_expr::{
-        col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
+        col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
         out_ref_col, scalar_subquery, wildcard, AggregateFunction, WindowFrame,
         WindowFrameBound, WindowFrameUnits,
     };
     use std::sync::Arc;
+
+    use datafusion_functions_aggregate::expr_fn::{count, sum};
 
     fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(

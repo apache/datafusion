@@ -821,7 +821,7 @@ mod tests {
     use datafusion_expr::{
         binary_expr, build_join_schema,
         builder::table_scan_with_filters,
-        col, count,
+        col,
         expr::{self, Cast},
         lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
@@ -829,6 +829,8 @@ mod tests {
         Like, LogicalPlan, Operator, Projection, UserDefinedLogicalNodeCore, WindowFrame,
         WindowFunctionDefinition,
     };
+
+    use datafusion_functions_aggregate::expr_fn::count;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(OptimizeProjections::new()), plan, expected)
