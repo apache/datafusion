@@ -156,9 +156,8 @@ pub use writer::plan_to_parquet;
 /// used to implement external indexes on top of parquet files and select only
 /// portions of the files.
 ///
-/// The `ParquetExec` will try and further reduce any provided
-/// `ParquetAccessPlan` further based on the contents of `ParquetMetadata` and
-/// other settings.
+/// The `ParquetExec` will try and reduce any provided `ParquetAccessPlan`
+/// further based on the contents of `ParquetMetadata` and other settings.
 ///
 /// ## Example of providing a ParquetAccessPlan
 ///
