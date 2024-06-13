@@ -58,6 +58,12 @@ fn cli_quick_test<'a>(
     cmd.assert().stdout(predicate::eq(expected));
 }
 
+// Disabled due to https://github.com/apache/datafusion/issues/10793
+// $ ./target/debug/datafusion-cli.exe --file tests/data/hf_store_sql.txt --format json
+// DataFusion CLI v39.0.0
+//
+// thread 'main' has overflowed its stack
+#[cfg(not(target_family = "windows"))]
 #[rstest]
 #[case::exec_hf_store_test(
     ["--file", "tests/data/hf_store_sql.txt", "--format", "json", "-q"],
