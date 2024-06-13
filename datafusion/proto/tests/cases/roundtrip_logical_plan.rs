@@ -26,6 +26,7 @@ use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
+use datafusion_functions_aggregate::count::count_udaf;
 use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
@@ -53,10 +54,10 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    Accumulator, AggregateFunction, ColumnarValue, ExprSchemable, LogicalPlan, Operator,
-    PartitionEvaluator, ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
-    WindowUDFImpl,
+    Accumulator, AggregateExt, AggregateFunction, ColumnarValue, ExprSchemable,
+    LogicalPlan, Operator, PartitionEvaluator, ScalarUDF, ScalarUDFImpl, Signature,
+    TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -1782,28 +1783,18 @@ fn roundtrip_similar_to() {
 
 #[test]
 fn roundtrip_count() {
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-        AggregateFunction::Count,
-        vec![col("bananas")],
-        false,
-        None,
-        None,
-        None,
-    ));
+    let test_expr = count(col("bananas"));
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
 }
 
 #[test]
 fn roundtrip_count_distinct() {
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-        AggregateFunction::Count,
-        vec![col("bananas")],
-        true,
-        None,
-        None,
-        None,
-    ));
+    let test_expr = count_udaf()
+        .call(vec![col("bananas")])
+        .distinct()
+        .build()
+        .unwrap();
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
 }

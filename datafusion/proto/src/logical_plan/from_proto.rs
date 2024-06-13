@@ -145,7 +145,6 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::BitXor => Self::BitXor,
             protobuf::AggregateFunction::BoolAnd => Self::BoolAnd,
             protobuf::AggregateFunction::BoolOr => Self::BoolOr,
-            protobuf::AggregateFunction::Count => Self::Count,
             protobuf::AggregateFunction::ArrayAgg => Self::ArrayAgg,
             protobuf::AggregateFunction::Correlation => Self::Correlation,
             protobuf::AggregateFunction::RegrSlope => Self::RegrSlope,

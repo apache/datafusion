@@ -2136,18 +2136,6 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_count_return_type() -> Result<()> {
-        let fun = find_df_window_func("count").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8])?;
-        assert_eq!(DataType::Int64, observed);
-
-        let observed = fun.return_type(&[DataType::UInt64])?;
-        assert_eq!(DataType::Int64, observed);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_first_value_return_type() -> Result<()> {
         let fun = find_df_window_func("first_value").unwrap();
         let observed = fun.return_type(&[DataType::Utf8])?;
@@ -2250,7 +2238,6 @@ mod test {
             "nth_value",
             "min",
             "max",
-            "count",
             "avg",
         ];
         for name in names {

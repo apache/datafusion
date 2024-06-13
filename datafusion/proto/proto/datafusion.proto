@@ -476,7 +476,7 @@ enum AggregateFunction {
   MAX = 1;
   // SUM = 2;
   AVG = 3;
-  COUNT = 4;
+  // COUNT = 4;
   // APPROX_DISTINCT = 5;
   ARRAY_AGG = 6;
   // VARIANCE = 7;
