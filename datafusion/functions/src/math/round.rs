@@ -20,10 +20,12 @@ use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
+use arrow::array::{ArrayRef, Float32Array, Float64Array, Int32Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Float32, Float64, Int32};
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -109,15 +111,16 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     if args.len() == 2 {
         decimal_places = ColumnarValue::Array(args[1].clone());
-        // if cast fails, we return error instead of panic. Better solution would to update
-        // function signature and instead error during planning -- to be improved later
-        _ = decimal_places.cast_to(&Int32, None)?;
     }
 
     match args[0].data_type() {
         DataType::Float64 => match decimal_places {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(decimal_places))) => {
-                let decimal_places = decimal_places.try_into().unwrap();
+                let decimal_places: i32 = decimal_places.try_into().map_err(|e| {
+                    exec_datafusion_err!(
+                        "Invalid value for decimal places: {decimal_places}: {e}"
+                    )
+                })?;
 
                 Ok(Arc::new(make_function_scalar_inputs!(
                     &args[0],
@@ -131,21 +134,29 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                 )) as ArrayRef)
             }
-            ColumnarValue::Array(decimal_places) => Ok(Arc::new(make_function_inputs2!(
-                &args[0],
-                decimal_places,
-                "value",
-                "decimal_places",
-                Float64Array,
-                Int64Array,
-                {
-                    |value: f64, decimal_places: i64| {
-                        (value * 10.0_f64.powi(decimal_places.try_into().unwrap()))
-                            .round()
-                            / 10.0_f64.powi(decimal_places.try_into().unwrap())
+            ColumnarValue::Array(_) => {
+                let ColumnarValue::Array(decimal_places) =
+                    decimal_places.cast_to(&Int32, None).map_err(|e| {
+                        exec_datafusion_err!("Invalid values for decimal places: {e}")
+                    })?
+                else {
+                    panic!("Unexpected result of ColumnarValue::Array.cast")
+                };
+                Ok(Arc::new(make_function_inputs2!(
+                    &args[0],
+                    decimal_places,
+                    "value",
+                    "decimal_places",
+                    Float64Array,
+                    Int32Array,
+                    {
+                        |value: f64, decimal_places: i32| {
+                            (value * 10.0_f64.powi(decimal_places)).round()
+                                / 10.0_f64.powi(decimal_places)
+                        }
                     }
-                }
-            )) as ArrayRef),
+                )) as ArrayRef)
+            }
             _ => {
                 exec_err!("round function requires a scalar or array for decimal_places")
             }
@@ -153,7 +164,11 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
 
         DataType::Float32 => match decimal_places {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(decimal_places))) => {
-                let decimal_places = decimal_places.try_into().unwrap();
+                let decimal_places: i32 = decimal_places.try_into().map_err(|e| {
+                    exec_datafusion_err!(
+                        "Invalid value for decimal places: {decimal_places}: {e}"
+                    )
+                })?;
 
                 Ok(Arc::new(make_function_scalar_inputs!(
                     &args[0],
@@ -167,21 +182,31 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                 )) as ArrayRef)
             }
-            ColumnarValue::Array(decimal_places) => Ok(Arc::new(make_function_inputs2!(
-                &args[0],
-                decimal_places,
-                "value",
-                "decimal_places",
-                Float32Array,
-                Int64Array,
-                {
-                    |value: f32, decimal_places: i64| {
-                        (value * 10.0_f32.powi(decimal_places.try_into().unwrap()))
-                            .round()
-                            / 10.0_f32.powi(decimal_places.try_into().unwrap())
+            ColumnarValue::Array(_) => {
+                let ColumnarValue::Array(decimal_places) =
+                    decimal_places.cast_to(&Int32, None).map_err(|e| {
+                        exec_datafusion_err!("Invalid values for decimal places: {e}")
+                    })?
+                else {
+                    panic!("Unexpected result of ColumnarValue::Array.cast")
+                };
+
+                Ok(Arc::new(make_function_inputs2!(
+                    &args[0],
+                    decimal_places,
+                    "value",
+                    "decimal_places",
+                    Float32Array,
+                    Int32Array,
+                    {
+                        |value: f32, decimal_places: i32| {
+                            (value * 10.0_f32.powi(decimal_places.try_into().unwrap()))
+                                .round()
+                                / 10.0_f32.powi(decimal_places.try_into().unwrap())
+                        }
                     }
-                }
-            )) as ArrayRef),
+                )) as ArrayRef)
+            }
             _ => {
                 exec_err!("round function requires a scalar or array for decimal_places")
             }
@@ -277,6 +302,6 @@ mod test {
         let result = round(&args);
 
         assert!(result.is_err());
-        assert!(matches!(result, Err(DataFusionError::ArrowError { .. })));
+        assert!(matches!(result, Err(DataFusionError::Execution { .. })));
     }
 }
