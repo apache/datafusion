@@ -34,6 +34,8 @@ use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
 use datafusion_expr::{col, Expr, ExprSchemable};
 use indexmap::IndexMap;
+use itertools::FoldWhile::{Continue, Done};
+use itertools::Itertools;
 
 /// Identifier that represents a subexpression tree.
 ///
@@ -88,7 +90,7 @@ type ExprStats = HashMap<Identifier, (usize, DataType)>;
 
 /// A map that contains the common expressions extracted during the second, rewriting
 /// traversal.
-type CommonExprs = IndexMap<Identifier, Expr>;
+type CommonExprs = IndexMap<Identifier, (Expr, usize)>;
 
 /// Performs Common Sub-expression Elimination optimization.
 ///
@@ -164,12 +166,14 @@ impl CommonSubexprEliminate {
         expr_stats: &ExprStats,
         config: &dyn OptimizerConfig,
     ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
-        let mut common_exprs = IndexMap::new();
+        let mut common_exprs = CommonExprs::new();
 
         input.schema().iter().for_each(|(qualifier, field)| {
             let name = field.name();
             if name.starts_with('#') {
-                common_exprs.insert(name.clone(), Expr::from((qualifier, field)));
+                let index = name.trim_start_matches('#').parse::<usize>().unwrap_or(1);
+                let expr = Expr::from((qualifier, field));
+                common_exprs.insert(name.clone(), (expr, index));
             }
         });
 
@@ -316,7 +320,7 @@ impl CommonSubexprEliminate {
             &mut expr_stats,
             ExprMask::NormalAndAggregates,
         )?;
-        let mut common_exprs = IndexMap::new();
+        let mut common_exprs = CommonExprs::new();
         let mut rewritten = self.rewrite_exprs_list(
             &[&new_aggr_expr],
             &[&aggr_arrays],
@@ -342,10 +346,9 @@ impl CommonSubexprEliminate {
 
             let mut agg_exprs = common_exprs
                 .into_iter()
-                .enumerate()
-                .map(|(index, (_, expr))| {
+                .map(|(_, (expr, index))| {
                     // todo: check `nullable`
-                    expr.alias(format!("#{}", index + 1))
+                    expr.alias(format!("#{index}"))
                 })
                 .collect::<Vec<_>>();
 
@@ -530,9 +533,8 @@ fn build_common_expr_project_plan(
     let mut fields_set = BTreeSet::new();
     let mut project_exprs = common_exprs
         .into_iter()
-        .enumerate()
-        .map(|(index, (_, expr))| {
-            let alias = format!("#{}", index + 1);
+        .map(|(_, (expr, index))| {
+            let alias = format!("#{index}");
             let (dt, nullable) = expr.data_type_and_nullable(input.schema())?;
             let field = Field::new(&alias, dt, nullable);
             fields_set.insert(field.name().to_owned());
@@ -829,11 +831,15 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
 
             let expr_name = expr.display_name()?;
 
-            let expr_number =
-                self.common_exprs.get_index_of(expr_id).unwrap_or_else(|| {
-                    self.common_exprs.insert(expr_id.clone(), expr);
-                    self.common_exprs.len() - 1
-                }) + 1;
+            let expr_number = match self.common_exprs.get(expr_id) {
+                Some((_, v)) => *v,
+                None => {
+                    let next_index = self.get_next_alias();
+                    self.common_exprs
+                        .insert(expr_id.clone(), (expr.clone(), next_index));
+                    next_index
+                }
+            };
 
             let expr_id = format!("#{expr_number}");
 
@@ -848,6 +854,30 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             Ok(Transformed::new(rewritten, true, TreeNodeRecursion::Jump))
         } else {
             Ok(Transformed::no(expr))
+        }
+    }
+}
+
+impl CommonSubexprRewriter<'_> {
+    fn get_next_alias(&self) -> usize {
+        let used_aliases = self.common_exprs.iter().map(|(_, v)| v.1).collect_vec();
+
+        let biggest_used = used_aliases.iter().max().unwrap_or(&0);
+
+        if used_aliases.len() == *biggest_used {
+            biggest_used + 1
+        } else {
+            // find the smallest unused index
+            used_aliases
+                .into_iter()
+                .fold_while(1, |index, alias| {
+                    if index < alias {
+                        Done(index)
+                    } else {
+                        Continue(index + 1)
+                    }
+                })
+                .into_inner()
         }
     }
 }
@@ -1232,12 +1262,12 @@ mod test {
     fn redundant_project_fields() {
         let table_scan = test_table_scan().unwrap();
         let common_exprs_1 = CommonExprs::from([
-            ("c+a".to_string(), col("c") + col("a")),
-            ("b+a".to_string(), col("b") + col("a")),
+            ("c+a".to_string(), (col("c") + col("a"), 1)),
+            ("b+a".to_string(), (col("b") + col("a"), 2)),
         ]);
         let common_exprs_2 = CommonExprs::from([
-            ("c+a".to_string(), col("#1")),
-            ("b+a".to_string(), col("#2")),
+            ("c+a".to_string(), (col("#1"), 1)),
+            ("b+a".to_string(), (col("#2"), 2)),
         ]);
         let project = build_common_expr_project_plan(table_scan, common_exprs_1).unwrap();
         let project_2 = build_common_expr_project_plan(project, common_exprs_2).unwrap();
@@ -1260,16 +1290,16 @@ mod test {
         let common_exprs_1 = CommonExprs::from([
             (
                 "test1.c+test1.a".to_string(),
-                col("test1.c") + col("test1.a"),
+                (col("test1.c") + col("test1.a"), 1),
             ),
             (
                 "test1.b+test1.a".to_string(),
-                col("test1.b") + col("test1.a"),
+                (col("test1.b") + col("test1.a"), 2),
             ),
         ]);
         let common_exprs_2 = CommonExprs::from([
-            ("test1.c+test1.a".to_string(), col("#1")),
-            ("test1.b+test1.a".to_string(), col("#2")),
+            ("test1.c+test1.a".to_string(), (col("#1"), 1)),
+            ("test1.b+test1.a".to_string(), (col("#2"), 2)),
         ]);
         let project = build_common_expr_project_plan(join, common_exprs_1).unwrap();
         let project_2 = build_common_expr_project_plan(project, common_exprs_2).unwrap();
@@ -1402,6 +1432,23 @@ mod test {
         let expected = "Projection: #1 AS c1, #1 AS c2, #2 AS c3, #2 AS c4\
         \n  Projection: #1 AS #1, test.c + Int32(2) AS #2, test.c\
         \n    Projection: test.a + test.b AS #1, test.c\
+        \n      TableScan: test";
+
+        assert_optimized_plan_eq(expected, &plan);
+
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![(col("a") + col("b")).alias("#2"), col("c")])?
+            .project(vec![
+                col("#2").alias("c1"),
+                col("#2").alias("c2"),
+                (col("c") + lit(2)).alias("c3"),
+                (col("c") + lit(2)).alias("c4"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: #2 AS c1, #2 AS c2, #1 AS c3, #1 AS c4\
+        \n  Projection: #2 AS #2, test.c + Int32(2) AS #1, test.c\
+        \n    Projection: test.a + test.b AS #2, test.c\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
