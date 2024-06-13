@@ -1950,15 +1950,15 @@ pub enum AggregateFunction {
     BitXor = 21,
     BoolAnd = 22,
     BoolOr = 23,
-    // RegrSlope = 26,
-    // RegrIntercept = 27,
-    // RegrCount = 28,
-    // RegrR2 = 29,
-    // RegrAvgx = 30,
-    // RegrAvgy = 31,
-    // RegrSxx = 32,
-    // RegrSyy = 33,
-    // RegrSxy = 34,
+    /// REGR_SLOPE = 26;
+    /// REGR_INTERCEPT = 27;
+    /// REGR_COUNT = 28;
+    /// REGR_R2 = 29;
+    /// REGR_AVGX = 30;
+    /// REGR_AVGY = 31;
+    /// REGR_SXX = 32;
+    /// REGR_SYY = 33;
+    /// REGR_SXY = 34;
     StringAgg = 35,
     NthValueAgg = 36,
 }
