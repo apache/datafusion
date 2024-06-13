@@ -203,6 +203,7 @@ impl AggregateUDFImpl for Sum {
     }
 }
 
+/// Testing stub implementation of COUNT aggregate
 pub struct Count {
     signature: Signature,
     aliases: Vec<String>,
