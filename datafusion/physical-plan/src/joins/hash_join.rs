@@ -21,7 +21,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
-use std::{any::Any, usize, vec};
+use std::{any::Any, vec};
 
 use super::{
     utils::{OnceAsync, OnceFut},
