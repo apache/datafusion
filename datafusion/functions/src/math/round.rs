@@ -22,7 +22,7 @@ use crate::utils::make_scalar_function;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Float32, Float64};
+use arrow::datatypes::DataType::{Float32, Float64, Int32};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
@@ -109,6 +109,9 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     if args.len() == 2 {
         decimal_places = ColumnarValue::Array(args[1].clone());
+        // if cast fails, we return error instead of panic. Better solution would to update
+        // function signature and instead error during planning -- to be improved later
+        _ = decimal_places.cast_to(&Int32, None)?;
     }
 
     match args[0].data_type() {
@@ -196,6 +199,7 @@ mod test {
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use datafusion_common::DataFusionError;
 
     #[test]
     fn test_round_f32() {
@@ -261,5 +265,18 @@ mod test {
         let expected = Float64Array::from(vec![125.0, 12.0, 1.0, 0.0]);
 
         assert_eq!(floats, &expected);
+    }
+
+    #[test]
+    fn test_round_f32_cast_fail() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![125.2345])), // input
+            Arc::new(Int64Array::from(vec![2147483648])), // decimal_places
+        ];
+
+        let result = round(&args);
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(DataFusionError::ArrowError { .. })));
     }
 }
