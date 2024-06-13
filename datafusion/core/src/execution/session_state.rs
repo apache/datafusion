@@ -490,14 +490,22 @@ impl SessionState {
         Ok(statement)
     }
 
-    /// Resolve all table references in the SQL statement.
+    /// Resolve all table references in the SQL statement. Does not include CTE references.
+    ///
+    /// See [`catalog::resolve_table_references`] for more information.
+    ///
+    /// [`catalog::resolve_table_references`]: crate::catalog::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &datafusion_sql::parser::Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        crate::catalog::resolve_table_references(statement, enable_ident_normalization)
+        let (table_refs, _) = crate::catalog::resolve_table_references(
+            statement,
+            enable_ident_normalization,
+        )?;
+        Ok(table_refs)
     }
 
     /// Convert an AST Statement into a LogicalPlan

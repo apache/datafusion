@@ -27,6 +27,7 @@ use crate::catalog::schema::SchemaProvider;
 use dashmap::DashMap;
 use datafusion_common::{exec_err, not_impl_err, Result};
 use std::any::Any;
+use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -296,25 +297,44 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 }
 
-/// Resolve all table references in the SQL statement.
+/// Collects all tables and views referenced in the SQL statement. CTEs are collected separately.
+/// This can be used to determine which tables need to be in the catalog for a query to be planned.
+///
+/// # Returns
+///
+/// A `(relations, ctes)` tuple, the first element contains table and view references and the second
+/// element contains any CTE aliases that were defined and possibly referenced.
 ///
 /// ## Example
 ///
 /// ```
-/// use datafusion_sql::parser::DFParser;
-/// use datafusion::catalog::resolve_table_references;
-///
+/// # use datafusion_sql::parser::DFParser;
+/// # use datafusion::catalog::resolve_table_references;
 /// let query = "SELECT a FROM foo where x IN (SELECT y FROM bar)";
 /// let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
-/// let table_refs = resolve_table_references(&statement, true).unwrap();
+/// let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();
 /// assert_eq!(table_refs.len(), 2);
-/// assert_eq!(table_refs[0].to_string(), "foo");
-/// assert_eq!(table_refs[1].to_string(), "bar");
+/// assert_eq!(table_refs[0].to_string(), "bar");
+/// assert_eq!(table_refs[1].to_string(), "foo");
+/// assert_eq!(ctes.len(), 0);
+/// ```
+///
+/// ## Example with CTEs  
+///  
+/// ```  
+/// # use datafusion_sql::parser::DFParser;  
+/// # use datafusion::catalog::resolve_table_references;  
+/// let query = "with my_cte as (values (1), (2)) SELECT * from my_cte;";  
+/// let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();  
+/// let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();  
+/// assert_eq!(table_refs.len(), 0);
+/// assert_eq!(ctes.len(), 1);  
+/// assert_eq!(ctes[0].to_string(), "my_cte");  
 /// ```
 pub fn resolve_table_references(
     statement: &datafusion_sql::parser::Statement,
     enable_ident_normalization: bool,
-) -> datafusion_common::Result<Vec<TableReference>> {
+) -> datafusion_common::Result<(Vec<TableReference>, Vec<TableReference>)> {
     use crate::sql::planner::object_name_to_table_reference;
     use datafusion_sql::parser::{
         CopyToSource, CopyToStatement, Statement as DFStatement,
@@ -323,24 +343,25 @@ pub fn resolve_table_references(
     use information_schema::INFORMATION_SCHEMA_TABLES;
     use sqlparser::ast::*;
 
-    // Getting `TableProviders` is async but planing is not -- thus pre-fetch
-    // table providers for all relations referenced in this query
-    let mut relations = hashbrown::HashSet::with_capacity(10);
+    struct RelationVisitor {
+        relations: BTreeSet<ObjectName>,
+        ctes: BTreeSet<ObjectName>,
+    }
 
-    struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
-
-    impl<'a> RelationVisitor<'a> {
-        /// Record that `relation` was used in this statement
-        fn insert(&mut self, relation: &ObjectName) {
-            self.0.get_or_insert_with(relation, |_| relation.clone());
+    impl RelationVisitor {
+        /// Record the reference to `relation`, if it's not a CTE reference.
+        fn insert_relation(&mut self, relation: &ObjectName) {
+            if !self.relations.contains(&relation) && !self.ctes.contains(&relation) {
+                self.relations.insert(relation.clone());
+            }
         }
     }
 
-    impl<'a> Visitor for RelationVisitor<'a> {
+    impl Visitor for RelationVisitor {
         type Break = ();
 
         fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<()> {
-            self.insert(relation);
+            self.insert_relation(relation);
             ControlFlow::Continue(())
         }
 
@@ -350,7 +371,13 @@ pub fn resolve_table_references(
                 obj_name,
             } = statement
             {
-                self.insert(obj_name)
+                self.insert_relation(obj_name)
+            }
+
+            if let Statement::Query(q) = statement {
+                for cte in q.with.as_ref().map(|w| &w.cte_tables).into_iter().flatten() {
+                    self.ctes.insert(ObjectName(vec![cte.alias.name.clone()]));
+                }
             }
 
             // SHOW statements will later be rewritten into a SELECT from the information_schema
@@ -367,7 +394,7 @@ pub fn resolve_table_references(
             );
             if requires_information_schema {
                 for s in INFORMATION_SCHEMA_TABLES {
-                    self.0.insert(ObjectName(vec![
+                    self.relations.insert(ObjectName(vec![
                         Ident::new(INFORMATION_SCHEMA),
                         Ident::new(*s),
                     ]));
@@ -377,20 +404,24 @@ pub fn resolve_table_references(
         }
     }
 
-    let mut visitor = RelationVisitor(&mut relations);
-    fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor<'_>) {
+    let mut visitor = RelationVisitor {
+        relations: BTreeSet::new(),
+        ctes: BTreeSet::new(),
+    };
+
+    fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) {
         match statement {
             DFStatement::Statement(s) => {
                 let _ = s.as_ref().visit(visitor);
             }
             DFStatement::CreateExternalTable(table) => {
                 visitor
-                    .0
+                    .relations
                     .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
             }
             DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
                 CopyToSource::Relation(table_name) => {
-                    visitor.insert(table_name);
+                    visitor.insert_relation(table_name);
                 }
                 CopyToSource::Query(query) => {
                     query.visit(visitor);
@@ -402,10 +433,17 @@ pub fn resolve_table_references(
 
     visit_statement(statement, &mut visitor);
 
-    relations
+    let relations = visitor
+        .relations
         .into_iter()
         .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
-        .collect::<datafusion_common::Result<_>>()
+        .collect::<datafusion_common::Result<_>>()?;
+    let ctes = visitor
+        .ctes
+        .into_iter()
+        .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
+        .collect::<datafusion_common::Result<_>>()?;
+    Ok((relations, ctes))
 }
 
 #[cfg(test)]
