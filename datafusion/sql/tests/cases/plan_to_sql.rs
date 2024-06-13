@@ -153,7 +153,9 @@ fn roundtrip_statement() -> Result<()> {
             .try_with_sql(query)?
             .parse_statement()?;
 
-        let context = MockContextProvider::default().with_udaf(sum_udaf()).with_udaf(count_udaf());
+        let context = MockContextProvider::default()
+            .with_udaf(sum_udaf())
+            .with_udaf(count_udaf());
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
