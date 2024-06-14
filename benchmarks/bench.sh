@@ -302,7 +302,7 @@ data_tpch() {
     else
         echo " creating parquet files using benchmark binary ..."
         pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --prefer_hash_join ${PREFER_HASH_JOIN} --output "${TPCH_DIR}" --format parquet
+        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}" --format parquet
         popd > /dev/null
     fi
 }
