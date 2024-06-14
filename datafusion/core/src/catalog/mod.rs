@@ -345,13 +345,16 @@ pub fn resolve_table_references(
 
     struct RelationVisitor {
         relations: BTreeSet<ObjectName>,
-        ctes: BTreeSet<ObjectName>,
+        all_ctes: BTreeSet<ObjectName>,
+        ctes_in_scope: Vec<ObjectName>,
     }
 
     impl RelationVisitor {
         /// Record the reference to `relation`, if it's not a CTE reference.
         fn insert_relation(&mut self, relation: &ObjectName) {
-            if !self.relations.contains(relation) && !self.ctes.contains(relation) {
+            if !self.relations.contains(relation)
+                && !self.ctes_in_scope.contains(relation)
+            {
                 self.relations.insert(relation.clone());
             }
         }
@@ -366,16 +369,30 @@ pub fn resolve_table_references(
         }
 
         fn pre_visit_query(&mut self, q: &Query) -> ControlFlow<Self::Break> {
-            // The CTE name is not in scope when evaluating the CTE itself, so this is valid:
-            // `WITH t AS (SELECT * FROM t) SELECT * FROM t`
-            // Where the first `t` refers to a predefined table. So we are careful here
-            // to visit the CTE first, before adding it to the set of known CTEs.
-            //
-            // This is a bit hackish as the CTE will be visited again as part of visiting `q`,
-            // ideally there would be a `Visitor::post_visit_cte` hook.
-            for cte in q.with.as_ref().map(|w| &w.cte_tables).into_iter().flatten() {
-                cte.visit(self);
-                self.ctes.insert(ObjectName(vec![cte.alias.name.clone()]));
+            if let Some(with) = &q.with {
+                for cte in &with.cte_tables {
+                    // The non-recursive CTE name is not in scope when evaluating the CTE itself, so this is valid:
+                    // `WITH t AS (SELECT * FROM t) SELECT * FROM t`
+                    // Where the first `t` refers to a predefined table. So we are careful here
+                    // to visit the CTE first, before putting it in scope.
+                    if !with.recursive {
+                        // This is a bit hackish as the CTE will be visited again as part of visiting `q`,
+                        // but thankfully `insert_relation` is idempotent.
+                        cte.visit(self);
+                    }
+                    self.ctes_in_scope
+                        .push(ObjectName(vec![cte.alias.name.clone()]));
+                }
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn post_visit_query(&mut self, q: &Query) -> ControlFlow<Self::Break> {
+            if let Some(with) = &q.with {
+                for _ in &with.cte_tables {
+                    // Unwrap: We just pushed these in `pre_visit_query`
+                    self.all_ctes.insert(self.ctes_in_scope.pop().unwrap());
+                }
             }
             ControlFlow::Continue(())
         }
@@ -415,7 +432,8 @@ pub fn resolve_table_references(
 
     let mut visitor = RelationVisitor {
         relations: BTreeSet::new(),
-        ctes: BTreeSet::new(),
+        all_ctes: BTreeSet::new(),
+        ctes_in_scope: vec![],
     };
 
     fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) {
@@ -448,7 +466,7 @@ pub fn resolve_table_references(
         .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
         .collect::<datafusion_common::Result<_>>()?;
     let ctes = visitor
-        .ctes
+        .all_ctes
         .into_iter()
         .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
         .collect::<datafusion_common::Result<_>>()?;
@@ -537,5 +555,47 @@ mod tests {
         assert_eq!(ctes.len(), 1);
         assert_eq!(ctes[0].to_string(), "t");
         assert_eq!(table_refs[0].to_string(), "t");
+
+        // UNION is a special case where the CTE is not in scope for the second branch.
+        let query = "(with t as (select 1) select * from t) union (select * from t)";
+        let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+        let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();
+        assert_eq!(table_refs.len(), 1);
+        assert_eq!(ctes.len(), 1);
+        assert_eq!(ctes[0].to_string(), "t");
+        assert_eq!(table_refs[0].to_string(), "t");
+
+        // Nested CTEs are also handled.
+        // Here the first `u` is a CTE, but the second `u` is a table reference.
+        // While `t` is always a CTE.
+        let query = "(with t as (with u as (select 1) select * from u) select * from u cross join t)";
+        let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+        let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();
+        assert_eq!(table_refs.len(), 1);
+        assert_eq!(ctes.len(), 2);
+        assert_eq!(ctes[0].to_string(), "t");
+        assert_eq!(ctes[1].to_string(), "u");
+        assert_eq!(table_refs[0].to_string(), "u");
+    }
+
+    #[test]
+    fn resolve_table_references_recursive_cte() {
+        use datafusion_sql::parser::DFParser;
+
+        let query = "
+            WITH RECURSIVE nodes AS ( 
+                SELECT 1 as id
+                UNION ALL 
+                SELECT id + 1 as id 
+                FROM nodes
+                WHERE id < 10
+            )
+            SELECT * FROM nodes
+        ";
+        let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+        let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();
+        assert_eq!(table_refs.len(), 0);
+        assert_eq!(ctes.len(), 1);
+        assert_eq!(ctes[0].to_string(), "nodes");
     }
 }
