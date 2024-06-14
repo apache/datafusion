@@ -738,7 +738,6 @@ impl FranzWindowAggStream {
                         }
                         Some(Err(e)) => Err(e),
                         None => {
-                            println!("none ya business");
                             Ok(RecordBatch::new_empty(self.output_schema_with_window()))
                         }
                     },
