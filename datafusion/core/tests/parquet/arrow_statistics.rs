@@ -18,6 +18,7 @@
 //! This file contains an end to end test of extracting statitics from parquet files.
 //! It writes data into a parquet file, reads statistics and verifies they are correct
 
+use std::default::Default;
 use std::fs::File;
 use std::sync::Arc;
 
@@ -47,7 +48,7 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
 use super::make_test_file_rg;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 struct Int64Case {
     /// Number of nulls in the column
     null_values: usize,
@@ -59,6 +60,8 @@ struct Int64Case {
     row_per_group: usize,
     /// if specified, overrides default statistics settings
     enable_stats: Option<EnabledStatistics>,
+    /// If specified, the number of values in each page
+    data_page_row_count_limit: Option<usize>,
 }
 
 impl Int64Case {
@@ -85,7 +88,7 @@ impl Int64Case {
     }
 
     // Create a parquet file with the specified settings
-    pub fn parquet_file(&self) -> ParquetRecordBatchReaderBuilder<File> {
+    pub fn build(&self) -> ParquetRecordBatchReaderBuilder<File> {
         let mut output_file = tempfile::Builder::new()
             .prefix("parquert_statistics_test")
             .suffix(".parquet")
@@ -96,6 +99,9 @@ impl Int64Case {
             WriterProperties::builder().set_max_row_group_size(self.row_per_group);
         if let Some(enable_stats) = self.enable_stats {
             builder = builder.set_statistics_enabled(enable_stats);
+        }
+        if let Some(data_page_row_count_limit) = self.data_page_row_count_limit {
+            builder = builder.set_data_page_row_count_limit(data_page_row_count_limit);
         }
         let props = builder.build();
 
@@ -115,7 +121,8 @@ impl Int64Case {
 
         // open the file & get the reader
         let file = output_file.reopen().unwrap();
-        ArrowReaderBuilder::try_new(file).unwrap()
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
     }
 }
 
@@ -311,9 +318,9 @@ async fn test_one_row_group_without_null() {
         no_null_values_start: 4,
         no_null_values_end: 7,
         row_per_group: 20,
-        enable_stats: None,
+        ..Default::default()
     }
-    .parquet_file();
+    .build();
 
     Test {
         reader: &reader,
@@ -338,9 +345,9 @@ async fn test_one_row_group_with_null_and_negative() {
         no_null_values_start: -1,
         no_null_values_end: 5,
         row_per_group: 20,
-        enable_stats: None,
+        ..Default::default()
     }
-    .parquet_file();
+    .build();
 
     Test {
         reader: &reader,
@@ -365,9 +372,9 @@ async fn test_two_row_group_with_null() {
         no_null_values_start: 4,
         no_null_values_end: 17,
         row_per_group: 10,
-        enable_stats: None,
+        ..Default::default()
     }
-    .parquet_file();
+    .build();
 
     Test {
         reader: &reader,
@@ -392,9 +399,9 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
         no_null_values_start: -2,
         no_null_values_end: 2,
         row_per_group: 5,
-        enable_stats: None,
+        ..Default::default()
     }
-    .parquet_file();
+    .build();
 
     Test {
         reader: &reader,
@@ -411,6 +418,38 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
     }
     .run()
 }
+
+
+#[tokio::test]
+async fn test_multiple_data_pages_nulls_and_negatives() {
+    let reader = Int64Case {
+        null_values: 2,
+        no_null_values_start: -1,
+        no_null_values_end: 5,
+        row_per_group: 20,
+        // limit page row count to 4
+        data_page_row_count_limit: Some(4),
+        enable_stats: Some(EnabledStatistics::Page),
+
+    }
+        .build();
+
+    Test {
+        reader: &reader,
+        // min is -1
+        expected_min: Arc::new(Int64Array::from(vec![-1])),
+        // max is 4
+        expected_max: Arc::new(Int64Array::from(vec![4])),
+        // 2 nulls
+        expected_null_counts: UInt64Array::from(vec![2]),
+        // 8 rows
+        expected_row_counts: UInt64Array::from(vec![8]),
+        column_name: "i64",
+        test_data_page_statistics: true,
+    }
+        .run()
+}
+
 
 /////////////// MORE GENERAL TESTS //////////////////////
 // . Many columns in a file
@@ -1896,8 +1935,10 @@ async fn test_missing_statistics() {
         no_null_values_end: 7,
         row_per_group: 5,
         enable_stats: Some(EnabledStatistics::None),
+        ..Default::default()
+
     }
-    .parquet_file();
+    .build();
 
     Test {
         reader: &reader,
