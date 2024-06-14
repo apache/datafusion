@@ -491,15 +491,16 @@ impl HashJoinExec {
             on,
         );
 
-        let mut output_partitioning = match (mode, join_type) {
-            (
-                PartitionMode::CollectLeft,
-                JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti,
-            )
-            | (PartitionMode::Auto, _) => Partitioning::UnknownPartitioning(
+        let mut output_partitioning = match mode {
+            PartitionMode::CollectLeft => {
+                asymmetric_join_output_partitioning(left, right, &join_type)
+            }
+            PartitionMode::Auto => Partitioning::UnknownPartitioning(
                 right.output_partitioning().partition_count(),
             ),
-            _ => symmetric_join_output_partitioning(left, right, &join_type),
+            PartitionMode::Partitioned => {
+                symmetric_join_output_partitioning(left, right, &join_type)
+            }
         };
 
         // Determine execution mode by checking whether this join is pipeline

@@ -1542,6 +1542,25 @@ pub(crate) fn symmetric_join_output_partitioning(
     }
 }
 
+pub(crate) fn asymmetric_join_output_partitioning(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    join_type: &JoinType,
+) -> Partitioning {
+    match join_type {
+        JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
+            right.output_partitioning(),
+            left.schema().fields().len(),
+        ),
+        JoinType::RightSemi | JoinType::RightAnti => right.output_partitioning().clone(),
+        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::Full => {
+            Partitioning::UnknownPartitioning(
+                right.output_partitioning().partition_count(),
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;

@@ -228,21 +228,8 @@ impl NestedLoopJoinExec {
             &[],
         );
 
-        // Get output partitioning,
-        let output_partitioning = match join_type {
-            JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
-                right.output_partitioning(),
-                left.schema().fields().len(),
-            ),
-            JoinType::RightSemi | JoinType::RightAnti => {
-                right.output_partitioning().clone()
-            }
-            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::Full => {
-                Partitioning::UnknownPartitioning(
-                    right.output_partitioning().partition_count(),
-                )
-            }
-        };
+        let output_partitioning =
+            asymmetric_join_output_partitioning(left, right, &join_type);
 
         // Determine execution mode:
         let mut mode = execution_mode_from_children([left, right]);
