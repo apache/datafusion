@@ -363,7 +363,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
 
     let expected = [
         "+---------------------------------------------+",
-        "| APPROX_PERCENTILE_CONT(test.b,Float64(0.5)) |",
+        "| approx_percentile_cont(test.b,Float64(0.5)) |",
         "+---------------------------------------------+",
         "| 10                                          |",
         "+---------------------------------------------+",
@@ -384,7 +384,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     let df = create_test_table().await?;
     let expected = [
         "+--------------------------------------+",
-        "| APPROX_PERCENTILE_CONT(test.b,arg_2) |",
+        "| approx_percentile_cont(test.b,arg_2) |",
         "+--------------------------------------+",
         "| 10                                   |",
         "+--------------------------------------+",

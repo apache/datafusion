@@ -410,15 +410,6 @@ pub fn is_integer_arg_type(arg_type: &DataType) -> bool {
 }
 
 /// Return `true` if `arg_type` is of a [`DataType`] that the
-/// [`AggregateFunction::ApproxPercentileCont`] aggregation can operate on.
-pub fn is_approx_percentile_cont_supported_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        arg_type if NUMERICS.contains(arg_type)
-    )
-}
-
-/// Return `true` if `arg_type` is of a [`DataType`] that the
 /// [`AggregateFunction::StringAgg`] aggregation can operate on.
 pub fn is_string_agg_supported_arg_type(arg_type: &DataType) -> bool {
     matches!(
