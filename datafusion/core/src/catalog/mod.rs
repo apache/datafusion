@@ -302,7 +302,7 @@ impl CatalogProvider for MemoryCatalogProvider {
 ///
 /// # Returns
 ///
-/// A `(relations, ctes)` tuple, the first element contains table and view references and the second
+/// A `(table_refs, ctes)` tuple, the first element contains table and view references and the second
 /// element contains any CTE aliases that were defined and possibly referenced.
 ///
 /// ## Example
@@ -351,7 +351,7 @@ pub fn resolve_table_references(
     impl RelationVisitor {
         /// Record the reference to `relation`, if it's not a CTE reference.
         fn insert_relation(&mut self, relation: &ObjectName) {
-            if !self.relations.contains(&relation) && !self.ctes.contains(&relation) {
+            if !self.relations.contains(relation) && !self.ctes.contains(relation) {
                 self.relations.insert(relation.clone());
             }
         }
@@ -365,6 +365,21 @@ pub fn resolve_table_references(
             ControlFlow::Continue(())
         }
 
+        fn pre_visit_query(&mut self, q: &Query) -> ControlFlow<Self::Break> {
+            // The CTE name is not in scope when evaluating the CTE itself, so this is valid:
+            // `WITH t AS (SELECT * FROM t) SELECT * FROM t`
+            // Where the first `t` refers to a predefined table. So we are careful here
+            // to visit the CTE first, before adding it to the set of known CTEs.
+            //
+            // This is a bit hackish as the CTE will be visited again as part of visiting `q`,
+            // ideally there would be a `Visitor::post_visit_cte` hook.
+            for cte in q.with.as_ref().map(|w| &w.cte_tables).into_iter().flatten() {
+                cte.visit(self);
+                self.ctes.insert(ObjectName(vec![cte.alias.name.clone()]));
+            }
+            ControlFlow::Continue(())
+        }
+
         fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<()> {
             if let Statement::ShowCreate {
                 obj_type: ShowCreateObject::Table | ShowCreateObject::View,
@@ -372,12 +387,6 @@ pub fn resolve_table_references(
             } = statement
             {
                 self.insert_relation(obj_name)
-            }
-
-            if let Statement::Query(q) = statement {
-                for cte in q.with.as_ref().map(|w| &w.cte_tables).into_iter().flatten() {
-                    self.ctes.insert(ObjectName(vec![cte.alias.name.clone()]));
-                }
             }
 
             // SHOW statements will later be rewritten into a SELECT from the information_schema
@@ -433,7 +442,7 @@ pub fn resolve_table_references(
 
     visit_statement(statement, &mut visitor);
 
-    let relations = visitor
+    let table_refs = visitor
         .relations
         .into_iter()
         .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
@@ -443,7 +452,7 @@ pub fn resolve_table_references(
         .into_iter()
         .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
         .collect::<datafusion_common::Result<_>>()?;
-    Ok((relations, ctes))
+    Ok((table_refs, ctes))
 }
 
 #[cfg(test)]
@@ -513,5 +522,20 @@ mod tests {
     fn memory_catalog_dereg_missing() {
         let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
         assert!(cat.deregister_schema("foo", false).unwrap().is_none());
+    }
+
+    #[test]
+    fn resolve_table_references_shadowed_cte() {
+        use datafusion_sql::parser::DFParser;
+
+        // An interesting edge case where the `t` name is used both as an ordinary table reference
+        // and as a CTE reference.
+        let query = "WITH t AS (SELECT * FROM t) SELECT * FROM t";
+        let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+        let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();
+        assert_eq!(table_refs.len(), 1);
+        assert_eq!(ctes.len(), 1);
+        assert_eq!(ctes[0].to_string(), "t");
+        assert_eq!(table_refs[0].to_string(), "t");
     }
 }
