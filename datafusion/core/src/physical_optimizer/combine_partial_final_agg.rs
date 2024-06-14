@@ -144,8 +144,12 @@ fn can_combine(final_agg: GroupExprsRef, partial_agg: GroupExprsRef) -> bool {
     let (input_group_by, input_aggr_expr, input_filter_expr) =
         normalize_group_exprs(partial_agg);
 
-    final_group_by.eq(&input_group_by)
-        && final_aggr_expr.len() == input_aggr_expr.len()
+    debug_assert_eq!(
+        input_group_by.input_exprs().len(),
+        final_group_by.input_exprs().len()
+    );
+
+    final_aggr_expr.len() == input_aggr_expr.len()
         && final_aggr_expr
             .iter()
             .zip(input_aggr_expr.iter())
