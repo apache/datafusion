@@ -1448,7 +1448,7 @@ position(substr in origstr)
 Return true if search_string is found within string.
 
 ```
-contains(substr in origstr)
+contains(string, search_string)
 ```
 
 #### Arguments
