@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod count_distinct;
 pub mod groups_accumulator;
 pub mod stats;
 pub mod tdigest;

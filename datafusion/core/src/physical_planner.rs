@@ -2183,7 +2183,6 @@ impl DefaultPhysicalPlanner {
         expr: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input_schema = input.as_ref().schema();
-
         let physical_exprs = expr
             .iter()
             .map(|e| {

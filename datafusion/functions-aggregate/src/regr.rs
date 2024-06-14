@@ -18,9 +18,8 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::sync::Arc;
+use std::fmt::Debug;
 
-use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::Float64Array;
 use arrow::{
     array::{ArrayRef, UInt64Array},
@@ -28,13 +27,56 @@ use arrow::{
     datatypes::DataType,
     datatypes::Field,
 };
-use datafusion_common::{downcast_value, unwrap_or_internal_err, ScalarValue};
+use datafusion_common::{downcast_value, plan_err, unwrap_or_internal_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::type_coercion::aggregates::NUMERICS;
+use datafusion_expr::utils::format_state_name;
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
-use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::format_state_name;
+macro_rules! make_regr_udaf_expr_and_func {
+    ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $REGR_TYPE:expr) => {
+        make_udaf_expr!($EXPR_FN, expr_y expr_x, concat!("Compute a linear regression of type [", stringify!($REGR_TYPE), "]"), $AGGREGATE_UDF_FN);
+        create_func!($EXPR_FN, $AGGREGATE_UDF_FN, Regr::new($REGR_TYPE, stringify!($EXPR_FN)));
+    }
+}
 
+make_regr_udaf_expr_and_func!(regr_slope, regr_slope_udaf, RegrType::Slope);
+make_regr_udaf_expr_and_func!(regr_intercept, regr_intercept_udaf, RegrType::Intercept);
+make_regr_udaf_expr_and_func!(regr_count, regr_count_udaf, RegrType::Count);
+make_regr_udaf_expr_and_func!(regr_r2, regr_r2_udaf, RegrType::R2);
+make_regr_udaf_expr_and_func!(regr_avgx, regr_avgx_udaf, RegrType::AvgX);
+make_regr_udaf_expr_and_func!(regr_avgy, regr_avgy_udaf, RegrType::AvgY);
+make_regr_udaf_expr_and_func!(regr_sxx, regr_sxx_udaf, RegrType::SXX);
+make_regr_udaf_expr_and_func!(regr_syy, regr_syy_udaf, RegrType::SYY);
+make_regr_udaf_expr_and_func!(regr_sxy, regr_sxy_udaf, RegrType::SXY);
+
+pub struct Regr {
+    signature: Signature,
+    regr_type: RegrType,
+    func_name: &'static str,
+}
+
+impl Debug for Regr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("regr")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+impl Regr {
+    pub fn new(regr_type: RegrType, func_name: &'static str) -> Self {
+        Self {
+            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            regr_type,
+            func_name,
+        }
+    }
+}
+
+/*
 #[derive(Debug)]
 pub struct Regr {
     name: String,
@@ -48,6 +90,7 @@ impl Regr {
         self.regr_type.clone()
     }
 }
+*/
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
@@ -92,86 +135,75 @@ pub enum RegrType {
     SXY,
 }
 
-impl Regr {
-    pub fn new(
-        expr_y: Arc<dyn PhysicalExpr>,
-        expr_x: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        regr_type: RegrType,
-        return_type: DataType,
-    ) -> Self {
-        // the result of regr_slope only support FLOAT64 data type.
-        assert!(matches!(return_type, DataType::Float64));
-        Self {
-            name: name.into(),
-            regr_type,
-            expr_y,
-            expr_x,
-        }
-    }
-}
-
-impl AggregateExpr for Regr {
+impl AggregateUDFImpl for Regr {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, DataType::Float64, true))
+    fn name(&self) -> &str {
+        self.func_name
     }
 
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if !arg_types[0].is_numeric() {
+            return plan_err!("Covariance requires numeric input types");
+        }
+
+        Ok(DataType::Float64)
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(RegrAccumulator::try_new(&self.regr_type)?))
     }
 
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+    fn create_sliding_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(RegrAccumulator::try_new(&self.regr_type)?))
     }
 
-    fn state_fields(&self) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                format_state_name(&self.name, "count"),
+                format_state_name(args.name, "count"),
                 DataType::UInt64,
                 true,
             ),
             Field::new(
-                format_state_name(&self.name, "mean_x"),
+                format_state_name(args.name, "mean_x"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                format_state_name(&self.name, "mean_y"),
+                format_state_name(args.name, "mean_y"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                format_state_name(&self.name, "m2_x"),
+                format_state_name(args.name, "m2_x"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                format_state_name(&self.name, "m2_y"),
+                format_state_name(args.name, "m2_y"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                format_state_name(&self.name, "algo_const"),
+                format_state_name(args.name, "algo_const"),
                 DataType::Float64,
                 true,
             ),
         ])
     }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr_y.clone(), self.expr_x.clone()]
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
 }
 
+/*
 impl PartialEq<dyn Any> for Regr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
@@ -184,6 +216,7 @@ impl PartialEq<dyn Any> for Regr {
             .unwrap_or(false)
     }
 }
+*/
 
 /// `RegrAccumulator` is used to compute linear regression aggregate functions
 /// by maintaining statistics needed to compute them in an online fashion.
@@ -303,6 +336,10 @@ impl Accumulator for RegrAccumulator {
         }
 
         Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

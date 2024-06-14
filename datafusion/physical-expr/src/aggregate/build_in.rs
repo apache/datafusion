@@ -30,12 +30,13 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use crate::aggregate::average::Avg;
-use crate::aggregate::regr::RegrType;
-use crate::expressions::{self, Literal};
-use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
+
+use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
+use crate::aggregate::average::Avg;
+use crate::expressions::{self, Literal};
+
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
 pub fn create_aggregate_expr(
@@ -60,14 +61,6 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::Count, false) => Arc::new(
-            expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, data_type),
-        ),
-        (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
-            data_type,
-            input_phy_exprs[0].clone(),
-            name,
-        )),
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
             input_phy_exprs[0].clone(),
             name,
@@ -162,83 +155,6 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Correlation, true) => {
             return not_impl_err!("CORR(DISTINCT) aggregations are not available");
         }
-        (AggregateFunction::RegrSlope, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::Slope,
-            data_type,
-        )),
-        (AggregateFunction::RegrIntercept, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::Intercept,
-            data_type,
-        )),
-        (AggregateFunction::RegrCount, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::Count,
-            data_type,
-        )),
-        (AggregateFunction::RegrR2, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::R2,
-            data_type,
-        )),
-        (AggregateFunction::RegrAvgx, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::AvgX,
-            data_type,
-        )),
-        (AggregateFunction::RegrAvgy, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::AvgY,
-            data_type,
-        )),
-        (AggregateFunction::RegrSXX, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::SXX,
-            data_type,
-        )),
-        (AggregateFunction::RegrSYY, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::SYY,
-            data_type,
-        )),
-        (AggregateFunction::RegrSXY, false) => Arc::new(expressions::Regr::new(
-            input_phy_exprs[0].clone(),
-            input_phy_exprs[1].clone(),
-            name,
-            RegrType::SXY,
-            data_type,
-        )),
-        (
-            AggregateFunction::RegrSlope
-            | AggregateFunction::RegrIntercept
-            | AggregateFunction::RegrCount
-            | AggregateFunction::RegrR2
-            | AggregateFunction::RegrAvgx
-            | AggregateFunction::RegrAvgy
-            | AggregateFunction::RegrSXX
-            | AggregateFunction::RegrSYY
-            | AggregateFunction::RegrSXY,
-            true,
-        ) => {
-            return not_impl_err!("{}(DISTINCT) aggregations are not available", fun);
-        }
         (AggregateFunction::NthValue, _) => {
             let expr = &input_phy_exprs[0];
             let Some(n) = input_phy_exprs[1]
@@ -282,18 +198,19 @@ pub fn create_aggregate_expr(
 mod tests {
     use arrow::datatypes::{DataType, Field};
 
-    use super::*;
+    use datafusion_common::plan_err;
+    use datafusion_expr::{Signature, type_coercion};
+
     use crate::expressions::{
-        try_cast, ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count,
-        DistinctArrayAgg, DistinctCount, Max, Min,
+        ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd, BoolOr,
+        DistinctArrayAgg, Max, Min, try_cast,
     };
 
-    use datafusion_common::plan_err;
-    use datafusion_expr::{type_coercion, Signature};
+    use super::*;
 
     #[test]
-    fn test_count_arragg_approx_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::Count, AggregateFunction::ArrayAgg];
+    fn test_approx_expr() -> Result<()> {
+        let funcs = vec![AggregateFunction::ArrayAgg];
         let data_types = vec![
             DataType::UInt32,
             DataType::Int32,
@@ -316,29 +233,18 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                match fun {
-                    AggregateFunction::Count => {
-                        assert!(result_agg_phy_exprs.as_any().is::<Count>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::Int64, true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    AggregateFunction::ArrayAgg => {
-                        assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new_list(
-                                "c1",
-                                Field::new("item", data_type.clone(), true),
-                                true,
-                            ),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
+                if fun == AggregateFunction::ArrayAgg {
+                    assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
+                    assert_eq!("c1", result_agg_phy_exprs.name());
+                    assert_eq!(
+                        Field::new_list(
+                            "c1",
+                            Field::new("item", data_type.clone(), true),
+                            true,
+                        ),
+                        result_agg_phy_exprs.field().unwrap()
+                    );
+                }
 
                 let result_distinct = create_physical_agg_expr_for_test(
                     &fun,
@@ -347,29 +253,18 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                match fun {
-                    AggregateFunction::Count => {
-                        assert!(result_distinct.as_any().is::<DistinctCount>());
-                        assert_eq!("c1", result_distinct.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::Int64, true),
-                            result_distinct.field().unwrap()
-                        );
-                    }
-                    AggregateFunction::ArrayAgg => {
-                        assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
-                        assert_eq!("c1", result_distinct.name());
-                        assert_eq!(
-                            Field::new_list(
-                                "c1",
-                                Field::new("item", data_type.clone(), true),
-                                true,
-                            ),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
+                if fun == AggregateFunction::ArrayAgg {
+                    assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
+                    assert_eq!("c1", result_distinct.name());
+                    assert_eq!(
+                        Field::new_list(
+                            "c1",
+                            Field::new("item", data_type.clone(), true),
+                            true,
+                        ),
+                        result_agg_phy_exprs.field().unwrap()
+                    );
+                }
             }
         }
         Ok(())
@@ -576,20 +471,6 @@ mod tests {
             AggregateFunction::Max.return_type(&[DataType::Decimal128(28, 13)])?;
         assert_eq!(DataType::Decimal128(28, 13), observed);
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_count_return_type() -> Result<()> {
-        let observed = AggregateFunction::Count.return_type(&[DataType::Utf8])?;
-        assert_eq!(DataType::Int64, observed);
-
-        let observed = AggregateFunction::Count.return_type(&[DataType::Int8])?;
-        assert_eq!(DataType::Int64, observed);
-
-        let observed =
-            AggregateFunction::Count.return_type(&[DataType::Decimal128(28, 13)])?;
-        assert_eq!(DataType::Int64, observed);
         Ok(())
     }
 

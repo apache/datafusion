@@ -535,7 +535,6 @@ impl serde::Serialize for AggregateFunction {
             Self::Min => "MIN",
             Self::Max => "MAX",
             Self::Avg => "AVG",
-            Self::Count => "COUNT",
             Self::ArrayAgg => "ARRAY_AGG",
             Self::Correlation => "CORRELATION",
             Self::Grouping => "GROUPING",
@@ -544,15 +543,6 @@ impl serde::Serialize for AggregateFunction {
             Self::BitXor => "BIT_XOR",
             Self::BoolAnd => "BOOL_AND",
             Self::BoolOr => "BOOL_OR",
-            Self::RegrSlope => "REGR_SLOPE",
-            Self::RegrIntercept => "REGR_INTERCEPT",
-            Self::RegrCount => "REGR_COUNT",
-            Self::RegrR2 => "REGR_R2",
-            Self::RegrAvgx => "REGR_AVGX",
-            Self::RegrAvgy => "REGR_AVGY",
-            Self::RegrSxx => "REGR_SXX",
-            Self::RegrSyy => "REGR_SYY",
-            Self::RegrSxy => "REGR_SXY",
             Self::StringAgg => "STRING_AGG",
             Self::NthValueAgg => "NTH_VALUE_AGG",
         };
@@ -569,7 +559,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "MIN",
             "MAX",
             "AVG",
-            "COUNT",
             "ARRAY_AGG",
             "CORRELATION",
             "GROUPING",
@@ -578,15 +567,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "BIT_XOR",
             "BOOL_AND",
             "BOOL_OR",
-            "REGR_SLOPE",
-            "REGR_INTERCEPT",
-            "REGR_COUNT",
-            "REGR_R2",
-            "REGR_AVGX",
-            "REGR_AVGY",
-            "REGR_SXX",
-            "REGR_SYY",
-            "REGR_SXY",
             "STRING_AGG",
             "NTH_VALUE_AGG",
         ];
@@ -632,7 +612,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                     "MIN" => Ok(AggregateFunction::Min),
                     "MAX" => Ok(AggregateFunction::Max),
                     "AVG" => Ok(AggregateFunction::Avg),
-                    "COUNT" => Ok(AggregateFunction::Count),
                     "ARRAY_AGG" => Ok(AggregateFunction::ArrayAgg),
                     "CORRELATION" => Ok(AggregateFunction::Correlation),
                     "GROUPING" => Ok(AggregateFunction::Grouping),
@@ -641,15 +620,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                     "BIT_XOR" => Ok(AggregateFunction::BitXor),
                     "BOOL_AND" => Ok(AggregateFunction::BoolAnd),
                     "BOOL_OR" => Ok(AggregateFunction::BoolOr),
-                    "REGR_SLOPE" => Ok(AggregateFunction::RegrSlope),
-                    "REGR_INTERCEPT" => Ok(AggregateFunction::RegrIntercept),
-                    "REGR_COUNT" => Ok(AggregateFunction::RegrCount),
-                    "REGR_R2" => Ok(AggregateFunction::RegrR2),
-                    "REGR_AVGX" => Ok(AggregateFunction::RegrAvgx),
-                    "REGR_AVGY" => Ok(AggregateFunction::RegrAvgy),
-                    "REGR_SXX" => Ok(AggregateFunction::RegrSxx),
-                    "REGR_SYY" => Ok(AggregateFunction::RegrSyy),
-                    "REGR_SXY" => Ok(AggregateFunction::RegrSxy),
                     "STRING_AGG" => Ok(AggregateFunction::StringAgg),
                     "NTH_VALUE_AGG" => Ok(AggregateFunction::NthValueAgg),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
@@ -880,6 +850,9 @@ impl serde::Serialize for AggregateUdfExprNode {
         if !self.args.is_empty() {
             len += 1;
         }
+        if self.distinct {
+            len += 1;
+        }
         if self.filter.is_some() {
             len += 1;
         }
@@ -892,6 +865,9 @@ impl serde::Serialize for AggregateUdfExprNode {
         }
         if !self.args.is_empty() {
             struct_ser.serialize_field("args", &self.args)?;
+        }
+        if self.distinct {
+            struct_ser.serialize_field("distinct", &self.distinct)?;
         }
         if let Some(v) = self.filter.as_ref() {
             struct_ser.serialize_field("filter", v)?;
@@ -912,6 +888,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
             "fun_name",
             "funName",
             "args",
+            "distinct",
             "filter",
             "order_by",
             "orderBy",
@@ -921,6 +898,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
         enum GeneratedField {
             FunName,
             Args,
+            Distinct,
             Filter,
             OrderBy,
         }
@@ -946,6 +924,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                         match value {
                             "funName" | "fun_name" => Ok(GeneratedField::FunName),
                             "args" => Ok(GeneratedField::Args),
+                            "distinct" => Ok(GeneratedField::Distinct),
                             "filter" => Ok(GeneratedField::Filter),
                             "orderBy" | "order_by" => Ok(GeneratedField::OrderBy),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -969,6 +948,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
             {
                 let mut fun_name__ = None;
                 let mut args__ = None;
+                let mut distinct__ = None;
                 let mut filter__ = None;
                 let mut order_by__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -984,6 +964,12 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                                 return Err(serde::de::Error::duplicate_field("args"));
                             }
                             args__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Distinct => {
+                            if distinct__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("distinct"));
+                            }
+                            distinct__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Filter => {
                             if filter__.is_some() {
@@ -1002,6 +988,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                 Ok(AggregateUdfExprNode {
                     fun_name: fun_name__.unwrap_or_default(),
                     args: args__.unwrap_or_default(),
+                    distinct: distinct__.unwrap_or_default(),
                     filter: filter__,
                     order_by: order_by__.unwrap_or_default(),
                 })

@@ -818,7 +818,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
                 }
             }
             Expr::Literal(_) => {
-                indexes.push(std::usize::MAX);
+                indexes.push(usize::MAX);
             }
             _ => {}
         }

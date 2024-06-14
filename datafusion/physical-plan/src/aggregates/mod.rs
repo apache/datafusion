@@ -1194,12 +1194,14 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::expr::Sort;
+    use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_physical_expr::expressions::{
-        lit, Count, FirstValue, LastValue, OrderSensitiveArrayAgg,
+        lit, FirstValue, LastValue, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::PhysicalSortExpr;
 
+    use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1334,11 +1336,16 @@ mod tests {
             ],
         };
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Count::new(
-            lit(1i8),
-            "COUNT(1)".to_string(),
-            DataType::Int64,
-        ))];
+        let aggregates = vec![create_aggregate_expr(
+            &count_udaf(),
+            &[lit(1i8)],
+            &[],
+            &[],
+            &input_schema,
+            "COUNT(1)",
+            false,
+            false,
+        )?];
 
         let task_ctx = if spill {
             new_spill_ctx(4, 1000)

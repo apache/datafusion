@@ -1,0 +1,71 @@
+{
+  "extensionUris": [],
+  "extensions": [],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "read": {
+            "common": {
+              "direct": {
+              }
+            },
+            "baseSchema": {
+              "names": [
+                "col"
+              ],
+              "struct": {
+                "types": [
+                  {
+                    "list": {
+                      "type": {
+                        "i32": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  }
+                ],
+                "typeVariationReference": 0,
+                "nullability": "NULLABILITY_REQUIRED"
+              }
+            },
+            "virtualTable": {
+              "values": [
+                {
+                  "fields": [
+                    {
+                      "list": {
+                        "values": [
+                          {
+                            "i32": 1,
+                            "nullable": false,
+                            "typeVariationReference": 0
+                          },
+                          {
+                            "i32": 2,
+                            "nullable": false,
+                            "typeVariationReference": 0
+                          }
+                        ]
+                      },
+                      "nullable": false,
+                      "typeVariationReference": 0
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "names": [
+          "col"
+        ]
+      }
+    }
+  ],
+  "expectedTypeUrls": []
+}

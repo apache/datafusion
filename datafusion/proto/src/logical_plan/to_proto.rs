@@ -116,18 +116,8 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::BitXor => Self::BitXor,
             AggregateFunction::BoolAnd => Self::BoolAnd,
             AggregateFunction::BoolOr => Self::BoolOr,
-            AggregateFunction::Count => Self::Count,
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
             AggregateFunction::Correlation => Self::Correlation,
-            AggregateFunction::RegrSlope => Self::RegrSlope,
-            AggregateFunction::RegrIntercept => Self::RegrIntercept,
-            AggregateFunction::RegrCount => Self::RegrCount,
-            AggregateFunction::RegrR2 => Self::RegrR2,
-            AggregateFunction::RegrAvgx => Self::RegrAvgx,
-            AggregateFunction::RegrAvgy => Self::RegrAvgy,
-            AggregateFunction::RegrSXX => Self::RegrSxx,
-            AggregateFunction::RegrSYY => Self::RegrSyy,
-            AggregateFunction::RegrSXY => Self::RegrSxy,
             AggregateFunction::Grouping => Self::Grouping,
             AggregateFunction::NthValue => Self::NthValueAgg,
             AggregateFunction::StringAgg => Self::StringAgg,
@@ -396,25 +386,9 @@ pub fn serialize_expr(
                     AggregateFunction::BoolAnd => protobuf::AggregateFunction::BoolAnd,
                     AggregateFunction::BoolOr => protobuf::AggregateFunction::BoolOr,
                     AggregateFunction::Avg => protobuf::AggregateFunction::Avg,
-                    AggregateFunction::Count => protobuf::AggregateFunction::Count,
                     AggregateFunction::Correlation => {
                         protobuf::AggregateFunction::Correlation
                     }
-                    AggregateFunction::RegrSlope => {
-                        protobuf::AggregateFunction::RegrSlope
-                    }
-                    AggregateFunction::RegrIntercept => {
-                        protobuf::AggregateFunction::RegrIntercept
-                    }
-                    AggregateFunction::RegrR2 => protobuf::AggregateFunction::RegrR2,
-                    AggregateFunction::RegrAvgx => protobuf::AggregateFunction::RegrAvgx,
-                    AggregateFunction::RegrAvgy => protobuf::AggregateFunction::RegrAvgy,
-                    AggregateFunction::RegrCount => {
-                        protobuf::AggregateFunction::RegrCount
-                    }
-                    AggregateFunction::RegrSXX => protobuf::AggregateFunction::RegrSxx,
-                    AggregateFunction::RegrSYY => protobuf::AggregateFunction::RegrSyy,
-                    AggregateFunction::RegrSXY => protobuf::AggregateFunction::RegrSxy,
                     AggregateFunction::Grouping => protobuf::AggregateFunction::Grouping,
                     AggregateFunction::NthValue => {
                         protobuf::AggregateFunction::NthValueAgg
@@ -446,6 +420,7 @@ pub fn serialize_expr(
                     protobuf::AggregateUdfExprNode {
                         fun_name: fun.name().to_string(),
                         args: serialize_exprs(args, codec)?,
+                        distinct: *distinct,
                         filter: match filter {
                             Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),
                             None => None,
