@@ -30,7 +30,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::arrow_reader::{
-    ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
+    ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
 };
 use datafusion::parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use datafusion::parquet::arrow::ArrowWriter;
@@ -42,7 +42,6 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -338,7 +337,12 @@ impl IndexedFile {
             DataFusionError::from(e).context(format!("Error opening file {path:?}"))
         })?;
 
-        let reader = ParquetRecordBatchReaderBuilder::try_new(file)?;
+        let options = ArrowReaderOptions::new()
+            // Load the page index when reading metadata to cache
+            // so it is available to interpret row selections
+            .with_page_index(true);
+        let reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)?;
         let metadata = reader.metadata().clone();
         let schema = reader.schema().clone();
 
@@ -409,14 +413,6 @@ impl TableProvider for IndexTableProvider {
             // storing it as  "extensions" on PartitionedFile
             .with_extensions(Arc::new(access_plan) as _);
 
-        // In this example, we are trying to minimize IO, but by default the
-        // ParquetExec will load the page index with a separate IO. Disable
-        // doing so unless we are using row selections (which needs the page index)
-        let mut table_parquet_options = TableParquetOptions::new();
-        if !self.use_row_selections() {
-            table_parquet_options.global.enable_page_index = false;
-        }
-
         // Prepare for scanning
         let schema = self.schema();
         let object_store_url = ObjectStoreUrl::parse("file://")?;
@@ -431,15 +427,13 @@ impl TableProvider for IndexTableProvider {
                 .with_file(indexed_file);
 
         // Finally, put it all together into a ParquetExec
-        Ok(
-            ParquetExecBuilder::new_with_options(file_scan_config, table_parquet_options)
-                // provide the predicate so the ParquetExec can try and prune
-                // row groups internally
-                .with_predicate(predicate)
-                // provide the factory to create parquet reader without re-reading metadata
-                .with_parquet_file_reader_factory(Arc::new(reader_factory))
-                .build_arc(),
-        )
+        Ok(ParquetExecBuilder::new(file_scan_config)
+            // provide the predicate so the ParquetExec can try and prune
+            // row groups internally
+            .with_predicate(predicate)
+            // provide the factory to create parquet reader without re-reading metadata
+            .with_parquet_file_reader_factory(Arc::new(reader_factory))
+            .build_arc())
     }
 
     /// Tell DataFusion to push filters down to the scan method
