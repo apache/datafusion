@@ -33,9 +33,9 @@ use arrow::datatypes::Schema;
 use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
-use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 use crate::aggregate::average::Avg;
 use crate::expressions::{self, Literal};
+use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -199,11 +199,11 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
 
     use datafusion_common::plan_err;
-    use datafusion_expr::{Signature, type_coercion};
+    use datafusion_expr::{type_coercion, Signature};
 
     use crate::expressions::{
-        ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd, BoolOr,
-        DistinctArrayAgg, Max, Min, try_cast,
+        try_cast, ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd, BoolOr,
+        DistinctArrayAgg, Max, Min,
     };
 
     use super::*;

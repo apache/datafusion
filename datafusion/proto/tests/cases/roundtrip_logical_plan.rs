@@ -35,9 +35,9 @@ use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
-approx_median, approx_percentile_cont, approx_percentile_cont_with_weight,
-count, count_distinct, covar_pop, covar_samp, first_value, median, stddev,
-    stddev_pop, sum, var_pop, var_sample,
+    approx_median, approx_percentile_cont, approx_percentile_cont_with_weight, count,
+    count_distinct, covar_pop, covar_samp, first_value, median, stddev, stddev_pop, sum,
+    var_pop, var_sample,
 };
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};

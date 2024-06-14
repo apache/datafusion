@@ -71,20 +71,6 @@ impl AggregateFunction {
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
             Correlation => "CORR",
-<<<<<<< HEAD
-            RegrSlope => "REGR_SLOPE",
-            RegrIntercept => "REGR_INTERCEPT",
-            RegrCount => "REGR_COUNT",
-            RegrR2 => "REGR_R2",
-            RegrAvgx => "REGR_AVGX",
-            RegrAvgy => "REGR_AVGY",
-            RegrSXX => "REGR_SXX",
-            RegrSYY => "REGR_SYY",
-            RegrSXY => "REGR_SXY",
-=======
-            ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
-            ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
->>>>>>> main
             Grouping => "GROUPING",
             BitAnd => "BIT_AND",
             BitOr => "BIT_OR",
@@ -121,23 +107,6 @@ impl FromStr for AggregateFunction {
             "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
-<<<<<<< HEAD
-            "regr_slope" => AggregateFunction::RegrSlope,
-            "regr_intercept" => AggregateFunction::RegrIntercept,
-            "regr_count" => AggregateFunction::RegrCount,
-            "regr_r2" => AggregateFunction::RegrR2,
-            "regr_avgx" => AggregateFunction::RegrAvgx,
-            "regr_avgy" => AggregateFunction::RegrAvgy,
-            "regr_sxx" => AggregateFunction::RegrSXX,
-            "regr_syy" => AggregateFunction::RegrSYY,
-            "regr_sxy" => AggregateFunction::RegrSXY,
-=======
-            // approximate
-            "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
-            "approx_percentile_cont_with_weight" => {
-                AggregateFunction::ApproxPercentileContWithWeight
-            }
->>>>>>> main
             // other
             "grouping" => AggregateFunction::Grouping,
             _ => {
