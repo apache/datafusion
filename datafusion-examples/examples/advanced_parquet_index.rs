@@ -321,7 +321,7 @@ impl IndexTableProvider {
 
             // If we want to use row selections, which the parquet reader can
             // use to skip data pages when the parquet file has a "page index"
-            // and the reader is configured to read it, add a row seelction
+            // and the reader is configured to read it, add a row selection
             if self.use_row_selections() {
                 let offset_in_row_group = val - row_group_index * num_rows_in_row_group;
                 let selection = RowSelection::from(vec![
