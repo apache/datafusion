@@ -47,96 +47,76 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
 use super::make_test_file_rg;
 
-// TEST HELPERS
-
-/// Return a record batch with i64 with Null values
-fn make_int64_batches_with_null(
+#[derive(Debug, Clone)]
+struct Int64Case {
+    /// Number of nulls in the column
     null_values: usize,
+    /// Non null values in the range `[no_null_values_start,
+    /// no_null_values_end]`, one value for each row
     no_null_values_start: i64,
     no_null_values_end: i64,
-) -> RecordBatch {
-    let schema = Arc::new(Schema::new(vec![Field::new("i64", DataType::Int64, true)]));
-
-    let v64: Vec<i64> = (no_null_values_start as _..no_null_values_end as _).collect();
-
-    RecordBatch::try_new(
-        schema,
-        vec![make_array(
-            Int64Array::from_iter(
-                v64.into_iter()
-                    .map(Some)
-                    .chain(std::iter::repeat(None).take(null_values)),
-            )
-            .to_data(),
-        )],
-    )
-    .unwrap()
+    /// Number of rows per row group
+    row_per_group: usize,
+    /// if specified, overrides default statistics settings
+    enable_stats: Option<EnabledStatistics>,
 }
 
-// Create a parquet file with one column for data type i64
-// Data of the file include
-//   . Number of null rows is the given num_null
-//   . There are non-null values in the range [no_null_values_start, no_null_values_end], one value each row
-//   . The file is divided into row groups of size row_per_group
-pub fn parquet_file_one_column(
-    num_null: usize,
-    no_null_values_start: i64,
-    no_null_values_end: i64,
-    row_per_group: usize,
-) -> ParquetRecordBatchReaderBuilder<File> {
-    parquet_file_one_column_stats(
-        num_null,
-        no_null_values_start,
-        no_null_values_end,
-        row_per_group,
-        EnabledStatistics::Chunk,
-    )
-}
+impl Int64Case {
+    /// Return a record batch with i64 with Null values
+    fn make_int64_batches_with_null(&self) -> RecordBatch {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("i64", DataType::Int64, true)]));
 
-// Create a parquet file with one column for data type i64
-// Data of the file include
-//   . Number of null rows is the given num_null
-//   . There are non-null values in the range [no_null_values_start, no_null_values_end], one value each row
-//   . The file is divided into row groups of size row_per_group
-//  . Statistics are enabled/disabled based on the given enable_stats
-pub fn parquet_file_one_column_stats(
-    num_null: usize,
-    no_null_values_start: i64,
-    no_null_values_end: i64,
-    row_per_group: usize,
-    enable_stats: EnabledStatistics,
-) -> ParquetRecordBatchReaderBuilder<File> {
-    let mut output_file = tempfile::Builder::new()
-        .prefix("parquert_statistics_test")
-        .suffix(".parquet")
-        .tempfile()
-        .expect("tempfile creation");
+        let v64: Vec<i64> =
+            (self.no_null_values_start as _..self.no_null_values_end as _).collect();
 
-    let props = WriterProperties::builder()
-        .set_max_row_group_size(row_per_group)
-        .set_statistics_enabled(enable_stats)
-        .build();
-
-    let batches = vec![make_int64_batches_with_null(
-        num_null,
-        no_null_values_start,
-        no_null_values_end,
-    )];
-
-    let schema = batches[0].schema();
-
-    let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
-
-    for batch in batches {
-        writer.write(&batch).expect("writing batch");
+        RecordBatch::try_new(
+            schema,
+            vec![make_array(
+                Int64Array::from_iter(
+                    v64.into_iter()
+                        .map(Some)
+                        .chain(std::iter::repeat(None).take(self.null_values)),
+                )
+                .to_data(),
+            )],
+        )
+        .unwrap()
     }
 
-    // close file
-    let _file_meta = writer.close().unwrap();
+    // Create a parquet file with the specified settings
+    pub fn parquet_file(&self) -> ParquetRecordBatchReaderBuilder<File> {
+        let mut output_file = tempfile::Builder::new()
+            .prefix("parquert_statistics_test")
+            .suffix(".parquet")
+            .tempfile()
+            .expect("tempfile creation");
 
-    // open the file & get the reader
-    let file = output_file.reopen().unwrap();
-    ArrowReaderBuilder::try_new(file).unwrap()
+        let mut builder =
+            WriterProperties::builder().set_max_row_group_size(self.row_per_group);
+        if let Some(enable_stats) = self.enable_stats {
+            builder = builder.set_statistics_enabled(enable_stats);
+        }
+        let props = builder.build();
+
+        let batches = vec![self.make_int64_batches_with_null()];
+
+        let schema = batches[0].schema();
+
+        let mut writer =
+            ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
+
+        for batch in batches {
+            writer.write(&batch).expect("writing batch");
+        }
+
+        // close file
+        let _file_meta = writer.close().unwrap();
+
+        // open the file & get the reader
+        let file = output_file.reopen().unwrap();
+        ArrowReaderBuilder::try_new(file).unwrap()
+    }
 }
 
 /// Defines what data to create in a parquet file
@@ -326,8 +306,15 @@ impl<'a> Test<'a> {
 
 #[tokio::test]
 async fn test_one_row_group_without_null() {
-    let row_per_group = 20;
-    let reader = parquet_file_one_column(0, 4, 7, row_per_group);
+    let reader = Int64Case {
+        null_values: 0,
+        no_null_values_start: 4,
+        no_null_values_end: 7,
+        row_per_group: 20,
+        enable_stats: None,
+    }
+    .parquet_file();
+
     Test {
         reader: &reader,
         // min is 4
@@ -346,8 +333,14 @@ async fn test_one_row_group_without_null() {
 
 #[tokio::test]
 async fn test_one_row_group_with_null_and_negative() {
-    let row_per_group = 20;
-    let reader = parquet_file_one_column(2, -1, 5, row_per_group);
+    let reader = Int64Case {
+        null_values: 2,
+        no_null_values_start: -1,
+        no_null_values_end: 5,
+        row_per_group: 20,
+        enable_stats: None,
+    }
+    .parquet_file();
 
     Test {
         reader: &reader,
@@ -367,8 +360,14 @@ async fn test_one_row_group_with_null_and_negative() {
 
 #[tokio::test]
 async fn test_two_row_group_with_null() {
-    let row_per_group = 10;
-    let reader = parquet_file_one_column(2, 4, 17, row_per_group);
+    let reader = Int64Case {
+        null_values: 2,
+        no_null_values_start: 4,
+        no_null_values_end: 17,
+        row_per_group: 10,
+        enable_stats: None,
+    }
+    .parquet_file();
 
     Test {
         reader: &reader,
@@ -388,8 +387,14 @@ async fn test_two_row_group_with_null() {
 
 #[tokio::test]
 async fn test_two_row_groups_with_all_nulls_in_one() {
-    let row_per_group = 5;
-    let reader = parquet_file_one_column(4, -2, 2, row_per_group);
+    let reader = Int64Case {
+        null_values: 4,
+        no_null_values_start: -2,
+        no_null_values_end: 2,
+        row_per_group: 5,
+        enable_stats: None,
+    }
+    .parquet_file();
 
     Test {
         reader: &reader,
@@ -1885,9 +1890,14 @@ async fn test_utf8() {
 
 #[tokio::test]
 async fn test_missing_statistics() {
-    let row_per_group = 5;
-    let reader =
-        parquet_file_one_column_stats(0, 4, 7, row_per_group, EnabledStatistics::None);
+    let reader = Int64Case {
+        null_values: 0,
+        no_null_values_start: 4,
+        no_null_values_end: 7,
+        row_per_group: 5,
+        enable_stats: Some(EnabledStatistics::None),
+    }
+    .parquet_file();
 
     Test {
         reader: &reader,
