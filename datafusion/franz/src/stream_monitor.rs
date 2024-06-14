@@ -16,10 +16,12 @@
 // under the License.
 
 use async_trait::async_trait;
-use datafusion::sql::sqlparser::ast::SetExpr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
+
+use crate::record_store::RecordStore;
+use crate::rocksdb_backend::RocksDBBackend;
 
 use arrow::json::ArrayWriter;
 use arrow::record_batch::RecordBatch;
@@ -27,15 +29,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::franz_sinks::FranzSink;
 
-use serde::Serialize;
 use serde_json::json;
 
 use axum::{response::Json, routing::get, Router};
 
-#[derive(Debug, Clone)]
-struct CacheContent {
-    cache: Vec<RecordBatch>,
-}
+const NAMESPACE: &str = "_stream_monitor";
 
 #[derive(Debug, Clone)]
 pub struct StreamMonitorConfig {}
@@ -58,17 +56,22 @@ pub struct StreamMonitor {
     config: StreamMonitorConfig,
     sink: Arc<Mutex<dyn FranzSink + Send + Sync>>,
     cache: Arc<RwLock<Vec<RecordBatch>>>,
+    record_store: RecordStore,
 }
 
 impl StreamMonitor {
-    pub fn new(
+    pub async fn new(
         config: &StreamMonitorConfig,
         sink: Arc<Mutex<dyn FranzSink + Send + Sync>>,
+        state_store: Arc<Mutex<RocksDBBackend>>,
     ) -> Result<Self> {
+        let record_store = RecordStore::new(state_store, NAMESPACE.to_string()).await;
+
         Ok(Self {
             config: config.clone(),
             sink,
             cache: Arc::new(RwLock::new(Vec::new())),
+            record_store,
         })
     }
 
@@ -95,7 +98,8 @@ impl StreamMonitor {
 
                         let str1 = String::from_utf8(buf).unwrap();
                         let str2 = str1.as_str();
-                        let json_str: serde_json::Value = serde_json::from_str(str2).unwrap();
+                        let json_str: serde_json::Value =
+                            serde_json::from_str(str2).unwrap();
 
                         Json(json!({ "data": json_str }))
                     }
@@ -112,6 +116,10 @@ impl StreamMonitor {
 impl FranzSink for StreamMonitor {
     #[instrument(name = "StreamMonitor::write_records", skip(self, batch))]
     async fn write_records(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
+        // TODO
+        // one key should serve as an index for keys that exist in the namespace state store
+        // Hash the record batches as they come in and use that hash as the key to store the record
+        // batch
         {
             let mut cache = self.cache.write().await;
             cache.push(batch.clone());
@@ -125,33 +133,4 @@ impl FranzSink for StreamMonitor {
 }
 
 #[cfg(test)]
-mod tests {
-    // use super::*;
-    // use crate::test::mock_sink::MockSink;
-    //
-    // use tokio::sync::Mutex;
-    // use arrow::array::{Int32Array, ArrayRef};
-    // use arrow::record_batch::RecordBatch;
-    // use arrow::datatypes::{Schema, Field, DataType};
-    // use std::sync::Arc;
-    //
-    // #[tokio::test]
-    // async fn test_write_records() {
-    //     let schema = Arc::new(Schema::new(vec![
-    //         Field::new("field1", DataType::Int32, false),
-    //     ]));
-    //     let batch = RecordBatch::try_new(
-    //         schema.clone(),
-    //         vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
-    //     ).unwrap();
-    //
-    //     let config = StreamMonitorConfig::new();
-    //     let sink = Arc::new(Mutex::new(MockSink::new()));
-    //     let mut monitor = StreamMonitor::new(&config, sink).unwrap();
-    //
-    //     monitor.write_records(batch.clone()).await.unwrap();
-    //
-    //     assert_eq!(monitor.cache.len(), 1);
-    //     assert_eq!(monitor.cache[0], batch);
-    // }
-}
+mod tests {}
