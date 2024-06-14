@@ -28,7 +28,6 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
-use crate::joins::utils::symmetric_join_output_partitioning;
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
@@ -39,9 +38,9 @@ use crate::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_from_indices, build_join_schema, check_join_is_valid,
         estimate_join_statistics, get_final_indices_from_bit_map,
-        need_produce_result_in_final, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
-        JoinHashMap, JoinHashMapOffset, JoinHashMapType, JoinOn, JoinOnRef,
-        StatefulStreamResult,
+        need_produce_result_in_final, symmetric_join_output_partitioning,
+        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMap, JoinHashMapOffset,
+        JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
