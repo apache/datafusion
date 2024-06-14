@@ -128,10 +128,6 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::RegrSXX => Self::RegrSxx,
             AggregateFunction::RegrSYY => Self::RegrSyy,
             AggregateFunction::RegrSXY => Self::RegrSxy,
-            AggregateFunction::ApproxPercentileCont => Self::ApproxPercentileCont,
-            AggregateFunction::ApproxPercentileContWithWeight => {
-                Self::ApproxPercentileContWithWeight
-            }
             AggregateFunction::Grouping => Self::Grouping,
             AggregateFunction::NthValue => Self::NthValueAgg,
             AggregateFunction::StringAgg => Self::StringAgg,
@@ -391,12 +387,6 @@ pub fn serialize_expr(
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(fun) => {
                 let aggr_function = match fun {
-                    AggregateFunction::ApproxPercentileCont => {
-                        protobuf::AggregateFunction::ApproxPercentileCont
-                    }
-                    AggregateFunction::ApproxPercentileContWithWeight => {
-                        protobuf::AggregateFunction::ApproxPercentileContWithWeight
-                    }
                     AggregateFunction::ArrayAgg => protobuf::AggregateFunction::ArrayAgg,
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
                     AggregateFunction::Max => protobuf::AggregateFunction::Max,

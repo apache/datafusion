@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 use crate::utils;
-use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
+use crate::{type_coercion::aggregates::*, Signature, Volatility};
 
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
@@ -65,8 +65,6 @@ pub enum AggregateFunction {
     RegrSYY,
     /// Sum of products of pairs of numbers
     RegrSXY,
-    /// Approximate continuous percentile function with weight
-    ApproxPercentileContWithWeight,
     /// Grouping
     Grouping,
     /// Bit And
@@ -103,7 +101,6 @@ impl AggregateFunction {
             RegrSXX => "REGR_SXX",
             RegrSYY => "REGR_SYY",
             RegrSXY => "REGR_SXY",
-            ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
             Grouping => "GROUPING",
             BitAnd => "BIT_AND",
             BitOr => "BIT_OR",
@@ -150,10 +147,6 @@ impl FromStr for AggregateFunction {
             "regr_sxx" => AggregateFunction::RegrSXX,
             "regr_syy" => AggregateFunction::RegrSYY,
             "regr_sxy" => AggregateFunction::RegrSXY,
-            // approximate
-            "approx_percentile_cont_with_weight" => {
-                AggregateFunction::ApproxPercentileContWithWeight
-            }
             // other
             "grouping" => AggregateFunction::Grouping,
             _ => {
@@ -216,9 +209,6 @@ impl AggregateFunction {
                 coerced_data_types[0].clone(),
                 true,
             )))),
-            AggregateFunction::ApproxPercentileContWithWeight => {
-                Ok(coerced_data_types[0].clone())
-            }
             AggregateFunction::Grouping => Ok(DataType::Int32),
             AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
             AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
@@ -285,20 +275,6 @@ impl AggregateFunction {
             | AggregateFunction::RegrSXY => {
                 Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
             }
-            AggregateFunction::ApproxPercentileContWithWeight => Signature::one_of(
-                // Accept any numeric value paired with a float64 percentile
-                NUMERICS
-                    .iter()
-                    .map(|t| {
-                        TypeSignature::Exact(vec![
-                            t.clone(),
-                            t.clone(),
-                            DataType::Float64,
-                        ])
-                    })
-                    .collect(),
-                Volatility::Immutable,
-            ),
             AggregateFunction::StringAgg => {
                 Signature::uniform(2, STRINGS.to_vec(), Volatility::Immutable)
             }

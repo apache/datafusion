@@ -1766,7 +1766,8 @@ pub fn create_window_expr_with_name(
             window_frame,
             null_treatment,
         }) => {
-            let physical_args = create_physical_exprs(args, logical_schema, execution_props)?;
+            let physical_args =
+                create_physical_exprs(args, logical_schema, execution_props)?;
             let partition_by =
                 create_physical_exprs(partition_by, logical_schema, execution_props)?;
             let order_by =
@@ -1780,8 +1781,7 @@ pub fn create_window_expr_with_name(
             }
 
             let window_frame = Arc::new(window_frame.clone());
-            let ignore_nulls = null_treatment
-                .unwrap_or(NullTreatment::RespectNulls)
+            let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
             windows::create_window_expr(
                 fun,

@@ -27,13 +27,17 @@ use arrow::{
 };
 use arrow_schema::Field;
 
-use datafusion_common::{DataFusionError, downcast_value, internal_err, not_impl_err, plan_err, ScalarValue};
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr, Signature, TypeSignature, Volatility};
+use datafusion_common::{
+    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, ScalarValue,
+};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Expr, Signature, TypeSignature, Volatility,
+};
 use datafusion_physical_expr_common::aggregate::tdigest::{
-    DEFAULT_MAX_SIZE, TDigest, TryIntoF64,
+    TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
 use datafusion_physical_expr_common::aggregate::utils::down_cast_any_ref;
 
@@ -46,7 +50,7 @@ make_udaf_expr_and_func!(
 );
 
 pub struct ApproxPercentileCont {
-    signature: Signature
+    signature: Signature,
 }
 
 impl Debug for ApproxPercentileCont {
@@ -67,12 +71,10 @@ impl Default for ApproxPercentileCont {
 impl ApproxPercentileCont {
     /// Create a new [`ApproxPercentileCont`] aggregate function.
     pub fn new() -> Self {
-        let mut variants =
-            Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
+        let mut variants = Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
         // Accept any numeric value paired with a float64 percentile
         for num in NUMERICS {
-            variants
-                .push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
+            variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
             // Additionally accept an integer number of centroids for T-Digest
             for int in INTEGERS {
                 variants.push(TypeSignature::Exact(vec![
@@ -85,6 +87,45 @@ impl ApproxPercentileCont {
         Self {
             signature: Signature::one_of(variants, Volatility::Immutable),
         }
+    }
+
+    pub(crate) fn create_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> datafusion_common::Result<ApproxPercentileAccumulator> {
+        let percentile = validate_input_percentile_expr(&args.args[1])?;
+        let tdigest_max_size = if args.args.len() == 3 {
+            Some(validate_input_max_size_expr(&args.args[2])?)
+        } else {
+            None
+        };
+
+        let accumulator: ApproxPercentileAccumulator = match args.input_type {
+            t @ (DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64) => {
+                if let Some(max_size) = tdigest_max_size {
+                    ApproxPercentileAccumulator::new_with_max_size(percentile, t.clone(), max_size)
+                }else{
+                    ApproxPercentileAccumulator::new(percentile, t.clone())
+
+                }
+            }
+            other => {
+                return not_impl_err!(
+                    "Support for 'APPROX_PERCENTILE_CONT' for data type {other} is not implemented"
+                )
+            }
+        };
+
+        Ok(accumulator)
     }
 }
 
@@ -157,7 +198,10 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     #[allow(rustdoc::private_intra_doc_links)]
     /// See [`datafusion_physical_expr_common::aggregate::tdigest::TDigest::to_scalar_state()`] for a description of the serialised
     /// state.
-    fn state_fields(&self, args: StateFieldsArgs) -> datafusion_common::Result<Vec<Field>> {
+    fn state_fields(
+        &self,
+        args: StateFieldsArgs,
+    ) -> datafusion_common::Result<Vec<Field>> {
         Ok(vec![
             Field::new(
                 format_state_name(args.name, "max_size"),
@@ -200,46 +244,11 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         &self.signature
     }
 
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> datafusion_common::Result<Box<dyn Accumulator>> {
-        if acc_args.is_distinct {
-            return not_impl_err!(
-                "approx_percentile_cont(DISTINCT) aggregations are not available"
-            );
-        }
-
-        let percentile = validate_input_percentile_expr(&acc_args.args[1])?;
-        let tdigest_max_size = if acc_args.args.len() == 3 {
-            Some(validate_input_max_size_expr(&acc_args.args[2])?)
-        } else {
-            None
-        };
-
-        let accumulator: ApproxPercentileAccumulator = match acc_args.input_type {
-            t @ (DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64) => {
-                if let Some(max_size) = tdigest_max_size {
-                    ApproxPercentileAccumulator::new_with_max_size(percentile, t.clone(), max_size)
-                }else{
-                    ApproxPercentileAccumulator::new(percentile, t.clone())
-
-                }
-            }
-            other => {
-                return not_impl_err!(
-                    "Support for 'APPROX_PERCENTILE_CONT' for data type {other} is not implemented"
-                )
-            }
-        };
-
-        Ok(Box::new(accumulator))
+    fn accumulator(
+        &self,
+        acc_args: AccumulatorArgs,
+    ) -> datafusion_common::Result<Box<dyn Accumulator>> {
+        Ok(Box::new(self.create_accumulator(acc_args)?))
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
@@ -247,7 +256,9 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             return plan_err!("approx_percentile_cont requires numeric input types");
         }
         if arg_types.len() == 3 && !arg_types[2].is_integer() {
-            return plan_err!("approx_percentile_cont requires integer max_size input types");
+            return plan_err!(
+                "approx_percentile_cont requires integer max_size input types"
+            );
         }
         Ok(arg_types[0].clone())
     }

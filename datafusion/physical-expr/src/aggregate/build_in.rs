@@ -239,19 +239,6 @@ pub fn create_aggregate_expr(
         ) => {
             return not_impl_err!("{}(DISTINCT) aggregations are not available", fun);
         }
-        (AggregateFunction::ApproxPercentileContWithWeight, false) => {
-            Arc::new(expressions::ApproxPercentileContWithWeight::new(
-                // Pass in the desired percentile expr
-                input_phy_exprs,
-                name,
-                data_type,
-            )?)
-        }
-        (AggregateFunction::ApproxPercentileContWithWeight, true) => {
-            return not_impl_err!(
-                "approx_percentile_cont_with_weight(DISTINCT) aggregations are not available"
-            );
-        }
         (AggregateFunction::NthValue, _) => {
             let expr = &input_phy_exprs[0];
             let Some(n) = input_phy_exprs[1]
@@ -297,12 +284,11 @@ mod tests {
 
     use super::*;
     use crate::expressions::{
-        try_cast, ApproxPercentileCont, ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd,
-        BoolOr, Count, DistinctArrayAgg, DistinctCount, Max, Min,
+        try_cast, ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Count,
+        DistinctArrayAgg, DistinctCount, Max, Min,
     };
 
-    use datafusion_common::{plan_err, DataFusionError, ScalarValue};
-    use datafusion_expr::type_coercion::aggregates::NUMERICS;
+    use datafusion_common::plan_err;
     use datafusion_expr::{type_coercion, Signature};
 
     #[test]
@@ -387,59 +373,6 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    #[test]
-    fn test_agg_approx_percentile_phy_expr() {
-        for data_type in NUMERICS {
-            let input_schema =
-                Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-            let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-                Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                ),
-                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.2)))),
-            ];
-            let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                &AggregateFunction::ApproxPercentileCont,
-                false,
-                &input_phy_exprs[..],
-                &input_schema,
-                "c1",
-            )
-            .expect("failed to create aggregate expr");
-
-            assert!(result_agg_phy_exprs.as_any().is::<ApproxPercentileCont>());
-            assert_eq!("c1", result_agg_phy_exprs.name());
-            assert_eq!(
-                Field::new("c1", data_type.clone(), false),
-                result_agg_phy_exprs.field().unwrap()
-            );
-        }
-    }
-
-    #[test]
-    fn test_agg_approx_percentile_invalid_phy_expr() {
-        for data_type in NUMERICS {
-            let input_schema =
-                Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-            let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-                Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                ),
-                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(4.2)))),
-            ];
-            let err = create_physical_agg_expr_for_test(
-                &AggregateFunction::ApproxPercentileCont,
-                false,
-                &input_phy_exprs[..],
-                &input_schema,
-                "c1",
-            )
-            .expect_err("should fail due to invalid percentile");
-
-            assert!(matches!(err, DataFusionError::Plan(_)));
-        }
     }
 
     #[test]

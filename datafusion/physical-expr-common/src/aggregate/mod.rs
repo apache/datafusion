@@ -42,7 +42,7 @@ use datafusion_expr::utils::AggregateOrderSensitivity;
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
 #[allow(clippy::too_many_arguments)]
-pub fn  create_aggregate_expr(
+pub fn create_aggregate_expr(
     fun: &AggregateUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_exprs: &[Expr],

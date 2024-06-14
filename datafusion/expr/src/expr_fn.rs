@@ -266,22 +266,6 @@ pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
     Expr::InList(InList::new(Box::new(expr), list, negated))
 }
 
-/// Calculate an approximation of the specified `percentile` for `expr` and `weight_expr`.
-pub fn approx_percentile_cont_with_weight(
-    expr: Expr,
-    weight_expr: Expr,
-    percentile: Expr,
-) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxPercentileContWithWeight,
-        vec![expr, weight_expr, percentile],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Create an EXISTS subquery expression
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();

@@ -303,6 +303,7 @@ fn roundtrip_window() -> Result<()> {
         &args,
         &[],
         &[],
+        &[],
         &schema,
         "SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING",
         false,
@@ -456,6 +457,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![udaf::create_aggregate_expr(
         &udaf,
         &[col("b", &schema)?],
+        &[],
         &[],
         &[],
         &schema,

@@ -66,18 +66,22 @@ pub mod variance;
 
 pub mod approx_median;
 pub mod approx_percentile_cont;
+pub mod approx_percentile_cont_with_weight;
 
+use crate::approx_percentile_cont::approx_percentile_cont_udaf;
+use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::AggregateUDF;
 use log::debug;
 use std::sync::Arc;
-use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     pub use super::approx_distinct;
     pub use super::approx_median::approx_median;
+    pub use super::approx_percentile_cont::approx_percentile_cont;
+    pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
     pub use super::covariance::covar_pop;
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
@@ -88,7 +92,6 @@ pub mod expr_fn {
     pub use super::sum::sum;
     pub use super::variance::var_pop;
     pub use super::variance::var_sample;
-    pub use super::approx_percentile_cont::approx_percentile_cont;
 }
 
 /// Returns all default aggregate functions
@@ -107,6 +110,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         approx_median::approx_median_udaf(),
         approx_distinct::approx_distinct_udaf(),
         approx_percentile_cont_udaf(),
+        approx_percentile_cont_with_weight_udaf(),
     ]
 }
 

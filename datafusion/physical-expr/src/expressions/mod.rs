@@ -36,7 +36,6 @@ mod try_cast;
 pub mod helpers {
     pub use crate::aggregate::min_max::{max, min};
 }
-pub use crate::aggregate::approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
 pub use crate::aggregate::array_agg::ArrayAgg;
 pub use crate::aggregate::array_agg_distinct::DistinctArrayAgg;
 pub use crate::aggregate::array_agg_ordered::OrderSensitiveArrayAgg;

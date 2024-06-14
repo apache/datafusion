@@ -179,30 +179,6 @@ pub fn coerce_types(
             }
             Ok(vec![Float64, Float64])
         }
-        AggregateFunction::ApproxPercentileContWithWeight => {
-            if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            if !is_approx_percentile_cont_supported_arg_type(&input_types[1]) {
-                return plan_err!(
-                    "The weight argument for {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[1]
-                );
-            }
-            if !matches!(input_types[2], Float64) {
-                return plan_err!(
-                    "The percentile argument for {:?} must be Float64, not {:?}.",
-                    agg_fun,
-                    input_types[2]
-                );
-            }
-            Ok(input_types.to_vec())
-        }
         AggregateFunction::NthValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
         AggregateFunction::StringAgg => {

@@ -157,12 +157,6 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::RegrSxx => Self::RegrSXX,
             protobuf::AggregateFunction::RegrSyy => Self::RegrSYY,
             protobuf::AggregateFunction::RegrSxy => Self::RegrSXY,
-            protobuf::AggregateFunction::ApproxPercentileCont => {
-                Self::ApproxPercentileCont
-            }
-            protobuf::AggregateFunction::ApproxPercentileContWithWeight => {
-                Self::ApproxPercentileContWithWeight
-            }
             protobuf::AggregateFunction::Grouping => Self::Grouping,
             protobuf::AggregateFunction::NthValueAgg => Self::NthValue,
             protobuf::AggregateFunction::StringAgg => Self::StringAgg,
