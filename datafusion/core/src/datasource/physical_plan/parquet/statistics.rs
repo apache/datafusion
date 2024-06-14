@@ -658,6 +658,8 @@ where
 
 /// Extracts the null count statistics from an iterator
 /// of parquet page [`Index`]'es to an [`ArrayRef`]
+///
+/// The returned Array is an [`UInt64Array`]
 pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<ArrayRef>
 where
     I: Iterator<Item = (usize, &'a Index)>,
@@ -990,6 +992,8 @@ impl<'a> StatisticsConverter<'a> {
     }
 
     /// Extract the null counts from Data Page statistics.
+    ///
+    /// The returned Array is an [`UInt64Array`]
     ///
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_null_counts<I>(
