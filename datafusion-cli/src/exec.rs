@@ -29,7 +29,7 @@ use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
     helper::{unescape_input, CliHelper},
-    object_storage::{get_object_store},
+    object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
 
@@ -39,7 +39,6 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::{collect, execute_stream, ExecutionPlanProperties};
-use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
@@ -51,7 +50,7 @@ use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
 pub async fn exec_from_commands(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     commands: Vec<String>,
     print_options: &PrintOptions,
 ) -> Result<()> {
@@ -395,6 +394,7 @@ mod tests {
     use datafusion::common::config::FormatOptions;
     use datafusion::common::plan_err;
 
+    use datafusion::prelude::SessionContext;
     use url::Url;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
