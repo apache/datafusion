@@ -61,7 +61,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
 
-/// This example demonstrates using low level DataFusion APIs to read ony
+/// This example demonstrates using low level DataFusion APIs to read only
 /// certain row groups and ranges from parquet files, based on external
 /// information.
 ///
@@ -81,7 +81,7 @@ use url::Url;
 ///
 /// Specifically, this example illustrates how to:
 /// 1. Use [`ParquetFileReaderFactory`] to avoid re-reading parquet metadata on each query
-/// 2. Use [`PruningPredicate`] for predicate anaysis
+/// 2. Use [`PruningPredicate`] for predicate analysis
 /// 3. Pass a row group selection to [`ParuetExec`]
 /// 4. Pass a row selection (within a row group) to [`ParuetExec`]
 ///
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
     let object_store: Arc<dyn ObjectStore> =
         Arc::new(object_store::local::LocalFileSystem::new());
 
-    // Create a a custom table provider with our special index.
+    // Create a custom table provider with our special index.
     let provider = Arc::new(IndexTableProvider::try_new(Arc::clone(&object_store))?);
 
     // SessionContext for running queries that has the table provider
