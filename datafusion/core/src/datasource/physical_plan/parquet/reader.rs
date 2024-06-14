@@ -16,7 +16,7 @@
 // under the License.
 
 //! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
-//! creating parquet file readers
+//! low level control of parquet file readers
 
 use crate::datasource::physical_plan::{FileMeta, ParquetFileMetrics};
 use bytes::Bytes;
@@ -33,11 +33,18 @@ use std::sync::Arc;
 ///
 /// The combined implementations of [`ParquetFileReaderFactory`] and
 /// [`AsyncFileReader`] can be used to provide custom data access operations
-/// such as pre-cached data, I/O coalescing, etc.
+/// such as pre-cached metadata, I/O coalescing, etc.
 ///
 /// See [`DefaultParquetFileReaderFactory`] for a simple implementation.
 pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     /// Provides an `AsyncFileReader` for reading data from a parquet file specified
+    ///
+    /// # Notes
+    ///
+    /// If the resulting [`AsyncFileReader`]  returns `ParquetMetaData` without
+    /// page index information, the reader will load it on demand. Thus it is important
+    /// to ensure that the returned `ParquetMetaData` has the necessary information
+    /// if you wish to avoid a subsequent I/O
     ///
     /// # Arguments
     /// * partition_index - Index of the partition (for reporting metrics)
