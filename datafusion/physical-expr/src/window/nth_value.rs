@@ -125,7 +125,6 @@ impl BuiltInWindowFunctionExpr for NthValue {
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         let state = NthValueState {
-            range: Default::default(),
             finalized_result: None,
             kind: self.kind,
         };

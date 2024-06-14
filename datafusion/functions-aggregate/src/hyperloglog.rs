@@ -20,7 +20,7 @@
 //! `hyperloglog` is a module that contains a modified version
 //! of [redis's implementation](https://github.com/redis/redis/blob/4930d19e70c391750479951022e207e19111eb55/src/hyperloglog.c)
 //! with some modification based on strong assumption of usage
-//! within datafusion, so that [`datafusion_expr::approx_distinct`] function can
+//! within datafusion, so that function can
 //! be efficiently implemented.
 //!
 //! Specifically, like Redis's version, this HLL structure uses

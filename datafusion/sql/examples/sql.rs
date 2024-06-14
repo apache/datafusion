@@ -18,11 +18,12 @@
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::WindowUDF;
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_sql::{
     planner::{ContextProvider, SqlToRel},
     sqlparser::{dialect::GenericDialect, parser::Parser},
@@ -50,7 +51,9 @@ fn main() {
     let statement = &ast[0];
 
     // create a logical query plan
-    let context_provider = MyContextProvider::new().with_udaf(sum_udaf());
+    let context_provider = MyContextProvider::new()
+        .with_udaf(sum_udaf())
+        .with_udaf(count_udaf());
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
@@ -66,7 +69,8 @@ struct MyContextProvider {
 
 impl MyContextProvider {
     fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
-        self.udafs.insert(udaf.name().to_string(), udaf);
+        // TODO: change to to_string() if all the function name is converted to lowercase
+        self.udafs.insert(udaf.name().to_lowercase(), udaf);
         self
     }
 

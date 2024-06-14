@@ -192,18 +192,6 @@ pub fn avg(expr: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the count() aggregate function
-pub fn count(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Count,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Return a new expression with bitwise AND
 pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(
@@ -249,39 +237,9 @@ pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the count(distinct) aggregate function
-pub fn count_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Count,
-        vec![expr],
-        true,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Create an in_list expression
 pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
     Expr::InList(InList::new(Box::new(expr), list, negated))
-}
-
-/// Returns the approximate number of distinct input values.
-/// This function provides an approximation of count(DISTINCT x).
-/// Zero is returned if all input values are null.
-/// This function should produce a standard error of 0.81%,
-/// which is the standard deviation of the (approximately normal)
-/// error distribution over all possible sets.
-/// It does not guarantee an upper bound on the error for any specific input set.
-pub fn approx_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxDistinct,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
 }
 
 /// Calculate an approximation of the specified `percentile` for `expr`.

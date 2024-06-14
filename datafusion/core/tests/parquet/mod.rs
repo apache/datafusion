@@ -18,9 +18,7 @@
 //! Parquet integration tests
 use crate::parquet::utils::MetricsFinder;
 use arrow::array::Decimal128Array;
-use arrow::datatypes::{
-    i256, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
-};
+use arrow::datatypes::i256;
 use arrow::{
     array::{
         make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
@@ -36,10 +34,6 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use arrow_array::{
-    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-};
-use arrow_schema::IntervalUnit;
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{provider_as_source, TableProvider},
@@ -92,7 +86,6 @@ enum Scenario {
     Time32Millisecond,
     Time64Nanosecond,
     Time64Microsecond,
-    Interval,
     /// 7 Rows, for each i8, i16, i32, i64, u8, u16, u32, u64, f32, f64
     /// -MIN, -100, -1, 0, 1, 100, MAX
     NumericLimits,
@@ -921,71 +914,6 @@ fn make_dict_batch() -> RecordBatch {
     .unwrap()
 }
 
-fn make_interval_batch(offset: i32) -> RecordBatch {
-    let schema = Schema::new(vec![
-        Field::new(
-            "year_month",
-            DataType::Interval(IntervalUnit::YearMonth),
-            true,
-        ),
-        Field::new("day_time", DataType::Interval(IntervalUnit::DayTime), true),
-        Field::new(
-            "month_day_nano",
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            true,
-        ),
-    ]);
-    let schema = Arc::new(schema);
-
-    let ym_arr = IntervalYearMonthArray::from(vec![
-        Some(IntervalYearMonthType::make_value(1 + offset, 10 + offset)),
-        Some(IntervalYearMonthType::make_value(2 + offset, 20 + offset)),
-        Some(IntervalYearMonthType::make_value(3 + offset, 30 + offset)),
-        None,
-        Some(IntervalYearMonthType::make_value(5 + offset, 50 + offset)),
-    ]);
-
-    let dt_arr = IntervalDayTimeArray::from(vec![
-        Some(IntervalDayTimeType::make_value(1 + offset, 10 + offset)),
-        Some(IntervalDayTimeType::make_value(2 + offset, 20 + offset)),
-        Some(IntervalDayTimeType::make_value(3 + offset, 30 + offset)),
-        None,
-        Some(IntervalDayTimeType::make_value(5 + offset, 50 + offset)),
-    ]);
-
-    // Not yet implemented, refer to:
-    // https://github.com/apache/arrow-rs/blob/master/parquet/src/arrow/arrow_writer/mod.rs#L747
-    let mdn_arr = IntervalMonthDayNanoArray::from(vec![
-        Some(IntervalMonthDayNanoType::make_value(
-            1 + offset,
-            10 + offset,
-            100 + (offset as i64),
-        )),
-        Some(IntervalMonthDayNanoType::make_value(
-            2 + offset,
-            20 + offset,
-            200 + (offset as i64),
-        )),
-        Some(IntervalMonthDayNanoType::make_value(
-            3 + offset,
-            30 + offset,
-            300 + (offset as i64),
-        )),
-        None,
-        Some(IntervalMonthDayNanoType::make_value(
-            5 + offset,
-            50 + offset,
-            500 + (offset as i64),
-        )),
-    ]);
-
-    RecordBatch::try_new(
-        schema,
-        vec![Arc::new(ym_arr), Arc::new(dt_arr), Arc::new(mdn_arr)],
-    )
-    .unwrap()
-}
-
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Boolean => {
@@ -1407,12 +1335,6 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 ]),
             ]
         }
-        Scenario::Interval => vec![
-            make_interval_batch(0),
-            make_interval_batch(1),
-            make_interval_batch(2),
-            make_interval_batch(3),
-        ],
     }
 }
 

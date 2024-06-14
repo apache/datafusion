@@ -767,6 +767,8 @@ pub struct AggregateUdfExprNode {
     pub fun_name: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
     pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(bool, tag = "5")]
+    pub distinct: bool,
     #[prost(message, optional, boxed, tag = "3")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, repeated, tag = "4")]
@@ -1530,6 +1532,8 @@ pub struct CsvScanExecNode {
     pub quote: ::prost::alloc::string::String,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
+    #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
+    pub optional_comment: ::core::option::Option<csv_scan_exec_node::OptionalComment>,
 }
 /// Nested message and enum types in `CsvScanExecNode`.
 pub mod csv_scan_exec_node {
@@ -1538,6 +1542,12 @@ pub mod csv_scan_exec_node {
     pub enum OptionalEscape {
         #[prost(string, tag = "5")]
         Escape(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalComment {
+        #[prost(string, tag = "6")]
+        Comment(::prost::alloc::string::String),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1920,8 +1930,8 @@ pub enum AggregateFunction {
     Max = 1,
     /// SUM = 2;
     Avg = 3,
-    Count = 4,
-    ApproxDistinct = 5,
+    /// COUNT = 4;
+    /// APPROX_DISTINCT = 5;
     ArrayAgg = 6,
     /// VARIANCE = 7;
     /// VARIANCE_POP = 8;
@@ -1940,15 +1950,15 @@ pub enum AggregateFunction {
     BitXor = 21,
     BoolAnd = 22,
     BoolOr = 23,
-    RegrSlope = 26,
-    RegrIntercept = 27,
-    RegrCount = 28,
-    RegrR2 = 29,
-    RegrAvgx = 30,
-    RegrAvgy = 31,
-    RegrSxx = 32,
-    RegrSyy = 33,
-    RegrSxy = 34,
+    /// REGR_SLOPE = 26;
+    /// REGR_INTERCEPT = 27;
+    /// REGR_COUNT = 28;
+    /// REGR_R2 = 29;
+    /// REGR_AVGX = 30;
+    /// REGR_AVGY = 31;
+    /// REGR_SXX = 32;
+    /// REGR_SYY = 33;
+    /// REGR_SXY = 34;
     StringAgg = 35,
     NthValueAgg = 36,
 }
@@ -1962,8 +1972,6 @@ impl AggregateFunction {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
             AggregateFunction::Avg => "AVG",
-            AggregateFunction::Count => "COUNT",
-            AggregateFunction::ApproxDistinct => "APPROX_DISTINCT",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::Correlation => "CORRELATION",
             AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
@@ -1976,15 +1984,6 @@ impl AggregateFunction {
             AggregateFunction::BitXor => "BIT_XOR",
             AggregateFunction::BoolAnd => "BOOL_AND",
             AggregateFunction::BoolOr => "BOOL_OR",
-            AggregateFunction::RegrSlope => "REGR_SLOPE",
-            AggregateFunction::RegrIntercept => "REGR_INTERCEPT",
-            AggregateFunction::RegrCount => "REGR_COUNT",
-            AggregateFunction::RegrR2 => "REGR_R2",
-            AggregateFunction::RegrAvgx => "REGR_AVGX",
-            AggregateFunction::RegrAvgy => "REGR_AVGY",
-            AggregateFunction::RegrSxx => "REGR_SXX",
-            AggregateFunction::RegrSyy => "REGR_SYY",
-            AggregateFunction::RegrSxy => "REGR_SXY",
             AggregateFunction::StringAgg => "STRING_AGG",
             AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
@@ -1995,8 +1994,6 @@ impl AggregateFunction {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
             "AVG" => Some(Self::Avg),
-            "COUNT" => Some(Self::Count),
-            "APPROX_DISTINCT" => Some(Self::ApproxDistinct),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "CORRELATION" => Some(Self::Correlation),
             "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),
@@ -2009,15 +2006,6 @@ impl AggregateFunction {
             "BIT_XOR" => Some(Self::BitXor),
             "BOOL_AND" => Some(Self::BoolAnd),
             "BOOL_OR" => Some(Self::BoolOr),
-            "REGR_SLOPE" => Some(Self::RegrSlope),
-            "REGR_INTERCEPT" => Some(Self::RegrIntercept),
-            "REGR_COUNT" => Some(Self::RegrCount),
-            "REGR_R2" => Some(Self::RegrR2),
-            "REGR_AVGX" => Some(Self::RegrAvgx),
-            "REGR_AVGY" => Some(Self::RegrAvgy),
-            "REGR_SXX" => Some(Self::RegrSxx),
-            "REGR_SYY" => Some(Self::RegrSyy),
-            "REGR_SXY" => Some(Self::RegrSxy),
             "STRING_AGG" => Some(Self::StringAgg),
             "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,

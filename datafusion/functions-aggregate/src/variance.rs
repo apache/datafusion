@@ -199,7 +199,7 @@ impl AggregateUDFImpl for VariancePopulation {
 }
 
 /// An accumulator to compute variance
-/// The algrithm used is an online implementation and numerically stable. It is based on this paper:
+/// The algorithm used is an online implementation and numerically stable. It is based on this paper:
 /// Welford, B. P. (1962). "Note on a method for calculating corrected sums of squares and products".
 /// Technometrics. 4 (3): 419–420. doi:10.2307/1266577. JSTOR 1266577.
 ///

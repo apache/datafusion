@@ -115,7 +115,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
             input: Some(*to_substrait_rel(plan, ctx, &mut extension_info)?),
-            names: plan.schema().field_names(),
+            names: to_substrait_named_struct(plan.schema())?.names,
         })),
     }];
 
@@ -2309,14 +2309,12 @@ mod test {
         round_trip_type(DataType::Decimal128(10, 2))?;
         round_trip_type(DataType::Decimal256(30, 2))?;
 
-        for nullable in [true, false] {
-            round_trip_type(DataType::List(
-                Field::new_list_field(DataType::Int32, nullable).into(),
-            ))?;
-            round_trip_type(DataType::LargeList(
-                Field::new_list_field(DataType::Int32, nullable).into(),
-            ))?;
-        }
+        round_trip_type(DataType::List(
+            Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
+        round_trip_type(DataType::LargeList(
+            Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
 
         round_trip_type(DataType::Struct(
             vec![

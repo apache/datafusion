@@ -33,40 +33,18 @@ use strum_macros::EnumIter;
 // https://datafusion.apache.org/contributor-guide/index.html#how-to-add-a-new-aggregate-function
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum AggregateFunction {
-    /// Count
-    Count,
     /// Minimum
     Min,
     /// Maximum
     Max,
     /// Average
     Avg,
-    /// Approximate distinct function
-    ApproxDistinct,
     /// Aggregation into an array
     ArrayAgg,
     /// N'th value in a group according to some ordering
     NthValue,
     /// Correlation
     Correlation,
-    /// Slope from linear regression
-    RegrSlope,
-    /// Intercept from linear regression
-    RegrIntercept,
-    /// Number of input rows in which both expressions are not null
-    RegrCount,
-    /// R-squared value from linear regression
-    RegrR2,
-    /// Average of the independent variable
-    RegrAvgx,
-    /// Average of the dependent variable
-    RegrAvgy,
-    /// Sum of squares of the independent variable
-    RegrSXX,
-    /// Sum of squares of the dependent variable
-    RegrSYY,
-    /// Sum of products of pairs of numbers
-    RegrSXY,
     /// Approximate continuous percentile function
     ApproxPercentileCont,
     /// Approximate continuous percentile function with weight
@@ -91,23 +69,12 @@ impl AggregateFunction {
     pub fn name(&self) -> &str {
         use AggregateFunction::*;
         match self {
-            Count => "COUNT",
             Min => "MIN",
             Max => "MAX",
             Avg => "AVG",
-            ApproxDistinct => "APPROX_DISTINCT",
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
             Correlation => "CORR",
-            RegrSlope => "REGR_SLOPE",
-            RegrIntercept => "REGR_INTERCEPT",
-            RegrCount => "REGR_COUNT",
-            RegrR2 => "REGR_R2",
-            RegrAvgx => "REGR_AVGX",
-            RegrAvgy => "REGR_AVGY",
-            RegrSXX => "REGR_SXX",
-            RegrSYY => "REGR_SYY",
-            RegrSXY => "REGR_SXY",
             ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
             Grouping => "GROUPING",
@@ -138,7 +105,6 @@ impl FromStr for AggregateFunction {
             "bit_xor" => AggregateFunction::BitXor,
             "bool_and" => AggregateFunction::BoolAnd,
             "bool_or" => AggregateFunction::BoolOr,
-            "count" => AggregateFunction::Count,
             "max" => AggregateFunction::Max,
             "mean" => AggregateFunction::Avg,
             "min" => AggregateFunction::Min,
@@ -147,17 +113,7 @@ impl FromStr for AggregateFunction {
             "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
-            "regr_slope" => AggregateFunction::RegrSlope,
-            "regr_intercept" => AggregateFunction::RegrIntercept,
-            "regr_count" => AggregateFunction::RegrCount,
-            "regr_r2" => AggregateFunction::RegrR2,
-            "regr_avgx" => AggregateFunction::RegrAvgx,
-            "regr_avgy" => AggregateFunction::RegrAvgy,
-            "regr_sxx" => AggregateFunction::RegrSXX,
-            "regr_syy" => AggregateFunction::RegrSYY,
-            "regr_sxy" => AggregateFunction::RegrSXY,
             // approximate
-            "approx_distinct" => AggregateFunction::ApproxDistinct,
             "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
             "approx_percentile_cont_with_weight" => {
                 AggregateFunction::ApproxPercentileContWithWeight
@@ -194,9 +150,6 @@ impl AggregateFunction {
             })?;
 
         match self {
-            AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
-                Ok(DataType::Int64)
-            }
             AggregateFunction::Max | AggregateFunction::Min => {
                 // For min and max agg function, the returned type is same as input type.
                 // The coerced_data_types is same with input_types.
@@ -211,15 +164,6 @@ impl AggregateFunction {
             AggregateFunction::Correlation => {
                 correlation_return_type(&coerced_data_types[0])
             }
-            AggregateFunction::RegrSlope
-            | AggregateFunction::RegrIntercept
-            | AggregateFunction::RegrCount
-            | AggregateFunction::RegrR2
-            | AggregateFunction::RegrAvgx
-            | AggregateFunction::RegrAvgy
-            | AggregateFunction::RegrSXX
-            | AggregateFunction::RegrSYY
-            | AggregateFunction::RegrSXY => Ok(DataType::Float64),
             AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
             AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
                 "item",
@@ -255,10 +199,9 @@ impl AggregateFunction {
     pub fn signature(&self) -> Signature {
         // note: the physical expression must accept the type returned by this function or the execution panics.
         match self {
-            AggregateFunction::Count => Signature::variadic_any(Volatility::Immutable),
-            AggregateFunction::ApproxDistinct
-            | AggregateFunction::Grouping
-            | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
+            AggregateFunction::Grouping | AggregateFunction::ArrayAgg => {
+                Signature::any(1, Volatility::Immutable)
+            }
             AggregateFunction::Min | AggregateFunction::Max => {
                 let valid = STRINGS
                     .iter()
@@ -284,16 +227,7 @@ impl AggregateFunction {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
-            AggregateFunction::Correlation
-            | AggregateFunction::RegrSlope
-            | AggregateFunction::RegrIntercept
-            | AggregateFunction::RegrCount
-            | AggregateFunction::RegrR2
-            | AggregateFunction::RegrAvgx
-            | AggregateFunction::RegrAvgy
-            | AggregateFunction::RegrSXX
-            | AggregateFunction::RegrSYY
-            | AggregateFunction::RegrSXY => {
+            AggregateFunction::Correlation => {
                 Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::ApproxPercentileCont => {

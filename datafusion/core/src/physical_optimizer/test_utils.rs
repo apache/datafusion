@@ -43,7 +43,8 @@ use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunctionDefinition};
+use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
+use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_plan::displayable;
@@ -240,7 +241,7 @@ pub fn bounded_window_exec(
     Arc::new(
         crate::physical_plan::windows::BoundedWindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+                &WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 "count".to_owned(),
                 &[col(col_name, &schema).unwrap()],
                 &[],

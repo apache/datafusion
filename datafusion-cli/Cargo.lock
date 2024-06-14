@@ -1376,9 +1376,11 @@ dependencies = [
 name = "datafusion-physical-expr-common"
 version = "39.0.0"
 dependencies = [
+ "ahash",
  "arrow",
  "datafusion-common",
  "datafusion-expr",
+ "hashbrown 0.14.5",
  "rand",
 ]
 

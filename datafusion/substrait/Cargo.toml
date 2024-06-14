@@ -26,7 +26,7 @@ repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.73"
+rust-version = "1.75"
 
 [lints]
 workspace = true
@@ -41,6 +41,7 @@ object_store = { workspace = true }
 pbjson-types = "0.6"
 prost = "0.12"
 substrait = { version = "0.34.0", features = ["serde"] }
+url = { workspace = true }
 
 [dev-dependencies]
 datafusion-functions-aggregate = { workspace = true }

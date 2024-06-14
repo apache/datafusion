@@ -147,6 +147,12 @@ impl CsvFormat {
         self.options.has_header
     }
 
+    /// Lines beginning with this byte are ignored.
+    pub fn with_comment(mut self, comment: Option<u8>) -> Self {
+        self.options.comment = comment;
+        self
+    }
+
     /// The character separating values within a row.
     /// - default to ','
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
@@ -252,6 +258,7 @@ impl FileFormat for CsvFormat {
             self.options.delimiter,
             self.options.quote,
             self.options.escape,
+            self.options.comment,
             self.options.compression.into(),
         );
         Ok(Arc::new(exec))
@@ -300,7 +307,7 @@ impl CsvFormat {
         pin_mut!(stream);
 
         while let Some(chunk) = stream.next().await.transpose()? {
-            let format = arrow::csv::reader::Format::default()
+            let mut format = arrow::csv::reader::Format::default()
                 .with_header(
                     first_chunk
                         && self
@@ -309,6 +316,10 @@ impl CsvFormat {
                             .unwrap_or(state.config_options().catalog.has_header),
                 )
                 .with_delimiter(self.options.delimiter);
+
+            if let Some(comment) = self.options.comment {
+                format = format.with_comment(comment);
+            }
 
             let (Schema { fields, .. }, records_read) =
                 format.infer_schema(chunk.reader(), Some(records_to_read))?;
