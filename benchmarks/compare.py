@@ -29,7 +29,7 @@ try:
     from rich.console import Console
     from rich.table import Table
 except ImportError:
-    print("Try `pip install rich` for using this script.")
+    print("Couldn't import modules -- run `./bench.sh venv` first")
     raise
 
 
