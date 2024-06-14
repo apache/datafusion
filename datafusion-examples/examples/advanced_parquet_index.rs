@@ -91,6 +91,67 @@ use url::Url;
 /// [`SessionContext::read_parquet`] or [`ListingTable`], which also do file
 /// pruning based on parquet statistics (using the same underlying APIs)
 ///
+/// # Diagram
+///
+/// This diagram shows how the `ParquetExec` is configured to do only a single
+/// (range) read from a parquet file, for the data that is needed. It does
+/// not read the file footer or any of the row groups that are not needed.
+///
+/// ```text
+///         ┌───────────────────────┐ The TableProvider configures the
+///         │ ┌───────────────────┐ │ ParquetExec:
+///         │ │                   │ │
+///         │ └───────────────────┘ │
+///         │ ┌───────────────────┐ │
+/// Row     │ │                   │ │  1. To read only specific Row
+/// Groups  │ └───────────────────┘ │  Groups (the ParquetExec tries
+///         │ ┌───────────────────┐ │  to reduce this further based
+///         │ │                   │ │  on metadata)
+///         │ └───────────────────┘ │              ┌────────────────────┐
+///         │ ┌───────────────────┐ │              │                    │
+///         │ │                   │◀┼ ─ ─ ┐        │    ParquetExec     │
+///         │ └───────────────────┘ │              │  (Parquet Reader)  │
+///         │          ...          │     └ ─ ─ ─ ─│                    │
+///         │ ┌───────────────────┐ │              │ ╔═══════════════╗  │
+///         │ │                   │ │              │ ║ParquetMetadata║  │
+///         │ └───────────────────┘ │              │ ╚═══════════════╝  │
+///         │ ╔═══════════════════╗ │              └────────────────────┘
+///         │ ║  Thrift metadata  ║ │
+///         │ ╚═══════════════════╝ │      1. With cached ParquetMetadata, so
+///         └───────────────────────┘      the ParquetExec does not re-read /
+///          Parquet File                  decode the thrift footer
+///
+/// ```
+///
+/// Within a Row Group, Column Chunks store data in DataPages. This example also
+/// shows how to configure the ParquetExec to read a `RowSelection` (row ranges)
+/// which will skip unneeded data pages:
+///
+/// ```text
+///         ┌───────────────────────┐   If the RowSelection does not include any
+///         │          ...          │   rows from a particular Data Page, that
+///         │                       │   Data Page is not fetched or decoded
+///         │ ┌───────────────────┐ │
+///         │ │     ┌──────────┐  │ │
+/// Row     │ │     │DataPage 0│  │ │                 ┌────────────────────┐
+/// Groups  │ │     └──────────┘  │ │                 │                    │
+///         │ │     ┌──────────┐  │ │                 │    ParquetExec     │
+///         │ │ ... │DataPage 1│ ◀┼ ┼ ─ ─ ─           │  (Parquet Reader)  │
+///         │ │     └──────────┘  │ │      └ ─ ─ ─ ─ ─│                    │
+///         │ │     ┌──────────┐  │ │                 │ ╔═══════════════╗  │
+///         │ │     │DataPage 2│  │ │ If only rows    │ ║ParquetMetadata║  │
+///         │ │     └──────────┘  │ │ from DataPage 1 │ ╚═══════════════╝  │
+///         │ └───────────────────┘ │ are selected,   └────────────────────┘
+///         │                       │ only DataPage 1
+///         │          ...          │ is fetched and
+///         │                       │ decoded
+///         │ ╔═══════════════════╗ │
+///         │ ║  Thrift metadata  ║ │
+///         │ ╚═══════════════════╝ │
+///         └───────────────────────┘
+///          Parquet File
+/// ```
+///
 /// [`ListingTable`]: datafusion::datasource::listing::ListingTable
 #[tokio::main]
 async fn main() -> Result<()> {
