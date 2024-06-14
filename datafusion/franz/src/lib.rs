@@ -16,7 +16,10 @@
 // under the License.
 
 pub mod stream_monitor;
+pub mod rocksdb_backend;
 pub mod test;
+pub mod utils;
+pub mod record_store;
 
 pub use stream_monitor::{StreamMonitor, StreamMonitorConfig};
-
+pub use rocksdb_backend::RocksDBBackend;

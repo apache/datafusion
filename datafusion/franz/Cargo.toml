@@ -38,15 +38,17 @@ path = "src/lib.rs"
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 async-trait = { workspace = true }
+axum = { version = "0.7.5" }
 chrono = { workspace = true }
 datafusion = { workspace = true, default-features = true }
 datafusion-common = { workspace = true, default-features = true }
-tokio = { workspace = true }
+rocksdb = { version = "0.22.0" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = "0.10"
+tokio = { workspace = true }
 tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 tracing = "0.1.40"
-axum = { version = "0.7.5"}
 
 [dev-dependencies]
 env_logger = { workspace = true }
