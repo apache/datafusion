@@ -17,22 +17,36 @@
 
 use std::sync::Arc;
 
-use datafusion::{dataframe::DataFrame, error::DataFusionError, execution::{context::SessionState, TaskContext}, logical_expr::LogicalPlan, prelude::SessionContext};
+use datafusion::{
+    dataframe::DataFrame,
+    error::DataFusionError,
+    execution::{context::SessionState, TaskContext},
+    logical_expr::LogicalPlan,
+    prelude::SessionContext,
+};
 use object_store::ObjectStore;
 
 use crate::object_storage::{AwsOptions, GcpOptions};
 
 #[async_trait::async_trait]
+/// The CLI session context trait provides a way to have a session context that can be used with datafusion's CLI code.
 pub trait CliSessionContext {
     fn task_ctx(&self) -> Arc<TaskContext>;
 
     fn state(&self) -> SessionState;
 
-    fn register_object_store(&self, url: &url::Url, object_store: Arc<dyn ObjectStore>) -> Option<Arc<dyn ObjectStore + 'static>>;
+    fn register_object_store(
+        &self,
+        url: &url::Url,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore + 'static>>;
 
     fn register_options(&self, scheme: &str);
 
-    async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame, DataFusionError>;
+    async fn execute_logical_plan(
+        &self,
+        plan: LogicalPlan,
+    ) -> Result<DataFrame, DataFusionError>;
 }
 
 #[async_trait::async_trait]
@@ -45,7 +59,11 @@ impl CliSessionContext for SessionContext {
         self.state()
     }
 
-    fn register_object_store(&self, url: &url::Url, object_store: Arc<dyn ObjectStore>) -> Option<Arc<dyn ObjectStore + 'static>> {
+    fn register_object_store(
+        &self,
+        url: &url::Url,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore + 'static>> {
         self.register_object_store(url, object_store)
     }
 
@@ -66,8 +84,10 @@ impl CliSessionContext for SessionContext {
         }
     }
 
-    async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame, DataFusionError> {
+    async fn execute_logical_plan(
+        &self,
+        plan: LogicalPlan,
+    ) -> Result<DataFrame, DataFusionError> {
         self.execute_logical_plan(plan).await
     }
-
 }
