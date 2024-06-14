@@ -843,15 +843,18 @@ impl<'a> StatisticsConverter<'a> {
 
     /// Extract the null counts from row group statistics in [`RowGroupMetaData`]
     ///
+    /// The returned array is [`UInt64Array`]
+    ///
     /// See docs on [`Self::row_group_mins`] for details
     pub fn row_group_null_counts<I>(&self, metadatas: I) -> Result<ArrayRef>
     where
         I: IntoIterator<Item = &'a RowGroupMetaData>,
     {
-        let data_type = self.arrow_field.data_type();
-
         let Some(parquet_index) = self.parquet_index else {
-            return Ok(self.make_null_array(data_type, metadatas));
+            let num_row_groups = metadatas.into_iter().count();
+            return Ok(Arc::new(UInt64Array::from_iter(
+                std::iter::repeat(None).take(num_row_groups),
+            )));
         };
 
         let null_counts = metadatas

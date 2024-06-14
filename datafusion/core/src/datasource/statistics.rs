@@ -16,10 +16,9 @@
 // under the License.
 
 use super::listing::PartitionedFile;
-use crate::arrow::datatypes::{Schema, SchemaRef};
+use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
-use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+use crate::physical_plan::{ColumnStatistics, Statistics};
 
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
@@ -149,23 +148,6 @@ pub async fn get_statistics_with_limit(
 
     Ok((result_files, statistics))
 }
-
-pub(crate) fn create_max_min_accs(
-    schema: &Schema,
-) -> (Vec<Option<MaxAccumulator>>, Vec<Option<MinAccumulator>>) {
-    let max_values: Vec<Option<MaxAccumulator>> = schema
-        .fields()
-        .iter()
-        .map(|field| MaxAccumulator::try_new(field.data_type()).ok())
-        .collect();
-    let min_values: Vec<Option<MinAccumulator>> = schema
-        .fields()
-        .iter()
-        .map(|field| MinAccumulator::try_new(field.data_type()).ok())
-        .collect();
-    (max_values, min_values)
-}
-
 fn add_row_stats(
     file_num_rows: Precision<usize>,
     num_rows: Precision<usize>,
@@ -188,32 +170,6 @@ pub(crate) fn get_col_stats_vec(
             max_value,
             min_value,
             distinct_count: Precision::Absent,
-        })
-        .collect()
-}
-
-pub(crate) fn get_col_stats(
-    schema: &Schema,
-    null_counts: Vec<Precision<usize>>,
-    max_values: &mut [Option<MaxAccumulator>],
-    min_values: &mut [Option<MinAccumulator>],
-) -> Vec<ColumnStatistics> {
-    (0..schema.fields().len())
-        .map(|i| {
-            let max_value = match max_values.get_mut(i).unwrap() {
-                Some(max_value) => max_value.evaluate().ok(),
-                None => None,
-            };
-            let min_value = match min_values.get_mut(i).unwrap() {
-                Some(min_value) => min_value.evaluate().ok(),
-                None => None,
-            };
-            ColumnStatistics {
-                null_count: null_counts[i].clone(),
-                max_value: max_value.map(Precision::Exact).unwrap_or(Precision::Absent),
-                min_value: min_value.map(Precision::Exact).unwrap_or(Precision::Absent),
-                distinct_count: Precision::Absent,
-            }
         })
         .collect()
 }

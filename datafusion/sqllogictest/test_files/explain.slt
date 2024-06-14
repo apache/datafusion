@@ -321,6 +321,24 @@ physical_plan
 02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
 
 
+# Create a new parquet file (with row group statistics) and show that
+query IT
+COPY (values (1, 'foo'), (2, 'bar'), (3, null)) TO 'test_files/scratch/explain/stats.parquet';
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE stats STORED AS PARQUET LOCATION 'test_files/scratch/explain/stats.parquet';
+
+## Expect to see value statistics in the plan
+query TT
+EXPLAIN SELECT * from stats;
+----
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/explain/stats.parquet]]}, projection=[column1, column2], statistics=[Rows=Exact(3), Bytes=Absent, [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(3)) Null=Exact(0)),(Col[1]: Min=Exact(Utf8("bar")) Max=Exact(Utf8("foo")) Null=Exact(1))]]
+
+statement ok
+DROP TABLE stats;
+
 statement ok
 set datafusion.explain.show_statistics = false;
 

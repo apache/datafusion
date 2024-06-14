@@ -344,6 +344,24 @@ impl ColumnStatistics {
             distinct_count: Precision::Absent,
         }
     }
+
+    /// Set the null count for the column
+    pub fn with_null_count(mut self, null_count: Precision<usize>) -> Self {
+        self.null_count = null_count;
+        self
+    }
+
+    /// Set the max value for the column
+    pub fn with_max_value(mut self, max_value: Precision<ScalarValue>) -> Self {
+        self.max_value = max_value;
+        self
+    }
+
+    /// Set the min value for the column
+    pub fn with_min_value(mut self, min_value: Precision<ScalarValue>) -> Self {
+        self.min_value = min_value;
+        self
+    }
 }
 
 #[cfg(test)]
