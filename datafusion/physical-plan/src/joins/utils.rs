@@ -25,8 +25,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::ExecutionPlanProperties;
-use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
+use crate::{
+    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
+};
 
 use arrow::array::{
     downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
