@@ -1193,9 +1193,7 @@ mod tests {
     use datafusion_execution::{
         RecordBatchStream, SendableRecordBatchStream, TaskContext,
     };
-    use datafusion_expr::{
-        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
-    };
+    use datafusion_expr::{Expr, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::{col, Column, NthValue};
     use datafusion_physical_expr::window::{
@@ -1301,7 +1299,9 @@ mod tests {
         let window_fn = WindowFunctionDefinition::AggregateUDF(count_udaf());
         let col_expr =
             Arc::new(Column::new(schema.fields[0].name(), 0)) as Arc<dyn PhysicalExpr>;
+        let log_expr = Expr::Column(datafusion_common::Column::from(schema.fields[0].name()));
         let args = vec![col_expr];
+        let log_args = vec![log_expr];
         let partitionby_exprs = vec![col(hash, &schema)?];
         let orderby_exprs = vec![PhysicalSortExpr {
             expr: col(order_by, &schema)?,
@@ -1322,6 +1322,7 @@ mod tests {
                 &window_fn,
                 fn_name,
                 &args,
+                &log_args,
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),

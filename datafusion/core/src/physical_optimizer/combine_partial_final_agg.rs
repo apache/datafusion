@@ -315,6 +315,7 @@ mod tests {
             &[expr],
             &[],
             &[],
+            &[],
             schema,
             name,
             false,

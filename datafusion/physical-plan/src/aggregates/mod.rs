@@ -1341,6 +1341,7 @@ mod tests {
             &[lit(1i8)],
             &[],
             &[],
+            &[],
             &input_schema,
             "COUNT(1)",
             false,
@@ -1976,7 +1977,7 @@ mod tests {
             options: sort_options,
         }];
         let args = vec![col("b", schema)?];
-        let logical_args = vec![datafusion_expr::col("b")?];
+        let logical_args = vec![datafusion_expr::col("b")];
         let func = datafusion_expr::AggregateUDF::new_from_impl(FirstValue::new());
         datafusion_physical_expr_common::aggregate::create_aggregate_expr(
             &func,
@@ -2008,9 +2009,9 @@ mod tests {
             options: sort_options,
         }];
         let args = vec![col("b", schema)?];
-        let logical_args = vec![datafusion_expr::col("b")?];
+        let logical_args = vec![datafusion_expr::col("b")];
         let func = datafusion_expr::AggregateUDF::new_from_impl(LastValue::new());
-        datafusion_physical_expr_common::aggregate::create_aggregate_expr(
+        create_aggregate_expr(
             &func,
             &args,
             &logical_args,

@@ -33,7 +33,7 @@ use datafusion::assert_batches_eq;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::ExprSchemable;
-use datafusion_functions_aggregate::expr_fn::approx_median;
+use datafusion_functions_aggregate::expr_fn::{approx_median, approx_percentile_cont};
 
 fn test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
