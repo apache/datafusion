@@ -481,20 +481,23 @@ async fn test_int_64() {
     .build()
     .await;
 
-    Test {
-        reader: &reader,
-        // mins are [-5, -4, 0, 5]
-        expected_min: Arc::new(Int64Array::from(vec![-5, -4, 0, 5])),
-        // maxes are [-1, 0, 4, 9]
-        expected_max: Arc::new(Int64Array::from(vec![-1, 0, 4, 9])),
-        // nulls are [0, 0, 0, 0]
-        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
-        // row counts are [5, 5, 5, 5]
-        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
-        column_name: "i64",
-        test_data_page_statistics: false,
+    // since each row has only one data page, the statistics are the same
+    for test_data_page_statistics in [true, false] {
+        Test {
+            reader: &reader,
+            // mins are [-5, -4, 0, 5]
+            expected_min: Arc::new(Int64Array::from(vec![-5, -4, 0, 5])),
+            // maxes are [-1, 0, 4, 9]
+            expected_max: Arc::new(Int64Array::from(vec![-1, 0, 4, 9])),
+            // nulls are [0, 0, 0, 0]
+            expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+            // row counts are [5, 5, 5, 5]
+            expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+            column_name: "i64",
+            test_data_page_statistics,
+        }
+        .run();
     }
-    .run();
 }
 
 #[tokio::test]
