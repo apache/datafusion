@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::ExecutionPlanProperties;
 use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
 
 use arrow::array::{
@@ -426,27 +427,6 @@ fn check_join_set_is_valid(
     };
 
     Ok(())
-}
-
-/// Calculate the OutputPartitioning for Partitioned Join
-pub fn partitioned_join_output_partitioning(
-    join_type: JoinType,
-    left_partitioning: &Partitioning,
-    right_partitioning: &Partitioning,
-    left_columns_len: usize,
-) -> Partitioning {
-    match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-            left_partitioning.clone()
-        }
-        JoinType::RightSemi | JoinType::RightAnti => right_partitioning.clone(),
-        JoinType::Right => {
-            adjust_right_output_partitioning(right_partitioning, left_columns_len)
-        }
-        JoinType::Full => {
-            Partitioning::UnknownPartitioning(right_partitioning.partition_count())
-        }
-    }
 }
 
 /// Adjust the right out partitioning to new Column Index
@@ -1537,6 +1517,29 @@ macro_rules! handle_state {
 pub enum StatefulStreamResult<T> {
     Ready(T),
     Continue,
+}
+
+pub(crate) fn symmetric_join_output_partitioning(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    join_type: &JoinType,
+) -> Partitioning {
+    let left_columns_len = left.schema().fields.len();
+    let left_partitioning = left.output_partitioning();
+    let right_partitioning = right.output_partitioning();
+    match join_type {
+        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+            left_partitioning.clone()
+        }
+        JoinType::RightSemi | JoinType::RightAnti => right_partitioning.clone(),
+        JoinType::Inner | JoinType::Right => {
+            adjust_right_output_partitioning(right_partitioning, left_columns_len)
+        }
+        JoinType::Full => {
+            // We could also use left partition count as they are necessarily equal.
+            Partitioning::UnknownPartitioning(right_partitioning.partition_count())
+        }
+    }
 }
 
 #[cfg(test)]
