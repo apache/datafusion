@@ -66,6 +66,8 @@ struct Int64Case {
 
 impl Int64Case {
     /// Return a record batch with i64 with Null values
+    /// The first no_null_values_end - no_null_values_start values
+    /// are non-null with the specified range, the rest are null
     fn make_int64_batches_with_null(&self) -> RecordBatch {
         let schema =
             Arc::new(Schema::new(vec![Field::new("i64", DataType::Int64, true)]));
@@ -112,8 +114,18 @@ impl Int64Case {
         let mut writer =
             ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
 
-        for batch in batches {
-            writer.write(&batch).expect("writing batch");
+        // if we have a datapage limit send the batches in one at a time to give
+        // the writer a chance to be split into multiple pages
+        if self.data_page_row_count_limit.is_some() {
+            for batch in batches {
+                for i in 0..batch.num_rows() {
+                    writer.write(&batch.slice(i, 1)).expect("writing batch");
+                }
+            }
+        } else {
+            for batch in batches {
+                writer.write(&batch).expect("writing batch");
+            }
         }
 
         // close file
@@ -187,36 +199,6 @@ impl<'a> Test<'a> {
 
         let row_groups = reader.metadata().row_groups();
 
-        let min = converter.row_group_mins(row_groups).unwrap();
-        assert_eq!(
-            &min, &expected_min,
-            "{column_name}: Mismatch with expected minimums"
-        );
-
-        let max = converter.row_group_maxes(row_groups).unwrap();
-        assert_eq!(
-            &max, &expected_max,
-            "{column_name}: Mismatch with expected maximum"
-        );
-
-        let null_counts = converter.row_group_null_counts(row_groups).unwrap();
-        let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
-        assert_eq!(
-            &null_counts, &expected_null_counts,
-            "{column_name}: Mismatch with expected null counts. \
-            Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
-        );
-
-        let row_counts = StatisticsConverter::row_group_row_counts(
-            reader.metadata().row_groups().iter(),
-        )
-        .unwrap();
-        assert_eq!(
-            row_counts, expected_row_counts,
-            "{column_name}: Mismatch with expected row counts. \
-            Actual: {row_counts:?}. Expected: {expected_row_counts:?}"
-        );
-
         if test_data_page_statistics {
             let column_page_index = reader
                 .metadata()
@@ -265,6 +247,8 @@ impl<'a> Test<'a> {
                     &row_group_indices,
                 )
                 .unwrap();
+
+            let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
             assert_eq!(
                 &null_counts, &expected_null_counts,
                 "{column_name}: Mismatch with expected data page null counts. \
@@ -277,6 +261,36 @@ impl<'a> Test<'a> {
             let expected_row_counts = Arc::new(expected_row_counts) as ArrayRef;
             assert_eq!(
                 &row_counts, &expected_row_counts,
+                "{column_name}: Mismatch with expected row counts. \
+                Actual: {row_counts:?}. Expected: {expected_row_counts:?}"
+            );
+        } else {
+            let min = converter.row_group_mins(row_groups).unwrap();
+            assert_eq!(
+                &min, &expected_min,
+                "{column_name}: Mismatch with expected minimums"
+            );
+
+            let max = converter.row_group_maxes(row_groups).unwrap();
+            assert_eq!(
+                &max, &expected_max,
+                "{column_name}: Mismatch with expected maximum"
+            );
+
+            let null_counts = converter.row_group_null_counts(row_groups).unwrap();
+            let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
+            assert_eq!(
+                &null_counts, &expected_null_counts,
+                "{column_name}: Mismatch with expected null counts. \
+                Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
+            );
+
+            let row_counts = StatisticsConverter::row_group_row_counts(
+                reader.metadata().row_groups().iter(),
+            )
+            .unwrap();
+            assert_eq!(
+                row_counts, expected_row_counts,
                 "{column_name}: Mismatch with expected row counts. \
                 Actual: {row_counts:?}. Expected: {expected_row_counts:?}"
             );
@@ -419,37 +433,36 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
     .run()
 }
 
-
 #[tokio::test]
 async fn test_multiple_data_pages_nulls_and_negatives() {
     let reader = Int64Case {
-        null_values: 2,
+        null_values: 3,
         no_null_values_start: -1,
-        no_null_values_end: 5,
+        no_null_values_end: 10,
         row_per_group: 20,
         // limit page row count to 4
         data_page_row_count_limit: Some(4),
         enable_stats: Some(EnabledStatistics::Page),
-
     }
-        .build();
+    .build();
 
+    // Data layout looks like this:
+    //
+    // page 0: [-1, 0, 1, 2]
+    // page 1: [3, 4, 5, 6]
+    // page 2: [7, 8, 9, null]
+    // page 3: [null, null]
     Test {
         reader: &reader,
-        // min is -1
-        expected_min: Arc::new(Int64Array::from(vec![-1])),
-        // max is 4
-        expected_max: Arc::new(Int64Array::from(vec![4])),
-        // 2 nulls
-        expected_null_counts: UInt64Array::from(vec![2]),
-        // 8 rows
-        expected_row_counts: UInt64Array::from(vec![8]),
+        expected_min: Arc::new(Int64Array::from(vec![Some(-1), Some(3), Some(7), None])),
+        expected_max: Arc::new(Int64Array::from(vec![Some(2), Some(6), Some(9), None])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 1, 2]),
+        expected_row_counts: UInt64Array::from(vec![4, 4, 4, 2]),
         column_name: "i64",
         test_data_page_statistics: true,
     }
-        .run()
+    .run()
 }
-
 
 /////////////// MORE GENERAL TESTS //////////////////////
 // . Many columns in a file
@@ -1936,7 +1949,6 @@ async fn test_missing_statistics() {
         row_per_group: 5,
         enable_stats: Some(EnabledStatistics::None),
         ..Default::default()
-
     }
     .build();
 
