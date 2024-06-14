@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, vec};
 
+use super::utils::asymmetric_join_output_partitioning;
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
