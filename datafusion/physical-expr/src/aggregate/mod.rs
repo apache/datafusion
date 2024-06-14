@@ -26,8 +26,6 @@ pub(crate) mod average;
 pub(crate) mod bit_and_or_xor;
 pub(crate) mod bool_and_or;
 pub(crate) mod correlation;
-pub(crate) mod count;
-pub(crate) mod count_distinct;
 pub(crate) mod covariance;
 pub(crate) mod grouping;
 pub(crate) mod nth_value;
@@ -35,7 +33,6 @@ pub(crate) mod string_agg;
 #[macro_use]
 pub(crate) mod min_max;
 pub(crate) mod groups_accumulator;
-pub(crate) mod regr;
 pub(crate) mod stats;
 pub(crate) mod stddev;
 pub(crate) mod variance;

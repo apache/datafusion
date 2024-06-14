@@ -31,6 +31,7 @@ use arrow::{
 };
 use arrow_array::Float32Array;
 use arrow_schema::ArrowError;
+use datafusion_functions_aggregate::count::count_udaf;
 use object_store::local::LocalFileSystem;
 use std::fs;
 use std::sync::Arc;
@@ -51,11 +52,11 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
-    array_agg, avg, cast, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
-    placeholder, scalar_subquery, when, wildcard, AggregateFunction, Expr, ExprSchemable,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    array_agg, avg, cast, col, exists, expr, in_subquery, lit, max, out_ref_col,
+    placeholder, scalar_subquery, when, wildcard, Expr, ExprSchemable, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
-use datafusion_functions_aggregate::expr_fn::sum;
+use datafusion_functions_aggregate::expr_fn::{count, sum};
 
 #[tokio::test]
 async fn test_count_wildcard_on_sort() -> Result<()> {
@@ -178,7 +179,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .table("t1")
         .await?
         .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![wildcard()],
             vec![],
             vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],

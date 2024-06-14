@@ -37,7 +37,9 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
-use datafusion_functions_aggregate::approx_median::approx_median_udaf;
+use datafusion_functions_aggregate::{
+    approx_median::approx_median_udaf, count::count_udaf,
+};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
@@ -2702,7 +2704,8 @@ fn logical_plan_with_dialect_and_options(
         ))
         .with_udf(make_udf("sqrt", vec![DataType::Int64], DataType::Int64))
         .with_udaf(sum_udaf())
-        .with_udaf(approx_median_udaf());
+        .with_udaf(approx_median_udaf())
+        .with_udaf(count_udaf());
 
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);

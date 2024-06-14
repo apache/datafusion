@@ -20,7 +20,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::usize;
 
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};

@@ -52,7 +52,7 @@ homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
-rust-version = "1.73"
+rust-version = "1.75"
 version = "39.0.0"
 
 [workspace.dependencies]
@@ -107,7 +107,7 @@ doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
 half = { version = "2.2.1", default-features = false }
-hashbrown = { version = "0.14", features = ["raw"] }
+hashbrown = { version = "0.14.5", features = ["raw"] }
 indexmap = "2.0.0"
 itertools = "0.12"
 log = "^0.4"

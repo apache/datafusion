@@ -38,6 +38,7 @@ use datafusion_expr::{
     AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
     WindowFrameUnits, WindowFunctionDefinition,
 };
+use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -165,7 +166,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
             // its name
             "COUNT",
             // window function argument
@@ -350,7 +351,7 @@ fn get_random_function(
     window_fn_map.insert(
         "count",
         (
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![arg.clone()],
         ),
     );

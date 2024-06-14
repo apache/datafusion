@@ -96,7 +96,6 @@ pub fn coerce_types(
     check_arg_count(agg_fun.name(), input_types, &signature.type_signature)?;
 
     match agg_fun {
-        AggregateFunction::Count => Ok(input_types.to_vec()),
         AggregateFunction::ArrayAgg => Ok(input_types.to_vec()),
         AggregateFunction::Min | AggregateFunction::Max => {
             // min and max support the dictionary data type
@@ -151,27 +150,6 @@ pub fn coerce_types(
         }
         AggregateFunction::Correlation => {
             if !is_correlation_support_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            Ok(vec![Float64, Float64])
-        }
-        AggregateFunction::RegrSlope
-        | AggregateFunction::RegrIntercept
-        | AggregateFunction::RegrCount
-        | AggregateFunction::RegrR2
-        | AggregateFunction::RegrAvgx
-        | AggregateFunction::RegrAvgy
-        | AggregateFunction::RegrSXX
-        | AggregateFunction::RegrSYY
-        | AggregateFunction::RegrSXY => {
-            let valid_types = [NUMERICS.to_vec(), vec![Null]].concat();
-            let input_types_valid = // number of input already checked before
-                valid_types.contains(&input_types[0]) && valid_types.contains(&input_types[1]);
-            if !input_types_valid {
                 return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun,
@@ -525,7 +503,6 @@ mod tests {
         // test count, array_agg, approx_distinct, min, max.
         // the coerced types is same with input types
         let funs = vec![
-            AggregateFunction::Count,
             AggregateFunction::ArrayAgg,
             AggregateFunction::Min,
             AggregateFunction::Max,
