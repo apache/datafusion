@@ -65,8 +65,6 @@ pub enum AggregateFunction {
     RegrSYY,
     /// Sum of products of pairs of numbers
     RegrSXY,
-    /// Approximate continuous percentile function
-    ApproxPercentileCont,
     /// Approximate continuous percentile function with weight
     ApproxPercentileContWithWeight,
     /// Grouping
@@ -105,7 +103,6 @@ impl AggregateFunction {
             RegrSXX => "REGR_SXX",
             RegrSYY => "REGR_SYY",
             RegrSXY => "REGR_SXY",
-            ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
             Grouping => "GROUPING",
             BitAnd => "BIT_AND",
@@ -154,7 +151,6 @@ impl FromStr for AggregateFunction {
             "regr_syy" => AggregateFunction::RegrSYY,
             "regr_sxy" => AggregateFunction::RegrSXY,
             // approximate
-            "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
             "approx_percentile_cont_with_weight" => {
                 AggregateFunction::ApproxPercentileContWithWeight
             }
@@ -220,7 +216,6 @@ impl AggregateFunction {
                 coerced_data_types[0].clone(),
                 true,
             )))),
-            AggregateFunction::ApproxPercentileCont => Ok(coerced_data_types[0].clone()),
             AggregateFunction::ApproxPercentileContWithWeight => {
                 Ok(coerced_data_types[0].clone())
             }
@@ -289,25 +284,6 @@ impl AggregateFunction {
             | AggregateFunction::RegrSYY
             | AggregateFunction::RegrSXY => {
                 Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
-            }
-            AggregateFunction::ApproxPercentileCont => {
-                let mut variants =
-                    Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
-                // Accept any numeric value paired with a float64 percentile
-                for num in NUMERICS {
-                    variants
-                        .push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
-                    // Additionally accept an integer number of centroids for T-Digest
-                    for int in INTEGERS {
-                        variants.push(TypeSignature::Exact(vec![
-                            num.clone(),
-                            DataType::Float64,
-                            int.clone(),
-                        ]))
-                    }
-                }
-
-                Signature::one_of(variants, Volatility::Immutable)
             }
             AggregateFunction::ApproxPercentileContWithWeight => Signature::one_of(
                 // Accept any numeric value paired with a float64 percentile

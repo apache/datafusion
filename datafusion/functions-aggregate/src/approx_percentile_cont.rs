@@ -40,7 +40,7 @@ use datafusion_physical_expr_common::aggregate::utils::down_cast_any_ref;
 make_udaf_expr_and_func!(
     ApproxPercentileCont,
     approx_percentile_cont,
-    expression,
+    expression percentile,
     "Computes the approximate percentile continuous of a set of numbers",
     approx_percentile_cont_udaf
 );
@@ -245,6 +245,9 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
         if !arg_types[0].is_numeric() {
             return plan_err!("approx_percentile_cont requires numeric input types");
+        }
+        if arg_types.len() == 3 && !arg_types[2].is_integer() {
+            return plan_err!("approx_percentile_cont requires integer max_size input types");
         }
         Ok(arg_types[0].clone())
     }

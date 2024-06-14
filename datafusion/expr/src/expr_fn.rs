@@ -266,18 +266,6 @@ pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
     Expr::InList(InList::new(Box::new(expr), list, negated))
 }
 
-/// Calculate an approximation of the specified `percentile` for `expr`.
-pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxPercentileCont,
-        vec![expr, percentile],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Calculate an approximation of the specified `percentile` for `expr` and `weight_expr`.
 pub fn approx_percentile_cont_with_weight(
     expr: Expr,

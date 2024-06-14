@@ -239,28 +239,6 @@ pub fn create_aggregate_expr(
         ) => {
             return not_impl_err!("{}(DISTINCT) aggregations are not available", fun);
         }
-        (AggregateFunction::ApproxPercentileCont, false) => {
-            if input_phy_exprs.len() == 2 {
-                Arc::new(expressions::ApproxPercentileCont::new(
-                    // Pass in the desired percentile expr
-                    input_phy_exprs,
-                    name,
-                    data_type,
-                )?)
-            } else {
-                Arc::new(expressions::ApproxPercentileCont::new_with_max_size(
-                    // Pass in the desired percentile expr
-                    input_phy_exprs,
-                    name,
-                    data_type,
-                )?)
-            }
-        }
-        (AggregateFunction::ApproxPercentileCont, true) => {
-            return not_impl_err!(
-                "approx_percentile_cont(DISTINCT) aggregations are not available"
-            );
-        }
         (AggregateFunction::ApproxPercentileContWithWeight, false) => {
             Arc::new(expressions::ApproxPercentileContWithWeight::new(
                 // Pass in the desired percentile expr

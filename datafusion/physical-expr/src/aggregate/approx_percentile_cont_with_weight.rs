@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::ApproxPercentileCont;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{
     array::ArrayRef,
