@@ -681,6 +681,7 @@ _Alias of [nvl](#nvl)._
 - [substr_index](#substr_index)
 - [find_in_set](#find_in_set)
 - [position](#position)
+- [contains](#contains)
 
 ### `ascii`
 
