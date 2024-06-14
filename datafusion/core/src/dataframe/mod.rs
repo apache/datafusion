@@ -3100,10 +3100,7 @@ mod tests {
             let join_schema = physical_plan.schema();
 
             match join_type {
-                JoinType::Inner
-                | JoinType::Left
-                | JoinType::LeftSemi
-                | JoinType::LeftAnti => {
+                JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
                     let left_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
                         Arc::new(Column::new_with_schema("c1", &join_schema)?),
                         Arc::new(Column::new_with_schema("c2", &join_schema)?),
@@ -3113,7 +3110,10 @@ mod tests {
                         &Partitioning::Hash(left_exprs, default_partition_count)
                     );
                 }
-                JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                JoinType::Inner
+                | JoinType::Right
+                | JoinType::RightSemi
+                | JoinType::RightAnti => {
                     let right_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
                         Arc::new(Column::new_with_schema("c2_c1", &join_schema)?),
                         Arc::new(Column::new_with_schema("c2_c2", &join_schema)?),
@@ -3133,6 +3133,7 @@ mod tests {
 
         Ok(())
     }
+
     #[tokio::test]
     async fn nested_explain_should_fail() -> Result<()> {
         let ctx = SessionContext::new();
