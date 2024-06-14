@@ -172,8 +172,7 @@ pub struct IndexTableProvider {
 }
 impl IndexTableProvider {
     /// Create a new IndexTableProvider
-    /// * `dir` - the directory containing the parquet files
-    /// * `object_store` - the object store implementation to use for reading the files
+    /// * `object_store` - the object store implementation to use for reading files
     pub fn try_new(object_store: Arc<dyn ObjectStore>) -> Result<Self> {
         let tmpdir = TempDir::new().expect("Can't make temporary directory");
 
