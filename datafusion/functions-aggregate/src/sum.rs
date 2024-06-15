@@ -46,7 +46,7 @@ make_udaf_expr_and_func!(
     Sum,
     sum,
     expression,
-    "Returns the first value in a group of values.",
+    "Returns the sum of a group of values.",
     sum_udaf
 );
 

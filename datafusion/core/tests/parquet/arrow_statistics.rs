@@ -30,8 +30,7 @@ use arrow::datatypes::{
 use arrow_array::{
     make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
     LargeStringArray, RecordBatch, StringArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
@@ -1057,84 +1056,6 @@ async fn test_dates_64_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: UInt64Array::from(vec![13, 7]),
         column_name: "date64",
-    }
-    .run();
-}
-
-#[tokio::test]
-#[should_panic]
-// Currently this test `should_panic` since statistics for `Intervals`
-// are not supported and `IntervalMonthDayNano` cannot be written
-// to parquet yet.
-// Refer to issue: https://github.com/apache/arrow-rs/issues/5847
-// and https://github.com/apache/arrow-rs/blob/master/parquet/src/arrow/arrow_writer/mod.rs#L747
-async fn test_interval_diff_rg_sizes() {
-    // This creates a parquet files of 3 columns:
-    // "year_month" --> IntervalYearMonthArray
-    // "day_time" --> IntervalDayTimeArray
-    // "month_day_nano" --> IntervalMonthDayNanoArray
-    //
-    // The file is created by 4 record batches (each has a null row)
-    // each has 5 rows but then will be split into 2 row groups with size 13, 7
-    let reader = TestReader {
-        scenario: Scenario::Interval,
-        row_per_group: 13,
-    }
-    .build()
-    .await;
-
-    // TODO: expected values need to be changed once issue is resolved
-    // expected_min: Arc::new(IntervalYearMonthArray::from(vec![
-    //     IntervalYearMonthType::make_value(1, 10),
-    //     IntervalYearMonthType::make_value(4, 13),
-    // ])),
-    // expected_max: Arc::new(IntervalYearMonthArray::from(vec![
-    //     IntervalYearMonthType::make_value(6, 51),
-    //     IntervalYearMonthType::make_value(8, 53),
-    // ])),
-    Test {
-        reader: &reader,
-        expected_min: Arc::new(IntervalYearMonthArray::from(vec![None, None])),
-        expected_max: Arc::new(IntervalYearMonthArray::from(vec![None, None])),
-        expected_null_counts: UInt64Array::from(vec![2, 2]),
-        expected_row_counts: UInt64Array::from(vec![13, 7]),
-        column_name: "year_month",
-    }
-    .run();
-
-    // expected_min: Arc::new(IntervalDayTimeArray::from(vec![
-    //     IntervalDayTimeType::make_value(1, 10),
-    //     IntervalDayTimeType::make_value(4, 13),
-    // ])),
-    // expected_max: Arc::new(IntervalDayTimeArray::from(vec![
-    //     IntervalDayTimeType::make_value(6, 51),
-    //     IntervalDayTimeType::make_value(8, 53),
-    // ])),
-    Test {
-        reader: &reader,
-        expected_min: Arc::new(IntervalDayTimeArray::from(vec![None, None])),
-        expected_max: Arc::new(IntervalDayTimeArray::from(vec![None, None])),
-        expected_null_counts: UInt64Array::from(vec![2, 2]),
-        expected_row_counts: UInt64Array::from(vec![13, 7]),
-        column_name: "day_time",
-    }
-    .run();
-
-    // expected_min: Arc::new(IntervalMonthDayNanoArray::from(vec![
-    //     IntervalMonthDayNanoType::make_value(1, 10, 100),
-    //     IntervalMonthDayNanoType::make_value(4, 13, 103),
-    // ])),
-    // expected_max: Arc::new(IntervalMonthDayNanoArray::from(vec![
-    //     IntervalMonthDayNanoType::make_value(6, 51, 501),
-    //     IntervalMonthDayNanoType::make_value(8, 53, 503),
-    // ])),
-    Test {
-        reader: &reader,
-        expected_min: Arc::new(IntervalMonthDayNanoArray::from(vec![None, None])),
-        expected_max: Arc::new(IntervalMonthDayNanoArray::from(vec![None, None])),
-        expected_null_counts: UInt64Array::from(vec![2, 2]),
-        expected_row_counts: UInt64Array::from(vec![13, 7]),
-        column_name: "month_day_nano",
     }
     .run();
 }

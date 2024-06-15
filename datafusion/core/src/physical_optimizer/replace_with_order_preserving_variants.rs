@@ -1502,6 +1502,7 @@ mod tests {
             0,
             b'"',
             None,
+            None,
             FileCompressionType::UNCOMPRESSED,
         ))
     }

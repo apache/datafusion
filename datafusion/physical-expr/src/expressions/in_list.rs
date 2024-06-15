@@ -38,7 +38,9 @@ use datafusion_common::cast::{
     as_boolean_array, as_generic_binary_array, as_string_array,
 };
 use datafusion_common::hash_utils::HashValue;
-use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue,
+};
 use datafusion_expr::ColumnarValue;
 
 use ahash::RandomState;
@@ -416,18 +418,6 @@ impl PartialEq<dyn Any> for InListExpr {
     }
 }
 
-/// Checks if two types are logically equal, dictionary types are compared by their value types.
-fn is_logically_eq(lhs: &DataType, rhs: &DataType) -> bool {
-    match (lhs, rhs) {
-        (DataType::Dictionary(_, v1), DataType::Dictionary(_, v2)) => {
-            v1.as_ref().eq(v2.as_ref())
-        }
-        (DataType::Dictionary(_, l), _) => l.as_ref().eq(rhs),
-        (_, DataType::Dictionary(_, r)) => lhs.eq(r.as_ref()),
-        _ => lhs.eq(rhs),
-    }
-}
-
 /// Creates a unary expression InList
 pub fn in_list(
     expr: Arc<dyn PhysicalExpr>,
@@ -439,7 +429,7 @@ pub fn in_list(
     let expr_data_type = expr.data_type(schema)?;
     for list_expr in list.iter() {
         let list_expr_data_type = list_expr.data_type(schema)?;
-        if !is_logically_eq(&expr_data_type, &list_expr_data_type) {
+        if !DFSchema::datatype_is_logically_equal(&expr_data_type, &list_expr_data_type) {
             return internal_err!(
                 "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
             );

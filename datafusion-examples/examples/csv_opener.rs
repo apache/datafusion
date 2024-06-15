@@ -48,6 +48,7 @@ async fn main() -> Result<()> {
         b',',
         b'"',
         object_store,
+        Some(b'#'),
     );
 
     let opener = CsvOpener::new(Arc::new(config), FileCompressionType::UNCOMPRESSED);

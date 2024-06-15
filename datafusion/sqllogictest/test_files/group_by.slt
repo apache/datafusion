@@ -4538,7 +4538,7 @@ CREATE EXTERNAL TABLE timestamp_table (
 	c2 INT,
 )
 STORED AS CSV
-LOCATION 'test_files/scratch/group_by/timestamp_table' 
+LOCATION 'test_files/scratch/group_by/timestamp_table'
 OPTIONS ('format.has_header' 'true');
 
 # Group By using date_trunc
@@ -4611,7 +4611,7 @@ DROP TABLE timestamp_table;
 
 # Table with an int column and Dict<Int8> column:
 statement ok
-CREATE TABLE int8_dict AS VALUES 
+CREATE TABLE int8_dict AS VALUES
 (1, arrow_cast('A', 'Dictionary(Int8, Utf8)')),
 (2, arrow_cast('B', 'Dictionary(Int8, Utf8)')),
 (2, arrow_cast('A', 'Dictionary(Int8, Utf8)')),
@@ -4649,7 +4649,7 @@ DROP TABLE int8_dict;
 
 # Table with an int column and Dict<Int16> column:
 statement ok
-CREATE TABLE int16_dict AS VALUES 
+CREATE TABLE int16_dict AS VALUES
 (1, arrow_cast('A', 'Dictionary(Int16, Utf8)')),
 (2, arrow_cast('B', 'Dictionary(Int16, Utf8)')),
 (2, arrow_cast('A', 'Dictionary(Int16, Utf8)')),
@@ -4687,7 +4687,7 @@ DROP TABLE int16_dict;
 
 # Table with an int column and Dict<Int32> column:
 statement ok
-CREATE TABLE int32_dict AS VALUES 
+CREATE TABLE int32_dict AS VALUES
 (1, arrow_cast('A', 'Dictionary(Int32, Utf8)')),
 (2, arrow_cast('B', 'Dictionary(Int32, Utf8)')),
 (2, arrow_cast('A', 'Dictionary(Int32, Utf8)')),
@@ -4725,7 +4725,7 @@ DROP TABLE int32_dict;
 
 # Table with an int column and Dict<Int64> column:
 statement ok
-CREATE TABLE int64_dict AS VALUES 
+CREATE TABLE int64_dict AS VALUES
 (1, arrow_cast('A', 'Dictionary(Int64, Utf8)')),
 (2, arrow_cast('B', 'Dictionary(Int64, Utf8)')),
 (2, arrow_cast('A', 'Dictionary(Int64, Utf8)')),
@@ -4763,7 +4763,7 @@ DROP TABLE int64_dict;
 
 # Table with an int column and Dict<UInt8> column:
 statement ok
-CREATE TABLE uint8_dict AS VALUES 
+CREATE TABLE uint8_dict AS VALUES
 (1, arrow_cast('A', 'Dictionary(UInt8, Utf8)')),
 (2, arrow_cast('B', 'Dictionary(UInt8, Utf8)')),
 (2, arrow_cast('A', 'Dictionary(UInt8, Utf8)')),
@@ -4801,7 +4801,7 @@ DROP TABLE uint8_dict;
 
 # Table with an int column and Dict<UInt16> column:
 statement ok
-CREATE TABLE uint16_dict AS VALUES 
+CREATE TABLE uint16_dict AS VALUES
 (1, arrow_cast('A', 'Dictionary(UInt16, Utf8)')),
 (2, arrow_cast('B', 'Dictionary(UInt16, Utf8)')),
 (2, arrow_cast('A', 'Dictionary(UInt16, Utf8)')),
@@ -4839,7 +4839,7 @@ DROP TABLE uint16_dict;
 
 # Table with an int column and Dict<UInt32> column:
 statement ok
-CREATE TABLE uint32_dict AS VALUES 
+CREATE TABLE uint32_dict AS VALUES
 (1, arrow_cast('A', 'Dictionary(UInt32, Utf8)')),
 (2, arrow_cast('B', 'Dictionary(UInt32, Utf8)')),
 (2, arrow_cast('A', 'Dictionary(UInt32, Utf8)')),
@@ -4877,7 +4877,7 @@ DROP TABLE uint32_dict;
 
 # Table with an int column and Dict<UInt64> column:
 statement ok
-CREATE TABLE uint64_dict AS VALUES 
+CREATE TABLE uint64_dict AS VALUES
 (1, arrow_cast('A', 'Dictionary(UInt64, Utf8)')),
 (2, arrow_cast('B', 'Dictionary(UInt64, Utf8)')),
 (2, arrow_cast('A', 'Dictionary(UInt64, Utf8)')),

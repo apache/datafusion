@@ -163,6 +163,11 @@ async fn wildcard_select() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_with_alias() -> Result<()> {
+    roundtrip("SELECT a AS aliased_a FROM data").await
+}
+
+#[tokio::test]
 async fn select_with_filter() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a > 1").await
 }
@@ -367,9 +372,9 @@ async fn implicit_cast() -> Result<()> {
 async fn aggregate_case() -> Result<()> {
     assert_expected_plan(
         "SELECT sum(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",
-        "Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END)]]\
+        "Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END) AS sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE NULL END)]]\
          \n  TableScan: data projection=[a]",
-        false // NULL vs Int64(NULL)
+        true
     )
         .await
 }
@@ -589,32 +594,23 @@ async fn roundtrip_union_all() -> Result<()> {
 
 #[tokio::test]
 async fn simple_intersect() -> Result<()> {
+    // Substrait treats both COUNT(*) and COUNT(1) the same
     assert_expected_plan(
         "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
-        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]\
          \n  Projection: \
          \n    LeftSemi Join: data.a = data2.a\
          \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
          \n        TableScan: data projection=[a]\
          \n      TableScan: data2 projection=[a]",
-        false // COUNT(*) vs COUNT(Int64(1))
+        true
     )
         .await
 }
 
 #[tokio::test]
 async fn simple_intersect_table_reuse() -> Result<()> {
-    assert_expected_plan(
-        "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);",
-        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
-         \n  Projection: \
-         \n    LeftSemi Join: data.a = data.a\
-         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
-         \n        TableScan: data projection=[a]\
-         \n      TableScan: data projection=[a]",
-        false // COUNT(*) vs COUNT(Int64(1))
-    )
-        .await
+    roundtrip("SELECT COUNT(1) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);").await
 }
 
 #[tokio::test]
@@ -694,20 +690,14 @@ async fn all_type_literal() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_literal_list() -> Result<()> {
-    assert_expected_plan(
-        "SELECT [[1,2,3], [], NULL, [NULL]] FROM data",
-        "Projection: List([[1, 2, 3], [], , []])\
-        \n  TableScan: data projection=[]",
-        false, // "List(..)" vs "make_array(..)"
-    )
-    .await
+    roundtrip("SELECT [[1,2,3], [], NULL, [NULL]] FROM data").await
 }
 
 #[tokio::test]
 async fn roundtrip_literal_struct() -> Result<()> {
     assert_expected_plan(
         "SELECT STRUCT(1, true, CAST(NULL AS STRING)) FROM data",
-        "Projection: Struct({c0:1,c1:true,c2:})\
+        "Projection: Struct({c0:1,c1:true,c2:}) AS struct(Int64(1),Boolean(true),NULL)\
         \n  TableScan: data projection=[]",
         false, // "Struct(..)" vs "struct(..)"
     )
@@ -980,12 +970,13 @@ async fn assert_expected_plan(
 
     println!("{proto:?}");
 
-    let plan2str = format!("{plan2:?}");
-    assert_eq!(expected_plan_str, &plan2str);
-
     if assert_schema {
         assert_eq!(plan.schema(), plan2.schema());
     }
+
+    let plan2str = format!("{plan2:?}");
+    assert_eq!(expected_plan_str, &plan2str);
+
     Ok(())
 }
 

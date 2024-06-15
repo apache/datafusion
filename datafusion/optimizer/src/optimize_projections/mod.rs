@@ -818,10 +818,11 @@ mod tests {
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
     };
+    use datafusion_expr::AggregateExt;
     use datafusion_expr::{
         binary_expr, build_join_schema,
         builder::table_scan_with_filters,
-        col, count,
+        col,
         expr::{self, Cast},
         lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
@@ -829,6 +830,9 @@ mod tests {
         Like, LogicalPlan, Operator, Projection, UserDefinedLogicalNodeCore, WindowFrame,
         WindowFunctionDefinition,
     };
+
+    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::expr_fn::count;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(OptimizeProjections::new()), plan, expected)
@@ -1886,16 +1890,10 @@ mod tests {
     #[test]
     fn aggregate_filter_pushdown() -> Result<()> {
         let table_scan = test_table_scan()?;
-
-        let aggr_with_filter = Expr::AggregateFunction(expr::AggregateFunction::new(
-            AggregateFunction::Count,
-            vec![col("b")],
-            false,
-            Some(Box::new(col("c").gt(lit(42)))),
-            None,
-            None,
-        ));
-
+        let aggr_with_filter = count_udaf()
+            .call(vec![col("b")])
+            .filter(col("c").gt(lit(42)))
+            .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],

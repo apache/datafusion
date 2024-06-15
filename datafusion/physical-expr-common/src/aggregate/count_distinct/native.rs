@@ -26,10 +26,10 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use ahash::RandomState;
+use arrow::array::types::ArrowPrimitiveType;
 use arrow::array::ArrayRef;
-use arrow_array::types::ArrowPrimitiveType;
-use arrow_array::PrimitiveArray;
-use arrow_schema::DataType;
+use arrow::array::PrimitiveArray;
+use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::utils::array_into_list_array;
@@ -40,7 +40,7 @@ use datafusion_expr::Accumulator;
 use crate::aggregate::utils::Hashable;
 
 #[derive(Debug)]
-pub(super) struct PrimitiveDistinctCountAccumulator<T>
+pub struct PrimitiveDistinctCountAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
     T::Native: Eq + Hash,
@@ -54,7 +54,7 @@ where
     T: ArrowPrimitiveType + Send,
     T::Native: Eq + Hash,
 {
-    pub(super) fn new(data_type: &DataType) -> Self {
+    pub fn new(data_type: &DataType) -> Self {
         Self {
             values: HashSet::default(),
             data_type: data_type.clone(),
@@ -125,7 +125,7 @@ where
 }
 
 #[derive(Debug)]
-pub(super) struct FloatDistinctCountAccumulator<T>
+pub struct FloatDistinctCountAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
 {
@@ -136,10 +136,19 @@ impl<T> FloatDistinctCountAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
 {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             values: HashSet::default(),
         }
+    }
+}
+
+impl<T> Default for FloatDistinctCountAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 

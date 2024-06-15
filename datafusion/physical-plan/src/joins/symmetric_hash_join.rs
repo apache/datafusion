@@ -29,7 +29,7 @@ use std::any::Any;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{usize, vec};
+use std::vec;
 
 use crate::common::SharedMemoryReservation;
 use crate::handle_state;
@@ -42,7 +42,7 @@ use crate::joins::stream_join_utils::{
 };
 use crate::joins::utils::{
     apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_join_is_valid, partitioned_join_output_partitioning, ColumnIndex, JoinFilter,
+    check_join_is_valid, symmetric_join_output_partitioning, ColumnIndex, JoinFilter,
     JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
 };
 use crate::{
@@ -271,14 +271,8 @@ impl SymmetricHashJoinExec {
             join_on,
         );
 
-        // Get output partitioning:
-        let left_columns_len = left.schema().fields.len();
-        let output_partitioning = partitioned_join_output_partitioning(
-            join_type,
-            left.output_partitioning(),
-            right.output_partitioning(),
-            left_columns_len,
-        );
+        let output_partitioning =
+            symmetric_join_output_partitioning(left, right, &join_type);
 
         // Determine execution mode:
         let mode = execution_mode_from_children([left, right]);
