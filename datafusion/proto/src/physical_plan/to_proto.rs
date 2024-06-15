@@ -24,8 +24,8 @@ use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     ApproxPercentileCont, ApproxPercentileContWithWeight, ArrayAgg, Avg, BinaryExpr,
-    BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr, CastExpr, Column, Correlation,
-    CumeDist, DistinctArrayAgg, DistinctBitXor, Grouping, InListExpr, IsNotNullExpr,
+    BoolAnd, BoolOr, CaseExpr, CastExpr, Column, Correlation,
+    CumeDist, DistinctArrayAgg, Grouping, InListExpr, IsNotNullExpr,
     IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile,
     OrderSensitiveArrayAgg, Rank, RankType, RowNumber, StringAgg, TryCastExpr,
     WindowShift,
@@ -242,15 +242,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
 
     let inner = if aggr_expr.downcast_ref::<Grouping>().is_some() {
         protobuf::AggregateFunction::Grouping
-    } else if aggr_expr.downcast_ref::<BitAnd>().is_some() {
-        protobuf::AggregateFunction::BitAnd
-    } else if aggr_expr.downcast_ref::<BitOr>().is_some() {
-        protobuf::AggregateFunction::BitOr
-    } else if aggr_expr.downcast_ref::<BitXor>().is_some() {
-        protobuf::AggregateFunction::BitXor
-    } else if aggr_expr.downcast_ref::<DistinctBitXor>().is_some() {
-        distinct = true;
-        protobuf::AggregateFunction::BitXor
     } else if aggr_expr.downcast_ref::<BoolAnd>().is_some() {
         protobuf::AggregateFunction::BoolAnd
     } else if aggr_expr.downcast_ref::<BoolOr>().is_some() {

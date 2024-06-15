@@ -65,26 +65,6 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::BitAnd, _) => Arc::new(expressions::BitAnd::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::BitOr, _) => Arc::new(expressions::BitOr::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::BitXor, false) => Arc::new(expressions::BitXor::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::BitXor, true) => Arc::new(expressions::DistinctBitXor::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
         (AggregateFunction::BoolAnd, _) => Arc::new(expressions::BoolAnd::new(
             input_phy_exprs[0].clone(),
             name,
@@ -234,7 +214,7 @@ mod tests {
 
     use super::*;
     use crate::expressions::{
-        try_cast, ApproxPercentileCont, ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd,
+        try_cast, ApproxPercentileCont, ArrayAgg, Avg, BoolAnd,
         BoolOr, DistinctArrayAgg, Max, Min,
     };
 
@@ -393,60 +373,6 @@ mod tests {
                     }
                     AggregateFunction::Max => {
                         assert!(result_agg_phy_exprs.as_any().is::<Max>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", data_type.clone(), true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_bit_and_or_xor_expr() -> Result<()> {
-        let funcs = vec![
-            AggregateFunction::BitAnd,
-            AggregateFunction::BitOr,
-            AggregateFunction::BitXor,
-        ];
-        let data_types = vec![DataType::UInt64, DataType::Int64];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema =
-                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                match fun {
-                    AggregateFunction::BitAnd => {
-                        assert!(result_agg_phy_exprs.as_any().is::<BitAnd>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", data_type.clone(), true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    AggregateFunction::BitOr => {
-                        assert!(result_agg_phy_exprs.as_any().is::<BitOr>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", data_type.clone(), true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    AggregateFunction::BitXor => {
-                        assert!(result_agg_phy_exprs.as_any().is::<BitXor>());
                         assert_eq!("c1", result_agg_phy_exprs.name());
                         assert_eq!(
                             Field::new("c1", data_type.clone(), true),
