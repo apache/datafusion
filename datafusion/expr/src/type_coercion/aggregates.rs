@@ -386,10 +386,6 @@ pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
     }
 }
 
-pub fn is_bit_and_or_xor_support_arg_type(arg_type: &DataType) -> bool {
-    NUMERICS.contains(arg_type)
-}
-
 pub fn is_bool_and_or_support_arg_type(arg_type: &DataType) -> bool {
     matches!(arg_type, DataType::Boolean)
 }
