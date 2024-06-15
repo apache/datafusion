@@ -31,18 +31,23 @@ use crate::object_storage::{AwsOptions, GcpOptions};
 #[async_trait::async_trait]
 /// The CLI session context trait provides a way to have a session context that can be used with datafusion's CLI code.
 pub trait CliSessionContext {
+    /// Get an atomic reference counted task context.
     fn task_ctx(&self) -> Arc<TaskContext>;
 
+    /// Get the session state.
     fn session_state(&self) -> SessionState;
 
+    /// Register an object store with the session context.
     fn register_object_store(
         &self,
         url: &url::Url,
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore + 'static>>;
 
+    /// Register table options extension from scheme.
     fn register_table_options_extension_from_scheme(&self, scheme: &str);
 
+    /// Execute a logical plan and return a DataFrame.
     async fn execute_logical_plan(
         &self,
         plan: LogicalPlan,
