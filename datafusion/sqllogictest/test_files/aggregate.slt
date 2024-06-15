@@ -1976,7 +1976,7 @@ drop table t;
 
 # test count with largeutf8
 statement ok
-create table t (c string) as values
+create table t (c string) as values 
   (arrow_cast('a', 'LargeUtf8')),
   (arrow_cast('b', 'LargeUtf8')),
   (arrow_cast(null, 'LargeUtf8')),
@@ -3784,7 +3784,6 @@ Y 2021-01-01 2021-01-01T00:00:00
 statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
 SELECT avg(date32), avg(date64) FROM t
 
-
 statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
 SELECT tag, avg(date32), avg(date64) FROM t GROUP BY tag ORDER BY tag;
 
@@ -4048,7 +4047,7 @@ statement ok
 create table t (c1 decimal(10, 0), c2 int) as values (null, null), (null, null), (null, null);
 
 query RTIT
-select
+select 
   sum(c1), arrow_typeof(sum(c1)),
   sum(c2), arrow_typeof(sum(c2))
 from t;
@@ -4682,7 +4681,7 @@ NULL NULL 3 NULL 1 4 0 8 0
 
 # regr_*() basic tests
 query RRRRRRRRR
-select
+select 
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -4697,7 +4696,7 @@ from (values (1,2), (2,4), (3,6));
 2 0 3 1 2 4 2 8 4
 
 query RRRRRRRRR
-select
+select 
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -4715,7 +4714,7 @@ from aggregate_test_100;
 
 # regr_*() functions ignore NULLs
 query RRRRRRRRR
-select
+select 
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -4730,7 +4729,7 @@ from (values (1,NULL), (2,4), (3,6));
 2 0 2 1 2.5 5 0.5 2 1
 
 query RRRRRRRRR
-select
+select 
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -4745,7 +4744,7 @@ from (values (1,NULL), (NULL,4), (3,6));
 NULL NULL 1 NULL 3 6 0 0 0
 
 query RRRRRRRRR
-select
+select 
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -4760,8 +4759,8 @@ from (values (1,NULL), (NULL,4), (NULL,NULL));
 NULL NULL 0 NULL NULL NULL NULL NULL NULL
 
 query TRRRRRRRRR rowsort
-select
-    column3,
+select 
+    column3, 
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -4785,7 +4784,7 @@ statement ok
 set datafusion.execution.batch_size = 1;
 
 query RRRRRRRRR
-select
+select 
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -4803,7 +4802,7 @@ statement ok
 set datafusion.execution.batch_size = 2;
 
 query RRRRRRRRR
-select
+select 
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -4821,7 +4820,7 @@ statement ok
 set datafusion.execution.batch_size = 3;
 
 query RRRRRRRRR
-select
+select 
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5014,7 +5013,7 @@ select count(*) from (select count(*) a, count(*) b from (select 1));
 
 # UTF8 string matters for string to &[u8] conversion, add it to prevent regression
 statement ok
-create table distinct_count_string_table as values
+create table distinct_count_string_table as values 
     (1, 'a', 'longstringtest_a', '台灣'),
     (2, 'b', 'longstringtest_b1', '日本'),
     (2, 'b', 'longstringtest_b2', '中國'),
