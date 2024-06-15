@@ -295,7 +295,7 @@ async fn create_plan(
     ctx: &mut dyn CliSessionContext,
     statement: Statement,
 ) -> Result<LogicalPlan, DataFusionError> {
-    let mut plan = ctx.state().statement_to_plan(statement).await?;
+    let mut plan = ctx.session_state().statement_to_plan(statement).await?;
 
     // Note that cmd is a mutable reference so that create_external_table function can remove all
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
@@ -369,17 +369,18 @@ pub(crate) async fn register_object_store_and_config_extensions(
     let url = table_path.as_ref();
 
     // Register the options based on the scheme extracted from the location
-    ctx.register_options(scheme);
+    ctx.register_table_options_extension_from_scheme(scheme);
 
     // Clone and modify the default table options based on the provided options
-    let mut table_options = ctx.state().default_table_options().clone();
+    let mut table_options = ctx.session_state().default_table_options().clone();
     if let Some(format) = format {
         table_options.set_file_format(format);
     }
     table_options.alter_with_string_hash_map(options)?;
 
     // Retrieve the appropriate object store based on the scheme, URL, and modified table options
-    let store = get_object_store(&ctx.state(), scheme, url, &table_options).await?;
+    let store =
+        get_object_store(&ctx.session_state(), scheme, url, &table_options).await?;
 
     // Register the retrieved object store in the session context's runtime environment
     ctx.register_object_store(url, store);

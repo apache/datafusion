@@ -51,7 +51,7 @@ impl CliSessionContext for MyUnionerContext {
         self.ctx.task_ctx()
     }
 
-    fn state(&self) -> SessionState {
+    fn session_state(&self) -> SessionState {
         self.ctx.state()
     }
 
@@ -63,7 +63,7 @@ impl CliSessionContext for MyUnionerContext {
         self.ctx.register_object_store(url, object_store)
     }
 
-    fn register_options(&self, _scheme: &str) {
+    fn register_table_options_extension_from_scheme(&self, _scheme: &str) {
         unimplemented!()
     }
 

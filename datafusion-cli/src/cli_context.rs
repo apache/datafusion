@@ -33,7 +33,7 @@ use crate::object_storage::{AwsOptions, GcpOptions};
 pub trait CliSessionContext {
     fn task_ctx(&self) -> Arc<TaskContext>;
 
-    fn state(&self) -> SessionState;
+    fn session_state(&self) -> SessionState;
 
     fn register_object_store(
         &self,
@@ -41,7 +41,7 @@ pub trait CliSessionContext {
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore + 'static>>;
 
-    fn register_options(&self, scheme: &str);
+    fn register_table_options_extension_from_scheme(&self, scheme: &str);
 
     async fn execute_logical_plan(
         &self,
@@ -55,7 +55,7 @@ impl CliSessionContext for SessionContext {
         self.task_ctx()
     }
 
-    fn state(&self) -> SessionState {
+    fn session_state(&self) -> SessionState {
         self.state()
     }
 
@@ -67,7 +67,7 @@ impl CliSessionContext for SessionContext {
         self.register_object_store(url, object_store)
     }
 
-    fn register_options(&self, scheme: &str) {
+    fn register_table_options_extension_from_scheme(&self, scheme: &str) {
         match scheme {
             // For Amazon S3 or Alibaba Cloud OSS
             "s3" | "oss" | "cos" => {
