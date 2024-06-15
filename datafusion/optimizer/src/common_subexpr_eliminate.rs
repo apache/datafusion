@@ -349,6 +349,7 @@ impl CommonSubexprEliminate {
             group_expr,
             aggr_expr,
             input,
+            schema: orig_schema,
             ..
         } = aggregate;
         let mut expr_stats = ExprStats::new();
@@ -414,12 +415,18 @@ impl CommonSubexprEliminate {
                 .zip(saved_names.into_iter())
                 .map(|(new_expr, saved_name)| saved_name.restore(new_expr))
                 .collect::<Result<Vec<Expr>>>()?;
-            // Since group_expr changes, schema may also. Use try_new method.
-            let new_agg = LogicalPlan::Aggregate(Aggregate::try_new(
-                Arc::new(new_input),
-                new_group_expr,
-                new_aggr_expr,
-            )?);
+            // Since group_expr may have changed, schema may also. Use try_new method.
+            let new_agg = if transformed {
+                Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr)?
+            } else {
+                Aggregate::try_new_with_schema(
+                    Arc::new(new_input),
+                    new_group_expr,
+                    new_aggr_expr,
+                    orig_schema,
+                )?
+            };
+            let new_agg = LogicalPlan::Aggregate(new_agg);
             return Ok(Transformed::new_transformed(new_agg, transformed));
         }
         let mut agg_exprs = common_exprs
