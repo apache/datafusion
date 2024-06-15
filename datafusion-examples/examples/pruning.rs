@@ -33,6 +33,9 @@ use std::sync::Arc;
 /// quickly eliminate entire files / partitions / row groups of data from
 /// consideration using statistical information from a catalog or other
 /// metadata.
+///
+/// This example uses a user defined catalog to supply information. See `parquet_index.rs` for
+/// an example that extracts the necessary information from Parquet metadata.
 #[tokio::main]
 async fn main() {
     // In this example, we'll use the PruningPredicate to determine if
