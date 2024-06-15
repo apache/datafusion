@@ -1339,7 +1339,7 @@ mod tests {
         let aggregates = vec![create_aggregate_expr(
             &count_udaf(),
             &[lit(1i8)],
-            &[],
+            &[datafusion_expr::lit(1i8)],
             &[],
             &[],
             &input_schema,
