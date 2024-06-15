@@ -41,10 +41,11 @@ use chrono::{DateTime, Utc};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+use datafusion_common::file_options::file_type::ExternalFileType;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, DFSchema, DataFusionError, ResolvedTableReference,
-    TableReference,
+    config_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
+    ResolvedTableReference, TableReference,
 };
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -111,6 +112,8 @@ pub struct SessionState {
     window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
+    /// Holds registered external FileFormat implementations
+    file_types: HashMap<String, Arc<dyn ExternalFileType>>,
     /// Session configuration
     config: SessionConfig,
     /// Table options
@@ -232,6 +235,7 @@ impl SessionState {
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: Arc::new(EmptySerializerRegistry),
+            file_types: HashMap::new(),
             table_options: TableOptions::default_from_session_config(config.options()),
             config,
             execution_props: ExecutionProps::new(),
@@ -828,6 +832,22 @@ impl SessionState {
     /// referenced from SQL statements executed against this context.
     pub fn register_table_options_extension<T: ConfigExtension>(&mut self, extension: T) {
         self.table_options.extensions.insert(extension)
+    }
+
+    /// Adds or updates a [ExternalFileType] which can be used with COPY TO or CREATE EXTERNAL TABLE statements for reading
+    /// and writing files of custom formats.
+    pub fn register_file_type(
+        &mut self,
+        file_type: Arc<dyn ExternalFileType>,
+        overwrite: bool,
+    ) -> Result<(), DataFusionError> {
+        let ext = file_type.get_ext();
+        match (self.file_types.entry(ext.clone()), overwrite){
+            (Entry::Vacant(e), _) => {e.insert(file_type);},
+            (Entry::Occupied(mut e), true)  => {e.insert(file_type);},
+            (Entry::Occupied(_), false) => return config_err!("File type already registered for extension {ext}. Set overwrite to true to replace this extension."),
+        };
+        Ok(())
     }
 
     /// Get a new TaskContext to run in this session

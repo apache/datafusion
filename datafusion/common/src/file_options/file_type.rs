@@ -40,6 +40,9 @@ pub trait GetExt {
     fn get_ext(&self) -> String;
 }
 
+/// Externally Defined FileType
+pub trait ExternalFileType: GetExt + Display + Send + Sync {}
+
 /// Readable file type
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FileType {
