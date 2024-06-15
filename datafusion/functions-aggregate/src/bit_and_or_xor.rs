@@ -23,9 +23,9 @@ use ahash::RandomState;
 use datafusion_common::cast::as_list_array;
 
 use arrow::array::{Array, ArrayRef, AsArray};
-use arrow::datatypes::{ArrowNativeType, ArrowNumericType};
 use arrow::datatypes::{
     DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, Float32Type, Float64Type,
 };
 use arrow_schema::Field;
 
@@ -46,8 +46,10 @@ macro_rules! downcast_logical {
             DataType::UInt16 => $helper!(UInt16Type, $args.data_type),
             DataType::UInt32  => $helper!(UInt32Type, $args.data_type),
             DataType::UInt64 => $helper!(UInt64Type, $args.data_type),
+            DataType::Float32 => $helper!(Float32Type, $args.data_type)
+            DataType::Float64 => $helper!(Float64Type, $args.data_type)
             _ => {
-                not_impl_err!("Sum not supported for {}: {}", $args.name, $args.data_type)
+                not_impl_err!("not supported for {}: {}", $args.name, $args.data_type)
             }
         }
     };
@@ -57,7 +59,7 @@ make_udaf_expr_and_func!(
     BitAnd,
     bit_and,
     expression,
-    "Returns the bit wise and of a group of values.",
+    "Returns the bit wise AND of a group of values.",
     bit_and_udaf
 );
 
@@ -65,7 +67,7 @@ make_udaf_expr_and_func!(
     BitOr,
     bit_or,
     expression,
-    "Returns the bit wise or of a group of values.",
+    "Returns the bit wise OR of a group of values.",
     bit_or_udaf
 );
 
@@ -73,7 +75,7 @@ make_udaf_expr_and_func!(
     BitXor,
     bit_xor,
     expression,
-    "Returns the bit wise xor of a group of values.",
+    "Returns the bit wise XOR of a group of values.",
     bit_xor_udaf
 );
 
@@ -110,21 +112,11 @@ impl AggregateUDFImpl for BitAnd {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Int8 |
-            DataType::Int16 |
-            DataType::Int32 |
-            DataType::Int64 |
-            DataType::UInt8 |
-            DataType::UInt16 |
-            DataType::UInt32 |
-            DataType::UInt64 => {
-                Ok(arg_types[0].clone())
-            }
-            other => {
-                exec_err!("[return_type] SUM not supported for {}", other)
-            }
+        let arg_type = &arg_types[0];
+        if !is_bit_and_or_xor_support_arg_type(arg_type) {
+            return exec_err!("[return_type] AND not supported for {}", arg_type)
         }
+        return Ok(arg_type.clone())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -165,20 +157,20 @@ impl<T: ArrowNumericType> Accumulator for BitAndAccumulator<T>
         Ok(())
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.update_batch(states)
-    }
-
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
     }
 }
 
@@ -215,21 +207,11 @@ impl AggregateUDFImpl for BitOr {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Int8 |
-            DataType::Int16 |
-            DataType::Int32 |
-            DataType::Int64 |
-            DataType::UInt8 |
-            DataType::UInt16 |
-            DataType::UInt32 |
-            DataType::UInt64 => {
-                Ok(arg_types[0].clone())
-            }
-            other => {
-                exec_err!("[return_type] SUM not supported for {}", other)
-            }
+        let arg_type = &arg_types[0];
+        if !is_bit_and_or_xor_support_arg_type(arg_type) {
+            return exec_err!("[return_type] OR not supported for {}", arg_type)
         }
+        return Ok(arg_type.clone())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -262,10 +244,6 @@ impl<T: ArrowNumericType> Accumulator for BitOrAccumulator<T>
     where
         T::Native: std::ops::BitOr<Output=T::Native>,
 {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = arrow::compute::bit_or(values[0].as_primitive::<T>()) {
             let v = self.value.get_or_insert(T::Native::usize_as(0));
@@ -274,16 +252,20 @@ impl<T: ArrowNumericType> Accumulator for BitOrAccumulator<T>
         Ok(())
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.update_batch(states)
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
     }
 }
 
@@ -320,21 +302,11 @@ impl AggregateUDFImpl for BitXor {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Int8 |
-            DataType::Int16 |
-            DataType::Int32 |
-            DataType::Int64 |
-            DataType::UInt8 |
-            DataType::UInt16 |
-            DataType::UInt32 |
-            DataType::UInt64 => {
-                Ok(arg_types[0].clone())
-            }
-            other => {
-                exec_err!("[return_type] SUM not supported for {}", other)
-            }
+        let arg_type = &arg_types[0];
+        if !is_bit_and_or_xor_support_arg_type(arg_type) {
+            return exec_err!("[return_type] XOR not supported for {}", arg_type)
         }
+        return Ok(arg_type.clone())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -394,10 +366,6 @@ impl<T: ArrowNumericType> Accumulator for BitXorAccumulator<T>
     where
         T::Native: std::ops::BitXor<Output=T::Native>,
 {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = arrow::compute::bit_xor(values[0].as_primitive::<T>()) {
             let v = self.value.get_or_insert(T::Native::usize_as(0));
@@ -406,16 +374,20 @@ impl<T: ArrowNumericType> Accumulator for BitXorAccumulator<T>
         Ok(())
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.update_batch(states)
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
     }
 }
 
@@ -441,22 +413,6 @@ impl<T: ArrowNumericType> Accumulator for DistinctBitXorAccumulator<T>
     where
         T::Native: std::ops::BitXor<Output = T::Native> + std::hash::Hash + Eq,
 {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        // 1. Stores aggregate state in `ScalarValue::List`
-        // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
-        let state_out = {
-            let values = self
-                .values
-                .iter()
-                .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &T::DATA_TYPE))
-                .collect::<Result<Vec<_>>>()?;
-
-            let arr = ScalarValue::new_list(&values, &T::DATA_TYPE);
-            vec![ScalarValue::List(arr)]
-        };
-        Ok(state_out)
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
@@ -476,16 +432,6 @@ impl<T: ArrowNumericType> Accumulator for DistinctBitXorAccumulator<T>
         Ok(())
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if let Some(state) = states.first() {
-            let list_arr = as_list_array(state)?;
-            for arr in list_arr.iter().flatten() {
-                self.update_batch(&[arr])?;
-            }
-        }
-        Ok(())
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut acc = T::Native::usize_as(0);
         for distinct_value in self.values.iter() {
@@ -499,4 +445,34 @@ impl<T: ArrowNumericType> Accumulator for DistinctBitXorAccumulator<T>
         std::mem::size_of_val(self)
             + self.values.capacity() * std::mem::size_of::<T::Native>()
     }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // 1. Stores aggregate state in `ScalarValue::List`
+        // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
+        let state_out = {
+            let values = self
+                .values
+                .iter()
+                .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &T::DATA_TYPE))
+                .collect::<Result<Vec<_>>>()?;
+
+            let arr = ScalarValue::new_list(&values, &T::DATA_TYPE);
+            vec![ScalarValue::List(arr)]
+        };
+        Ok(state_out)
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if let Some(state) = states.first() {
+            let list_arr = as_list_array(state)?;
+            for arr in list_arr.iter().flatten() {
+                self.update_batch(&[arr])?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_bit_and_or_xor_support_arg_type(arg_type: &DataType) -> bool {
+    NUMERICS.contains(arg_type)
 }
