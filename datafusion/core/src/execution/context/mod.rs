@@ -1323,6 +1323,13 @@ impl FunctionRegistry for SessionContext {
     }
 }
 
+/// Create a SessionContext from a SessionState
+impl From<SessionState> for SessionContext {
+    fn from(state: SessionState) -> Self {
+        Self::new_with_state(state)
+    }
+}
+
 /// Create a new task context instance from SessionContext
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {

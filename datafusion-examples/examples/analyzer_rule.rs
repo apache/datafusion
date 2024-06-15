@@ -15,73 +15,85 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+use datafusion::prelude::SessionContext;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_err, Result, ScalarValue};
-use datafusion_expr::{
-    AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
-};
-use datafusion_optimizer::analyzer::{Analyzer, AnalyzerRule};
-use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{utils, OptimizerConfig, OptimizerContext, OptimizerRule};
-use datafusion_sql::planner::{ContextProvider, SqlToRel};
-use datafusion_sql::sqlparser::dialect::PostgreSqlDialect;
-use datafusion_sql::sqlparser::parser::Parser;
-use datafusion_sql::TableReference;
-use std::any::Any;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{lit, Expr, LogicalPlan};
+use datafusion_optimizer::analyzer::AnalyzerRule;
 use std::sync::Arc;
 
-pub fn main() -> Result<()> {
-    // produce a logical plan using the datafusion-sql crate
-    let dialect = PostgreSqlDialect {};
+/// This example demonstrates how to add your own [`AnalyzerRule`]
+/// to DataFusion.
+///
+/// [`AnalyzerRule`]s transform [`LogicalPlan`]s prior to the rest of the
+/// DataFusion optimization process, and are allowed to change the plan's
+/// semantics (e.g. output types).
+///
+#[tokio::main]
+pub async fn main() -> Result<()> {
+    // DataFusion includes several built in AnalyzerRules for tasks such as type
+    // coercion. To modify the list of rules, we must use the lower level
+    // SessionState API
+    let state = SessionContext::new().state();
+    let state = state.add_analyzer_rule(Arc::new(MyAnalyzerRule {}));
+
+    // To plan and run queries with the new rule, create a SessionContext with
+    // the modified SessionState
+    let ctx = SessionContext::from(state);
+    ctx.register_batch("person", person_batch())?;
+
+    // Plan a SQL statement as normal
     let sql = "SELECT * FROM person WHERE age BETWEEN 21 AND 32";
-    let statements = Parser::parse_sql(&dialect, sql)?;
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
 
-    // produce a logical plan using the datafusion-sql crate
-    let context_provider = MyContextProvider::default();
-    let sql_to_rel = SqlToRel::new(&context_provider);
-    let logical_plan = sql_to_rel.sql_statement_to_plan(statements[0].clone())?;
-    println!(
-        "Unoptimized Logical Plan:\n\n{}\n",
-        logical_plan.display_indent()
-    );
+    println!("Logical Plan:\n\n{}\n", plan.display_indent());
 
-    // run the analyzer with our custom rule
-    let config = OptimizerContext::default().with_skip_failing_rules(false);
-    let analyzer = Analyzer::with_rules(vec![Arc::new(MyAnalyzerRule {})]);
-    let analyzed_plan =
-        analyzer.execute_and_check(logical_plan, config.options(), |_, _| {})?;
-    println!(
-        "Analyzed Logical Plan:\n\n{}\n",
-        analyzed_plan.display_indent()
-    );
+    // We can see the effect of our rewrite on the output plan. Even though the
+    // input query was between 21 and 32, the plan is between 31 and 42
 
-    // then run the optimizer with our custom rule
-    let optimizer = Optimizer::with_rules(vec![Arc::new(MyOptimizerRule {})]);
-    let optimized_plan = optimizer.optimize(analyzed_plan, &config, observe)?;
-    println!(
-        "Optimized Logical Plan:\n\n{}\n",
-        optimized_plan.display_indent()
-    );
+    // Filter: person.age >= Int32(31) AND person.age <= Int32(42)
+    //   TableScan: person projection=[name, age]
+
+    ctx.sql(sql).await?.show().await?;
+
+    // And the output verifies the predicates have been changed
+
+    // +-------+-----+
+    // | name  | age |
+    // +-------+-----+
+    // | Oleks | 33  |
+    // +-------+-----+
 
     Ok(())
 }
 
-fn observe(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
-    println!(
-        "After applying rule '{}':\n{}\n",
-        rule.name(),
-        plan.display_indent()
-    )
-}
-
-/// An example analyzer rule that changes Int64 literals to UInt64
+/// An example analyzer rule that changes adds 10 to all Int64 literals in the plan
 struct MyAnalyzerRule {}
 
 impl AnalyzerRule for MyAnalyzerRule {
     fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
-        Self::analyze_plan(plan)
+        // use the TreeNode API to recursively walk the LogicalPlan tree
+        // and all of its children (inputs)
+        plan.transform(|plan| {
+            // This closure is called for each LogicalPlan node
+            plan.map_expressions(|expr| {
+                // This closure is called for all expressions in the current plan
+                //
+                // For example, given a plan like `SELECT a + b, 5 + 10`
+                //
+                // The closure would be called twice, once for `a + b` and once for `5 + 10`
+                self.rewrite_expr(expr)
+            })
+        })
+        // the result of calling transform is a `Transformed` structure that
+        // contains a flag signalling if any rewrite took place as well as
+        // if the recursion stopped early.
+        //
+        // This example does not need either of that information, so simply
+        // extract the LogicalPlan "data"
+        .data()
     }
 
     fn name(&self) -> &str {
@@ -90,166 +102,26 @@ impl AnalyzerRule for MyAnalyzerRule {
 }
 
 impl MyAnalyzerRule {
-    fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
-        plan.transform(|plan| {
-            Ok(match plan {
-                LogicalPlan::Filter(filter) => {
-                    let predicate = Self::analyze_expr(filter.predicate.clone())?;
-                    Transformed::yes(LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        filter.input,
-                    )?))
-                }
-                _ => Transformed::no(plan),
-            })
-        })
-        .data()
-    }
-
-    fn analyze_expr(expr: Expr) -> Result<Expr> {
+    /// rewrites an idividual expression
+    fn rewrite_expr(&self, expr: Expr) -> Result<Transformed<Expr>> {
         expr.transform(|expr| {
             // closure is invoked for all sub expressions
-            Ok(match expr {
-                Expr::Literal(ScalarValue::Int64(i)) => {
-                    // transform to UInt64
-                    Transformed::yes(Expr::Literal(ScalarValue::UInt64(
-                        i.map(|i| i as u64),
-                    )))
-                }
-                _ => Transformed::no(expr),
-            })
-        })
-        .data()
-    }
-}
 
-/// An example optimizer rule that rewrite BETWEEN expression to binary compare expressions
-struct MyOptimizerRule {}
-
-impl OptimizerRule for MyOptimizerRule {
-    fn name(&self) -> &str {
-        "my_optimizer_rule"
-    }
-
-    fn try_optimize(
-        &self,
-        plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        // recurse down and optimize children first
-        let optimized_plan = utils::optimize_children(self, plan, config)?;
-        match optimized_plan {
-            Some(LogicalPlan::Filter(filter)) => {
-                let predicate = my_rewrite(filter.predicate.clone())?;
-                Ok(Some(LogicalPlan::Filter(Filter::try_new(
-                    predicate,
-                    filter.input,
-                )?)))
+            // Transformed is used to transfer the "was this rewritten"
+            // information back up the stack.
+            if let Expr::Literal(ScalarValue::Int64(Some(i))) = expr {
+                Ok(Transformed::yes(lit(i + 10)))
+            } else {
+                Ok(Transformed::no(expr))
             }
-            Some(optimized_plan) => Ok(Some(optimized_plan)),
-            None => match plan {
-                LogicalPlan::Filter(filter) => {
-                    let predicate = my_rewrite(filter.predicate.clone())?;
-                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        filter.input.clone(),
-                    )?)))
-                }
-                _ => Ok(None),
-            },
-        }
-    }
-}
-
-/// use rewrite_expr to modify the expression tree.
-fn my_rewrite(expr: Expr) -> Result<Expr> {
-    expr.transform(|expr| {
-        // closure is invoked for all sub expressions
-        Ok(match expr {
-            Expr::Between(Between {
-                expr,
-                negated,
-                low,
-                high,
-            }) => {
-                // unbox
-                let expr: Expr = *expr;
-                let low: Expr = *low;
-                let high: Expr = *high;
-                if negated {
-                    Transformed::yes(expr.clone().lt(low).or(expr.gt(high)))
-                } else {
-                    Transformed::yes(expr.clone().gt_eq(low).and(expr.lt_eq(high)))
-                }
-            }
-            _ => Transformed::no(expr),
         })
-    })
-    .data()
-}
-
-#[derive(Default)]
-struct MyContextProvider {
-    options: ConfigOptions,
-}
-
-impl ContextProvider for MyContextProvider {
-    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
-        if name.table() == "person" {
-            Ok(Arc::new(MyTableSource {
-                schema: Arc::new(Schema::new(vec![
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("age", DataType::UInt8, false),
-                ])),
-            }))
-        } else {
-            plan_err!("table not found")
-        }
-    }
-
-    fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
-        None
-    }
-
-    fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-        None
-    }
-
-    fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
-        None
-    }
-
-    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
-        None
-    }
-
-    fn options(&self) -> &ConfigOptions {
-        &self.options
-    }
-
-    fn udf_names(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    fn udaf_names(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    fn udwf_names(&self) -> Vec<String> {
-        Vec::new()
     }
 }
 
-struct MyTableSource {
-    schema: SchemaRef,
-}
-
-impl TableSource for MyTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
+/// Return a RecordBatch with made up date
+fn person_batch() -> RecordBatch {
+    let name: ArrayRef =
+        Arc::new(StringArray::from_iter_values(["Andy", "Andrew", "Oleks"]));
+    let age: ArrayRef = Arc::new(Int32Array::from(vec![11, 22, 33]));
+    RecordBatch::try_from_iter(vec![("name", name), ("age", age)]).unwrap()
 }
