@@ -19,20 +19,20 @@
 
 use std::any::Any;
 use std::collections::HashSet;
-use ahash::RandomState;
-use datafusion_common::cast::as_list_array;
 
+use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::{
-    DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    ArrowNativeType, ArrowNumericType, Float32Type, Float64Type,
+    ArrowNativeType, ArrowNumericType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
 };
 use arrow_schema::Field;
 
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::cast::as_list_array;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
+use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;
 
 macro_rules! downcast_logical {
@@ -46,8 +46,6 @@ macro_rules! downcast_logical {
             DataType::UInt16 => $helper!(UInt16Type, $args.data_type),
             DataType::UInt32  => $helper!(UInt32Type, $args.data_type),
             DataType::UInt64 => $helper!(UInt64Type, $args.data_type),
-            DataType::Float32 => $helper!(Float32Type, $args.data_type)
-            DataType::Float64 => $helper!(Float64Type, $args.data_type)
             _ => {
                 not_impl_err!("not supported for {}: {}", $args.name, $args.data_type)
             }
@@ -87,7 +85,7 @@ pub struct BitAnd {
 impl BitAnd {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
+            signature: Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
         }
     }
 }
@@ -182,7 +180,7 @@ pub struct BitOr {
 impl BitOr {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
+            signature: Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
         }
     }
 }
@@ -277,7 +275,7 @@ pub struct BitXor {
 impl BitXor {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
+            signature: Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
         }
     }
 }
@@ -474,5 +472,5 @@ impl<T: ArrowNumericType> Accumulator for DistinctBitXorAccumulator<T>
 }
 
 fn is_bit_and_or_xor_support_arg_type(arg_type: &DataType) -> bool {
-    NUMERICS.contains(arg_type)
+    INTEGERS.contains(arg_type)
 }
