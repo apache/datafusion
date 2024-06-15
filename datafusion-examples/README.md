@@ -73,8 +73,8 @@ cargo run --example csv_sql
 - [`simple_udaf.rs`](examples/simple_udaf.rs): Define and invoke a User Defined Aggregate Function (UDAF)
 - [`simple_udf.rs`](examples/simple_udf.rs): Define and invoke a User Defined Scalar Function (UDF)
 - [`simple_udfw.rs`](examples/simple_udwf.rs): Define and invoke a User Defined Window Function (UDWF)
+- [`sql_frontend.rs`](examples/sql_frontend.rs): Create LogicalPlans (only) from sql strings
 - [`sql_dialect.rs`](examples/sql_dialect.rs): Implementing a custom SQL dialect on top of `DFParser`
-- [`sql_planning.rs`](examples/rewrite_expr.rs): Create LogicalPlans (only) from sql strings
 - [`to_char.rs`](examples/to_char.rs): Examples of using the to_char function
 - [`to_timestamp.rs`](examples/to_timestamp.rs): Examples of using to_timestamp functions
 
