@@ -79,6 +79,7 @@ use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
     ScalarUDFImpl, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
+use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
@@ -462,6 +463,47 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         &[],
         &schema,
         "example_agg",
+        false,
+        false,
+    )?];
+
+    roundtrip_test_with_context(
+        Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::new_single(groups.clone()),
+            aggregates.clone(),
+            vec![None],
+            Arc::new(EmptyExec::new(schema.clone())),
+            schema,
+        )?),
+        &ctx,
+    )
+}
+
+#[test]
+fn roundtrip_approx_percentile_cont_udaf() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Float64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let udaf = (*approx_percentile_cont_udaf()).clone();
+
+    let ctx = SessionContext::new();
+    ctx.register_udaf(udaf.clone());
+
+    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        vec![(col("a", &schema)?, "unused".to_string())];
+
+    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![udaf::create_aggregate_expr(
+        &udaf,
+        &[col("b", &schema)?, lit(ScalarValue::Float64(Some(0.5)))],
+        &[
+            datafusion_expr::col("b"),
+            datafusion_expr::lit(ScalarValue::Float64(Some(0.5))),
+        ],
+        &[],
+        &[],
+        &schema,
+        "approx_percentile_cont_agg",
         false,
         false,
     )?];

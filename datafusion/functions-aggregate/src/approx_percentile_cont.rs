@@ -17,7 +17,9 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
+use arrow::array::RecordBatch;
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -25,7 +27,7 @@ use arrow::{
     },
     datatypes::DataType,
 };
-use arrow_schema::Field;
+use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, ScalarValue,
@@ -34,12 +36,14 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Expr, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, ColumnarValue, Expr, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_physical_expr_common::aggregate::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
 use datafusion_physical_expr_common::aggregate::utils::down_cast_any_ref;
+use datafusion_physical_expr_common::utils::limited_convert_logical_expr_to_physical_expr;
 
 make_udaf_expr_and_func!(
     ApproxPercentileCont,
@@ -145,9 +149,16 @@ impl PartialEq<dyn Any> for ApproxPercentileCont {
 }
 
 fn get_lit_value(expr: &Expr) -> datafusion_common::Result<ScalarValue> {
-    match expr {
-        Expr::Literal(lit) => Ok(lit.clone()),
-        _ => plan_err!("Expected a literal expression"),
+    let empty_schema = Arc::new(Schema::empty());
+    let empty_batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
+    let expr = limited_convert_logical_expr_to_physical_expr(expr, &empty_schema)?;
+    let result = expr.evaluate(&empty_batch)?;
+    match result {
+        ColumnarValue::Array(_) => Err(DataFusionError::Internal(format!(
+            "The expr {:?} can't be evaluated to scalar value",
+            expr
+        ))),
+        ColumnarValue::Scalar(scalar_value) => Ok(scalar_value),
     }
 }
 
