@@ -31,6 +31,7 @@ use std::sync::Arc;
 /// DataFusion optimization process, and are allowed to change the plan's
 /// semantics (e.g. output types).
 ///
+/// See [optimizer_rule.rs] for an example of a optimizer rule
 #[tokio::main]
 pub async fn main() -> Result<()> {
     // DataFusion includes several built in AnalyzerRules for tasks such as type
@@ -118,7 +119,7 @@ impl MyAnalyzerRule {
     }
 }
 
-/// Return a RecordBatch with made up date
+/// Return a RecordBatch with made up data
 fn person_batch() -> RecordBatch {
     let name: ArrayRef =
         Arc::new(StringArray::from_iter_values(["Andy", "Andrew", "Oleks"]));
