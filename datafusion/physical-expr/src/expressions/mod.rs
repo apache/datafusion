@@ -65,7 +65,6 @@ pub use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
 pub use datafusion_physical_expr_common::expressions::column::{col, Column};
 pub use datafusion_physical_expr_common::expressions::literal::{lit, Literal};
 pub use datafusion_physical_expr_common::expressions::{cast, CastExpr};
-pub use datafusion_physical_expr_common::expressions::{lit, Literal};
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
