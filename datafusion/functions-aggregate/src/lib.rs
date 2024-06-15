@@ -68,6 +68,7 @@ pub mod variance;
 
 pub mod approx_median;
 pub mod approx_percentile_cont;
+pub mod bit_and_or_xor;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
@@ -100,6 +101,9 @@ pub mod expr_fn {
     pub use super::sum::sum;
     pub use super::variance::var_pop;
     pub use super::variance::var_sample;
+    pub use super::bit_and_or_xor::bit_and;
+    pub use super::bit_and_or_xor::bit_or;
+    pub use super::bit_and_or_xor::bit_xor;
 }
 
 /// Returns all default aggregate functions
@@ -127,6 +131,9 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         stddev::stddev_pop_udaf(),
         approx_median::approx_median_udaf(),
         approx_distinct::approx_distinct_udaf(),
+        bit_and_or_xor::bit_and_udaf(),
+        bit_and_or_xor::bit_or_udaf(),
+        bit_and_or_xor::bit_xor_udaf()
     ]
 }
 
