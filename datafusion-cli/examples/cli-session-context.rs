@@ -18,7 +18,7 @@
 //! Shows an example of a custom session context that unions the input plan with itself.
 //! To run this example, use `cargo run --example cli-session-context` from within the `datafusion-cli` directory.
 
-use std::{process::ExitCode, sync::Arc};
+use std::sync::Arc;
 
 use datafusion::{
     dataframe::DataFrame,
@@ -80,8 +80,8 @@ impl CliSessionContext for MyUnionerContext {
 }
 
 #[tokio::main]
-/// Calls [`main_inner`], then handles printing errors and returning the correct exit code
-pub async fn main() -> ExitCode {
+/// Runs the example.
+pub async fn main() {
     let mut my_ctx = MyUnionerContext::default();
 
     let mut print_options = PrintOptions {
@@ -94,6 +94,4 @@ pub async fn main() -> ExitCode {
     exec_from_repl(&mut my_ctx, &mut print_options)
         .await
         .unwrap();
-
-    ExitCode::SUCCESS
 }
