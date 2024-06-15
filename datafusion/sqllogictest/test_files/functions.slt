@@ -1158,3 +1158,21 @@ drop table uuid_table
 
 statement ok
 drop table t
+
+
+# test for contains
+
+query B
+select contains('alphabet', 'pha');
+----
+true
+
+query B
+select contains('alphabet', 'dddd');
+----
+false
+
+query B
+select contains('', '');
+----
+true
