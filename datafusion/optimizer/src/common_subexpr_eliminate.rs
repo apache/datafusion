@@ -302,9 +302,16 @@ impl CommonSubexprEliminate {
 
         assert_eq!(window_exprs.len(), arrays_per_window.len());
         let num_window_exprs = window_exprs.len();
-        let (mut new_expr, new_input) = self
-            .rewrite_expr(window_exprs, &arrays_per_window, plan, &expr_stats, config)?
-            .data;
+        let rewritten_window_exprs = self.rewrite_expr(
+            window_exprs,
+            &arrays_per_window,
+            plan,
+            &expr_stats,
+            config,
+        )?;
+        let transformed = rewritten_window_exprs.transformed;
+
+        let (mut new_expr, new_input) = rewritten_window_exprs.data;
 
         let mut plan = new_input;
 
@@ -330,7 +337,7 @@ impl CommonSubexprEliminate {
             plan = LogicalPlan::Window(Window::try_new(new_window_expr, Arc::new(plan))?);
         }
 
-        Ok(Transformed::yes(plan))
+        Ok(Transformed::new_transformed(plan, transformed))
     }
 
     fn try_optimize_aggregate(
