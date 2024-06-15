@@ -483,12 +483,11 @@ impl CommonSubexprEliminate {
             ExprMask::Normal,
         )?;
 
-        let (mut new_expr, new_input) = self
-            .rewrite_expr(vec![expr], &[&arrays], input, &expr_stats, config)?
-            .data;
-        assert_eq!(new_expr.len(), 1);
-        let result = (new_expr.pop().unwrap(), new_input);
-        Ok(Transformed::yes(result))
+        self.rewrite_expr(vec![expr], &[&arrays], input, &expr_stats, config)?
+            .map_data(|(mut new_expr, new_input)| {
+                assert_eq!(new_expr.len(), 1);
+                Ok((new_expr.pop().unwrap(), new_input))
+            })
     }
 }
 
@@ -1051,6 +1050,19 @@ mod test {
 
     use super::*;
 
+    fn assert_non_optimized_plan_eq(expected: &str, plan: LogicalPlan) {
+        assert_eq!(expected, format!("{plan:?}"), "Unexpected starting plan");
+        let optimizer = CommonSubexprEliminate {};
+        let optimized_plan = optimizer.rewrite(plan, &OptimizerContext::new()).unwrap();
+        assert!(!optimized_plan.transformed, "unexpectedly optimize plan");
+        let optimized_plan = optimized_plan.data;
+        assert_eq!(
+            expected,
+            format!("{optimized_plan:?}"),
+            "Unexpected optimized plan"
+        );
+    }
+
     fn assert_optimized_plan_eq(expected: &str, plan: LogicalPlan) {
         let optimizer = CommonSubexprEliminate {};
         let optimized_plan = optimizer.rewrite(plan, &OptimizerContext::new()).unwrap();
@@ -1363,7 +1375,7 @@ mod test {
         let expected = "Projection: Int32(1) + test.a, test.a + Int32(1)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(expected, plan);
+        assert_non_optimized_plan_eq(expected, plan);
 
         Ok(())
     }
@@ -1381,7 +1393,7 @@ mod test {
         \n  Projection: Int32(1) + test.a, test.a\
         \n    TableScan: test";
 
-        assert_optimized_plan_eq(expected, plan);
+        assert_non_optimized_plan_eq(expected, plan);
         Ok(())
     }
 
@@ -1482,7 +1494,7 @@ mod test {
             .unwrap();
         let rule = CommonSubexprEliminate {};
         let optimized_plan = rule.rewrite(plan, &OptimizerContext::new()).unwrap();
-        assert!(optimized_plan.transformed);
+        assert!(!optimized_plan.transformed);
         let optimized_plan = optimized_plan.data;
 
         let schema = optimized_plan.schema();
