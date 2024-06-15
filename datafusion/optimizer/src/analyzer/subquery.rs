@@ -300,17 +300,16 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     }) = expr
     {
         match (left.deref(), right.deref()) {
-            (Expr::Column(_), right) if right.to_columns().unwrap().is_empty() => true,
-            (left, Expr::Column(_)) if left.to_columns().unwrap().is_empty() => true,
+            (Expr::Column(_), right) if !right.any_column_refs() => true,
+            (left, Expr::Column(_)) if !left.any_column_refs() => true,
             (Expr::Cast(Cast { expr, .. }), right)
                 if matches!(expr.deref(), Expr::Column(_))
-                    && right.to_columns().unwrap().is_empty() =>
+                    && !right.any_column_refs() =>
             {
                 true
             }
             (left, Expr::Cast(Cast { expr, .. }))
-                if matches!(expr.deref(), Expr::Column(_))
-                    && left.to_columns().unwrap().is_empty() =>
+                if matches!(expr.deref(), Expr::Column(_)) && !left.any_column_refs() =>
             {
                 true
             }
@@ -323,9 +322,10 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
 
 /// Check whether the window expressions contain a mixture of out reference columns and inner columns
 fn check_mixed_out_refer_in_window(window: &Window) -> Result<()> {
-    let mixed = window.window_expr.iter().any(|win_expr| {
-        win_expr.contains_outer() && !win_expr.to_columns().unwrap().is_empty()
-    });
+    let mixed = window
+        .window_expr
+        .iter()
+        .any(|win_expr| win_expr.contains_outer() && win_expr.any_column_refs());
     if mixed {
         plan_err!(
             "Window expressions should not contain a mixed of outer references and inner columns"
