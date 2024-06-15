@@ -26,8 +26,7 @@ use crate::optimizer::ApplyOrder;
 use crate::utils::NamePreserver;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
-    TreeNodeVisitor,
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{
     internal_datafusion_err, internal_err, qualified_name, Column, DFSchema, DFSchemaRef,
@@ -137,7 +136,8 @@ impl CommonSubexprEliminate {
         arrays_list: &[&[IdArray]],
         expr_stats: &ExprStats,
         common_exprs: &mut CommonExprs,
-    ) -> Result<Vec<Vec<Expr>>> {
+    ) -> Result<Transformed<Vec<Vec<Expr>>>> {
+        let mut transformed = false;
         exprs_list
             .into_iter()
             .zip(arrays_list.iter())
@@ -146,12 +146,23 @@ impl CommonSubexprEliminate {
                     .into_iter()
                     .zip(arrays.iter())
                     .map(|(expr, id_array)| {
-                        replace_common_expr(expr, id_array, expr_stats, common_exprs)
-                            .data()
+                        let replaced = replace_common_expr(
+                            expr,
+                            id_array,
+                            expr_stats,
+                            common_exprs,
+                        )?;
+                        // remember if this expression was actually replaced
+                        transformed |= replaced.transformed;
+                        Ok(replaced.data)
                     })
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()
+            .map(|rewritten_exprs_list| {
+                // propagate back transformed information
+                Transformed::new_transformed(rewritten_exprs_list, transformed)
+            })
     }
 
     /// Rewrites the expression in `exprs_list` with common sub-expressions
@@ -169,7 +180,8 @@ impl CommonSubexprEliminate {
         input: LogicalPlan,
         expr_stats: &ExprStats,
         config: &dyn OptimizerConfig,
-    ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
+    ) -> Result<Transformed<(Vec<Vec<Expr>>, LogicalPlan)>> {
+        let mut transformed = false;
         let mut common_exprs = IndexMap::new();
 
         let rewrite_exprs = self.rewrite_exprs_list(
@@ -178,15 +190,24 @@ impl CommonSubexprEliminate {
             expr_stats,
             &mut common_exprs,
         )?;
+        transformed |= rewrite_exprs.transformed;
 
-        let mut new_input = self.rewrite(input, config)?.data;
+        let new_input = self.rewrite(input, config)?;
+        transformed |= rewrite_exprs.transformed;
+        let mut new_input = new_input.data;
 
         if !common_exprs.is_empty() {
             new_input =
                 build_common_expr_project_plan(new_input, common_exprs, expr_stats)?;
+            transformed = true;
         }
 
-        Ok((rewrite_exprs, new_input))
+        // return the transformed information
+
+        Ok(Transformed::new_transformed(
+            (rewrite_exprs.data, new_input),
+            transformed,
+        ))
     }
 
     fn try_optimize_proj(
@@ -281,13 +302,9 @@ impl CommonSubexprEliminate {
 
         assert_eq!(window_exprs.len(), arrays_per_window.len());
         let num_window_exprs = window_exprs.len();
-        let (mut new_expr, new_input) = self.rewrite_expr(
-            window_exprs,
-            &arrays_per_window,
-            plan,
-            &expr_stats,
-            config,
-        )?;
+        let (mut new_expr, new_input) = self
+            .rewrite_expr(window_exprs, &arrays_per_window, plan, &expr_stats, config)?
+            .data;
 
         let mut plan = new_input;
 
@@ -347,13 +364,15 @@ impl CommonSubexprEliminate {
             .collect::<Result<Vec<_>>>()?;
 
         // rewrite both group exprs and aggr_expr
-        let (mut new_expr, new_input) = self.rewrite_expr(
-            vec![group_expr, aggr_expr],
-            &[&group_arrays, &aggr_arrays],
-            unwrap_arc(input),
-            &expr_stats,
-            config,
-        )?;
+        let (mut new_expr, new_input) = self
+            .rewrite_expr(
+                vec![group_expr, aggr_expr],
+                &[&group_arrays, &aggr_arrays],
+                unwrap_arc(input),
+                &expr_stats,
+                config,
+            )?
+            .data;
         // note the reversed pop order.
         let new_aggr_expr = pop_expr(&mut new_expr)?;
         let new_group_expr = pop_expr(&mut new_expr)?;
@@ -368,12 +387,14 @@ impl CommonSubexprEliminate {
             ExprMask::NormalAndAggregates,
         )?;
         let mut common_exprs = IndexMap::new();
-        let mut rewritten = self.rewrite_exprs_list(
-            vec![new_aggr_expr.clone()],
-            &[&aggr_arrays],
-            &expr_stats,
-            &mut common_exprs,
-        )?;
+        let mut rewritten = self
+            .rewrite_exprs_list(
+                vec![new_aggr_expr.clone()],
+                &[&aggr_arrays],
+                &expr_stats,
+                &mut common_exprs,
+            )?
+            .data;
         let rewritten = pop_expr(&mut rewritten)?;
 
         if common_exprs.is_empty() {
@@ -383,7 +404,7 @@ impl CommonSubexprEliminate {
                 .zip(saved_names.into_iter())
                 .map(|(new_expr, saved_name)| saved_name.restore(new_expr))
                 .collect::<Result<Vec<Expr>>>()?;
-            // Since group_epxr changes, schema changes also. Use try_new method.
+            // Since group_expr changes, schema changes also. Use try_new method.
             return Aggregate::try_new(
                 Arc::new(new_input),
                 new_group_expr,
@@ -462,8 +483,9 @@ impl CommonSubexprEliminate {
             ExprMask::Normal,
         )?;
 
-        let (mut new_expr, new_input) =
-            self.rewrite_expr(vec![expr], &[&arrays], input, &expr_stats, config)?;
+        let (mut new_expr, new_input) = self
+            .rewrite_expr(vec![expr], &[&arrays], input, &expr_stats, config)?
+            .data;
         assert_eq!(new_expr.len(), 1);
         let result = (new_expr.pop().unwrap(), new_input);
         Ok(Transformed::yes(result))
