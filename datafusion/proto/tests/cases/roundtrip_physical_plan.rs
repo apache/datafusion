@@ -79,7 +79,6 @@ use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
     ScalarUDFImpl, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
-use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
