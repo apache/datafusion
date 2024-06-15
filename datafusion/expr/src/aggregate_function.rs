@@ -51,12 +51,6 @@ pub enum AggregateFunction {
     ApproxPercentileContWithWeight,
     /// Grouping
     Grouping,
-    /// Bit And
-    BitAnd,
-    /// Bit Or
-    BitOr,
-    /// Bit Xor
-    BitXor,
     /// Bool And
     BoolAnd,
     /// Bool Or
@@ -78,9 +72,6 @@ impl AggregateFunction {
             ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
             Grouping => "GROUPING",
-            BitAnd => "BIT_AND",
-            BitOr => "BIT_OR",
-            BitXor => "BIT_XOR",
             BoolAnd => "BOOL_AND",
             BoolOr => "BOOL_OR",
             StringAgg => "STRING_AGG",
@@ -100,9 +91,6 @@ impl FromStr for AggregateFunction {
         Ok(match name {
             // general
             "avg" => AggregateFunction::Avg,
-            "bit_and" => AggregateFunction::BitAnd,
-            "bit_or" => AggregateFunction::BitOr,
-            "bit_xor" => AggregateFunction::BitXor,
             "bool_and" => AggregateFunction::BoolAnd,
             "bool_or" => AggregateFunction::BoolOr,
             "max" => AggregateFunction::Max,
@@ -155,9 +143,6 @@ impl AggregateFunction {
                 // The coerced_data_types is same with input_types.
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::BitAnd
-            | AggregateFunction::BitOr
-            | AggregateFunction::BitXor => Ok(coerced_data_types[0].clone()),
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Ok(DataType::Boolean)
             }
@@ -213,11 +198,6 @@ impl AggregateFunction {
                     .cloned()
                     .collect::<Vec<_>>();
                 Signature::uniform(1, valid, Volatility::Immutable)
-            }
-            AggregateFunction::BitAnd
-            | AggregateFunction::BitOr
-            | AggregateFunction::BitXor => {
-                Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)

@@ -122,20 +122,6 @@ pub fn coerce_types(
             };
             Ok(vec![v])
         }
-        AggregateFunction::BitAnd
-        | AggregateFunction::BitOr
-        | AggregateFunction::BitXor => {
-            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
-            // smallint, int, bigint, real, double precision, decimal, or interval.
-            if !is_bit_and_or_xor_support_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            Ok(input_types.to_vec())
-        }
         AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval.
