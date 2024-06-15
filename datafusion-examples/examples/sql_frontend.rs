@@ -18,8 +18,13 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
-use datafusion_optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule};
+use datafusion_expr::{
+    AggregateUDF, Expr, LogicalPlan, ScalarUDF, TableProviderFilterPushDown, TableSource,
+    WindowUDF,
+};
+use datafusion_optimizer::{
+    Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
+};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_sql::sqlparser::parser::Parser;
@@ -44,7 +49,7 @@ pub fn main() -> Result<()> {
     // Parser, which wraps the `sqlparser-rs` SQL parser and adds DataFusion
     // specific syntax such as `CREATE EXTERNAL TABLE`
     let dialect = PostgreSqlDialect {};
-    let sql = "SELECT * FROM person WHERE age BETWEEN 21 AND 32";
+    let sql = "SELECT name FROM person WHERE age BETWEEN 21 AND 32";
     let statements = Parser::parse_sql(&dialect, sql)?;
 
     // Now, use DataFusion's SQL planner, called `SqlToRel` to create a
@@ -60,7 +65,7 @@ pub fn main() -> Result<()> {
         logical_plan.display_indent()
     );
 
-    // Projection: person.name, person.age
+    // Projection: person.name
     //   Filter: person.age BETWEEN Int64(21) AND Int64(32)
     //     TableScan: person
 
@@ -74,33 +79,52 @@ pub fn main() -> Result<()> {
     // check for other semantic errors. In DataFusion this is done by a
     // component called the Analyzer.
     let config = OptimizerContext::default().with_skip_failing_rules(false);
-    let analyzed_plan =Analyzer::new()
-        .execute_and_check(logical_plan, config.options(), observe_analyzer)?;
+    let analyzed_plan = Analyzer::new().execute_and_check(
+        logical_plan,
+        config.options(),
+        observe_analyzer,
+    )?;
     println!(
         "Analyzed Logical Plan:\n\n{}\n",
         analyzed_plan.display_indent()
     );
 
-    // Finally we must invoke the DataFusion optimizer to improve the plans
-    // performance by applying various rewrite rules.
-    let optimized_plan = Optimizer::new().optimize(analyzed_plan, &config, observe_optimizer)?;
+    // Projection: person.name
+    //   Filter: CAST(person.age AS Int64) BETWEEN Int64(21) AND Int64(32)
+    //     TableScan: person
+
+    // As we can see, the Analyzer added a CAST so the types are the same
+    // (Int64). However, this plan is not as efficient as it could be, as it
+    // will require casting *each row* of the input to UInt64 before comparison
+    // to 21 and 32. To optimize this query's performance, it is  better to cast
+    // the constants once at plan time to Int32.
+    //
+    // Query optimization is handled in DataFusion by a component called the
+    // Optimizer, which we now invoke
+    let optimized_plan =
+        Optimizer::new().optimize(analyzed_plan, &config, observe_optimizer)?;
     println!(
         "Optimized Logical Plan:\n\n{}\n",
         optimized_plan.display_indent()
     );
 
+    // TableScan: person projection=[name], full_filters=[person.age >= UInt8(21), person.age <= UInt8(32)]
+
+    // The optimizer did several things to this plan:
+    // 1. Removed casts from person.age as we described above
+    // 2. Converted BETWEEN to two single columns  inequalities (which are typically faster to execute)
+    // 3. Pushed the projection of `name` down to the scan (so the scan only returns that column)
+    // 4. Pushed the filter all the way down into the scan
+
     Ok(())
 }
 
-// Both the optimizer and the analyzer take a callback, called an "observer"
-// that is invoked after each pass. We do not do anything with these callbacks
-// in this example
+// Note that both the optimizer and the analyzer take a callback, called an
+// "observer" that is invoked after each pass. We do not do anything with these
+// callbacks in this example
 
-fn observe_analyzer(_plan: &LogicalPlan, _rule: &dyn AnalyzerRule) {
-}
-fn observe_optimizer(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {
-}
-
+fn observe_analyzer(_plan: &LogicalPlan, _rule: &dyn AnalyzerRule) {}
+fn observe_optimizer(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
 /// Implements the `ContextProvider` trait required to plan SQL
 #[derive(Default)]
@@ -167,5 +191,14 @@ impl TableSource for MyTableSource {
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    // For this example, we report to the DataFusion optimizer that
+    // this provider can apply filters during the scan
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 }
