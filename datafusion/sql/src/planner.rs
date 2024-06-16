@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
+use datafusion_common::file_options::file_type::ExternalFileType;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, SchemaError,
 };
@@ -48,6 +49,11 @@ use crate::utils::make_decimal_type;
 pub trait ContextProvider {
     /// Getter for a datasource
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
+
+    fn get_file_type(&self, _ext: &str) -> Result<Arc<dyn ExternalFileType>> {
+        not_impl_err!("Registered file types are not supported")
+    }
+
     /// Getter for a table function
     fn get_table_function_source(
         &self,

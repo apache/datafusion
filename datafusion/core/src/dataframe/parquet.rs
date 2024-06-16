@@ -15,11 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use super::{
     DataFrame, DataFrameWriteOptions, DataFusionError, LogicalPlanBuilder, RecordBatch,
 };
 
-use datafusion_common::config::{FormatOptions, TableParquetOptions};
+use datafusion_common::{
+    config::TableParquetOptions, file_options::file_type::ExternalCSV,
+};
 
 impl DataFrame {
     /// Execute the `DataFrame` and write the results to Parquet file(s).
@@ -63,7 +67,8 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FormatOptions::PARQUET(props),
+            // TODO! update for parquet
+            Arc::new(ExternalCSV {}),
             Default::default(),
             options.partition_by,
         )?

@@ -992,6 +992,19 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
     fn udwf_names(&self) -> Vec<String> {
         self.state.window_functions().keys().cloned().collect()
     }
+
+    fn get_file_type(
+        &self,
+        ext: &str,
+    ) -> datafusion_common::Result<Arc<dyn ExternalFileType>> {
+        self.state
+            .file_types
+            .get(ext)
+            .ok_or(plan_datafusion_err!(
+                "There is no registered file type with ext {ext}"
+            ))
+            .map(|file_type| file_type.clone())
+    }
 }
 
 impl FunctionRegistry for SessionState {

@@ -256,14 +256,14 @@ impl TreeNode for LogicalPlan {
                 input,
                 output_url,
                 partition_by,
-                format_options,
+                file_type,
                 options,
             }) => rewrite_arc(input, f)?.update_data(|input| {
                 LogicalPlan::Copy(CopyTo {
                     input,
                     output_url,
                     partition_by,
-                    format_options,
+                    file_type,
                     options,
                 })
             }),

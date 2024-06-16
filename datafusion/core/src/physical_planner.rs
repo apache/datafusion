@@ -759,7 +759,7 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Copy(CopyTo {
                 input,
                 output_url,
-                format_options,
+                file_type,
                 partition_by,
                 options: source_option_tuples,
             }) => {

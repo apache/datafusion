@@ -43,6 +43,22 @@ pub trait GetExt {
 /// Externally Defined FileType
 pub trait ExternalFileType: GetExt + Display + Send + Sync {}
 
+pub struct ExternalCSV {}
+
+impl GetExt for ExternalCSV {
+    fn get_ext(&self) -> String {
+        "csv".to_string()
+    }
+}
+
+impl Display for ExternalCSV {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", "csv")
+    }
+}
+
+impl ExternalFileType for ExternalCSV {}
+
 /// Readable file type
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FileType {

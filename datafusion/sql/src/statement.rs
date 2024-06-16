@@ -34,8 +34,8 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
     unqualified_field_not_found, Column, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, FileType, Result, ScalarValue, SchemaError, SchemaReference,
-    TableReference, ToDFSchema,
+    DataFusionError, Result, ScalarValue, SchemaError, SchemaReference, TableReference,
+    ToDFSchema,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
@@ -899,31 +899,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
 
-        let file_type = if let Some(file_type) = statement.stored_as {
-            FileType::from_str(&file_type).map_err(|_| {
-                DataFusionError::Configuration(format!("Unknown FileType {}", file_type))
-            })?
+        let maybe_file_type = if let Some(stored_as) = &statement.stored_as {
+            if let Ok(ext_file_type) = self.context_provider.get_file_type(stored_as) {
+                Some(ext_file_type)
+            } else {
+                None
+            }
         } else {
-            let e = || {
-                DataFusionError::Configuration(
-                    "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
-                        .to_string(),
-                )
-            };
-            // try to infer file format from file extension
-            let extension: &str = &Path::new(&statement.target)
-                .extension()
-                .ok_or_else(e)?
-                .to_str()
-                .ok_or_else(e)?
-                .to_lowercase();
+            None
+        };
 
-            FileType::from_str(extension).map_err(|e| {
-                DataFusionError::Configuration(format!(
-                    "{}. Use STORED AS to define file format.",
-                    e
-                ))
-            })?
+        let file_type = match maybe_file_type {
+            Some(ft) => ft,
+            None => {
+                let e = || {
+                    DataFusionError::Configuration(
+                        "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
+                            .to_string(),
+                    )
+                };
+                // try to infer file format from file extension
+                let extension: &str = &Path::new(&statement.target)
+                    .extension()
+                    .ok_or_else(e)?
+                    .to_str()
+                    .ok_or_else(e)?
+                    .to_lowercase();
+
+                self.context_provider.get_file_type(extension)?
+            }
         };
 
         let partition_by = statement
@@ -938,7 +942,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url: statement.target,
-            format_options: file_type.into(),
+            file_type,
             partition_by,
             options,
         }))

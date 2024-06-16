@@ -44,7 +44,8 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::{Schema, SchemaRef};
-use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions};
+use datafusion_common::config::{CsvOptions, JsonOptions};
+use datafusion_common::file_options::file_type::ExternalCSV;
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
@@ -1236,13 +1237,11 @@ impl DataFrame {
                 "Overwrites are not implemented for DataFrame::write_csv.".to_owned(),
             ));
         }
-        let props = writer_options
-            .unwrap_or_else(|| self.session_state.default_table_options().csv);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FormatOptions::CSV(props),
+            Arc::new(ExternalCSV {}),
             HashMap::new(),
             options.partition_by,
         )?
@@ -1291,13 +1290,11 @@ impl DataFrame {
             ));
         }
 
-        let props = writer_options
-            .unwrap_or_else(|| self.session_state.default_table_options().json);
-
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FormatOptions::JSON(props),
+            // TODO! update for json
+            Arc::new(ExternalCSV {}),
             Default::default(),
             options.partition_by,
         )?
