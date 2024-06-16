@@ -258,7 +258,7 @@ impl AggregateUDFImpl for Count {
         if args.is_distinct {
             return false;
         }
-        args.args_num == 1
+        args.input_exprs.len() == 1
     }
 
     fn create_groups_accumulator(

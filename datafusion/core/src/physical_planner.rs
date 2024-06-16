@@ -1766,7 +1766,8 @@ pub fn create_window_expr_with_name(
             window_frame,
             null_treatment,
         }) => {
-            let args = create_physical_exprs(args, logical_schema, execution_props)?;
+            let physical_args =
+                create_physical_exprs(args, logical_schema, execution_props)?;
             let partition_by =
                 create_physical_exprs(partition_by, logical_schema, execution_props)?;
             let order_by =
@@ -1780,13 +1781,13 @@ pub fn create_window_expr_with_name(
             }
 
             let window_frame = Arc::new(window_frame.clone());
-            let ignore_nulls = null_treatment
-                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+            let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
             windows::create_window_expr(
                 fun,
                 name,
-                &args,
+                &physical_args,
+                args,
                 &partition_by,
                 &order_by,
                 window_frame,
@@ -1837,7 +1838,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             order_by,
             null_treatment,
         }) => {
-            let args =
+            let physical_args =
                 create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {
                 Some(e) => Some(create_physical_expr(
@@ -1867,7 +1868,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     let agg_expr = aggregates::create_aggregate_expr(
                         fun,
                         *distinct,
-                        &args,
+                        &physical_args,
                         &ordering_reqs,
                         physical_input_schema,
                         name,
@@ -1889,7 +1890,8 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         physical_sort_exprs.clone().unwrap_or(vec![]);
                     let agg_expr = udaf::create_aggregate_expr(
                         fun,
-                        &args,
+                        &physical_args,
+                        args,
                         &sort_exprs,
                         &ordering_reqs,
                         physical_input_schema,
