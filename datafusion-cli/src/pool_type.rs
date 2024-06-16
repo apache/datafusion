@@ -15,16 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![doc = include_str!("../README.md")]
-pub const DATAFUSION_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
+use std::{
+    fmt::{self, Display, Formatter},
+    str::FromStr,
+};
 
-pub mod catalog;
-pub mod command;
-pub mod exec;
-pub mod functions;
-pub mod helper;
-pub mod highlighter;
-pub mod object_storage;
-pub mod pool_type;
-pub mod print_format;
-pub mod print_options;
+#[derive(PartialEq, Debug)]
+pub enum PoolType {
+    Greedy,
+    Fair,
+}
+
+impl FromStr for PoolType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Greedy" | "greedy" => Ok(PoolType::Greedy),
+            "Fair" | "fair" => Ok(PoolType::Fair),
+            _ => Err(format!("Invalid memory pool type '{}'", s)),
+        }
+    }
+}
+
+impl Display for PoolType {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            PoolType::Greedy => write!(f, "greedy"),
+            PoolType::Fair => write!(f, "fair"),
+        }
+    }
+}
