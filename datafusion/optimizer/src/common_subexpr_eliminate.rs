@@ -324,8 +324,8 @@ impl CommonSubexprEliminate {
                 .map(LogicalPlan::Aggregate)
         } else {
             let mut agg_exprs = common_exprs
-                .into_iter()
-                .map(|(_, (expr, expr_alias))| expr.alias(expr_alias))
+                .into_values()
+                .map(|(expr, expr_alias)| expr.alias(expr_alias))
                 .collect::<Vec<_>>();
 
             let mut proj_exprs = vec![];
@@ -497,8 +497,8 @@ fn build_common_expr_project_plan(
 ) -> Result<LogicalPlan> {
     let mut fields_set = BTreeSet::new();
     let mut project_exprs = common_exprs
-        .into_iter()
-        .map(|(_, (expr, expr_alias))| {
+        .into_values()
+        .map(|(expr, expr_alias)| {
             fields_set.insert(expr_alias.clone());
             Ok(expr.alias(expr_alias))
         })
