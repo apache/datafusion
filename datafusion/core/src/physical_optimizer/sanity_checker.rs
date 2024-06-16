@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! The [PipelineChecker] rule ensures that a given plan can accommodate its
+//! infinite sources, if there are any. It will reject non-runnable query plans
+//! that use pipeline-breaking operators on infinite input(s).
+
 use itertools::izip;
 use std::sync::Arc;
 
@@ -22,11 +26,15 @@ use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::ExecutionPlan;
 
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigOptions, OptimizerOptions};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
+use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
+/// The PipelineChecker rule rejects non-runnable query plans that use
+/// pipeline-breaking operators on infinite input(s).
 #[derive(Default)]
 pub struct SanityCheckPlan {}
 
@@ -41,9 +49,10 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(|p| check_plan_sanity(p)).data()
+        plan.transform_down(|p| check_plan_sanity(p, &config.optimizer))
+            .data()
     }
 
     fn name(&self) -> &str {
@@ -55,14 +64,55 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
     }
 }
 
+/// This function propagates finiteness information and rejects any plan with
+/// pipeline-breaking operators acting on infinite inputs.
+pub fn check_finiteness_requirements(
+    input: Arc<dyn ExecutionPlan>,
+    optimizer_options: &OptimizerOptions,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    if let Some(exec) = input.as_any().downcast_ref::<SymmetricHashJoinExec>() {
+        if !(optimizer_options.allow_symmetric_joins_without_pruning
+            || (exec.check_if_order_information_available()? && is_prunable(exec)))
+        {
+            return plan_err!("Join operation cannot operate on a non-prunable stream without enabling \
+                              the 'allow_symmetric_joins_without_pruning' configuration flag");
+        }
+    }
+    if !input.execution_mode().pipeline_friendly() {
+        plan_err!(
+            "Cannot execute pipeline breaking queries, operator: {:?}",
+            input
+        )
+    } else {
+        Ok(Transformed::no(input))
+    }
+}
+
+/// This function returns whether a given symmetric hash join is amenable to
+/// data pruning. For this to be possible, it needs to have a filter where
+/// all involved [`PhysicalExpr`]s, [`Operator`]s and data types support
+/// interval calculations.
+///
+/// [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
+/// [`Operator`]: datafusion_expr::Operator
+fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
+    join.filter().map_or(false, |filter| {
+        check_support(filter.expression(), &join.schema())
+            && filter
+                .schema()
+                .fields()
+                .iter()
+                .all(|f| is_datatype_supported(f.data_type()))
+    })
+}
+
 /// Ensures that the plan is pipeline friendly and the order and
 /// distribution requirements from its children are satisfied.
 pub fn check_plan_sanity(
     plan: Arc<dyn ExecutionPlan>,
+    optimizer_options: &OptimizerOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    if !plan.execution_mode().pipeline_friendly() {
-        return plan_err!("Plan {:?} is not pipeline friendly.", plan);
-    }
+    check_finiteness_requirements(plan.clone(), optimizer_options)?;
 
     for (child, child_sort_req, child_dist_req) in izip!(
         plan.children().iter(),
@@ -103,7 +153,9 @@ mod tests {
     use crate::physical_optimizer::test_utils::{
         bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec,
         repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec,
+        BinaryTestCase, QueryCase, SourceType, UnaryTestCase,
     };
+
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
@@ -139,6 +191,226 @@ mod tests {
         let plan_str = displayable(plan).indent(true).to_string();
         let actual_lines: Vec<&str> = plan_str.trim().lines().collect();
         assert_eq!(actual_lines, expected_lines);
+    }
+
+    #[tokio::test]
+    async fn test_hash_left_join_swap() -> Result<()> {
+        let test1 = BinaryTestCase {
+            source_types: (SourceType::Unbounded, SourceType::Bounded),
+            expect_fail: false,
+        };
+
+        let test2 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Unbounded),
+            expect_fail: true,
+        };
+        let test3 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Bounded),
+            expect_fail: false,
+        };
+        let case = QueryCase {
+            sql: "SELECT t2.c1 FROM left as t1 LEFT JOIN right as t2 ON t1.c1 = t2.c1"
+                .to_string(),
+            cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+            error_operator: "operator: HashJoinExec".to_string(),
+        };
+
+        case.run().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hash_right_join_swap() -> Result<()> {
+        let test1 = BinaryTestCase {
+            source_types: (SourceType::Unbounded, SourceType::Bounded),
+            expect_fail: true,
+        };
+        let test2 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Unbounded),
+            expect_fail: false,
+        };
+        let test3 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Bounded),
+            expect_fail: false,
+        };
+        let case = QueryCase {
+            sql: "SELECT t2.c1 FROM left as t1 RIGHT JOIN right as t2 ON t1.c1 = t2.c1"
+                .to_string(),
+            cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+            error_operator: "operator: HashJoinExec".to_string(),
+        };
+
+        case.run().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hash_inner_join_swap() -> Result<()> {
+        let test1 = BinaryTestCase {
+            source_types: (SourceType::Unbounded, SourceType::Bounded),
+            expect_fail: false,
+        };
+        let test2 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Unbounded),
+            expect_fail: false,
+        };
+        let test3 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Bounded),
+            expect_fail: false,
+        };
+        let case = QueryCase {
+            sql: "SELECT t2.c1 FROM left as t1 JOIN right as t2 ON t1.c1 = t2.c1"
+                .to_string(),
+            cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+            error_operator: "Join Error".to_string(),
+        };
+
+        case.run().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hash_full_outer_join_swap() -> Result<()> {
+        let test1 = BinaryTestCase {
+            source_types: (SourceType::Unbounded, SourceType::Bounded),
+            expect_fail: true,
+        };
+        let test2 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Unbounded),
+            expect_fail: true,
+        };
+        let test3 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Bounded),
+            expect_fail: false,
+        };
+        let case = QueryCase {
+            sql: "SELECT t2.c1 FROM left as t1 FULL JOIN right as t2 ON t1.c1 = t2.c1"
+                .to_string(),
+            cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+            error_operator: "operator: HashJoinExec".to_string(),
+        };
+
+        case.run().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate() -> Result<()> {
+        let test1 = UnaryTestCase {
+            source_type: SourceType::Bounded,
+            expect_fail: false,
+        };
+        let test2 = UnaryTestCase {
+            source_type: SourceType::Unbounded,
+            expect_fail: true,
+        };
+        let case = QueryCase {
+            sql: "SELECT c1, MIN(c4) FROM test GROUP BY c1".to_string(),
+            cases: vec![Arc::new(test1), Arc::new(test2)],
+            error_operator: "operator: AggregateExec".to_string(),
+        };
+
+        case.run().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_window_agg_hash_partition() -> Result<()> {
+        let test1 = UnaryTestCase {
+            source_type: SourceType::Bounded,
+            expect_fail: false,
+        };
+        let test2 = UnaryTestCase {
+            source_type: SourceType::Unbounded,
+            expect_fail: true,
+        };
+        let case = QueryCase {
+            sql: "SELECT
+                    c9,
+                    SUM(c9) OVER(PARTITION BY c1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum1
+                  FROM test
+                  LIMIT 5".to_string(),
+            cases: vec![Arc::new(test1), Arc::new(test2)],
+            error_operator: "operator: SortExec".to_string()
+        };
+
+        case.run().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_window_agg_single_partition() -> Result<()> {
+        let test1 = UnaryTestCase {
+            source_type: SourceType::Bounded,
+            expect_fail: false,
+        };
+        let test2 = UnaryTestCase {
+            source_type: SourceType::Unbounded,
+            expect_fail: true,
+        };
+        let case = QueryCase {
+            sql: "SELECT
+                        c9,
+                        SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum1
+                  FROM test".to_string(),
+            cases: vec![Arc::new(test1), Arc::new(test2)],
+            error_operator: "operator: SortExec".to_string()
+        };
+        case.run().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hash_cross_join() -> Result<()> {
+        let test1 = BinaryTestCase {
+            source_types: (SourceType::Unbounded, SourceType::Bounded),
+            expect_fail: true,
+        };
+        let test2 = BinaryTestCase {
+            source_types: (SourceType::Unbounded, SourceType::Unbounded),
+            expect_fail: true,
+        };
+        let test3 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Unbounded),
+            expect_fail: true,
+        };
+        let test4 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Bounded),
+            expect_fail: false,
+        };
+        let case = QueryCase {
+            sql: "SELECT t2.c1 FROM left as t1 CROSS JOIN right as t2".to_string(),
+            cases: vec![
+                Arc::new(test1),
+                Arc::new(test2),
+                Arc::new(test3),
+                Arc::new(test4),
+            ],
+            error_operator: "operator: CrossJoinExec".to_string(),
+        };
+
+        case.run().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_analyzer() -> Result<()> {
+        let test1 = UnaryTestCase {
+            source_type: SourceType::Bounded,
+            expect_fail: false,
+        };
+        let test2 = UnaryTestCase {
+            source_type: SourceType::Unbounded,
+            expect_fail: false,
+        };
+        let case = QueryCase {
+            sql: "EXPLAIN ANALYZE SELECT * FROM test".to_string(),
+            cases: vec![Arc::new(test1), Arc::new(test2)],
+            error_operator: "Analyze Error".to_string(),
+        };
+
+        case.run().await?;
+        Ok(())
     }
 
     #[tokio::test]

@@ -30,7 +30,6 @@ pub mod join_selection;
 pub mod limited_distinct_aggregation;
 pub mod optimizer;
 pub mod output_requirements;
-pub mod pipeline_checker;
 pub mod sanity_checker;
 mod projection_pushdown;
 pub mod pruning;
