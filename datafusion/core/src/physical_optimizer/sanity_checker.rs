@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The [PipelineChecker] rule ensures that a given plan can accommodate its
-//! infinite sources, if there are any. It will reject non-runnable query plans
-//! that use pipeline-breaking operators on infinite input(s).
+//! The [SanityCheckPlan] rule ensures that a given plan can
+//! accommodate its infinite sources, if there are any. It will reject
+//! non-runnable query plans that use pipeline-breaking operators on
+//! infinite input(s). In addition, it will check if all order and
+//! distribution requirements of a plan are satisfied by its children.
 
 use itertools::izip;
 use std::sync::Arc;
@@ -33,8 +35,12 @@ use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supp
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-/// The PipelineChecker rule rejects non-runnable query plans that use
-/// pipeline-breaking operators on infinite input(s).
+/// The SanityCheckPlan rule rejects the following query plans:
+/// i) Plans that use pipeline-breaking operators on infinite input(s),
+///    these queries cannot be ran.
+/// ii) Plans in which their order and distribution requirements are not
+///     satisfied by its children, these queries will most likely yield
+///     incorrect results.
 #[derive(Default)]
 pub struct SanityCheckPlan {}
 
@@ -51,7 +57,7 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(|p| check_plan_sanity(p, &config.optimizer))
+        plan.transform_up(|p| check_plan_sanity(p, &config.optimizer))
             .data()
     }
 
