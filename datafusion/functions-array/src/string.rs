@@ -18,7 +18,7 @@
 //! [`ScalarUDFImpl`] definitions for array_to_string and string_to_array functions.
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Float32Array, Float64Array, GenericListArray,
+    Array, ArrayRef, AsArray, BooleanArray, Float32Array, Float64Array, GenericListArray,
     Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, ListBuilder,
     OffsetSizeTrait, StringArray, StringBuilder, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
