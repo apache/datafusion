@@ -25,6 +25,7 @@ use crate::catalog::{
     MemoryCatalogProviderList,
 };
 use crate::datasource::cte_worktable::CteWorkTable;
+use crate::datasource::file_format::{format_as_file_type, FileFormat};
 use crate::datasource::function::{TableFunction, TableFunctionImpl};
 use crate::datasource::provider::{DefaultTableFactory, TableProviderFactory};
 use crate::datasource::provider_as_source;
@@ -113,7 +114,7 @@ pub struct SessionState {
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Holds registered external FileFormat implementations
-    file_types: HashMap<String, Arc<dyn ExternalFileType>>,
+    file_formats: HashMap<String, Arc<dyn FileFormat>>,
     /// Session configuration
     config: SessionConfig,
     /// Table options
@@ -235,7 +236,7 @@ impl SessionState {
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: Arc::new(EmptySerializerRegistry),
-            file_types: HashMap::new(),
+            file_formats: HashMap::new(),
             table_options: TableOptions::default_from_session_config(config.options()),
             config,
             execution_props: ExecutionProps::new(),
@@ -836,15 +837,15 @@ impl SessionState {
 
     /// Adds or updates a [ExternalFileType] which can be used with COPY TO or CREATE EXTERNAL TABLE statements for reading
     /// and writing files of custom formats.
-    pub fn register_file_type(
+    pub fn register_file_format(
         &mut self,
-        file_type: Arc<dyn ExternalFileType>,
+        file_format: Arc<dyn FileFormat>,
         overwrite: bool,
     ) -> Result<(), DataFusionError> {
-        let ext = file_type.get_ext();
-        match (self.file_types.entry(ext.clone()), overwrite){
-            (Entry::Vacant(e), _) => {e.insert(file_type);},
-            (Entry::Occupied(mut e), true)  => {e.insert(file_type);},
+        let ext = file_format.get_ext();
+        match (self.file_formats.entry(ext.clone()), overwrite){
+            (Entry::Vacant(e), _) => {e.insert(file_format);},
+            (Entry::Occupied(mut e), true)  => {e.insert(file_format);},
             (Entry::Occupied(_), false) => return config_err!("File type already registered for extension {ext}. Set overwrite to true to replace this extension."),
         };
         Ok(())
@@ -998,12 +999,12 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         ext: &str,
     ) -> datafusion_common::Result<Arc<dyn ExternalFileType>> {
         self.state
-            .file_types
+            .file_formats
             .get(ext)
             .ok_or(plan_datafusion_err!(
-                "There is no registered file type with ext {ext}"
+                "There is no registered file format with ext {ext}"
             ))
-            .map(|file_type| file_type.clone())
+            .map(|file_type| format_as_file_type(file_type.clone()))
     }
 }
 

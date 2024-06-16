@@ -17,6 +17,7 @@
 
 //! File type abstraction
 
+use std::any::Any;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
@@ -41,7 +42,12 @@ pub trait GetExt {
 }
 
 /// Externally Defined FileType
-pub trait ExternalFileType: GetExt + Display + Send + Sync {}
+pub trait ExternalFileType: GetExt + Display + Send + Sync {
+    /// Returns the table source as [`Any`] so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+}
+
 
 pub struct ExternalCSV {}
 
@@ -57,7 +63,11 @@ impl Display for ExternalCSV {
     }
 }
 
-impl ExternalFileType for ExternalCSV {}
+impl ExternalFileType for ExternalCSV {
+    fn as_any(&self) -> &dyn Any{
+        self
+    }
+}
 
 /// Readable file type
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

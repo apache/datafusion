@@ -32,7 +32,7 @@ pub mod parquet;
 pub mod write;
 
 use std::any::Any;
-use std::fmt;
+use std::fmt::{self, Display};
 use std::sync::Arc;
 
 use crate::arrow::datatypes::SchemaRef;
@@ -41,7 +41,8 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use datafusion_common::not_impl_err;
+use datafusion_common::file_options::file_type::ExternalFileType;
+use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use async_trait::async_trait;
@@ -57,6 +58,10 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
+
+    fn get_ext(&self) -> String{
+        panic!("Undefined get_ext")
+    }
 
     /// Infer the common schema of the provided objects. The objects will usually
     /// be analysed up to a given number of records or files (as specified in the
@@ -103,6 +108,53 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         _order_requirements: Option<Vec<PhysicalSortRequirement>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
+    }
+}
+
+pub struct DefaultFileFormat{
+    file_format: Arc<dyn FileFormat>
+}
+
+impl DefaultFileFormat{
+    pub fn new(file_format: Arc<dyn FileFormat>) -> Self{
+        Self{ file_format }
+    }
+}
+
+impl ExternalFileType for DefaultFileFormat{
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl Display for DefaultFileFormat{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.file_format.fmt(f)
+    }
+}
+
+impl GetExt for DefaultFileFormat{
+    fn get_ext(&self) -> String {
+        self.file_format.get_ext()
+    }
+}
+
+pub fn format_as_file_type(
+    file_format: Arc<dyn FileFormat>
+) -> Arc<dyn ExternalFileType>{
+    Arc::new(DefaultFileFormat{file_format})
+}
+
+pub fn file_type_to_format(
+    file_type: &Arc<dyn ExternalFileType>,
+) -> datafusion_common::Result<Arc<dyn FileFormat>> {
+    match file_type
+        .as_ref()
+        .as_any()
+        .downcast_ref::<DefaultFileFormat>()
+    {
+        Some(source) => Ok(source.file_format.clone()),
+        _ => internal_err!("FileType was not DefaultFileFormat"),
     }
 }
 
