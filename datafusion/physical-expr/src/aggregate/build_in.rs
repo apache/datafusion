@@ -182,8 +182,7 @@ mod tests {
     use datafusion_expr::{type_coercion, Signature};
 
     use crate::expressions::{
-        try_cast, ArrayAgg, Avg, BoolAnd, BoolOr,
-        DistinctArrayAgg, Max, Min,
+        try_cast, ArrayAgg, Avg, BoolAnd, BoolOr, DistinctArrayAgg, Max, Min,
     };
 
     use super::*;

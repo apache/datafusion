@@ -24,27 +24,28 @@ use std::fmt::{Display, Formatter};
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::{
-    ArrowNativeType, ArrowNumericType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, ArrowPrimitiveType, DataType, Int16Type,
+    Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::Field;
 
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_common::cast::as_list_array;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;
-
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
 /// `accumulator_helper` is a macro accepting ([ArrowPrimitiveType], [BitwiseOperationType])
 macro_rules! accumulator_helper {
     ($t:ty, $opr:expr) => {
         match $opr {
-            BitwiseOperationType::And => Ok(Box::<BitAndAccumulator::<$t>>::default()),
-            BitwiseOperationType::Or => Ok(Box::<BitOrAccumulator::<$t>>::default()),
-            BitwiseOperationType::Xor => Ok(Box::<BitXorAccumulator::<$t>>::default()),
-            BitwiseOperationType::XorDistinct => Ok(Box::<DistinctBitXorAccumulator::<$t>>::default()),
+            BitwiseOperationType::And => Ok(Box::<BitAndAccumulator<$t>>::default()),
+            BitwiseOperationType::Or => Ok(Box::<BitOrAccumulator<$t>>::default()),
+            BitwiseOperationType::Xor => Ok(Box::<BitXorAccumulator<$t>>::default()),
+            BitwiseOperationType::XorDistinct => {
+                Ok(Box::<DistinctBitXorAccumulator<$t>>::default())
+            }
         }
     };
 }
@@ -62,10 +63,15 @@ macro_rules! downcast_bitwise_accumulator {
             DataType::Int64 => accumulator_helper!(Int64Type, $opr),
             DataType::UInt8 => accumulator_helper!(UInt8Type, $opr),
             DataType::UInt16 => accumulator_helper!(UInt16Type, $opr),
-            DataType::UInt32  => accumulator_helper!(UInt32Type, $opr),
+            DataType::UInt32 => accumulator_helper!(UInt32Type, $opr),
             DataType::UInt64 => accumulator_helper!(UInt64Type, $opr),
             _ => {
-                not_impl_err!("{} not supported for {}: {}", stringify!($opr) ,$args.name, $args.data_type)
+                not_impl_err!(
+                    "{} not supported for {}: {}",
+                    stringify!($opr),
+                    $args.name,
+                    $args.data_type
+                )
             }
         }
     };
@@ -138,7 +144,11 @@ impl AggregateUDFImpl for BitwiseOperation {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let arg_type = &arg_types[0];
         if !is_bit_and_or_xor_support_arg_type(arg_type) {
-            return exec_err!("[return_type] {} not supported for {}", self.operation.to_string() ,arg_type);
+            return exec_err!(
+                "[return_type] {} not supported for {}",
+                self.operation.to_string(),
+                arg_type
+            );
         }
         Ok(arg_type.clone())
     }
@@ -185,8 +195,8 @@ impl<T: ArrowNumericType> Default for BitAndAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> Accumulator for BitAndAccumulator<T>
-    where
-        T::Native: std::ops::BitAnd<Output=T::Native>,
+where
+    T::Native: std::ops::BitAnd<Output = T::Native>,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = arrow::compute::bit_and(values[0].as_primitive::<T>()) {
@@ -230,8 +240,8 @@ impl<T: ArrowNumericType> Default for BitOrAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> Accumulator for BitOrAccumulator<T>
-    where
-        T::Native: std::ops::BitOr<Output=T::Native>,
+where
+    T::Native: std::ops::BitOr<Output = T::Native>,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = arrow::compute::bit_or(values[0].as_primitive::<T>()) {
@@ -275,8 +285,8 @@ impl<T: ArrowNumericType> Default for BitXorAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> Accumulator for BitXorAccumulator<T>
-    where
-        T::Native: std::ops::BitXor<Output=T::Native>,
+where
+    T::Native: std::ops::BitXor<Output = T::Native>,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = arrow::compute::bit_xor(values[0].as_primitive::<T>()) {
@@ -322,8 +332,8 @@ impl<T: ArrowNumericType> Default for DistinctBitXorAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> Accumulator for DistinctBitXorAccumulator<T>
-    where
-        T::Native: std::ops::BitXor<Output=T::Native> + std::hash::Hash + Eq,
+where
+    T::Native: std::ops::BitXor<Output = T::Native> + std::hash::Hash + Eq,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {

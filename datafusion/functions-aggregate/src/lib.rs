@@ -85,6 +85,9 @@ pub mod expr_fn {
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
+    pub use super::bit_and_or_xor::bit_and;
+    pub use super::bit_and_or_xor::bit_or;
+    pub use super::bit_and_or_xor::bit_xor;
     pub use super::count::count;
     pub use super::count::count_distinct;
     pub use super::covariance::covar_pop;
@@ -106,9 +109,6 @@ pub mod expr_fn {
     pub use super::sum::sum;
     pub use super::variance::var_pop;
     pub use super::variance::var_sample;
-    pub use super::bit_and_or_xor::bit_and;
-    pub use super::bit_and_or_xor::bit_or;
-    pub use super::bit_and_or_xor::bit_xor;
 }
 
 /// Returns all default aggregate functions
