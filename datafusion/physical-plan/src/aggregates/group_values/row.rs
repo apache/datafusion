@@ -126,18 +126,18 @@ impl GroupValuesRows {
 impl GroupValues for GroupValuesRows {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         let n_rows = cols[0].len();
-        println!("n_rows: {:?}", n_rows);
+        // println!("n_rows: {:?}", n_rows);
 
         // 1.1 Calculate the group keys for the group values
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
         create_hashes(&cols, &self.random_state, batch_hashes)?;
-        println!("cols: {:?}", cols);
+        // println!("cols: {:?}", cols);
 
         let cols_fixed = &[cols[0].clone()];
         let fixed_width_group_rows = self.row_converter.convert_columns(cols_fixed)?;
-        println!("fixed_width_group_rowsl num_rows : {:?}", fixed_width_group_rows.num_rows());
+        // println!("fixed_width_group_rowsl num_rows : {:?}", fixed_width_group_rows.num_rows());
 
         let cols_var = &[cols[1].clone()];
         let cols_var_len = cols_var.len();
@@ -198,6 +198,9 @@ impl GroupValues for GroupValuesRows {
                 //  1.2 Need to create new entry for the group
                 None => {
                     // // Add new entry to aggr_state and save newly created index
+
+                    // There might be duplicated row inserted into group values, but we can save the time to search the expected row id.
+                    let fixed_width_group_row_id = fixed_width_group_values.num_rows();
                     fixed_width_group_values.push(fixed_width_group_rows.row(row));
 
                     let mut len = vec![None;cols_var_len];
@@ -233,7 +236,7 @@ impl GroupValues for GroupValuesRows {
                         hash,
                         len,
                         offset_or_inline,
-                        fixed_width_group_row: row,
+                        fixed_width_group_row: fixed_width_group_row_id,
                         group_id,
                     };
                     // for hasher function, use precomputed hash value
