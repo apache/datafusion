@@ -3769,6 +3769,22 @@ select array_to_string(make_array(), ',')
 ----
 (empty)
 
+# array to string dictionary
+statement ok
+CREATE TABLE table1 AS VALUES (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
+
+query T
+SELECT array_to_string(array_agg(column2),',') FROM (SELECT column2 FROM table1);
+----
+foo,bar
+
+statement ok
+CREATE TABLE table2 AS VALUES (1, arrow_cast(1, 'Dictionary(Int32, Int32)')), (2, arrow_cast(2, 'Dictionary(Int32, Int32)'));
+
+query T
+SELECT array_to_string(array_agg(column2),'-') FROM (SELECT column2 FROM table2);
+----
+1-2
 
 ## array_union (aliases: `list_union`)
 
