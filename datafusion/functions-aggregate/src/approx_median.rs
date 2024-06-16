@@ -28,7 +28,6 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
-use datafusion_physical_expr_common::aggregate::utils::down_cast_any_ref;
 
 use crate::approx_percentile_cont::ApproxPercentileAccumulator;
 
@@ -116,14 +115,5 @@ impl AggregateUDFImpl for ApproxMedian {
             0.5_f64,
             acc_args.input_type.clone(),
         )))
-    }
-}
-
-impl PartialEq<dyn Any> for ApproxMedian {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.signature == x.signature)
-            .unwrap_or(false)
     }
 }
