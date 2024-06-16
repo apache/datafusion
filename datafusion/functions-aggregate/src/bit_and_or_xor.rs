@@ -24,8 +24,8 @@ use std::fmt::{Display, Formatter};
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::{
-    ArrowNativeType, ArrowNumericType, ArrowPrimitiveType, DataType, Int16Type,
-    Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, DataType, Int16Type, Int32Type, Int64Type,
+    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::Field;
 
@@ -36,7 +36,7 @@ use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
-/// `accumulator_helper` is a macro accepting ([ArrowPrimitiveType], [BitwiseOperationType])
+/// `accumulator_helper` is a macro accepting (ArrowPrimitiveType, BitwiseOperationType)
 macro_rules! accumulator_helper {
     ($t:ty, $opr:expr) => {
         match $opr {
