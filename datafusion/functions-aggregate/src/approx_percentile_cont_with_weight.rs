@@ -32,7 +32,6 @@ use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, TypeSignature};
 use datafusion_physical_expr_common::aggregate::tdigest::{
     Centroid, TDigest, DEFAULT_MAX_SIZE,
 };
-use datafusion_physical_expr_common::physical_expr::down_cast_any_ref;
 
 use crate::approx_percentile_cont::{ApproxPercentileAccumulator, ApproxPercentileCont};
 
@@ -150,18 +149,6 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         self.approx_percentile_cont.state_fields(args)
-    }
-}
-
-impl PartialEq<dyn Any> for ApproxPercentileContWithWeight {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.signature == x.signature
-                    && self.approx_percentile_cont == x.approx_percentile_cont
-            })
-            .unwrap_or(false)
     }
 }
 

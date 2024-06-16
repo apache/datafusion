@@ -42,7 +42,6 @@ use datafusion_expr::{
 use datafusion_physical_expr_common::aggregate::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
-use datafusion_physical_expr_common::aggregate::utils::down_cast_any_ref;
 use datafusion_physical_expr_common::utils::limited_convert_logical_expr_to_physical_expr;
 
 make_udaf_expr_and_func!(
@@ -130,21 +129,6 @@ impl ApproxPercentileCont {
         };
 
         Ok(accumulator)
-    }
-}
-
-impl PartialEq for ApproxPercentileCont {
-    fn eq(&self, other: &ApproxPercentileCont) -> bool {
-        self.signature == other.signature
-    }
-}
-
-impl PartialEq<dyn Any> for ApproxPercentileCont {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.eq(x))
-            .unwrap_or(false)
     }
 }
 
