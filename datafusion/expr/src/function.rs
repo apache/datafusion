@@ -84,7 +84,7 @@ pub struct AccumulatorArgs<'a> {
     pub input_type: &'a DataType,
 
     /// The logical expression of arguments the aggregate function takes.
-    pub args: &'a [Expr],
+    pub input_exprs: &'a [Expr],
 }
 
 /// [`StateFieldsArgs`] contains information about the fields that an

@@ -27,9 +27,8 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
-use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
-};
+use datafusion_expr::Volatility::Immutable;
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, TypeSignature};
 use datafusion_physical_expr_common::aggregate::tdigest::{
     Centroid, TDigest, DEFAULT_MAX_SIZE,
 };
@@ -81,7 +80,7 @@ impl ApproxPercentileContWithWeight {
                         ])
                     })
                     .collect(),
-                Volatility::Immutable,
+                Immutable,
             ),
             approx_percentile_cont: ApproxPercentileCont::new(),
         }
@@ -112,8 +111,8 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
                 "approx_percentile_cont_with_weight requires numeric weight input types"
             );
         }
-        if !arg_types[2].is_floating() {
-            return plan_err!("approx_percentile_cont_with_weight requires floating percentile input types");
+        if arg_types[2] != DataType::Float64 {
+            return plan_err!("approx_percentile_cont_with_weight requires float64 percentile input types");
         }
         Ok(arg_types[0].clone())
     }
@@ -125,14 +124,17 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             );
         }
 
-        if acc_args.args.len() != 3 {
+        if acc_args.input_exprs.len() != 3 {
             return plan_err!(
                 "approx_percentile_cont_with_weight requires three arguments: value, weight, percentile"
             );
         }
 
         let sub_args = AccumulatorArgs {
-            args: &[acc_args.args[0].clone(), acc_args.args[2].clone()],
+            input_exprs: &[
+                acc_args.input_exprs[0].clone(),
+                acc_args.input_exprs[2].clone(),
+            ],
             ..acc_args
         };
         let approx_percentile_cont_accumulator =

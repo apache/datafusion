@@ -296,7 +296,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            args: &self.logical_args,
+            input_exprs: &self.logical_args,
             name: &self.name,
         };
 
@@ -311,7 +311,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            args: &self.logical_args,
+            input_exprs: &self.logical_args,
             name: &self.name,
         };
 
@@ -381,7 +381,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            args: &self.logical_args,
+            input_exprs: &self.logical_args,
             name: &self.name,
         };
         self.fun.groups_accumulator_supported(args)
@@ -395,7 +395,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            args: &self.logical_args,
+            input_exprs: &self.logical_args,
             name: &self.name,
         };
         self.fun.create_groups_accumulator(args)

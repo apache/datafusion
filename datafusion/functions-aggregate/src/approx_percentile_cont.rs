@@ -97,9 +97,9 @@ impl ApproxPercentileCont {
         &self,
         args: AccumulatorArgs,
     ) -> datafusion_common::Result<ApproxPercentileAccumulator> {
-        let percentile = validate_input_percentile_expr(&args.args[1])?;
-        let tdigest_max_size = if args.args.len() == 3 {
-            Some(validate_input_max_size_expr(&args.args[2])?)
+        let percentile = validate_input_percentile_expr(&args.input_exprs[1])?;
+        let tdigest_max_size = if args.input_exprs.len() == 3 {
+            Some(validate_input_max_size_expr(&args.input_exprs[2])?)
         } else {
             None
         };
@@ -255,6 +255,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         &self.signature
     }
 
+    #[inline]
     fn accumulator(
         &self,
         acc_args: AccumulatorArgs,
