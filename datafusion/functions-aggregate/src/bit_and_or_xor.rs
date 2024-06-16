@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines BitAnd, BitOr, and BitXor Aggregate accumulators
+//! Defines `BitAnd`, `BitOr`, `BitXor` and `BitXor DISTINCT` aggregate accumulators
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -35,19 +35,38 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;
 
-macro_rules! downcast_logical {
-    ($args:ident, $helper:ident) => {
+#[derive()]
+enum BitwiseOperatorType {
+    And,
+    Or,
+    Xor,
+    XorDistinct,
+}
+
+macro_rules! accumulator_helper {
+    ($t:ty, $opr:expr) => {
+        match $opr {
+            BitwiseOperatorType::And => Ok(Box::new(BitAndAccumulator::<$t>::default())),
+            BitwiseOperatorType::Or => Ok(Box::<BitOrAccumulator::<$t>>::default()),
+            BitwiseOperatorType::Xor => Ok(Box::new(BitXorAccumulator::<$t>::default())),
+            BitwiseOperatorType::XorDistinct => Ok(Box::new(DistinctBitXorAccumulator::<$t>::default())),
+        }
+    };
+}
+
+macro_rules! downcast_bitwise_accumulator {
+    ($args:ident, $opr:expr) => {
         match $args.data_type {
-            DataType::Int8 => $helper!(Int8Type, $args.data_type),
-            DataType::Int16 => $helper!(Int16Type, $args.data_type),
-            DataType::Int32 => $helper!(Int32Type, $args.data_type),
-            DataType::Int64 => $helper!(Int64Type, $args.data_type),
-            DataType::UInt8 => $helper!(UInt8Type, $args.data_type),
-            DataType::UInt16 => $helper!(UInt16Type, $args.data_type),
-            DataType::UInt32  => $helper!(UInt32Type, $args.data_type),
-            DataType::UInt64 => $helper!(UInt64Type, $args.data_type),
+            DataType::Int8 => accumulator_helper!(Int8Type, $opr),
+            DataType::Int16 => accumulator_helper!(Int16Type, $opr),
+            DataType::Int32 => accumulator_helper!(Int32Type, $opr),
+            DataType::Int64 => accumulator_helper!(Int64Type, $opr),
+            DataType::UInt8 => accumulator_helper!(UInt8Type, $opr),
+            DataType::UInt16 => accumulator_helper!(UInt16Type, $opr),
+            DataType::UInt32  => accumulator_helper!(UInt32Type, $opr),
+            DataType::UInt64 => accumulator_helper!(UInt64Type, $opr),
             _ => {
-                not_impl_err!("not supported for {}: {}", $args.name, $args.data_type)
+                not_impl_err!("{} not supported for {}: {}", stringify!($opr) ,$args.name, $args.data_type)
             }
         }
     };
@@ -114,16 +133,11 @@ impl AggregateUDFImpl for BitAnd {
         if !is_bit_and_or_xor_support_arg_type(arg_type) {
             return exec_err!("[return_type] AND not supported for {}", arg_type)
         }
-        return Ok(arg_type.clone())
+        Ok(arg_type.clone())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(BitAndAccumulator::<$t>::default()))
-                };
-        }
-        downcast_logical!(acc_args, helper)
+        downcast_bitwise_accumulator!(acc_args, BitwiseOperatorType::And)
     }
 }
 
@@ -213,12 +227,7 @@ impl AggregateUDFImpl for BitOr {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(BitOrAccumulator::<$t>::default()))
-                };
-        }
-        downcast_logical!(acc_args, helper)
+        downcast_bitwise_accumulator!(acc_args, BitwiseOperatorType::Or)
     }
 }
 
@@ -308,21 +317,10 @@ impl AggregateUDFImpl for BitXor {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-
         if acc_args.is_distinct {
-            macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(DistinctBitXorAccumulator::<$t>::default()))
-                };
-            }
-            downcast_logical!(acc_args, helper)
+            downcast_bitwise_accumulator!(acc_args, BitwiseOperatorType::XorDistinct)
         } else {
-            macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(BitXorAccumulator::<$t>::default()))
-                };
-            }
-            downcast_logical!(acc_args, helper)
+            downcast_bitwise_accumulator!(acc_args, BitwiseOperatorType::Xor)
         }
     }
 
