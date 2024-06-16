@@ -48,8 +48,8 @@ fn total_join_count(plan: &LogicalPlan) -> usize {
     total
 }
 
-/// Counts the total amount of joins and collects every join group with it's join count
-/// The list of groupts summes to the total count
+/// Counts the total amount of joins and collects every join tree with it's join count
+/// The list of groups sums to the total count
 fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
     // this works the same way as `total_count`, but now when we encounter a Join
     // we try to collect it's entire tree
@@ -59,7 +59,7 @@ fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
 
     while let Some(node) = to_visit.pop() {
         // if we encouter a join, we know were at the root of the tree
-        // so count this group and later start recursing on it's children
+        // count this tree and recurse on it's inputs
         if matches!(node, LogicalPlan::Join(_) | LogicalPlan::CrossJoin(_)) {
             let (group_count, inputs) = count_tree(node);
             total += group_count;
