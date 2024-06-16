@@ -49,7 +49,7 @@ macro_rules! accumulator_helper {
     };
 }
 
-/// AND, OR and XOR only supports a subset of numeric types, instead relying on type coercion
+/// AND, OR and XOR only supports a subset of numeric types
 ///
 /// `args` is [AccumulatorArgs]
 /// `opr` is [BitwiseOperationType]
@@ -71,7 +71,11 @@ macro_rules! downcast_bitwise_accumulator {
     };
 }
 
-
+/// Simplifies the creation of User-Defined Aggregate Functions (UDAFs) for performing bitwise operations in a declarative manner.
+///
+/// `EXPR_FN` identifier used to name the generated expression function.
+/// `AGGREGATE_UDF_FN` is an identifier used to name the underlying UDAF function.
+/// `OPR_TYPE` is an expression that evaluates to the type of bitwise operation to be performed.
 macro_rules! make_bitwise_udaf_expr_and_func {
     ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $OPR_TYPE:expr) => {
         make_udaf_expr!($EXPR_FN, expr_y expr_x, concat!("Returns the bitwise", stringify!($OPR_TYPE), "of a group of values"), $AGGREGATE_UDF_FN);
@@ -83,11 +87,13 @@ make_bitwise_udaf_expr_and_func!(bit_and, bit_and_udaf, BitwiseOperationType::An
 make_bitwise_udaf_expr_and_func!(bit_or, bit_or_udaf, BitwiseOperationType::Or);
 make_bitwise_udaf_expr_and_func!(bit_xor, bit_xor_udaf, BitwiseOperationType::Xor);
 
+/// The different types of bitwise operations that can be performed.
 #[derive(Debug, Clone, Eq, PartialEq)]
 enum BitwiseOperationType {
     And,
     Or,
     Xor,
+    /// `XorDistinct` is a variation of the bitwise XOR operation specifically for the scenario of BitXor DISTINCT
     XorDistinct,
 }
 
@@ -97,9 +103,11 @@ impl Display for BitwiseOperationType {
     }
 }
 
+/// [BitwiseOperation] struct encapsulates information about a bitwise operation.
 #[derive(Debug)]
 struct BitwiseOperation {
     signature: Signature,
+    /// `operation` indicates the type of bitwise operation to be performed.
     operation: BitwiseOperationType,
     func_name: &'static str,
 }
