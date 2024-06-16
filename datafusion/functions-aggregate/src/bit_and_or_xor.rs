@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::collections::HashSet;
+use std::fmt::{Display, Formatter};
 
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, AsArray};
@@ -35,22 +36,15 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;
 
-#[derive()]
-enum BitwiseOperatorType {
-    And,
-    Or,
-    Xor,
-    XorDistinct,
-}
 
-/// `accumulator_helper` is a macro accepting ([ArrowPrimitiveType], [BitwiseOperatorType])
+/// `accumulator_helper` is a macro accepting ([ArrowPrimitiveType], [BitwiseOperationType])
 macro_rules! accumulator_helper {
     ($t:ty, $opr:expr) => {
         match $opr {
-            BitwiseOperatorType::And => Ok(Box::<BitAndAccumulator::<$t>>::default()),
-            BitwiseOperatorType::Or => Ok(Box::<BitOrAccumulator::<$t>>::default()),
-            BitwiseOperatorType::Xor => Ok(Box::<BitXorAccumulator::<$t>>::default()),
-            BitwiseOperatorType::XorDistinct => Ok(Box::<DistinctBitXorAccumulator::<$t>>::default()),
+            BitwiseOperationType::And => Ok(Box::<BitAndAccumulator::<$t>>::default()),
+            BitwiseOperationType::Or => Ok(Box::<BitOrAccumulator::<$t>>::default()),
+            BitwiseOperationType::Xor => Ok(Box::<BitXorAccumulator::<$t>>::default()),
+            BitwiseOperationType::XorDistinct => Ok(Box::<DistinctBitXorAccumulator::<$t>>::default()),
         }
     };
 }
@@ -58,7 +52,7 @@ macro_rules! accumulator_helper {
 /// AND, OR and XOR only supports a subset of numeric types, instead relying on type coercion
 ///
 /// `args` is [AccumulatorArgs]
-/// `opr` is [BitwiseOperatorType]
+/// `opr` is [BitwiseOperationType]
 macro_rules! downcast_bitwise_accumulator {
     ($args:ident, $opr:expr) => {
         match $args.data_type {
@@ -77,56 +71,56 @@ macro_rules! downcast_bitwise_accumulator {
     };
 }
 
-make_udaf_expr_and_func!(
-    BitAnd,
-    bit_and,
-    expression,
-    "Returns the bitwise AND of a group of values.",
-    bit_and_udaf
-);
 
-make_udaf_expr_and_func!(
-    BitOr,
-    bit_or,
-    expression,
-    "Returns the bitwise OR of a group of values.",
-    bit_or_udaf
-);
-
-make_udaf_expr_and_func!(
-    BitXor,
-    bit_xor,
-    expression,
-    "Returns the bitwise XOR of a group of values.",
-    bit_xor_udaf
-);
-
-#[derive(Debug)]
-pub struct BitAnd {
-    signature: Signature,
+macro_rules! make_bitwise_udaf_expr_and_func {
+    ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $OPR_TYPE:expr) => {
+        make_udaf_expr!($EXPR_FN, expr_y expr_x, concat!("Returns the bitwise", stringify!($OPR_TYPE), "of a group of values"), $AGGREGATE_UDF_FN);
+        create_func!($EXPR_FN, $AGGREGATE_UDF_FN, BitwiseOperation::new($OPR_TYPE, stringify!($EXPR_FN)));
+    }
 }
 
-impl BitAnd {
-    pub fn new() -> Self {
+make_bitwise_udaf_expr_and_func!(bit_and, bit_and_udaf, BitwiseOperationType::And);
+make_bitwise_udaf_expr_and_func!(bit_or, bit_or_udaf, BitwiseOperationType::Or);
+make_bitwise_udaf_expr_and_func!(bit_xor, bit_xor_udaf, BitwiseOperationType::Xor);
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum BitwiseOperationType {
+    And,
+    Or,
+    Xor,
+    XorDistinct,
+}
+
+impl Display for BitwiseOperationType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug)]
+struct BitwiseOperation {
+    signature: Signature,
+    operation: BitwiseOperationType,
+    func_name: &'static str,
+}
+
+impl BitwiseOperation {
+    pub fn new(operator: BitwiseOperationType, func_name: &'static str) -> Self {
         Self {
-            signature: Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
+            operation: operator,
+            signature: Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable),
+            func_name,
         }
     }
 }
 
-impl Default for BitAnd {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AggregateUDFImpl for BitAnd {
+impl AggregateUDFImpl for BitwiseOperation {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "bit_and"
+        self.func_name
     }
 
     fn signature(&self) -> &Signature {
@@ -136,13 +130,33 @@ impl AggregateUDFImpl for BitAnd {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let arg_type = &arg_types[0];
         if !is_bit_and_or_xor_support_arg_type(arg_type) {
-            return exec_err!("[return_type] AND not supported for {}", arg_type)
+            return exec_err!("[return_type] {} not supported for {}", self.operation.to_string() ,arg_type);
         }
         Ok(arg_type.clone())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        downcast_bitwise_accumulator!(acc_args, BitwiseOperatorType::And)
+        if acc_args.is_distinct && self.operation == BitwiseOperationType::Xor {
+            downcast_bitwise_accumulator!(acc_args, BitwiseOperationType::XorDistinct)
+        } else {
+            downcast_bitwise_accumulator!(acc_args, self.operation)
+        }
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        if self.operation == BitwiseOperationType::Xor && args.is_distinct {
+            Ok(vec![Field::new_list(
+                format_state_name(args.name, "xor distinct"),
+                Field::new("item", args.return_type.clone(), true),
+                false,
+            )])
+        } else {
+            Ok(vec![Field::new(
+                format_state_name(args.name, self.operation.to_string().as_str()),
+                args.return_type.clone(),
+                true,
+            )])
+        }
     }
 }
 
@@ -191,51 +205,6 @@ impl<T: ArrowNumericType> Accumulator for BitAndAccumulator<T>
     }
 }
 
-#[derive(Debug)]
-pub struct BitOr {
-    signature: Signature,
-}
-
-impl BitOr {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
-        }
-    }
-}
-
-impl Default for BitOr {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AggregateUDFImpl for BitOr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "bit_or"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_type = &arg_types[0];
-        if !is_bit_and_or_xor_support_arg_type(arg_type) {
-            return exec_err!("[return_type] OR not supported for {}", arg_type)
-        }
-        Ok(arg_type.clone())
-    }
-
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        downcast_bitwise_accumulator!(acc_args, BitwiseOperatorType::Or)
-    }
-}
-
 struct BitOrAccumulator<T: ArrowNumericType> {
     value: Option<T::Native>,
 }
@@ -279,72 +248,6 @@ impl<T: ArrowNumericType> Accumulator for BitOrAccumulator<T>
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         self.update_batch(states)
     }
-}
-
-#[derive(Debug)]
-pub struct BitXor {
-    signature: Signature,
-}
-
-impl BitXor {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
-        }
-    }
-}
-
-impl Default for BitXor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AggregateUDFImpl for BitXor {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "bit_xor"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_type = &arg_types[0];
-        if !is_bit_and_or_xor_support_arg_type(arg_type) {
-            return exec_err!("[return_type] XOR not supported for {}", arg_type)
-        }
-        Ok(arg_type.clone())
-    }
-
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if acc_args.is_distinct {
-            downcast_bitwise_accumulator!(acc_args, BitwiseOperatorType::XorDistinct)
-        } else {
-            downcast_bitwise_accumulator!(acc_args, BitwiseOperatorType::Xor)
-        }
-    }
-
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        if args.is_distinct {
-            Ok(vec![Field::new_list(
-                format_state_name(args.name, "xor distinct"),
-                Field::new("item", args.return_type.clone(), true),
-                false,
-            )])
-        } else {
-            Ok(vec![Field::new(
-                format_state_name(args.name, "xor"),
-                args.return_type.clone(),
-                true,
-            )])
-        }
-    }
-
 }
 
 struct BitXorAccumulator<T: ArrowNumericType> {
@@ -412,7 +315,7 @@ impl<T: ArrowNumericType> Default for DistinctBitXorAccumulator<T> {
 
 impl<T: ArrowNumericType> Accumulator for DistinctBitXorAccumulator<T>
     where
-        T::Native: std::ops::BitXor<Output = T::Native> + std::hash::Hash + Eq,
+        T::Native: std::ops::BitXor<Output=T::Native> + std::hash::Hash + Eq,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
