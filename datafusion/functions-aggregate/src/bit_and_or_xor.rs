@@ -43,17 +43,22 @@ enum BitwiseOperatorType {
     XorDistinct,
 }
 
+/// `accumulator_helper` is a macro accepting ([ArrowPrimitiveType], [BitwiseOperatorType])
 macro_rules! accumulator_helper {
     ($t:ty, $opr:expr) => {
         match $opr {
-            BitwiseOperatorType::And => Ok(Box::new(BitAndAccumulator::<$t>::default())),
+            BitwiseOperatorType::And => Ok(Box::<BitAndAccumulator::<$t>>::default()),
             BitwiseOperatorType::Or => Ok(Box::<BitOrAccumulator::<$t>>::default()),
-            BitwiseOperatorType::Xor => Ok(Box::new(BitXorAccumulator::<$t>::default())),
-            BitwiseOperatorType::XorDistinct => Ok(Box::new(DistinctBitXorAccumulator::<$t>::default())),
+            BitwiseOperatorType::Xor => Ok(Box::<BitXorAccumulator::<$t>>::default()),
+            BitwiseOperatorType::XorDistinct => Ok(Box::<DistinctBitXorAccumulator::<$t>>::default()),
         }
     };
 }
 
+/// AND, OR and XOR only supports a subset of numeric types, instead relying on type coercion
+///
+/// `args` is [AccumulatorArgs]
+/// `opr` is [BitwiseOperatorType]
 macro_rules! downcast_bitwise_accumulator {
     ($args:ident, $opr:expr) => {
         match $args.data_type {
@@ -76,7 +81,7 @@ make_udaf_expr_and_func!(
     BitAnd,
     bit_and,
     expression,
-    "Returns the bit wise AND of a group of values.",
+    "Returns the bitwise AND of a group of values.",
     bit_and_udaf
 );
 
@@ -84,7 +89,7 @@ make_udaf_expr_and_func!(
     BitOr,
     bit_or,
     expression,
-    "Returns the bit wise OR of a group of values.",
+    "Returns the bitwise OR of a group of values.",
     bit_or_udaf
 );
 
@@ -92,7 +97,7 @@ make_udaf_expr_and_func!(
     BitXor,
     bit_xor,
     expression,
-    "Returns the bit wise XOR of a group of values.",
+    "Returns the bitwise XOR of a group of values.",
     bit_xor_udaf
 );
 
@@ -223,7 +228,7 @@ impl AggregateUDFImpl for BitOr {
         if !is_bit_and_or_xor_support_arg_type(arg_type) {
             return exec_err!("[return_type] OR not supported for {}", arg_type)
         }
-        return Ok(arg_type.clone())
+        Ok(arg_type.clone())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -313,7 +318,7 @@ impl AggregateUDFImpl for BitXor {
         if !is_bit_and_or_xor_support_arg_type(arg_type) {
             return exec_err!("[return_type] XOR not supported for {}", arg_type)
         }
-        return Ok(arg_type.clone())
+        Ok(arg_type.clone())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
