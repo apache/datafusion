@@ -183,7 +183,7 @@ async fn main_inner() -> Result<()> {
             match args.mem_pool_type {
                 Some(PoolType::Fair) => rt_config
                     .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit))),
-                _ => rt_config
+                None | Some(PoolType::Greedy) => rt_config
                     .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
             }
         } else {
