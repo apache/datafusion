@@ -108,6 +108,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         &[col("d", &schema).unwrap()],
         &[],
         &[],
+        &[],
         &schema,
         "sum1",
         false,

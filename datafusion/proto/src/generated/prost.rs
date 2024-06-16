@@ -1940,9 +1940,9 @@ pub enum AggregateFunction {
     /// STDDEV = 11;
     /// STDDEV_POP = 12;
     Correlation = 13,
-    ApproxPercentileCont = 14,
+    /// APPROX_PERCENTILE_CONT = 14;
     /// APPROX_MEDIAN = 15;
-    ApproxPercentileContWithWeight = 16,
+    /// APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
     Grouping = 17,
     /// MEDIAN = 18;
     /// BIT_AND = 19;
@@ -1974,10 +1974,6 @@ impl AggregateFunction {
             AggregateFunction::Avg => "AVG",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::Correlation => "CORRELATION",
-            AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
-            AggregateFunction::ApproxPercentileContWithWeight => {
-                "APPROX_PERCENTILE_CONT_WITH_WEIGHT"
-            }
             AggregateFunction::Grouping => "GROUPING",
             AggregateFunction::BoolAnd => "BOOL_AND",
             AggregateFunction::BoolOr => "BOOL_OR",
@@ -1993,10 +1989,6 @@ impl AggregateFunction {
             "AVG" => Some(Self::Avg),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "CORRELATION" => Some(Self::Correlation),
-            "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),
-            "APPROX_PERCENTILE_CONT_WITH_WEIGHT" => {
-                Some(Self::ApproxPercentileContWithWeight)
-            }
             "GROUPING" => Some(Self::Grouping),
             "BOOL_AND" => Some(Self::BoolAnd),
             "BOOL_OR" => Some(Self::BoolOr),

@@ -390,6 +390,7 @@ pub(crate) mod tests {
                 &[self.column()],
                 &[],
                 &[],
+                &[],
                 schema,
                 self.column_name(),
                 false,

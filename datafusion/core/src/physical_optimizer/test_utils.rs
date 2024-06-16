@@ -245,6 +245,7 @@ pub fn bounded_window_exec(
                 "count".to_owned(),
                 &[col(col_name, &schema).unwrap()],
                 &[],
+                &[],
                 &sort_exprs,
                 Arc::new(WindowFrame::new(Some(false))),
                 schema.as_ref(),

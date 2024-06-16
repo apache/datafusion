@@ -46,6 +46,7 @@ use datafusion_expr::utils::AggregateOrderSensitivity;
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    input_exprs: &[Expr],
     sort_exprs: &[Expr],
     ordering_req: &[PhysicalSortExpr],
     schema: &Schema,
@@ -76,6 +77,7 @@ pub fn create_aggregate_expr(
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
         args: input_phy_exprs.to_vec(),
+        logical_args: input_exprs.to_vec(),
         data_type: fun.return_type(&input_exprs_types)?,
         name: name.into(),
         schema: schema.clone(),
@@ -231,6 +233,7 @@ pub struct AggregatePhysicalExpressions {
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
+    logical_args: Vec<Expr>,
     /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
@@ -293,7 +296,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            args_num: self.args.len(),
+            input_exprs: &self.logical_args,
             name: &self.name,
         };
 
@@ -308,7 +311,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            args_num: self.args.len(),
+            input_exprs: &self.logical_args,
             name: &self.name,
         };
 
@@ -378,7 +381,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            args_num: self.args.len(),
+            input_exprs: &self.logical_args,
             name: &self.name,
         };
         self.fun.groups_accumulator_supported(args)
@@ -392,7 +395,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            args_num: self.args.len(),
+            input_exprs: &self.logical_args,
             name: &self.name,
         };
         self.fun.create_groups_accumulator(args)
@@ -434,6 +437,7 @@ impl AggregateExpr for AggregateFunctionExpr {
         create_aggregate_expr(
             &updated_fn,
             &self.args,
+            &self.logical_args,
             &self.sort_exprs,
             &self.ordering_req,
             &self.schema,
@@ -468,6 +472,7 @@ impl AggregateExpr for AggregateFunctionExpr {
                 let reverse_aggr = create_aggregate_expr(
                     &reverse_udf,
                     &self.args,
+                    &self.logical_args,
                     &reverse_sort_exprs,
                     &reverse_ordering_req,
                     &self.schema,

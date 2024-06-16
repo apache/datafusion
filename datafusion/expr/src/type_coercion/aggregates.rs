@@ -17,7 +17,6 @@
 
 use std::ops::Deref;
 
-use super::functions::can_coerce_from;
 use crate::{AggregateFunction, Signature, TypeSignature};
 
 use arrow::datatypes::{
@@ -143,55 +142,6 @@ pub fn coerce_types(
                 );
             }
             Ok(vec![Float64, Float64])
-        }
-        AggregateFunction::ApproxPercentileCont => {
-            if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            if input_types.len() == 3 && !input_types[2].is_integer() {
-                return plan_err!(
-                        "The percentile sample points count for {:?} must be integer, not {:?}.",
-                        agg_fun, input_types[2]
-                    );
-            }
-            let mut result = input_types.to_vec();
-            if can_coerce_from(&Float64, &input_types[1]) {
-                result[1] = Float64;
-            } else {
-                return plan_err!(
-                    "Could not coerce the percent argument for {:?} to Float64. Was  {:?}.",
-                    agg_fun, input_types[1]
-                );
-            }
-            Ok(result)
-        }
-        AggregateFunction::ApproxPercentileContWithWeight => {
-            if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            if !is_approx_percentile_cont_supported_arg_type(&input_types[1]) {
-                return plan_err!(
-                    "The weight argument for {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[1]
-                );
-            }
-            if !matches!(input_types[2], Float64) {
-                return plan_err!(
-                    "The percentile argument for {:?} must be Float64, not {:?}.",
-                    agg_fun,
-                    input_types[2]
-                );
-            }
-            Ok(input_types.to_vec())
         }
         AggregateFunction::NthValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
@@ -442,15 +392,6 @@ pub fn is_integer_arg_type(arg_type: &DataType) -> bool {
 }
 
 /// Return `true` if `arg_type` is of a [`DataType`] that the
-/// [`AggregateFunction::ApproxPercentileCont`] aggregation can operate on.
-pub fn is_approx_percentile_cont_supported_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        arg_type if NUMERICS.contains(arg_type)
-    )
-}
-
-/// Return `true` if `arg_type` is of a [`DataType`] that the
 /// [`AggregateFunction::StringAgg`] aggregation can operate on.
 pub fn is_string_agg_supported_arg_type(arg_type: &DataType) -> bool {
     matches!(
@@ -514,29 +455,6 @@ mod tests {
         assert_eq!(r[0], DataType::Decimal128(20, 3));
         let r = coerce_types(&fun, &[DataType::Decimal256(20, 3)], &signature).unwrap();
         assert_eq!(r[0], DataType::Decimal256(20, 3));
-
-        // ApproxPercentileCont input types
-        let input_types = vec![
-            vec![DataType::Int8, DataType::Float64],
-            vec![DataType::Int16, DataType::Float64],
-            vec![DataType::Int32, DataType::Float64],
-            vec![DataType::Int64, DataType::Float64],
-            vec![DataType::UInt8, DataType::Float64],
-            vec![DataType::UInt16, DataType::Float64],
-            vec![DataType::UInt32, DataType::Float64],
-            vec![DataType::UInt64, DataType::Float64],
-            vec![DataType::Float32, DataType::Float64],
-            vec![DataType::Float64, DataType::Float64],
-        ];
-        for input_type in &input_types {
-            let signature = AggregateFunction::ApproxPercentileCont.signature();
-            let result = coerce_types(
-                &AggregateFunction::ApproxPercentileCont,
-                input_type,
-                &signature,
-            );
-            assert_eq!(*input_type, result.unwrap());
-        }
     }
 
     #[test]

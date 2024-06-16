@@ -17,7 +17,7 @@
 
 mod cast;
 pub mod column;
-mod literal;
+pub mod literal;
 
 pub use cast::{cast, cast_with_options, CastExpr};
 pub use literal::{lit, Literal};
