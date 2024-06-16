@@ -135,11 +135,11 @@ impl GroupValues for GroupValuesRows {
         create_hashes(&cols, &self.random_state, batch_hashes)?;
         // println!("cols: {:?}", cols);
 
-        let cols_fixed = &[cols[0].clone()];
+        let cols_fixed = &cols[0..1];
         let fixed_width_group_rows = self.row_converter.convert_columns(cols_fixed)?;
         // println!("fixed_width_group_rowsl num_rows : {:?}", fixed_width_group_rows.num_rows());
 
-        let cols_var = &[cols[1].clone()];
+        let cols_var = &cols[1..];
         let cols_var_len = cols_var.len();
 
         // let n_rows = group_rows.num_rows();
