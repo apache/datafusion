@@ -19,12 +19,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
+use datafusion::dataframe::DataFrame;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::error::Result;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_substrait::physical_plan::{consumer, producer};
 
 use substrait::proto::extensions;
@@ -70,4 +71,58 @@ async fn parquet_exec() -> Result<()> {
     assert_eq!(expected, actual);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn simple_select() -> Result<()> {
+    roundtrip("SELECT a, b FROM data").await
+}
+
+#[tokio::test]
+async fn wildcard_select() -> Result<()> {
+    roundtrip("SELECT * FROM data").await
+}
+
+async fn roundtrip(sql: &str) -> Result<()> {
+    let ctx = create_parquet_context().await?;
+    let df = ctx.sql(sql).await?;
+
+    roundtrip_parquet(df).await?;
+
+    Ok(())
+}
+
+async fn roundtrip_parquet(df: DataFrame) -> Result<()> {
+    let physical_plan = df.create_physical_plan().await?;
+
+    // Convert the plan into a substrait (protobuf) Rel
+    let mut extension_info = (vec![], HashMap::new());
+    let substrait_plan =
+        producer::to_substrait_rel(physical_plan.as_ref(), &mut extension_info)?;
+
+    // Convert the substrait Rel back into a physical plan
+    let ctx = create_parquet_context().await?;
+    let physical_plan_roundtrip =
+        consumer::from_substrait_rel(&ctx, substrait_plan.as_ref(), &HashMap::new())
+            .await?;
+
+    // Compare the original and roundtrip physical plans
+    let expected = format!("{}", displayable(physical_plan.as_ref()).indent(true));
+    let actual = format!(
+        "{}",
+        displayable(physical_plan_roundtrip.as_ref()).indent(true)
+    );
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+async fn create_parquet_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+    let explicit_options = ParquetReadOptions::default();
+
+    ctx.register_parquet("data", "tests/testdata/data.parquet", explicit_options)
+        .await?;
+
+    Ok(ctx)
 }
