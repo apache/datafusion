@@ -50,7 +50,7 @@ mod bounded_window_agg_exec;
 #[cfg(feature = "franz")]
 pub mod stream_window_agg_exec;
 #[cfg(feature = "franz")]
-pub use stream_window_agg_exec::{FranzWindowType, FranzWindowExec};
+pub use stream_window_agg_exec::{FranzWindowExec, FranzWindowType};
 
 mod window_agg_exec;
 

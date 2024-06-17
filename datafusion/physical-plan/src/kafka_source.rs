@@ -120,7 +120,7 @@ impl PartitionStream for KafkaStreamRead {
                 self.config.bootstrap_servers.to_string(),
             )
             .set("enable.auto.commit", "false") // Disable auto-commit for manual offset control
-                                                // @TODO we need to store offsets somehow
+            // @TODO we need to store offsets somehow
             .set("auto.offset.reset", self.config.offset_reset.to_string())
             .set("group.id", self.config.consumer_group_id.to_string());
 

@@ -17,10 +17,13 @@
 
 use std::{collections::HashSet, env};
 
-use std::sync::Arc;
-use rocksdb::{BoundColumnFamily, Error as RocksDBError, Options, DB, DBWithThreadMode, MultiThreaded, DBCommon};
+use rocksdb::{
+    BoundColumnFamily, DBCommon, DBWithThreadMode, Error as RocksDBError, MultiThreaded,
+    Options, DB,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Error as SerdeJsonError;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct StateError {
@@ -44,7 +47,7 @@ impl From<SerdeJsonError> for StateError {
 }
 
 pub struct RocksDBBackend {
-    db: DBWithThreadMode::<MultiThreaded>,
+    db: DBWithThreadMode<MultiThreaded>,
     namespaces: HashSet<String>,
 }
 
@@ -55,7 +58,10 @@ impl RocksDBBackend {
         db_opts.create_if_missing(true);
         tracing::info!("creating a backend at {}", dir.display());
         // ... potentially set other general DB options
-        let db = DBWithThreadMode::<MultiThreaded>::open(&db_opts, format!("{}{}", dir.display(), path))?;
+        let db = DBWithThreadMode::<MultiThreaded>::open(
+            &db_opts,
+            format!("{}{}", dir.display(), path),
+        )?;
         Ok(RocksDBBackend {
             db,
             namespaces: HashSet::new(),
@@ -64,12 +70,16 @@ impl RocksDBBackend {
 
     async fn create_cf(&mut self, namespace: &str) -> Result<(), StateError> {
         let cf_opts: Options = Options::default();
-        DBWithThreadMode::<MultiThreaded>::create_cf(&mut self.db, namespace, &cf_opts).map_err(|e| StateError::from(e))?;
+        DBWithThreadMode::<MultiThreaded>::create_cf(&mut self.db, namespace, &cf_opts)
+            .map_err(|e| StateError::from(e))?;
         self.namespaces.insert(namespace.to_string());
         Ok(())
     }
 
-    async fn get_cf(&self, namespace: &str) -> Result<Arc<BoundColumnFamily>, StateError> {
+    async fn get_cf(
+        &self,
+        namespace: &str,
+    ) -> Result<Arc<BoundColumnFamily>, StateError> {
         self.db.cf_handle(namespace).ok_or_else(|| StateError {
             message: "namespace does not exist.".to_string(),
         })
@@ -87,7 +97,12 @@ impl RocksDBBackend {
         tracing::info!("destroyed db {:?}", ret)
     }
 
-    pub async fn put_state<K, V>(&mut self, namespace: &str, key: K, value: V) -> Result<(), StateError>
+    pub async fn put_state<K, V>(
+        &mut self,
+        namespace: &str,
+        key: K,
+        value: V,
+    ) -> Result<(), StateError>
     where
         K: Serialize + for<'de> Deserialize<'de> + Send,
         V: Serialize + for<'de> Deserialize<'de> + Send,
@@ -106,7 +121,11 @@ impl RocksDBBackend {
             })
     }
 
-    pub async fn get_state<K, V>(&mut self, namespace: &str, key: K) -> Result<Option<V>, StateError>
+    pub async fn get_state<K, V>(
+        &mut self,
+        namespace: &str,
+        key: K,
+    ) -> Result<Option<V>, StateError>
     where
         K: Serialize + for<'de> Deserialize<'de> + Send + std::fmt::Debug,
         V: Serialize + for<'de> Deserialize<'de> + Send,

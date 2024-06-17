@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::franz_sinks::FranzSink;
-use arrow::record_batch::RecordBatch;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Default)]
 pub struct MockSink {

@@ -48,6 +48,7 @@ pub mod analyze;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
 pub mod common;
+pub mod continuous;
 pub mod display;
 pub mod empty;
 pub mod explain;
@@ -72,7 +73,6 @@ pub mod unnest;
 pub mod values;
 pub mod windows;
 pub mod work_table;
-pub mod continuous;
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::metrics::Metric;

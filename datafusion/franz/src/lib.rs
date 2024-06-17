@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod stream_monitor;
+pub mod record_store;
 pub mod rocksdb_backend;
+pub mod stream_monitor;
 pub mod test;
 pub mod utils;
-pub mod record_store;
 
-pub use stream_monitor::{StreamMonitor, StreamMonitorConfig};
 pub use rocksdb_backend::RocksDBBackend;
+pub use stream_monitor::{StreamMonitor, StreamMonitorConfig};

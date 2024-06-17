@@ -17,8 +17,8 @@
 
 use async_trait::async_trait;
 
-use arrow::record_batch::RecordBatch;
 use crate::error::{DataFusionError, Result};
+use arrow::record_batch::RecordBatch;
 
 #[async_trait]
 pub trait FranzSink {
