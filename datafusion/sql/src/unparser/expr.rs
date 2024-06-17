@@ -20,8 +20,9 @@ use std::{fmt::Display, vec};
 
 use arrow_array::{Date32Array, Date64Array};
 use arrow_schema::DataType;
+use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
+    self, Expr as AstExpr, Function, FunctionArg, Ident, Interval, UnaryOperator,
 };
 
 use datafusion_common::{
@@ -825,8 +826,26 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
             ScalarValue::IntervalDayTime(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::IntervalMonthDayNano(Some(_i)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::IntervalMonthDayNano(Some(i)) => {
+                let mut s = vec![];
+                if i.months != 0 {
+                    s.push(format!("{} MONTH", i.months));
+                }
+                if i.days != 0 {
+                    s.push(format!("{} DAY", i.days));
+                }
+                if i.nanoseconds != 0 {
+                    s.push(Self::process_interval_nanosecond(i.nanoseconds));
+                }
+
+                let interval = Interval {
+                    value: Box::new(ast::Expr::Value(SingleQuotedString(s.join(" ")))),
+                    leading_field: None,
+                    leading_precision: None,
+                    last_field: None,
+                    fractional_seconds_precision: None,
+                };
+                Ok(ast::Expr::Interval(interval))
             }
             ScalarValue::IntervalMonthDayNano(None) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
@@ -857,6 +876,35 @@ impl Unparser<'_> {
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(..) => not_impl_err!("Unsupported scalar: {v:?}"),
         }
+    }
+
+    fn process_interval_nanosecond(nano: i64) -> String {
+        let mut s = vec![];
+        let hour = nano / 3_600_000_000_000;
+        let minute = nano / 60_000_000_000 % 60;
+        let second = nano / 1_000_000_000 % 60;
+        let millisecond = nano / 1_000_000 % 1_000;
+        let microsecond = nano / 1_000 % 1_000;
+        let nanosecond = nano % 1_000;
+        if hour != 0 {
+            s.push(format!("{} HOUR", hour));
+        }
+        if minute != 0 {
+            s.push(format!("{} MINUTE", minute));
+        }
+        if second != 0 {
+            s.push(format!("{} SECOND", second));
+        }
+        if millisecond != 0 {
+            s.push(format!("{} MILLISECOND", millisecond));
+        }
+        if microsecond != 0 {
+            s.push(format!("{} MICROSECOND", microsecond));
+        }
+        if nanosecond != 0 {
+            s.push(format!("{} NANOSECOND", nanosecond));
+        }
+        s.join(" ")
     }
 
     fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
@@ -954,19 +1002,19 @@ impl Unparser<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::{Add, Sub};
     use std::{any::Any, sync::Arc, vec};
 
     use arrow::datatypes::{Field, Schema};
     use arrow_schema::DataType::Int8;
-
     use datafusion_common::TableReference;
-    use datafusion_expr::AggregateExt;
     use datafusion_expr::{
         case, col, cube, exists, grouping_set, lit, not, not_exists, out_ref_col,
         placeholder, rollup, table_scan, try_cast, when, wildcard, ColumnarValue,
         ScalarUDF, ScalarUDFImpl, Signature, Volatility, WindowFrame,
         WindowFunctionDefinition,
     };
+    use datafusion_expr::{interval_month_day_nano_lit, AggregateExt};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
 
@@ -1256,6 +1304,73 @@ mod tests {
             ),
             (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
             (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
+            (
+                interval_month_day_nano_lit("3 NANOSECOND"),
+                r#"INTERVAL '3 NANOSECOND'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1000 NANOSECOND"),
+                r#"INTERVAL '1 MICROSECOND'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1000000 NANOSECOND"),
+                r#"INTERVAL '1 MILLISECOND'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1000000000 NANOSECOND"),
+                r#"INTERVAL '1 SECOND'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1001001001 NANOSECOND"),
+                r#"INTERVAL '1 SECOND 1 MILLISECOND 1 MICROSECOND 1 NANOSECOND'"#,
+            ),
+            (
+                interval_month_day_nano_lit("3 SECOND"),
+                r#"INTERVAL '3 SECOND'"#,
+            ),
+            (
+                interval_month_day_nano_lit("3 MINUTE"),
+                r#"INTERVAL '3 MINUTE'"#,
+            ),
+            (
+                interval_month_day_nano_lit("3 HOUR"),
+                r#"INTERVAL '3 HOUR'"#,
+            ),
+            (
+                interval_month_day_nano_lit("3 HOUR 10 MINUTE 20 SECOND"),
+                r#"INTERVAL '3 HOUR 10 MINUTE 20 SECOND'"#,
+            ),
+            (interval_month_day_nano_lit("3 DAY"), r#"INTERVAL '3 DAY'"#),
+            (
+                interval_month_day_nano_lit("3 MONTH"),
+                r#"INTERVAL '3 MONTH'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1 MONTH 1 DAY 10 SECOND"),
+                r#"INTERVAL '1 MONTH 1 DAY 10 SECOND'"#,
+            ),
+            (
+                interval_month_day_nano_lit("15 MONTH"),
+                r#"INTERVAL '15 MONTH'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1.5 MONTH"),
+                r#"INTERVAL '1 MONTH 15 DAY'"#,
+            ),
+            (
+                interval_month_day_nano_lit("-3 MONTH"),
+                r#"INTERVAL '-3 MONTH'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1 MONTH")
+                    .add(interval_month_day_nano_lit("1 DAY")),
+                r#"(INTERVAL '1 MONTH' + INTERVAL '1 DAY')"#,
+            ),
+            (
+                interval_month_day_nano_lit("1 MONTH")
+                    .sub(interval_month_day_nano_lit("1 DAY")),
+                r#"(INTERVAL '1 MONTH' - INTERVAL '1 DAY')"#,
+            ),
         ];
 
         for (expr, expected) in tests {
