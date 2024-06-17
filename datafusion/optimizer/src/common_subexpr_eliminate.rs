@@ -856,7 +856,7 @@ mod test {
 
     use datafusion_expr::logical_plan::{table_scan, JoinType};
 
-    use datafusion_expr::{avg, lit, logical_plan::builder::LogicalPlanBuilder};
+    use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_expr::{
         grouping_set, AccumulatorFactoryFunction, AggregateUDF, Signature,
         SimpleAggregateUDF, Volatility,
@@ -864,7 +864,7 @@ mod test {
 
     use crate::optimizer::OptimizerContext;
     use crate::test::*;
-    use datafusion_expr::test::function_stub::sum;
+    use datafusion_expr::test::function_stub::{avg, sum};
 
     use super::*;
 

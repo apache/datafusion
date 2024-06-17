@@ -32,6 +32,8 @@ use arrow::datatypes::{
     DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use datafusion_common::{exec_err, not_impl_err, Result};
+use crate::type_coercion::aggregates::NUMERICS;
+use crate::Volatility::Immutable;
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
@@ -74,6 +76,19 @@ create_func!(Count, count_udaf);
 pub fn count(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new_udf(
         count_udaf(),
+        vec![expr],
+        false,
+        None,
+        None,
+        None,
+    ))
+}
+
+create_func!(Average, avg_udaf);
+
+pub fn avg(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        crate::test::function_stub::avg_udaf(),
         vec![expr],
         false,
         None,
@@ -271,5 +286,54 @@ impl AggregateUDFImpl for Count {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
+    }
+}
+
+
+/// Testing stub implementation of AVERAGE aggregate
+#[derive(Debug)]
+pub struct Average {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl Average {
+    pub fn new() -> Self {
+        Self {
+            aliases: vec![String::from("mean")],
+            signature: Signature::uniform(1, NUMERICS.to_vec(), Immutable)
+        }
+    }
+}
+
+impl Default for Average {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AggregateUDFImpl for Average {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "average"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        todo!()
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        todo!()
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }
