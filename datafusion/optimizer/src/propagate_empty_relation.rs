@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::JoinType::Inner;
+use datafusion_common::JoinType;
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::LogicalPlan;
@@ -94,13 +94,9 @@ impl OptimizerRule for PropagateEmptyRelation {
                 Ok(Transformed::no(LogicalPlan::CrossJoin(join.clone())))
             }
 
-            LogicalPlan::Join(ref join) if join.join_type == Inner => {
+            LogicalPlan::Join(ref join) => {
                 // TODO: For Join, more join type need to be careful:
-                // For LeftOuter/LeftSemi/LeftAnti Join, only the left side is empty, the Join result is empty.
-                // For LeftSemi Join, if the right side is empty, the Join result is empty.
                 // For LeftAnti Join, if the right side is empty, the Join result is left side(should exclude null ??).
-                // For RightOuter/RightSemi/RightAnti Join, only the right side is empty, the Join result is empty.
-                // For RightSemi Join, if the left side is empty, the Join result is empty.
                 // For RightAnti Join, if the left side is empty, the Join result is right side(should exclude null ??).
                 // For Full Join, only both sides are empty, the Join result is empty.
                 // For LeftOut/Full Join, if the right side is empty, the Join can be eliminated with a Projection with left side
@@ -108,15 +104,52 @@ impl OptimizerRule for PropagateEmptyRelation {
                 // For RightOut/Full Join, if the left side is empty, the Join can be eliminated with a Projection with right side
                 // columns + left side columns replaced with null values.
                 let (left_empty, right_empty) = binary_plan_children_is_empty(&plan)?;
-                if left_empty || right_empty {
-                    return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
-                        EmptyRelation {
+
+                match join.join_type {
+                    JoinType::Inner if left_empty || right_empty => Ok(Transformed::yes(
+                        LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
                             schema: join.schema.clone(),
-                        },
-                    )));
+                        }),
+                    )),
+                    JoinType::Left if left_empty => Ok(Transformed::yes(
+                        LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: join.schema.clone(),
+                        }),
+                    )),
+                    JoinType::Right if right_empty => Ok(Transformed::yes(
+                        LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: join.schema.clone(),
+                        }),
+                    )),
+                    JoinType::LeftSemi if left_empty || right_empty => Ok(
+                        Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: join.schema.clone(),
+                        })),
+                    ),
+                    JoinType::RightSemi if left_empty || right_empty => Ok(
+                        Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: join.schema.clone(),
+                        })),
+                    ),
+                    JoinType::LeftAnti if left_empty => Ok(Transformed::yes(
+                        LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: join.schema.clone(),
+                        }),
+                    )),
+                    JoinType::RightAnti if right_empty => Ok(Transformed::yes(
+                        LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: join.schema.clone(),
+                        }),
+                    )),
+                    _ => Ok(Transformed::no(LogicalPlan::Join(join.clone()))),
                 }
-                Ok(Transformed::no(LogicalPlan::Join(join.clone())))
             }
             LogicalPlan::Aggregate(ref agg) => {
                 if !agg.group_expr.is_empty() {
@@ -394,6 +427,182 @@ mod tests {
         let plan = LogicalPlanBuilder::from(left)
             .cross_join(right)?
             .filter(col("a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_left_join_empty_left_table() -> Result<()> {
+        let left_table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(left_table_scan)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan).build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                right,
+                JoinType::Left,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_right_join_empty_right_table() -> Result<()> {
+        let left_table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(left_table_scan).build()?;
+
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                right,
+                JoinType::Right,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_left_semi_join_empty_left_table() -> Result<()> {
+        let left_table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(left_table_scan)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan).build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                right,
+                JoinType::LeftSemi,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_left_semi_join_empty_right_table() -> Result<()> {
+        let left_table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(left_table_scan).build()?;
+
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                right,
+                JoinType::LeftSemi,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_right_semi_join_empty_right_table() -> Result<()> {
+        let left_table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(left_table_scan).build()?;
+
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                right,
+                JoinType::RightSemi,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_right_semi_join_empty_left_table() -> Result<()> {
+        let left_table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(left_table_scan)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan).build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                right,
+                JoinType::RightSemi,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_right_anti_join_empty_right_table() -> Result<()> {
+        let left_table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(left_table_scan).build()?;
+
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                right,
+                JoinType::RightAnti,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_left_anti_join_empty_left_table() -> Result<()> {
+        let left_table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(left_table_scan)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan).build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                right,
+                JoinType::LeftAnti,
+                vec![Column::from_name("a".to_string())],
+            )?
             .build()?;
 
         let expected = "EmptyRelation";
