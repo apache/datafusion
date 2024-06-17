@@ -81,12 +81,18 @@ async fn simple_select() -> Result<()> {
 #[tokio::test]
 #[ignore = "This test is failing because the translation of the substrait plan to the physical plan is not implemented yet"]
 async fn simple_select_alltypes() -> Result<()> {
-    roundtrip_alltypes("SELECT * FROM alltypes_plain").await
+    roundtrip_alltypes("SELECT bool_col, int_col FROM alltypes_plain").await
 }
 
 #[tokio::test]
 async fn wildcard_select() -> Result<()> {
     roundtrip("SELECT * FROM data").await
+}
+
+#[tokio::test]
+#[ignore = "This test is failing because the translation of the substrait plan to the physical plan is not implemented yet"]
+async fn wildcard_select_alltypes() -> Result<()> {
+    roundtrip_alltypes("SELECT * FROM alltypes_plain").await
 }
 
 async fn roundtrip(sql: &str) -> Result<()> {

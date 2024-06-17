@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::common::not_impl_err;
+use datafusion::common::{not_impl_err, substrait_err};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
@@ -57,15 +57,11 @@ pub async fn from_substrait_rel(
             }
 
             let Some(schema) = read.base_schema.as_ref() else {
-                return Err(DataFusionError::Substrait(
-                    "Missing base_schema".to_string(),
-                ));
+                return substrait_err!("Missing base schema in the read");
             };
 
             let Some(r#struct) = schema.r#struct.as_ref() else {
-                return Err(DataFusionError::Substrait(
-                    "Missing struct in the base schema".to_string(),
-                ));
+                return substrait_err!("Missing struct in the schema");
             };
 
             match schema
@@ -162,9 +158,7 @@ pub async fn from_substrait_rel(
 
 fn to_field(name: &String, r#type: &Type) -> Result<Field> {
     let Some(kind) = r#type.kind.as_ref() else {
-        return Err(DataFusionError::Substrait(
-            "Missing kind in the type".to_string(),
-        ));
+        return substrait_err!("Missing kind in the type with name {}", name);
     };
 
     let mut nullable = false;
@@ -185,10 +179,11 @@ fn to_field(name: &String, r#type: &Type) -> Result<Field> {
             nullable = is_nullable(string.nullability);
             Ok(DataType::Utf8)
         }
-        _ => Err(DataFusionError::Substrait(format!(
+        _ => substrait_err!(
             "Unsupported kind: {:?} in the type with name {}",
-            kind, name
-        ))),
+            kind,
+            name
+        ),
     }?;
 
     Ok(Field::new(name, data_type, nullable))
@@ -196,7 +191,7 @@ fn to_field(name: &String, r#type: &Type) -> Result<Field> {
 
 fn is_nullable(nullability: i32) -> bool {
     let Ok(nullability) = Nullability::try_from(nullability) else {
-        return false;
+        return true;
     };
 
     match nullability {
