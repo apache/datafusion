@@ -303,24 +303,12 @@ macro_rules! get_statistics {
             ))),
             DataType::Int8 => Ok(Arc::new(Int8Array::from_iter(
                 [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
-                    x.and_then(|x| {
-                        if let Ok(v) = i8::try_from(*x) {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })
+                    x.and_then(|x| i8::try_from(*x).ok())
                 }),
             ))),
             DataType::Int16 => Ok(Arc::new(Int16Array::from_iter(
                 [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
-                    x.and_then(|x| {
-                        if let Ok(v) = i16::try_from(*x) {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })
+                    x.and_then(|x| i16::try_from(*x).ok())
                 }),
             ))),
             DataType::Int32 => Ok(Arc::new(Int32Array::from_iter(
@@ -331,24 +319,12 @@ macro_rules! get_statistics {
             ))),
             DataType::UInt8 => Ok(Arc::new(UInt8Array::from_iter(
                 [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
-                    x.and_then(|x| {
-                        if let Ok(v) = u8::try_from(*x) {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })
+                    x.and_then(|x| u8::try_from(*x).ok())
                 }),
             ))),
             DataType::UInt16 => Ok(Arc::new(UInt16Array::from_iter(
                 [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
-                    x.and_then(|x| {
-                        if let Ok(v) = u16::try_from(*x) {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })
+                    x.and_then(|x| u16::try_from(*x).ok())
                 }),
             ))),
             DataType::UInt32 => Ok(Arc::new(UInt32Array::from_iter(
