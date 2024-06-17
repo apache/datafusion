@@ -20,7 +20,8 @@ pub use datafusion_physical_expr_common::aggregate::AggregateExpr;
 pub(crate) mod array_agg;
 pub(crate) mod array_agg_distinct;
 pub(crate) mod array_agg_ordered;
-pub(crate) mod average;
+// FIXME: Delete Me
+mod average;
 pub(crate) mod bit_and_or_xor;
 pub(crate) mod bool_and_or;
 pub(crate) mod correlation;

@@ -139,7 +139,6 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
         match agg_fun {
             protobuf::AggregateFunction::Min => Self::Min,
             protobuf::AggregateFunction::Max => Self::Max,
-            protobuf::AggregateFunction::Avg => Self::Avg,
             protobuf::AggregateFunction::BitAnd => Self::BitAnd,
             protobuf::AggregateFunction::BitOr => Self::BitOr,
             protobuf::AggregateFunction::BitXor => Self::BitXor,
