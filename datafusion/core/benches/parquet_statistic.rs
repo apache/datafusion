@@ -84,7 +84,7 @@ fn create_parquet_file(
         )])),
     };
 
-    let mut props = WriterProperties::builder();
+    let mut props = WriterProperties::builder().set_max_row_group_size(row_groups);
     if let Some(limit) = data_page_row_count_limit {
         props = props
             .set_data_page_row_count_limit(*limit)
@@ -210,11 +210,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             let reader = ArrowReaderBuilder::try_new_with_options(file, options).unwrap();
             let metadata = reader.metadata();
             let row_groups = metadata.row_groups();
-            let row_group_indices = row_groups
-                .iter()
-                .enumerate()
-                .map(|(i, _)| i)
-                .collect::<Vec<_>>();
+            let row_group_indices: Vec<_> = (0..row_groups.len()).collect();
 
             let statistic_type = if data_page_row_count_limit.is_some() {
                 "data page"
