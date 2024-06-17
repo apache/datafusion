@@ -846,6 +846,9 @@ query I rowsort
 3
 400
 
+query error DataFusion error: Error during planning: table 'datafusion\.public\.cte' not found
+(WITH cte AS (SELECT 400) SELECT * FROM cte) UNION (SELECT * FROM cte);
+
 # Test duplicate CTE names in different subqueries in the FROM clause.
 query III rowsort
 SELECT * FROM 
