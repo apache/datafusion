@@ -30,11 +30,9 @@ impl StringAgg {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Uniform(2, vec![DataType::LargeUtf8, DataType::Utf8]),
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
+                    TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Null]),
-                    TypeSignature::Exact(vec![DataType::Utf8, DataType::LargeUtf8]),
-                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Null]),
                 ],
                 Volatility::Immutable,
             ),
@@ -69,13 +67,14 @@ impl AggregateUDFImpl for StringAgg {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         return match &acc_args.input_exprs[1] {
             Expr::Literal(ScalarValue::Utf8(Some(delimiter)))
-            | Expr::Literal(ScalarValue::LargeUtf8(Some(delimiter))) => Ok(Box::new(
-                StringAggAccumulator::new(delimiter, acc_args.input_type.clone()),
-            )),
-            Expr::Literal(ScalarValue::Null) => Ok(Box::new(StringAggAccumulator::new(
-                "",
-                acc_args.input_type.clone(),
-            ))),
+            | Expr::Literal(ScalarValue::LargeUtf8(Some(delimiter))) => {
+                Ok(Box::new(StringAggAccumulator::new(delimiter)))
+            }
+            Expr::Literal(ScalarValue::Utf8(None))
+            | Expr::Literal(ScalarValue::LargeUtf8(None))
+            | Expr::Literal(ScalarValue::Null) => {
+                Ok(Box::new(StringAggAccumulator::new("")))
+            }
             _ => not_impl_err!(
                 "StringAgg not supported for delimiter {}",
                 &acc_args.input_exprs[1]
@@ -92,32 +91,23 @@ impl AggregateUDFImpl for StringAgg {
 pub(crate) struct StringAggAccumulator {
     values: Option<String>,
     delimiter: String,
-    input_type: DataType,
 }
 
 impl StringAggAccumulator {
-    pub fn new(delimiter: &str, input_type: DataType) -> Self {
+    pub fn new(delimiter: &str) -> Self {
         Self {
             values: None,
             delimiter: delimiter.to_string(),
-            input_type,
         }
     }
 }
 
 impl Accumulator for StringAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let string_array: Vec<_> = match self.input_type {
-            DataType::Utf8 => as_generic_string_array::<i32>(&values[0])?
-                .iter()
-                .filter_map(|v| v.as_ref().map(ToString::to_string))
-                .collect(),
-            DataType::LargeUtf8 => as_generic_string_array::<i64>(&values[0])?
-                .iter()
-                .filter_map(|v| v.as_ref().map(ToString::to_string))
-                .collect(),
-            _ => unreachable!(),
-        };
+        let string_array: Vec<_> = as_generic_string_array::<i64>(&values[0])?
+            .iter()
+            .filter_map(|v| v.as_ref().map(ToString::to_string))
+            .collect();
         if !string_array.is_empty() {
             let s = string_array.join(self.delimiter.as_str());
             let v = self.values.get_or_insert("".to_string());
