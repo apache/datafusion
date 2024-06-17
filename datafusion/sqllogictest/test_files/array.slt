@@ -3771,20 +3771,52 @@ select array_to_string(make_array(), ',')
 
 # array to string dictionary
 statement ok
-CREATE TABLE table1 AS VALUES (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
+CREATE TABLE table1 AS VALUES
+  (1, 'foo'),
+  (3, 'bar'),
+  (1, 'foo'),
+  (2, NULL),
+  (NULL, 'baz')
+  ;
 
+# expect 1-3-2-1 (dictionary values should be repeated)
 query T
-SELECT array_to_string(array_agg(column2),',') FROM (SELECT column2 FROM table1);
+SELECT array_to_string(array_agg(column1),'-')
+FROM (
+  SELECT arrow_cast(column1, 'Dictionary(Int32, Int32)') as column1
+  FROM table1
+);
 ----
-foo,bar
+1-3-2
+
+# expect foo,bar,foo,baz (dictionary values should be repeated)
+query T
+SELECT array_to_string(array_agg(column2),',')
+FROM (
+  SELECT arrow_cast(column2, 'Dictionary(Int32, Utf8)') as column2
+  FROM table1
+);
+----
+foo,bar,baz
+
+# Expect only values that are in the group
+query I?T
+SELECT column1, array_agg(column2), array_to_string(array_agg(column2),',')
+FROM (
+  SELECT column1, arrow_cast(column2, 'Dictionary(Int32, Utf8)') as column2
+  FROM table1
+)
+GROUP BY column1
+ORDER BY column1;
+----
+1 [foo, foo] foo,bar,baz
+2 [] foo,bar,baz
+3 [bar] foo,bar,baz
+NULL [baz] foo,bar,baz
 
 statement ok
-CREATE TABLE table2 AS VALUES (1, arrow_cast(1, 'Dictionary(Int32, Int32)')), (2, arrow_cast(2, 'Dictionary(Int32, Int32)'));
+drop table table1;
 
-query T
-SELECT array_to_string(array_agg(column2),'-') FROM (SELECT column2 FROM table2);
-----
-1-2
 
 ## array_union (aliases: `list_union`)
 
