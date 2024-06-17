@@ -146,30 +146,7 @@ async fn main() {
                 JOIN driver_actions ON trip_actions.trip_id = driver_actions.trip_id 
                 WHERE trip_actions.franz_canonical_timestamp >= driver_actions.franz_canonical_timestamp - INTERVAL '5 SECONDS' 
                 AND trip_actions.franz_canonical_timestamp <= driver_actions.franz_canonical_timestamp + INTERVAL '5 SECONDS'",).await.unwrap();
-
-    //let plan = df.create_physical_plan().await.unwrap();
-    println!("{}", df.logical_plan().display());
-
     let writer = PrettyPrinter::new().unwrap();
     let sink = Box::new(writer) as Box<dyn FranzSink>;
     let _ = df.sink(sink).await;
-}
-
-async fn print_stream(windowed_df: &DataFrame) {
-    let mut stream: std::pin::Pin<Box<dyn RecordBatchStream + Send>> =
-        windowed_df.clone().execute_stream().await.unwrap();
-
-    // for _ in 1..100 {
-    loop {
-        let rb = stream.next().await.transpose();
-        // println!("{:?}", rb);
-        if let Ok(Some(batch)) = rb {
-            if batch.num_rows() > 0 {
-                println!(
-                    "{}",
-                    arrow::util::pretty::pretty_format_batches(&[batch]).unwrap()
-                );
-            }
-        }
-    }
 }
