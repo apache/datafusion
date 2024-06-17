@@ -255,11 +255,7 @@ impl<'a> Test<'a> {
                 .offset_index()
                 .expect("File should have column offset indices");
 
-            let row_group_indices = row_groups
-                .iter()
-                .enumerate()
-                .map(|(i, _)| i)
-                .collect::<Vec<_>>();
+            let row_group_indices: Vec<_> = (0..row_groups.len()).collect();
 
             let min = converter
                 .data_page_mins(
