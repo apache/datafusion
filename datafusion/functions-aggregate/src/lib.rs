@@ -135,6 +135,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         approx_distinct::approx_distinct_udaf(),
         approx_percentile_cont_udaf(),
         approx_percentile_cont_with_weight_udaf(),
+        string_agg::string_agg_udaf(),
     ]
 }
 

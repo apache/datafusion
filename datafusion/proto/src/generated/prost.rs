@@ -1959,7 +1959,7 @@ pub enum AggregateFunction {
     /// REGR_SXX = 32;
     /// REGR_SYY = 33;
     /// REGR_SXY = 34;
-    StringAgg = 35,
+    /// STRING_AGG = 35;
     NthValueAgg = 36,
 }
 impl AggregateFunction {
@@ -1980,7 +1980,6 @@ impl AggregateFunction {
             AggregateFunction::BitXor => "BIT_XOR",
             AggregateFunction::BoolAnd => "BOOL_AND",
             AggregateFunction::BoolOr => "BOOL_OR",
-            AggregateFunction::StringAgg => "STRING_AGG",
             AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
     }
@@ -1998,7 +1997,6 @@ impl AggregateFunction {
             "BIT_XOR" => Some(Self::BitXor),
             "BOOL_AND" => Some(Self::BoolAnd),
             "BOOL_OR" => Some(Self::BoolOr),
-            "STRING_AGG" => Some(Self::StringAgg),
             "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
         }

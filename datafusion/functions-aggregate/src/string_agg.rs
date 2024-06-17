@@ -9,6 +9,14 @@ use datafusion_expr::{
 };
 use std::any::Any;
 
+make_udaf_expr_and_func!(
+    StringAgg,
+    string_agg,
+    expression,
+    "Concatenates the values of string expressions and places separator values between them",
+    string_agg_udaf
+);
+
 /// STRING_AGG aggregate expression
 #[derive(Debug)]
 pub struct StringAgg {
@@ -30,7 +38,7 @@ impl StringAgg {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec!["string_agg".to_string()],
+            aliases: vec![],
         }
     }
 }
@@ -47,7 +55,7 @@ impl AggregateUDFImpl for StringAgg {
     }
 
     fn name(&self) -> &str {
-        "STRING_AGG"
+        "string_agg"
     }
 
     fn signature(&self) -> &Signature {
@@ -129,13 +137,4 @@ impl Accumulator for StringAggAccumulator {
             + self.values.as_ref().map(|v| v.capacity()).unwrap_or(0)
             + self.delimiter.capacity()
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::datatypes::*;
-    use arrow::record_batch::RecordBatch;
-    use datafusion_expr::type_coercion::aggregates::coerce_types;
-    use datafusion_expr::AggregateFunction;
 }
