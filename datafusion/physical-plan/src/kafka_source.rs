@@ -192,7 +192,6 @@ impl PartitionStream for KafkaStreamRead {
                     Err(err) => println!("result err {:?}", err),
                 }
             }
-            Ok(())
         });
         builder.build()
     }
