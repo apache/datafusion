@@ -548,6 +548,8 @@ macro_rules! make_data_page_stats_iterator {
     };
 }
 
+make_data_page_stats_iterator!(MinInt32DataPageStatsIterator, min, Index::INT32, i32);
+make_data_page_stats_iterator!(MaxInt32DataPageStatsIterator, max, Index::INT32, i32);
 make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min, Index::INT64, i64);
 make_data_page_stats_iterator!(MaxInt64DataPageStatsIterator, max, Index::INT64, i64);
 
@@ -555,6 +557,29 @@ macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
         paste! {
             match $data_type {
+                Some(DataType::Int8) => Ok(Arc::new(
+                    Int8Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| i8::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::Int16) => Ok(Arc::new(
+                    Int16Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| i16::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::Int32) => Ok(Arc::new(Int32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
                 _ => unimplemented!()
             }
@@ -636,12 +661,17 @@ where
 /// of parquet page [`Index`]'es to an [`ArrayRef`]
 ///
 /// The returned Array is an [`UInt64Array`]
-pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<ArrayRef>
+pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<UInt64Array>
 where
     I: Iterator<Item = (usize, &'a Index)>,
 {
     let iter = iterator.flat_map(|(len, index)| match index {
         Index::NONE => vec![None; len],
+        Index::INT32(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
         Index::INT64(native_index) => native_index
             .indexes
             .iter()
@@ -650,7 +680,7 @@ where
         _ => unimplemented!(),
     });
 
-    Ok(Arc::new(UInt64Array::from_iter(iter)))
+    Ok(UInt64Array::from_iter(iter))
 }
 
 /// Extracts Parquet statistics as Arrow arrays
@@ -846,22 +876,22 @@ impl<'a> StatisticsConverter<'a> {
     /// The returned array is [`UInt64Array`]
     ///
     /// See docs on [`Self::row_group_mins`] for details
-    pub fn row_group_null_counts<I>(&self, metadatas: I) -> Result<ArrayRef>
+    pub fn row_group_null_counts<I>(&self, metadatas: I) -> Result<UInt64Array>
     where
         I: IntoIterator<Item = &'a RowGroupMetaData>,
     {
         let Some(parquet_index) = self.parquet_index else {
             let num_row_groups = metadatas.into_iter().count();
-            return Ok(Arc::new(UInt64Array::from_iter(
+            return Ok(UInt64Array::from_iter(
                 std::iter::repeat(None).take(num_row_groups),
-            )));
+            ));
         };
 
         let null_counts = metadatas
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
             .map(|s| s.map(|s| s.null_count()));
-        Ok(Arc::new(UInt64Array::from_iter(null_counts)))
+        Ok(UInt64Array::from_iter(null_counts))
     }
 
     /// Extract the minimum values from Data Page statistics.
@@ -980,14 +1010,15 @@ impl<'a> StatisticsConverter<'a> {
         column_page_index: &ParquetColumnIndex,
         column_offset_index: &ParquetOffsetIndex,
         row_group_indices: I,
-    ) -> Result<ArrayRef>
+    ) -> Result<UInt64Array>
     where
         I: IntoIterator<Item = &'a usize>,
     {
-        let data_type = self.arrow_field.data_type();
-
         let Some(parquet_index) = self.parquet_index else {
-            return Ok(self.make_null_array(data_type, row_group_indices));
+            let num_row_groups = row_group_indices.into_iter().count();
+            return Ok(UInt64Array::from_iter(
+                std::iter::repeat(None).take(num_row_groups),
+            ));
         };
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
@@ -1020,21 +1051,19 @@ impl<'a> StatisticsConverter<'a> {
     pub fn data_page_row_counts<I>(
         &self,
         column_offset_index: &ParquetOffsetIndex,
-        row_group_metadatas: &[RowGroupMetaData],
+        row_group_metadatas: &'a [RowGroupMetaData],
         row_group_indices: I,
-    ) -> Result<ArrayRef>
+    ) -> Result<Option<UInt64Array>>
     where
         I: IntoIterator<Item = &'a usize>,
     {
-        let data_type = self.arrow_field.data_type();
-
         let Some(parquet_index) = self.parquet_index else {
-            return Ok(self.make_null_array(data_type, row_group_indices));
+            // no matching column found in parquet_index;
+            // thus we cannot extract page_locations in order to determine
+            // the row count on a per DataPage basis.
+            return Ok(None);
         };
 
-        // `offset_index[row_group_number][column_number][page_number]` holds
-        // the [`PageLocation`] corresponding to page `page_number` of column
-        // `column_number`of row group `row_group_number`.
         let mut row_count_total = Vec::new();
         for rg_idx in row_group_indices {
             let page_locations = &column_offset_index[*rg_idx][parquet_index];
@@ -1043,9 +1072,8 @@ impl<'a> StatisticsConverter<'a> {
                 Some(loc[1].first_row_index as u64 - loc[0].first_row_index as u64)
             });
 
-            let num_rows_in_row_group = &row_group_metadatas[*rg_idx].num_rows();
-
             // append the last page row count
+            let num_rows_in_row_group = &row_group_metadatas[*rg_idx].num_rows();
             let row_count_per_page = row_count_per_page
                 .chain(std::iter::once(Some(
                     *num_rows_in_row_group as u64
@@ -1056,7 +1084,7 @@ impl<'a> StatisticsConverter<'a> {
             row_count_total.extend(row_count_per_page);
         }
 
-        Ok(Arc::new(UInt64Array::from_iter(row_count_total)))
+        Ok(Some(UInt64Array::from_iter(row_count_total)))
     }
 
     /// Returns a null array of data_type with one element per row group
