@@ -2268,12 +2268,6 @@ mod test {
             ))
         );
         assert_eq!(
-            find_df_window_func("avg"),
-            Some(WindowFunctionDefinition::AggregateFunction(
-                aggregate_function::AggregateFunction::Avg
-            ))
-        );
-        assert_eq!(
             find_df_window_func("cume_dist"),
             Some(WindowFunctionDefinition::BuiltInWindowFunction(
                 built_in_window_function::BuiltInWindowFunction::CumeDist

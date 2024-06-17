@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::compute::sum;
 use arrow::datatypes::{Float64Type, UInt64Type};
 use arrow_schema::DataType;
 use datafusion_common::ScalarValue;
-use arrow::compute::sum;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::Volatility::Immutable;
+use datafusion_expr::{Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature};
+use std::any::Any;
 
 make_udaf_expr_and_func!(
     Average,
@@ -44,7 +44,7 @@ impl Average {
     pub fn new() -> Self {
         Self {
             signature: Signature::uniform(1, NUMERICS.to_vec(), Immutable),
-            aliases: vec![String::from("mean")]
+            aliases: vec![String::from("mean")],
         }
     }
 }
@@ -72,7 +72,10 @@ impl AggregateUDFImpl for Average {
         todo!()
     }
 
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> datafusion_common::Result<Box<dyn Accumulator>> {
+    fn accumulator(
+        &self,
+        acc_args: AccumulatorArgs,
+    ) -> datafusion_common::Result<Box<dyn Accumulator>> {
         todo!()
     }
 
@@ -80,7 +83,10 @@ impl AggregateUDFImpl for Average {
         true
     }
 
-    fn create_groups_accumulator(&self, args: AccumulatorArgs) -> datafusion_common::Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> datafusion_common::Result<Box<dyn GroupsAccumulator>> {
         todo!()
     }
 
@@ -89,11 +95,10 @@ impl AggregateUDFImpl for Average {
     }
 }
 
-
 #[derive(Debug)]
 pub struct AvgAccumulator {
     sum: Option<f64>,
-    count: u64
+    count: u64,
 }
 
 impl Accumulator for AvgAccumulator {
@@ -110,10 +115,9 @@ impl Accumulator for AvgAccumulator {
 
     fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
         Ok(ScalarValue::Float64(
-            self.sum.map(|f| f / self.count as f64)
+            self.sum.map(|f| f / self.count as f64),
         ))
     }
-
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
@@ -122,7 +126,7 @@ impl Accumulator for AvgAccumulator {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.count),
-            ScalarValue::Float64(self.sum)
+            ScalarValue::Float64(self.sum),
         ])
     }
 

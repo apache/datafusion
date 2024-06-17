@@ -33,7 +33,6 @@ use arrow::datatypes::Schema;
 use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
-use crate::aggregate::average::Avg;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 
@@ -118,12 +117,6 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::Avg, false) => {
-            Arc::new(Avg::new(input_phy_exprs[0].clone(), name, data_type))
-        }
-        (AggregateFunction::Avg, true) => {
-            return not_impl_err!("AVG(DISTINCT) aggregations are not available");
-        }
         (AggregateFunction::Correlation, false) => {
             Arc::new(expressions::Correlation::new(
                 input_phy_exprs[0].clone(),
