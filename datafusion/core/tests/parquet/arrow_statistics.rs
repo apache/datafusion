@@ -550,16 +550,11 @@ async fn test_int_32() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
         column_name: "i32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
 
-// BUG: ignore this test for now
-// https://github.com/apache/datafusion/issues/10585
-// Note that the file has 4 columns named "i8", "i16", "i32", "i64".
-//   - The tests on column i32 and i64 passed.
-//   - The tests on column i8 and i16 failed.
 #[tokio::test]
 async fn test_int_16() {
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
@@ -573,16 +568,6 @@ async fn test_int_16() {
     Test {
         reader: &reader,
         // mins are [-5, -4, 0, 5]
-        // BUG: not sure why this returns same data but in Int32Array type even though I debugged and the columns name is "i16" an its data is Int16
-        // My debugging tells me the bug is either at:
-        //   1. The new code to get "iter". See the code in this PR with
-        // // Get an iterator over the column statistics
-        // let iter = row_groups
-        // .iter()
-        // .map(|x| x.column(parquet_idx).statistics());
-        //    OR
-        //   2. in the function (and/or its marco) `pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>` here
-        //      https://github.com/apache/datafusion/blob/ea023e2d4878240eece870cf4b346c7a0667aeed/datafusion/core/src/datasource/physical_plan/parquet/statistics.rs#L179
         expected_min: Arc::new(Int16Array::from(vec![-5, -4, 0, 5])), // panic here because the actual data is Int32Array
         // maxes are [-1, 0, 4, 9]
         expected_max: Arc::new(Int16Array::from(vec![-1, 0, 4, 9])),
@@ -591,13 +576,11 @@ async fn test_int_16() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
         column_name: "i16",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
 
-// BUG (same as above): ignore this test for now
-// https://github.com/apache/datafusion/issues/10585
 #[tokio::test]
 async fn test_int_8() {
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
@@ -611,7 +594,6 @@ async fn test_int_8() {
     Test {
         reader: &reader,
         // mins are [-5, -4, 0, 5]
-        // BUG: not sure why this returns same data but in Int32Array even though I debugged and the columns name is "i8" an its data is Int8
         expected_min: Arc::new(Int8Array::from(vec![-5, -4, 0, 5])), // panic here because the actual data is Int32Array
         // maxes are [-1, 0, 4, 9]
         expected_max: Arc::new(Int8Array::from(vec![-1, 0, 4, 9])),
@@ -620,7 +602,7 @@ async fn test_int_8() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
         column_name: "i8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
