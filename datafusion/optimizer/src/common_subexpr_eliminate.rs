@@ -193,7 +193,7 @@ impl CommonSubexprEliminate {
         transformed |= rewrite_exprs.transformed;
 
         let new_input = self.rewrite(input, config)?;
-        transformed |= rewrite_exprs.transformed;
+        transformed |= new_input.transformed;
         let mut new_input = new_input.data;
 
         if !common_exprs.is_empty() {
