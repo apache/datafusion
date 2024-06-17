@@ -303,7 +303,6 @@ impl<'a> Test<'a> {
                 .data_page_row_counts(column_offset_index, row_groups, &row_group_indices)
                 .unwrap();
             // https://github.com/apache/datafusion/issues/10926
-            let expected_row_counts: ArrayRef = Arc::new(expected_row_counts.clone());
             assert_eq!(
                 &row_counts, &expected_row_counts,
                 "{column_name}: Mismatch with expected row counts. \

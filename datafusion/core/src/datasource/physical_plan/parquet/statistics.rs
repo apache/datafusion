@@ -1043,21 +1043,20 @@ impl<'a> StatisticsConverter<'a> {
     pub fn data_page_row_counts<I>(
         &self,
         column_offset_index: &ParquetOffsetIndex,
-        row_group_metadatas: &[RowGroupMetaData],
+        row_group_metadatas: &'a [RowGroupMetaData],
         row_group_indices: I,
-    ) -> Result<ArrayRef>
+    ) -> Result<UInt64Array>
     where
         I: IntoIterator<Item = &'a usize>,
     {
-        let data_type = self.arrow_field.data_type();
-
         let Some(parquet_index) = self.parquet_index else {
-            return Ok(self.make_null_array(data_type, row_group_indices));
+            // no matching column found in parquet_index;
+            // thus we cannot extract page_locations in order to determine
+            // the row count on a per DataPage basis.
+            // We use `row_group_row_counts` instead.
+            return Self::row_group_row_counts(row_group_metadatas);
         };
 
-        // `offset_index[row_group_number][column_number][page_number]` holds
-        // the [`PageLocation`] corresponding to page `page_number` of column
-        // `column_number`of row group `row_group_number`.
         let mut row_count_total = Vec::new();
         for rg_idx in row_group_indices {
             let page_locations = &column_offset_index[*rg_idx][parquet_index];
@@ -1066,9 +1065,8 @@ impl<'a> StatisticsConverter<'a> {
                 Some(loc[1].first_row_index as u64 - loc[0].first_row_index as u64)
             });
 
-            let num_rows_in_row_group = &row_group_metadatas[*rg_idx].num_rows();
-
             // append the last page row count
+            let num_rows_in_row_group = &row_group_metadatas[*rg_idx].num_rows();
             let row_count_per_page = row_count_per_page
                 .chain(std::iter::once(Some(
                     *num_rows_in_row_group as u64
@@ -1079,7 +1077,7 @@ impl<'a> StatisticsConverter<'a> {
             row_count_total.extend(row_count_per_page);
         }
 
-        Ok(Arc::new(UInt64Array::from_iter(row_count_total)))
+        Ok(UInt64Array::from_iter(row_count_total))
     }
 
     /// Returns a null array of data_type with one element per row group
