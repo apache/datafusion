@@ -129,7 +129,7 @@ pub fn check_plan_sanity(
         match child_sort_req {
             None => (),
             Some(child_sort_req) => {
-                if !child_eq_props.ordering_satisfy_requirement(&child_sort_req) {
+                if !child_eq_props.ordering_satisfy_requirement(child_sort_req) {
                     return plan_err!(
                         "Child: {:?} does not satisfy parent order requirements",
                         child
@@ -140,7 +140,7 @@ pub fn check_plan_sanity(
 
         if !child
             .output_partitioning()
-            .satisfy(&child_dist_req, child_eq_props)
+            .satisfy(child_dist_req, child_eq_props)
         {
             return plan_err!(
                 "Child: {:?} does not satisfy parent distribution requirements",
@@ -182,6 +182,7 @@ mod tests {
         ]))
     }
 
+    /// Check if sanity checker should accept or reject plans.
     fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
         let sanity_checker = SanityCheckPlan::new();
         let opts = ConfigOptions::default();
@@ -466,7 +467,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Tests that plan is valid when a single partition requirement
+    /// A valid when a single partition requirement
     /// is satisfied.
     async fn test_global_limit_single_partition() -> Result<()> {
         let schema = create_test_schema();
@@ -485,7 +486,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Tests that plan is invalid when a single partition requirement
+    /// An invalid plan when a single partition requirement
     /// is not satisfied.
     async fn test_global_limit_multi_partition() -> Result<()> {
         let schema = create_test_schema();
@@ -505,7 +506,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Tests that when a plan has no requirements it is valid.
+    /// A plan with no requirements should satisfy.
     async fn test_local_limit() -> Result<()> {
         let schema = create_test_schema();
         let source = memory_exec(&schema);
@@ -523,7 +524,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Tests that plan is valid when the sort requirements are satisfied.
+    /// Valid plan with multiple children satisfy both order and distribution.
     async fn test_sort_merge_join_satisfied() -> Result<()> {
         let schema1 = create_test_schema();
         let schema2 = create_test_schema2();
@@ -567,7 +568,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Tests that plan is valid when the sort requirements are satisfied.
+    /// Invalid case when the order is not satisfied by the 2nd
+    /// child.
     async fn test_sort_merge_join_order_missing() -> Result<()> {
         let schema1 = create_test_schema();
         let schema2 = create_test_schema2();
@@ -612,7 +614,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Tests that plan is valid when the sort requirements are satisfied.
+    /// Invalid case when the distribution is not satisfied by the 2nd
+    /// child.
     async fn test_sort_merge_join_dist_missing() -> Result<()> {
         let schema1 = create_test_schema();
         let schema2 = create_test_schema2();
@@ -630,7 +633,7 @@ mod tests {
             Partitioning::Hash(vec![left_jcol.clone()], 10),
         )?);
 
-        // Missing hash partitioning here..
+        // Missing hash partitioning on right child.
 
         let join_on = vec![(left_jcol as _, right_jcol as _)];
         let join_ty = JoinType::Inner;
