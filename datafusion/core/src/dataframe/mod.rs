@@ -23,6 +23,7 @@ mod parquet;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
@@ -379,6 +380,19 @@ impl DataFrame {
             session_state: self.session_state,
             plan,
         })
+    }
+
+    /// Return a new DataFrame that adds the result of evaluating one or more
+    /// window functions ([`Expr::WindowFunction`]) to the existing columns
+    pub fn franz_window(
+        self,
+        window_exprs: Vec<Expr>,
+        window_length: Duration,
+    ) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .franz_window(window_exprs, window_length)?
+            .build()?;
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Returns a new `DataFrame` with a limited number of rows.
