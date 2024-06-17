@@ -79,12 +79,27 @@ async fn simple_select() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "This test is failing because the translation of the substrait plan to the physical plan is not implemented yet"]
+async fn simple_select_alltypes() -> Result<()> {
+    roundtrip_alltypes("SELECT * FROM alltypes_plain").await
+}
+
+#[tokio::test]
 async fn wildcard_select() -> Result<()> {
     roundtrip("SELECT * FROM data").await
 }
 
 async fn roundtrip(sql: &str) -> Result<()> {
     let ctx = create_parquet_context().await?;
+    let df = ctx.sql(sql).await?;
+
+    roundtrip_parquet(df).await?;
+
+    Ok(())
+}
+
+async fn roundtrip_alltypes(sql: &str) -> Result<()> {
+    let ctx = create_all_types_context().await?;
     let df = ctx.sql(sql).await?;
 
     roundtrip_parquet(df).await?;
@@ -123,6 +138,19 @@ async fn create_parquet_context() -> Result<SessionContext> {
 
     ctx.register_parquet("data", "tests/testdata/data.parquet", explicit_options)
         .await?;
+
+    Ok(ctx)
+}
+
+async fn create_all_types_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+
+    let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_plain",
+        &format!("{testdata}/alltypes_plain.parquet"),
+        ParquetReadOptions::default(),
+    ).await?;
 
     Ok(ctx)
 }
