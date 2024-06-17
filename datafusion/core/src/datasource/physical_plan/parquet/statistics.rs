@@ -548,6 +548,8 @@ macro_rules! make_data_page_stats_iterator {
     };
 }
 
+make_data_page_stats_iterator!(MinInt32DataPageStatsIterator, min, Index::INT32, i32);
+make_data_page_stats_iterator!(MaxInt32DataPageStatsIterator, max, Index::INT32, i32);
 make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min, Index::INT64, i64);
 make_data_page_stats_iterator!(MaxInt64DataPageStatsIterator, max, Index::INT64, i64);
 
@@ -555,6 +557,29 @@ macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
         paste! {
             match $data_type {
+                Some(DataType::Int8) => Ok(Arc::new(
+                    Int8Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| i8::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::Int16) => Ok(Arc::new(
+                    Int16Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| i16::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::Int32) => Ok(Arc::new(Int32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
                 _ => unimplemented!()
             }
@@ -642,6 +667,11 @@ where
 {
     let iter = iterator.flat_map(|(len, index)| match index {
         Index::NONE => vec![None; len],
+        Index::INT32(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
         Index::INT64(native_index) => native_index
             .indexes
             .iter()
