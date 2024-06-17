@@ -150,7 +150,8 @@ async fn create_all_types_context() -> Result<SessionContext> {
         "alltypes_plain",
         &format!("{testdata}/alltypes_plain.parquet"),
         ParquetReadOptions::default(),
-    ).await?;
+    )
+    .await?;
 
     Ok(ctx)
 }
