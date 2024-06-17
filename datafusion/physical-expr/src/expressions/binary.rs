@@ -628,8 +628,8 @@ impl BinaryExpr {
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
             StringConcat => binary_string_array_op!(left, right, concat_elements),
-            AtArrow | ArrowAt => {
-                unreachable!("ArrowAt and AtArrow should be rewritten to function")
+            Question | Arrow | LongArrow | AtArrow | ArrowAt => {
+                unreachable!("Question, Arrow, LongArrow, ArrowAt, and AtArrow should be rewritten to function")
             }
         }
     }

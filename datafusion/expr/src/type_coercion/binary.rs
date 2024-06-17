@@ -121,6 +121,30 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 )
             })
         }
+        Question => {
+            match (lhs, rhs) {
+                (Utf8 | LargeUtf8, Utf8 | LargeUtf8) => Ok(Signature{
+                    lhs: lhs.clone(),
+                    rhs: rhs.clone(),
+                    ret: Boolean,
+                }),
+                _ => Err(plan_datafusion_err!(
+                    "Cannot coerce question operation {lhs} {op} {rhs} to vaild types"
+                ))
+            }
+        }
+        Arrow | LongArrow => {
+            match (lhs, rhs) {
+                (Utf8 | LargeUtf8, Utf8 | LargeUtf8) => Ok(Signature{
+                    lhs: lhs.clone(),
+                    rhs: rhs.clone(),
+                    ret: lhs.clone(),
+                }),
+                _ => Err(plan_datafusion_err!(
+                    "Cannot coerce arrow operation {lhs} {op} {rhs} to vaild types"
+                ))
+            }
+        }
         AtArrow | ArrowAt => {
             // ArrowAt and AtArrow check for whether one array is contained in another.
             // The result type is boolean. Signature::comparison defines this signature.

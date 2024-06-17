@@ -707,6 +707,9 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "RegexNotIMatch" => Ok(Operator::RegexNotIMatch),
         "RegexNotMatch" => Ok(Operator::RegexNotMatch),
         "StringConcat" => Ok(Operator::StringConcat),
+        "Question" => Ok(Operator::Question),
+        "Arrow" => Ok(Operator::Arrow),
+        "LongArrow" => Ok(Operator::LongArrow),
         "AtArrow" => Ok(Operator::AtArrow),
         "ArrowAt" => Ok(Operator::ArrowAt),
         other => Err(proto_error(format!(

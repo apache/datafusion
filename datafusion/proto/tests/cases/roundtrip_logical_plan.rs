@@ -1595,6 +1595,9 @@ fn roundtrip_binary_op() {
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
+    test(Operator::Question);
+    test(Operator::Arrow);
+    test(Operator::LongArrow);
     test(Operator::ArrowAt);
     test(Operator::AtArrow);
     test(Operator::StringConcat);

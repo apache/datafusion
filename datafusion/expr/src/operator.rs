@@ -89,6 +89,12 @@ pub enum Operator {
     BitwiseShiftLeft,
     /// String concat
     StringConcat,
+    /// Question, like `?`
+    Question,
+    /// Arrow, like `->`
+    Arrow,
+    /// Long arrow, like `->>`
+    LongArrow,
     /// At arrow, like `@>`
     AtArrow,
     /// Arrow at, like `<@`
@@ -129,6 +135,9 @@ impl Operator {
             | Operator::BitwiseShiftRight
             | Operator::BitwiseShiftLeft
             | Operator::StringConcat
+            | Operator::Question
+            | Operator::Arrow
+            | Operator::LongArrow
             | Operator::AtArrow
             | Operator::ArrowAt => None,
         }
@@ -213,7 +222,10 @@ impl Operator {
             | Operator::BitwiseXor
             | Operator::BitwiseShiftRight
             | Operator::BitwiseShiftLeft
-            | Operator::StringConcat => None,
+            | Operator::StringConcat
+            | Operator::Question
+            | Operator::Arrow
+            | Operator::LongArrow => None,
         }
     }
 
@@ -247,6 +259,9 @@ impl Operator {
             | Operator::BitwiseShiftRight
             | Operator::BitwiseXor
             | Operator::StringConcat
+            | Operator::Question
+            | Operator::Arrow
+            | Operator::LongArrow
             | Operator::AtArrow
             | Operator::ArrowAt => 0,
         }
@@ -285,6 +300,9 @@ impl fmt::Display for Operator {
             Operator::BitwiseShiftRight => ">>",
             Operator::BitwiseShiftLeft => "<<",
             Operator::StringConcat => "||",
+            Operator::Question => "?",
+            Operator::Arrow => "->",
+            Operator::LongArrow => "->>",
             Operator::AtArrow => "@>",
             Operator::ArrowAt => "<@",
         };
