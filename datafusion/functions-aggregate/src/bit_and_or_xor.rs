@@ -29,22 +29,25 @@ use arrow::datatypes::{
 };
 use arrow_schema::Field;
 
-use datafusion_common::cast::as_list_array;
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::cast::as_list_array;
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
-/// `accumulator_helper` is a macro accepting (ArrowPrimitiveType, BitwiseOperationType)
+/// `accumulator_helper` is a macro accepting (ArrowPrimitiveType, BitwiseOperationType, bool)
 macro_rules! accumulator_helper {
-    ($t:ty, $opr:expr) => {
+    ($t:ty, $opr:expr, $is_distinct: expr) => {
         match $opr {
             BitwiseOperationType::And => Ok(Box::<BitAndAccumulator<$t>>::default()),
             BitwiseOperationType::Or => Ok(Box::<BitOrAccumulator<$t>>::default()),
-            BitwiseOperationType::Xor => Ok(Box::<BitXorAccumulator<$t>>::default()),
-            BitwiseOperationType::XorDistinct => {
-                Ok(Box::<DistinctBitXorAccumulator<$t>>::default())
+            BitwiseOperationType::Xor => {
+                if $is_distinct {
+                    Ok(Box::<DistinctBitXorAccumulator<$t>>::default())
+                } else {
+                    Ok(Box::<BitXorAccumulator<$t>>::default())
+                }
             }
         }
     };
@@ -54,17 +57,18 @@ macro_rules! accumulator_helper {
 ///
 /// `args` is [AccumulatorArgs]
 /// `opr` is [BitwiseOperationType]
+/// `is_distinct` is boolean value indicating whether the operation is distinct or not.
 macro_rules! downcast_bitwise_accumulator {
-    ($args:ident, $opr:expr) => {
+    ($args:ident, $opr:expr, $is_distinct: expr) => {
         match $args.data_type {
-            DataType::Int8 => accumulator_helper!(Int8Type, $opr),
-            DataType::Int16 => accumulator_helper!(Int16Type, $opr),
-            DataType::Int32 => accumulator_helper!(Int32Type, $opr),
-            DataType::Int64 => accumulator_helper!(Int64Type, $opr),
-            DataType::UInt8 => accumulator_helper!(UInt8Type, $opr),
-            DataType::UInt16 => accumulator_helper!(UInt16Type, $opr),
-            DataType::UInt32 => accumulator_helper!(UInt32Type, $opr),
-            DataType::UInt64 => accumulator_helper!(UInt64Type, $opr),
+            DataType::Int8 => accumulator_helper!(Int8Type, $opr, $is_distinct),
+            DataType::Int16 => accumulator_helper!(Int16Type, $opr, $is_distinct),
+            DataType::Int32 => accumulator_helper!(Int32Type, $opr, $is_distinct),
+            DataType::Int64 => accumulator_helper!(Int64Type, $opr, $is_distinct),
+            DataType::UInt8 => accumulator_helper!(UInt8Type, $opr, $is_distinct),
+            DataType::UInt16 => accumulator_helper!(UInt16Type, $opr, $is_distinct),
+            DataType::UInt32 => accumulator_helper!(UInt32Type, $opr, $is_distinct),
+            DataType::UInt64 => accumulator_helper!(UInt64Type, $opr, $is_distinct),
             _ => {
                 not_impl_err!(
                     "{} not supported for {}: {}",
@@ -84,7 +88,7 @@ macro_rules! downcast_bitwise_accumulator {
 /// `OPR_TYPE` is an expression that evaluates to the type of bitwise operation to be performed.
 macro_rules! make_bitwise_udaf_expr_and_func {
     ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $OPR_TYPE:expr) => {
-        make_udaf_expr!($EXPR_FN, expr_y expr_x, concat!("Returns the bitwise", stringify!($OPR_TYPE), "of a group of values"), $AGGREGATE_UDF_FN);
+        make_udaf_expr!($EXPR_FN, expr_x, concat!("Returns the bitwise", stringify!($OPR_TYPE), "of a group of values"), $AGGREGATE_UDF_FN);
         create_func!($EXPR_FN, $AGGREGATE_UDF_FN, BitwiseOperation::new($OPR_TYPE, stringify!($EXPR_FN)));
     }
 }
@@ -99,8 +103,6 @@ enum BitwiseOperationType {
     And,
     Or,
     Xor,
-    /// `XorDistinct` is a variation of the bitwise XOR operation specifically for the scenario of BitXor DISTINCT
-    XorDistinct,
 }
 
 impl Display for BitwiseOperationType {
@@ -143,7 +145,7 @@ impl AggregateUDFImpl for BitwiseOperation {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let arg_type = &arg_types[0];
-        if !is_bit_and_or_xor_support_arg_type(arg_type) {
+        if !arg_type.is_integer() {
             return exec_err!(
                 "[return_type] {} not supported for {}",
                 self.operation.to_string(),
@@ -154,11 +156,7 @@ impl AggregateUDFImpl for BitwiseOperation {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if acc_args.is_distinct && self.operation == BitwiseOperationType::Xor {
-            downcast_bitwise_accumulator!(acc_args, BitwiseOperationType::XorDistinct)
-        } else {
-            downcast_bitwise_accumulator!(acc_args, self.operation)
-        }
+        downcast_bitwise_accumulator!(acc_args, self.operation, acc_args.is_distinct)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
@@ -393,8 +391,4 @@ where
         }
         Ok(())
     }
-}
-
-fn is_bit_and_or_xor_support_arg_type(arg_type: &DataType) -> bool {
-    INTEGERS.contains(arg_type)
 }
