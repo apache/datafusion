@@ -1045,7 +1045,7 @@ impl<'a> StatisticsConverter<'a> {
         column_offset_index: &ParquetOffsetIndex,
         row_group_metadatas: &'a [RowGroupMetaData],
         row_group_indices: I,
-    ) -> Result<UInt64Array>
+    ) -> Result<Option<UInt64Array>>
     where
         I: IntoIterator<Item = &'a usize>,
     {
@@ -1053,8 +1053,7 @@ impl<'a> StatisticsConverter<'a> {
             // no matching column found in parquet_index;
             // thus we cannot extract page_locations in order to determine
             // the row count on a per DataPage basis.
-            // We use `row_group_row_counts` instead.
-            return Self::row_group_row_counts(row_group_metadatas);
+            return Ok(None);
         };
 
         let mut row_count_total = Vec::new();
@@ -1077,7 +1076,7 @@ impl<'a> StatisticsConverter<'a> {
             row_count_total.extend(row_count_per_page);
         }
 
-        Ok(UInt64Array::from_iter(row_count_total))
+        Ok(Some(UInt64Array::from_iter(row_count_total)))
     }
 
     /// Returns a null array of data_type with one element per row group
