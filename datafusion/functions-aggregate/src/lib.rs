@@ -70,6 +70,7 @@ pub mod approx_median;
 pub mod approx_percentile_cont;
 pub mod approx_percentile_cont_with_weight;
 pub mod bit_and_or_xor;
+pub mod average;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;
@@ -109,6 +110,7 @@ pub mod expr_fn {
     pub use super::sum::sum;
     pub use super::variance::var_pop;
     pub use super::variance::var_sample;
+    pub use super::average::avg;
 }
 
 /// Returns all default aggregate functions
@@ -141,6 +143,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         bit_and_or_xor::bit_and_udaf(),
         bit_and_or_xor::bit_or_udaf(),
         bit_and_or_xor::bit_xor_udaf(),
+        average::avg_udaf(),
     ]
 }
 
