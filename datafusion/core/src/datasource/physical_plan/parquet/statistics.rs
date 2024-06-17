@@ -660,7 +660,7 @@ where
 /// of parquet page [`Index`]'es to an [`ArrayRef`]
 ///
 /// The returned Array is an [`UInt64Array`]
-pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<ArrayRef>
+pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<UInt64Array>
 where
     I: Iterator<Item = (usize, &'a Index)>,
 {
@@ -674,7 +674,7 @@ where
         _ => unimplemented!(),
     });
 
-    Ok(Arc::new(UInt64Array::from_iter(iter)))
+    Ok(UInt64Array::from_iter(iter))
 }
 
 /// Extracts Parquet statistics as Arrow arrays
@@ -868,21 +868,22 @@ impl<'a> StatisticsConverter<'a> {
     /// Extract the null counts from row group statistics in [`RowGroupMetaData`]
     ///
     /// See docs on [`Self::row_group_mins`] for details
-    pub fn row_group_null_counts<I>(&self, metadatas: I) -> Result<ArrayRef>
+    pub fn row_group_null_counts<I>(&self, metadatas: I) -> Result<UInt64Array>
     where
         I: IntoIterator<Item = &'a RowGroupMetaData>,
     {
-        let data_type = self.arrow_field.data_type();
-
         let Some(parquet_index) = self.parquet_index else {
-            return Ok(self.make_null_array(data_type, metadatas));
+            let num_row_groups = metadatas.into_iter().count();
+            return Ok(UInt64Array::from_iter(
+                std::iter::repeat(None).take(num_row_groups),
+            ));
         };
 
         let null_counts = metadatas
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
             .map(|s| s.map(|s| s.null_count()));
-        Ok(Arc::new(UInt64Array::from_iter(null_counts)))
+        Ok(UInt64Array::from_iter(null_counts))
     }
 
     /// Extract the minimum values from Data Page statistics.
@@ -1001,14 +1002,15 @@ impl<'a> StatisticsConverter<'a> {
         column_page_index: &ParquetColumnIndex,
         column_offset_index: &ParquetOffsetIndex,
         row_group_indices: I,
-    ) -> Result<ArrayRef>
+    ) -> Result<UInt64Array>
     where
         I: IntoIterator<Item = &'a usize>,
     {
-        let data_type = self.arrow_field.data_type();
-
         let Some(parquet_index) = self.parquet_index else {
-            return Ok(self.make_null_array(data_type, row_group_indices));
+            let num_row_groups = row_group_indices.into_iter().count();
+            return Ok(UInt64Array::from_iter(
+                std::iter::repeat(None).take(num_row_groups),
+            ));
         };
 
         let iter = row_group_indices.into_iter().map(|rg_index| {

@@ -381,6 +381,7 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
         self.statistics_converter(column)
             .and_then(|c| c.row_group_null_counts(self.metadata_iter()))
             .ok()
+            .map(|counts| Arc::new(counts) as ArrayRef)
     }
 
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {

@@ -243,7 +243,6 @@ impl<'a> Test<'a> {
         } = self;
 
         let row_groups = reader.metadata().row_groups();
-        let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
 
         if check.data_page() {
             let column_page_index = reader
