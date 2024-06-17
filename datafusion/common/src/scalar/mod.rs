@@ -5446,12 +5446,16 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
         );
 
+        // needs https://github.com/apache/arrow-rs/issues/5893
+        /*
         check_scalar_cast(ScalarValue::Utf8(None), DataType::Utf8View);
         check_scalar_cast(ScalarValue::from("foo"), DataType::Utf8View);
         check_scalar_cast(
             ScalarValue::from("larger than 12 bytes string"),
             DataType::Utf8View,
         );
+
+         */
     }
 
     // mimics how casting work on scalar values by `casting` `scalar` to `desired_type`
