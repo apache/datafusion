@@ -153,3 +153,20 @@ large_futures = "warn"
 
 [workspace.lints.rust]
 unused_imports = "deny"
+
+## Temporary arrow-rs patch until 52.1.0 is released
+
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c"}
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c"}
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c"}
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c"}
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "72467c670f8c38130e4743347407f1a542e59e0c" }
