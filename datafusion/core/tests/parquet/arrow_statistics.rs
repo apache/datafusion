@@ -210,6 +210,28 @@ struct Test<'a> {
 
 impl<'a> Test<'a> {
     fn run(self) {
+        let converter = StatisticsConverter::try_new(
+            self.column_name,
+            self.reader.schema(),
+            self.reader.parquet_schema(),
+        )
+        .unwrap();
+
+        self.run_checks(converter);
+    }
+
+    fn run_with_schema(self, schema: &Schema) {
+        let converter = StatisticsConverter::try_new(
+            self.column_name,
+            schema,
+            self.reader.parquet_schema(),
+        )
+        .unwrap();
+
+        self.run_checks(converter);
+    }
+
+    fn run_checks(self, converter: StatisticsConverter) {
         let Self {
             reader,
             expected_min,
@@ -219,13 +241,6 @@ impl<'a> Test<'a> {
             column_name,
             check,
         } = self;
-
-        let converter = StatisticsConverter::try_new(
-            column_name,
-            reader.schema(),
-            reader.parquet_schema(),
-        )
-        .unwrap();
 
         let row_groups = reader.metadata().row_groups();
         let expected_null_counts = Arc::new(expected_null_counts) as ArrayRef;
@@ -1989,4 +2004,39 @@ async fn test_column_not_found() {
         check: Check::RowGroup,
     }
     .run_col_not_found();
+}
+
+#[tokio::test]
+async fn test_column_non_existent() {
+    // Create a schema with an additional column
+    // that will not have a matching parquet index
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("i8", DataType::Int8, true),
+        Field::new("i16", DataType::Int16, true),
+        Field::new("i32", DataType::Int32, true),
+        Field::new("i64", DataType::Int64, true),
+        Field::new("i_do_not_exist", DataType::Int64, true),
+    ]));
+
+    let reader = TestReader {
+        scenario: Scenario::Int,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Int64Array::from(vec![None, None, None, None])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Int64Array::from(vec![None, None, None, None])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![None, None, None, None]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: UInt64Array::from(vec![5, 5, 5, 5]),
+        column_name: "i_do_not_exist",
+        check: Check::Both,
+    }
+    .run_with_schema(&schema);
 }
