@@ -120,7 +120,6 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Correlation => Self::Correlation,
             AggregateFunction::Grouping => Self::Grouping,
             AggregateFunction::NthValue => Self::NthValueAgg,
-            AggregateFunction::StringAgg => Self::StringAgg,
         }
     }
 }
@@ -392,9 +391,6 @@ pub fn serialize_expr(
                     AggregateFunction::Grouping => protobuf::AggregateFunction::Grouping,
                     AggregateFunction::NthValue => {
                         protobuf::AggregateFunction::NthValueAgg
-                    }
-                    AggregateFunction::StringAgg => {
-                        protobuf::AggregateFunction::StringAgg
                     }
                 };
 

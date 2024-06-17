@@ -149,7 +149,6 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Correlation => Self::Correlation,
             protobuf::AggregateFunction::Grouping => Self::Grouping,
             protobuf::AggregateFunction::NthValueAgg => Self::NthValue,
-            protobuf::AggregateFunction::StringAgg => Self::StringAgg,
         }
     }
 }

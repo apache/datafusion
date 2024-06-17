@@ -48,7 +48,7 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, NotExpr, NthValue,
-    PhysicalSortExpr, StringAgg,
+    PhysicalSortExpr,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::DataSinkExec;
@@ -355,13 +355,6 @@ fn rountrip_aggregate() -> Result<()> {
             false,
             Vec::new(),
             Vec::new(),
-        ))],
-        // STRING_AGG
-        vec![Arc::new(StringAgg::new(
-            cast(col("b", &schema)?, &schema, DataType::Utf8)?,
-            lit(ScalarValue::Utf8(Some(",".to_string()))),
-            "STRING_AGG(name, ',')".to_string(),
-            DataType::Utf8,
         ))],
     ];
 
