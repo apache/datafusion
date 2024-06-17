@@ -43,7 +43,7 @@ use datafusion::{
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use half::f16;
 use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
@@ -1349,6 +1349,7 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
     let props = WriterProperties::builder()
         .set_max_row_group_size(row_per_group)
         .set_bloom_filter_enabled(true)
+        .set_statistics_enabled(EnabledStatistics::Page)
         .build();
 
     let batches = create_data_batch(scenario);

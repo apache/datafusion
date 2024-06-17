@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 use crate::utils;
-use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
+use crate::{type_coercion::aggregates::*, Signature, Volatility};
 
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
@@ -45,18 +45,8 @@ pub enum AggregateFunction {
     NthValue,
     /// Correlation
     Correlation,
-    /// Approximate continuous percentile function
-    ApproxPercentileCont,
-    /// Approximate continuous percentile function with weight
-    ApproxPercentileContWithWeight,
     /// Grouping
     Grouping,
-    /// Bit And
-    BitAnd,
-    /// Bit Or
-    BitOr,
-    /// Bit Xor
-    BitXor,
     /// Bool And
     BoolAnd,
     /// Bool Or
@@ -75,12 +65,7 @@ impl AggregateFunction {
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
             Correlation => "CORR",
-            ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
-            ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
             Grouping => "GROUPING",
-            BitAnd => "BIT_AND",
-            BitOr => "BIT_OR",
-            BitXor => "BIT_XOR",
             BoolAnd => "BOOL_AND",
             BoolOr => "BOOL_OR",
             StringAgg => "STRING_AGG",
@@ -100,9 +85,6 @@ impl FromStr for AggregateFunction {
         Ok(match name {
             // general
             "avg" => AggregateFunction::Avg,
-            "bit_and" => AggregateFunction::BitAnd,
-            "bit_or" => AggregateFunction::BitOr,
-            "bit_xor" => AggregateFunction::BitXor,
             "bool_and" => AggregateFunction::BoolAnd,
             "bool_or" => AggregateFunction::BoolOr,
             "max" => AggregateFunction::Max,
@@ -113,11 +95,6 @@ impl FromStr for AggregateFunction {
             "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
-            // approximate
-            "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
-            "approx_percentile_cont_with_weight" => {
-                AggregateFunction::ApproxPercentileContWithWeight
-            }
             // other
             "grouping" => AggregateFunction::Grouping,
             _ => {
@@ -155,9 +132,6 @@ impl AggregateFunction {
                 // The coerced_data_types is same with input_types.
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::BitAnd
-            | AggregateFunction::BitOr
-            | AggregateFunction::BitXor => Ok(coerced_data_types[0].clone()),
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Ok(DataType::Boolean)
             }
@@ -170,10 +144,6 @@ impl AggregateFunction {
                 coerced_data_types[0].clone(),
                 true,
             )))),
-            AggregateFunction::ApproxPercentileCont => Ok(coerced_data_types[0].clone()),
-            AggregateFunction::ApproxPercentileContWithWeight => {
-                Ok(coerced_data_types[0].clone())
-            }
             AggregateFunction::Grouping => Ok(DataType::Int32),
             AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
             AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
@@ -214,11 +184,6 @@ impl AggregateFunction {
                     .collect::<Vec<_>>();
                 Signature::uniform(1, valid, Volatility::Immutable)
             }
-            AggregateFunction::BitAnd
-            | AggregateFunction::BitOr
-            | AggregateFunction::BitXor => {
-                Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
-            }
             AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
                 Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
             }
@@ -230,39 +195,6 @@ impl AggregateFunction {
             AggregateFunction::Correlation => {
                 Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
             }
-            AggregateFunction::ApproxPercentileCont => {
-                let mut variants =
-                    Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
-                // Accept any numeric value paired with a float64 percentile
-                for num in NUMERICS {
-                    variants
-                        .push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
-                    // Additionally accept an integer number of centroids for T-Digest
-                    for int in INTEGERS {
-                        variants.push(TypeSignature::Exact(vec![
-                            num.clone(),
-                            DataType::Float64,
-                            int.clone(),
-                        ]))
-                    }
-                }
-
-                Signature::one_of(variants, Volatility::Immutable)
-            }
-            AggregateFunction::ApproxPercentileContWithWeight => Signature::one_of(
-                // Accept any numeric value paired with a float64 percentile
-                NUMERICS
-                    .iter()
-                    .map(|t| {
-                        TypeSignature::Exact(vec![
-                            t.clone(),
-                            t.clone(),
-                            DataType::Float64,
-                        ])
-                    })
-                    .collect(),
-                Volatility::Immutable,
-            ),
             AggregateFunction::StringAgg => {
                 Signature::uniform(2, STRINGS.to_vec(), Volatility::Immutable)
             }

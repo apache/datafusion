@@ -315,6 +315,7 @@ mod tests {
             &[expr],
             &[],
             &[],
+            &[],
             schema,
             name,
             false,
@@ -402,6 +403,7 @@ mod tests {
         let aggr_expr = vec![create_aggregate_expr(
             &sum_udaf(),
             &[col("b", &schema)?],
+            &[],
             &[],
             &[],
             &schema,
