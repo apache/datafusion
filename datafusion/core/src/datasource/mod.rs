@@ -36,6 +36,9 @@ pub mod stream;
 pub mod streaming;
 pub mod view;
 
+#[cfg(feature = "franz")]
+pub mod continuous;
+
 // backwards compatibility
 pub use datafusion_execution::object_store;
 
