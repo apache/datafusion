@@ -37,6 +37,7 @@ DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 #CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --profile release-nonlto"}  # for faster iterations
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
+VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
 
 usage() {
     echo "
@@ -46,6 +47,7 @@ Usage:
 $0 data [benchmark]
 $0 run [benchmark]
 $0 compare <branch1> <branch2>
+$0 venv
 
 **********
 Examples:
@@ -62,6 +64,7 @@ DATAFUSION_DIR=/source/datafusion ./bench.sh run tpch
 data:         Generates or downloads data needed for benchmarking
 run:          Runs the named benchmark
 compare:      Compares results from benchmark runs
+venv:         Creates new venv (unless already exists) and installs compare's requirements into it
 
 **********
 * Benchmarks
@@ -84,7 +87,8 @@ DATA_DIR            directory to store datasets
 CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
-PREFER_HASH_JOIN    Prefer hash join algorithm(default true)
+PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
+VENV_PATH           Python venv to use for compare and venv commands (default ./venv, override by <your-venv>/bin/activate)
 "
     exit 1
 }
@@ -243,6 +247,9 @@ main() {
         compare)
             compare_benchmarks "$ARG2" "$ARG3"
             ;;
+        venv)
+            setup_venv
+            ;;
         "")
             usage
             ;;
@@ -302,7 +309,7 @@ data_tpch() {
     else
         echo " creating parquet files using benchmark binary ..."
         pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --prefer_hash_join ${PREFER_HASH_JOIN} --output "${TPCH_DIR}" --format parquet
+        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}" --format parquet
         popd > /dev/null
     fi
 }
@@ -405,7 +412,7 @@ run_clickbench_1() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
-    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --prefer_hash_join ${PREFER_HASH_JOIN} --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
 }
 
  # Runs the clickbench benchmark with the partitioned parquet files
@@ -413,7 +420,7 @@ run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --prefer_hash_join ${PREFER_HASH_JOIN} --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
 }
 
 # Runs the clickbench "extended" benchmark with a single large parquet file
@@ -421,7 +428,7 @@ run_clickbench_extended() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
-    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --prefer_hash_join ${PREFER_HASH_JOIN} --queries-path "${SCRIPT_DIR}/queries/clickbench/extended.sql" -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended.sql" -o ${RESULTS_FILE}
 }
 
 compare_benchmarks() {
@@ -448,12 +455,17 @@ compare_benchmarks() {
             echo "--------------------"
             echo "Benchmark ${bench}"
             echo "--------------------"
-            python3 "${SCRIPT_DIR}"/compare.py "${RESULTS_FILE1}" "${RESULTS_FILE2}"
+            PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py "${RESULTS_FILE1}" "${RESULTS_FILE2}"
         else
             echo "Note: Skipping ${RESULTS_FILE1} as ${RESULTS_FILE2} does not exist"
         fi
     done
 
+}
+
+setup_venv() {
+    python3 -m venv $VIRTUAL_ENV
+    PATH=$VIRTUAL_ENV/bin:$PATH python3 -m pip install -r requirements.txt
 }
 
 # And start the process up

@@ -982,18 +982,16 @@ pub async fn from_substrait_agg_func(
     let function_name = substrait_fun_name((**function_name).as_str());
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
+        // deal with situation that count(*) got no arguments
+        if fun.name() == "COUNT" && args.is_empty() {
+            args.push(Expr::Literal(ScalarValue::Int64(Some(1))));
+        }
+
         Ok(Arc::new(Expr::AggregateFunction(
             expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by, None),
         )))
     } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
     {
-        match &fun {
-            // deal with situation that count(*) got no arguments
-            aggregate_function::AggregateFunction::Count if args.is_empty() => {
-                args.push(Expr::Literal(ScalarValue::Int64(Some(1))));
-            }
-            _ => {}
-        }
         Ok(Arc::new(Expr::AggregateFunction(
             expr::AggregateFunction::new(fun, args, distinct, filter, order_by, None),
         )))
@@ -1395,7 +1393,9 @@ fn from_substrait_type(
                 })?;
                 let field = Arc::new(Field::new_list_field(
                     from_substrait_type(inner_type, dfs_names, name_idx)?,
-                    is_substrait_type_nullable(inner_type)?,
+                    // We ignore Substrait's nullability here to match to_substrait_literal 
+                    // which always creates nullable lists
+                    true,
                 ));
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::List(field)),

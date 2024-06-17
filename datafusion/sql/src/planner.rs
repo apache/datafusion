@@ -439,6 +439,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SQLDataType::Bytea => Ok(DataType::Binary),
             SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+            SQLDataType::Struct(fields) => {
+                let fields = fields
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, field)| {
+                        let data_type = self.convert_data_type(&field.field_type)?;
+                        let field_name = match &field.field_name{
+                            Some(ident) => ident.clone(),
+                            None => Ident::new(format!("c{idx}"))
+                        };
+                        Ok(Arc::new(Field::new(
+                            self.normalizer.normalize(field_name),
+                            data_type,
+                            true,
+                        )))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(DataType::Struct(Fields::from(fields)))
+            }
             // Explicitly list all other types so that if sqlparser
             // adds/changes the `SQLDataType` the compiler will tell us on upgrade
             // and avoid bugs like https://github.com/apache/datafusion/issues/3059
@@ -472,7 +491,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Bytes(_)
             | SQLDataType::Int64
             | SQLDataType::Float64
-            | SQLDataType::Struct(_)
             | SQLDataType::JSONB
             | SQLDataType::Unspecified
             => not_impl_err!(

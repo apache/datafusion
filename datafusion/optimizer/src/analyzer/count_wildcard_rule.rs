@@ -25,9 +25,7 @@ use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionDefinition, WindowFunction,
 };
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_expr::{
-    aggregate_function, lit, Expr, LogicalPlan, WindowFunctionDefinition,
-};
+use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
@@ -56,37 +54,19 @@ fn is_wildcard(expr: &Expr) -> bool {
 }
 
 fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
-    match aggregate_function {
+    matches!(aggregate_function,
         AggregateFunction {
             func_def: AggregateFunctionDefinition::UDF(udf),
             args,
             ..
-        } if udf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]) => true,
-        AggregateFunction {
-            func_def:
-                AggregateFunctionDefinition::BuiltIn(
-                    datafusion_expr::aggregate_function::AggregateFunction::Count,
-                ),
-            args,
-            ..
-        } if args.len() == 1 && is_wildcard(&args[0]) => true,
-        _ => false,
-    }
+        } if udf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]))
 }
 
 fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
     let args = &window_function.args;
-    match window_function.fun {
-        WindowFunctionDefinition::AggregateFunction(
-            aggregate_function::AggregateFunction::Count,
-        ) if args.len() == 1 && is_wildcard(&args[0]) => true,
+    matches!(window_function.fun,
         WindowFunctionDefinition::AggregateUDF(ref udaf)
-            if udaf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]) =>
-        {
-            true
-        }
-        _ => false,
-    }
+            if udaf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]))
 }
 
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -121,13 +101,15 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
-    use datafusion_expr::test::function_stub::sum;
     use datafusion_expr::{
-        col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
-        out_ref_col, scalar_subquery, wildcard, AggregateFunction, WindowFrame,
-        WindowFrameBound, WindowFrameUnits,
+        col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
+        out_ref_col, scalar_subquery, wildcard, WindowFrame, WindowFrameBound,
+        WindowFrameUnits,
     };
+    use datafusion_functions_aggregate::count::count_udaf;
     use std::sync::Arc;
+
+    use datafusion_functions_aggregate::expr_fn::{count, sum};
 
     fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(
@@ -239,7 +221,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+                WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 vec![wildcard()],
                 vec![],
                 vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
