@@ -109,6 +109,9 @@ fn create_parquet_file(
             TestTypes::Dictionary => make_dict_batch(),
         };
         if data_page_row_count_limit.is_some() {
+            // Send batches one at a time. This allows the
+            // writer to apply the page limit, that is only
+            // checked on RecordBatch boundaries.
             for i in 0..batch.num_rows() {
                 writer.write(&batch.slice(i, 1)).unwrap();
             }
