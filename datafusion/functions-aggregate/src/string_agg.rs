@@ -84,7 +84,7 @@ impl AggregateUDFImpl for StringAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        return match &acc_args.input_exprs[1] {
+        match &acc_args.input_exprs[1] {
             Expr::Literal(ScalarValue::Utf8(Some(delimiter)))
             | Expr::Literal(ScalarValue::LargeUtf8(Some(delimiter))) => {
                 Ok(Box::new(StringAggAccumulator::new(delimiter)))
@@ -98,7 +98,7 @@ impl AggregateUDFImpl for StringAgg {
                 "StringAgg not supported for delimiter {}",
                 &acc_args.input_exprs[1]
             ),
-        };
+        }
     }
 
     fn aliases(&self) -> &[String] {
