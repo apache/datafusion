@@ -168,7 +168,7 @@ impl FranzWindowFrame {
 
     pub fn evaluate(&self) -> Vec<RecordBatch> {
         self.batches.clone()
-    } //TODO: Fill me in.
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -474,7 +474,7 @@ impl FranzWindowAggStream {
             self.latest_watermark.lock().unwrap();
 
         if let Some(watermark) = *watermark_lock {
-            let mut window_frames_to_remove = Vec::new();
+            let mut window_frames_to_remove: Vec<SystemTime> = Vec::new();
 
             for (timestamp, frame) in self.window_frames.iter() {
                 if watermark >= frame.window_end_time {
@@ -603,13 +603,7 @@ impl FranzWindowAggStream {
                             self.get_frames_for_ranges(&ranges);
                             for range in ranges {
                                 let frame = self.window_frames.get_mut(&range.0).unwrap();
-                                match frame.push(&batch) {
-                                    Ok(_) => info!(
-                                        "frame {:?} successfully updated.",
-                                        frame.window_start_time
-                                    ),
-                                    Err(err) => error!("error ----> {:?}", err),
-                                }
+                                let _ = frame.push(&batch);
                             }
                             self.process_watermark(watermark);
                             let (result, is_empty) = self.trigger_windows();

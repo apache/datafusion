@@ -17,29 +17,30 @@
 
 use std::time::Duration;
 
-use super::{
-    DataFrame, LogicalPlanBuilder,
-};
+use datafusion_expr::builder::add_group_by_exprs_from_dependencies;
+use datafusion_expr::expr_rewriter::normalize_cols;
+use datafusion_expr::{Aggregate, LogicalPlan};
+
+use super::{DataFrame, LogicalPlanBuilder};
 use crate::error::Result;
 use crate::logical_expr::Expr;
 
 impl DataFrame {
-
     /// Return a new DataFrame that adds the result of evaluating one or more
     /// window functions ([`Expr::WindowFunction`]) to the existing columns
     /// TODO: add documentation
     pub fn franz_window(
         self,
-        window_exprs: Vec<Expr>,
+        group_expr: impl IntoIterator<Item = impl Into<Expr>>,
+        aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
         window_length: Duration,
-    ) -> Result<DataFrame> {
+    ) -> Result<Self> {
         let plan = LogicalPlanBuilder::from(self.plan)
-            .franz_window(window_exprs, window_length)?
+            .franz_window(group_expr, aggr_expr, window_length)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 }
 
 #[cfg(test)]
-mod tests {
-}
+mod tests {}

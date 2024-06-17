@@ -41,5 +41,6 @@ mod utils;
 
 #[cfg(test)]
 pub mod test_utils;
+mod coalesce_before_streaming_window_aggregate;
 
 pub use optimizer::PhysicalOptimizerRule;

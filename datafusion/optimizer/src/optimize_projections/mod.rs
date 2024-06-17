@@ -364,6 +364,157 @@ fn optimize_projections(
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
+        LogicalPlan::Projection(proj) => {
+            return if let Some(proj) = merge_consecutive_projections(proj)? {
+                Ok(Some(
+                    rewrite_projection_given_requirements(&proj, config, indices)?
+                        // Even if we cannot optimize the projection, merge if possible:
+                        .unwrap_or_else(|| LogicalPlan::Projection(proj)),
+                ))
+            } else {
+                rewrite_projection_given_requirements(proj, config, indices)
+            };
+        }
+        LogicalPlan::Aggregate(aggregate) | LogicalPlan::StreamingWindow(aggregate) => {
+            // Split parent requirements to GROUP BY and aggregate sections:
+            let n_group_exprs = aggregate.group_expr_len()?;
+            let (group_by_reqs, mut aggregate_reqs): (Vec<usize>, Vec<usize>) =
+                indices.iter().partition(|&&idx| idx < n_group_exprs);
+            // Offset aggregate indices so that they point to valid indices at
+            // `aggregate.aggr_expr`:
+            for idx in aggregate_reqs.iter_mut() {
+                *idx -= n_group_exprs;
+            }
+
+            // Get absolutely necessary GROUP BY fields:
+            let group_by_expr_existing = aggregate
+                .group_expr
+                .iter()
+                .map(|group_by_expr| group_by_expr.display_name())
+                .collect::<Result<Vec<_>>>()?;
+            let new_group_bys = if let Some(simplest_groupby_indices) =
+                get_required_group_by_exprs_indices(
+                    aggregate.input.schema(),
+                    &group_by_expr_existing,
+                ) {
+                // Some of the fields in the GROUP BY may be required by the
+                // parent even if these fields are unnecessary in terms of
+                // functional dependency.
+                let required_indices =
+                    merge_slices(&simplest_groupby_indices, &group_by_reqs);
+                get_at_indices(&aggregate.group_expr, &required_indices)
+            } else {
+                aggregate.group_expr.clone()
+            };
+
+            // Only use the absolutely necessary aggregate expressions required
+            // by the parent:
+            let mut new_aggr_expr = get_at_indices(&aggregate.aggr_expr, &aggregate_reqs);
+
+            // Aggregations always need at least one aggregate expression.
+            // With a nested count, we don't require any column as input, but
+            // still need to create a correct aggregate, which may be optimized
+            // out later. As an example, consider the following query:
+            //
+            // SELECT COUNT(*) FROM (SELECT COUNT(*) FROM [...])
+            //
+            // which always returns 1.
+            if new_aggr_expr.is_empty()
+                && new_group_bys.is_empty()
+                && !aggregate.aggr_expr.is_empty()
+            {
+                new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
+            }
+
+            let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
+            let schema = aggregate.input.schema();
+            let mut necessary_indices =
+                indices_referred_by_exprs(schema, all_exprs_iter)?;
+
+            //TODO: This is a bit of a hack to make sure canonical timestamps aren't erase by the optimizer.
+            //      Ideally we want to have a concept of canonical timestamps that optimizer rules are aware of and
+            //      thus don't mess with them.
+            let col = schema
+                .index_of_column_by_name(None, "franz_canonical_timestamp")
+                .unwrap();
+            necessary_indices.push(col);
+            let aggregate_input = if let Some(input) =
+                optimize_projections(&aggregate.input, config, &necessary_indices)?
+            {
+                input
+            } else {
+                aggregate.input.as_ref().clone()
+            };
+
+            // Simplify the input of the aggregation by adding a projection so
+            // that its input only contains absolutely necessary columns for
+            // the aggregate expressions. Note that necessary_indices refer to
+            // fields in `aggregate.input.schema()`.
+            let necessary_exprs = get_required_exprs(schema, &necessary_indices);
+
+            let (aggregate_input, _) =
+                add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)?;
+
+            // Create a new aggregate plan with the updated input and only the
+            // absolutely necessary fields:
+            let inner_agg = Aggregate::try_new(
+                Arc::new(aggregate_input),
+                new_group_bys,
+                new_aggr_expr,
+            );
+            if let LogicalPlan::StreamingWindow(_) = plan {
+                return inner_agg
+                    .map(|aggregate| Some(LogicalPlan::StreamingWindow(aggregate)));
+            } else {
+                return inner_agg
+                    .map(|aggregate| Some(LogicalPlan::Aggregate(aggregate)));
+            }
+        }
+        LogicalPlan::Window(window) => {
+            // Split parent requirements to child and window expression sections:
+            let n_input_fields = window.input.schema().fields().len();
+            let (child_reqs, mut window_reqs): (Vec<usize>, Vec<usize>) =
+                indices.iter().partition(|&&idx| idx < n_input_fields);
+            // Offset window expression indices so that they point to valid
+            // indices at `window.window_expr`:
+            for idx in window_reqs.iter_mut() {
+                *idx -= n_input_fields;
+            }
+
+            // Only use window expressions that are absolutely necessary according
+            // to parent requirements:
+            let new_window_expr = get_at_indices(&window.window_expr, &window_reqs);
+
+            // Get all the required column indices at the input, either by the
+            // parent or window expression requirements.
+            let required_indices = get_all_required_indices(
+                &child_reqs,
+                &window.input,
+                new_window_expr.iter(),
+            )?;
+            let window_child = if let Some(new_window_child) =
+                optimize_projections(&window.input, config, &required_indices)?
+            {
+                new_window_child
+            } else {
+                window.input.as_ref().clone()
+            };
+
+            return if new_window_expr.is_empty() {
+                // When no window expression is necessary, use the input directly:
+                Ok(Some(window_child))
+            } else {
+                // Calculate required expressions at the input of the window.
+                // Please note that we use `old_child`, because `required_indices`
+                // refers to `old_child`.
+                let required_exprs =
+                    get_required_exprs(window.input.schema(), &required_indices);
+                let (window_child, _) =
+                    add_projection_on_top_if_helpful(window_child, required_exprs)?;
+                Window::try_new(new_window_expr, Arc::new(window_child))
+                    .map(|window| Some(LogicalPlan::Window(window)))
+            };
+        }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let (left_req_indices, right_req_indices) =

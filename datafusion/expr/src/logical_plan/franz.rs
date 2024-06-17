@@ -18,9 +18,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::builder::validate_unique_names;
 use super::LogicalPlanBuilder;
-use crate::Expr;
+use crate::builder::{add_group_by_exprs_from_dependencies, validate_unique_names};
+use crate::{Aggregate, Expr};
 
 use crate::expr_rewriter::normalize_cols;
 use datafusion_common::Result;
@@ -31,14 +31,18 @@ impl LogicalPlanBuilder {
     /// Apply franz window functions to extend the schema
     pub fn franz_window(
         self,
-        window_expr: impl IntoIterator<Item = impl Into<Expr>>,
-        _window_length: Duration,
+        group_expr: impl IntoIterator<Item = impl Into<Expr>>,
+        aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
+        window_length: Duration,
     ) -> Result<Self> {
-        let window_expr = normalize_cols(window_expr, &self.plan)?;
-        validate_unique_names("Windows", &window_expr)?;
-        Ok(Self::from(LogicalPlan::Window(Window::try_new(
-            window_expr,
-            Arc::new(self.plan),
-        )?)))
+        let group_expr = normalize_cols(group_expr, &self.plan)?;
+        let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
+
+        let group_expr =
+            add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
+        let aggr = Aggregate::try_new(Arc::new(self.plan), group_expr, aggr_expr)
+            .map(LogicalPlan::StreamingWindow)
+            .map(Self::from);
+        aggr
     }
 }

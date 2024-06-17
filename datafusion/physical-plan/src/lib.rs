@@ -72,6 +72,7 @@ pub mod unnest;
 pub mod values;
 pub mod windows;
 pub mod work_table;
+pub mod continuous;
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::metrics::Metric;

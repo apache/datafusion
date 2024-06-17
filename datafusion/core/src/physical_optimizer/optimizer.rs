@@ -24,6 +24,7 @@ use super::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::config::ConfigOptions;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
+use crate::physical_optimizer::coalesce_before_streaming_window_aggregate::CoaslesceBeforeStreamingAggregate;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
 use crate::physical_optimizer::enforce_sorting::EnforceSorting;
@@ -129,6 +130,10 @@ impl PhysicalOptimizer {
             // diagnostic error message when this happens. It makes no changes to the
             // given query plan; i.e. it only acts as a final gatekeeping rule.
             Arc::new(PipelineChecker::new()),
+            // Franz optimizer rule, added to ensure coalescing of partitions before a global aggregate
+            // window. This rule may be removed once we have support for two stage partial and final
+            // aggregates a la vanilla Datafusion.
+            Arc::new(CoaslesceBeforeStreamingAggregate::new()),
         ];
 
         Self::with_rules(rules)

@@ -26,8 +26,8 @@ use datafusion_common::{
     franz_arrow::infer_arrow_schema_from_json_value, plan_err, ScalarValue,
 };
 use datafusion_expr::{
-    col, create_udwf, Expr, LogicalPlanBuilder, PartitionEvaluator, TableType,
-    Volatility, WindowFrame,
+    col, create_udwf, ident, max, Expr, LogicalPlanBuilder, PartitionEvaluator,
+    TableType, Volatility, WindowFrame,
 };
 
 use datafusion_common::Result;
@@ -152,18 +152,7 @@ async fn main() {
         .expect("setting default subscriber failed");
     // create our custom datasource and adding some users
     let sample_event = r#"
-        {
-        "id": "6872fd27-38a3-4e65-8858-03d51f40a718",
-        "sequence_id": 121,
-        "bank_account": "GB79PFYP54653078323522",
-        "name": "Donald Blevins",
-        "email": "henryhoward@example.com",
-        "address": "059 Lawrence Crescent Apt. 494\nMortonborough, MS 26500",
-        "balance": 328647.45878,
-        "timestamp": "2024-04-12T13:08:49.000498",
-        "kafka_timestamp": 1713310471,
-        "kafka_key": ""
-    }"#;
+        {"id": "89aad9ea-7bb1-42ec-8995-e56c2d06eec2", "sequence_id": 199, "bank_account": "GB24MZLI50174378094670", "info": {"name": "Kevin Woods", "email": "susan50@example.net", "address": "674 Robin Grove Suite 637\nNew Jonathanton, PA 62421", "balance": 993554.83}, "timestamp": "2024-05-08T15:04:31.059356"}"#;
 
     // here is where we define the UDWF. We also declare its signature:
     let smooth_it = create_udwf(
@@ -188,8 +177,12 @@ async fn main() {
         )),
     );
     let canonical_schema = Arc::new(Schema::new(fields));
+
+    println!("{:?}\n\n", canonical_schema);
     let _config = KafkaStreamConfig {
-        bootstrap_servers: String::from("localhost:19092,localhost:29092,localhost:39092"),
+        bootstrap_servers: String::from(
+            "localhost:19092,localhost:29092,localhost:39092",
+        ),
         topic: String::from("accounts"),
         consumer_group_id: String::from("my_test_consumer"),
         original_schema: Arc::new(inferred_schema),
@@ -233,15 +226,19 @@ async fn main() {
     //.unwrap();
 
     let window_expr = smooth_it.call(
-        vec![col("balance")],      // smooth_it(speed)
+        vec![col("info")],         // smooth_it(speed)
         vec![col("bank_account")], // PARTITION BY car
         vec![col("franz_canonical_timestamp").sort(true, true)], // ORDER BY time ASC
         WindowFrame::new(None),
     );
 
-    let windowed_df = df
+    let windowed_df: DataFrame = df
         .clone()
-        .franz_window(vec![window_expr], Duration::from_millis(5000))
+        .franz_window(
+            vec![],
+            vec![max(col("info").field("balance"))],
+            Duration::from_millis(5000),
+        )
         .unwrap();
 
     let df2 = windowed_df.clone().explain(true, true);
@@ -257,11 +254,18 @@ async fn main() {
     let mut stream: std::pin::Pin<Box<dyn RecordBatchStream + Send>> =
         windowed_df.execute_stream().await.unwrap();
 
-
     for _ in 1..5 {
         let rb = stream.next().await.transpose();
-        println!("{:?}", rb);
-        println!("<<<<< window end >>>>>>");
+        let l = match rb.unwrap() {
+            Some(batch) => {
+                if batch.num_rows() > 0 {
+                    info!("{:?}", batch);
+                    println!("<<<<< window end >>>>>>");
+                }
+                1
+            }
+            None => 1,
+        };
     }
 }
 

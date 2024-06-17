@@ -39,7 +39,6 @@ path = "src/lib.rs"
 avro = ["apache-avro"]
 backtrace = []
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
-apache-avro = ["dep:apache-avro"]
 
 [dependencies]
 apache-avro = { version = "0.16", default-features = false, features = [
@@ -51,6 +50,12 @@ apache-avro = { version = "0.16", default-features = false, features = [
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
+apache-avro = { version = "0.16", default-features = false, features = [
+    "bzip",
+    "snappy",
+    "xz",
+    "zstandard",
+], optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }

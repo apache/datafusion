@@ -33,6 +33,7 @@ pub mod config;
 pub mod display;
 pub mod file_options;
 pub mod format;
+pub mod franz_arrow;
 pub mod hash_utils;
 pub mod instant;
 pub mod parsers;
@@ -42,7 +43,6 @@ pub mod stats;
 pub mod test_util;
 pub mod tree_node;
 pub mod utils;
-pub mod franz_arrow;
 
 /// Reexport arrow crate
 pub use arrow;
