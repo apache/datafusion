@@ -64,7 +64,7 @@ impl ScalarUDFImpl for NowFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, Some("+00:00".into())))
+        Ok(Timestamp(Nanosecond, Some("UTC".into())))
     }
 
     fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
