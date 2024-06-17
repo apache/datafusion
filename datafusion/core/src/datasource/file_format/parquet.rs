@@ -17,8 +17,6 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
-use arrow_array::cast::AsArray;
-use arrow_array::types::UInt64Type;
 use arrow_array::{Array, ArrayRef, UInt64Array};
 use std::any::Any;
 use std::fmt;
@@ -446,7 +444,7 @@ pub async fn statistics_from_parquet_meta(
         };
 
         let null_counts = converter.row_group_null_counts(metadata.row_groups())?;
-        let null_count = accumulate_null_counts(null_counts.as_primitive::<UInt64Type>());
+        let null_count = accumulate_null_counts(&null_counts);
 
         let maxes = converter.row_group_maxes(metadata.row_groups())?;
         let max_value =
