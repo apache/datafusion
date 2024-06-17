@@ -289,22 +289,15 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                             format!("could not cast {} to AnyDictionaryArray", arr.data_type())
                         )
                     })?;
-                macro_rules! array_function {
-                    ($ARRAY_TYPE:ident) => {
-                        to_string!(
-                            arg,
-                            any_dict_array.values(),
-                            &delimiter,
-                            &null_string,
-                            with_null_string,
-                            $ARRAY_TYPE
-                        )
-                    };
-                }
-                call_array_function!(
-                    any_dict_array.values().data_type(),
-                    false
-                )
+                compute_array_to_string(
+                    arg,
+                    any_dict_array.values().clone(),
+                    delimiter.clone(),
+                    null_string.clone(),
+                    with_null_string,
+                )?;
+
+                Ok(arg)
             }
             Null => Ok(arg),
             data_type => {
