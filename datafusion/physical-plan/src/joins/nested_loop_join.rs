@@ -25,18 +25,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 
+use super::utils::{asymmetric_join_output_partitioning, need_produce_result_in_final};
 use crate::coalesce_batches::concat_batches;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::joins::utils::{
-    adjust_indices_by_join_type, adjust_right_output_partitioning,
-    apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_join_is_valid, estimate_join_statistics, get_final_indices_from_bit_map,
-    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
+    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
+    build_join_schema, check_join_is_valid, estimate_join_statistics,
+    get_final_indices_from_bit_map, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
+    OnceAsync, OnceFut,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
     execution_mode_from_children, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionMode, ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
+    ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream,
 };
 
@@ -54,8 +55,6 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
-
-use super::utils::need_produce_result_in_final;
 
 /// Shared bitmap for visited left-side indices
 type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
@@ -228,21 +227,8 @@ impl NestedLoopJoinExec {
             &[],
         );
 
-        // Get output partitioning,
-        let output_partitioning = match join_type {
-            JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
-                right.output_partitioning(),
-                left.schema().fields().len(),
-            ),
-            JoinType::RightSemi | JoinType::RightAnti => {
-                right.output_partitioning().clone()
-            }
-            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::Full => {
-                Partitioning::UnknownPartitioning(
-                    right.output_partitioning().partition_count(),
-                )
-            }
-        };
+        let output_partitioning =
+            asymmetric_join_output_partitioning(left, right, &join_type);
 
         // Determine execution mode:
         let mut mode = execution_mode_from_children([left, right]);
@@ -673,7 +659,7 @@ mod tests {
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
-    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 
     fn build_table(
         a: (&str, &Vec<i32>),

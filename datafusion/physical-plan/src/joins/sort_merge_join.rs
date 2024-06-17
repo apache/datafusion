@@ -30,12 +30,22 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::expressions::PhysicalSortExpr;
+use crate::joins::utils::{
+    build_join_schema, check_join_is_valid, estimate_join_statistics,
+    symmetric_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
+};
+use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use crate::{
+    execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
+};
+
 use arrow::array::*;
 use arrow::compute::{self, concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use futures::{Stream, StreamExt};
-use hashbrown::HashSet;
 
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
@@ -45,17 +55,8 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
-use crate::expressions::PhysicalSortExpr;
-use crate::joins::utils::{
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    partitioned_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
-};
-use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use crate::{
-    execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
-};
+use futures::{Stream, StreamExt};
+use hashbrown::HashSet;
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -220,14 +221,8 @@ impl SortMergeJoinExec {
             join_on,
         );
 
-        // Get output partitioning:
-        let left_columns_len = left.schema().fields.len();
-        let output_partitioning = partitioned_join_output_partitioning(
-            join_type,
-            left.output_partitioning(),
-            right.output_partitioning(),
-            left_columns_len,
-        );
+        let output_partitioning =
+            symmetric_join_output_partitioning(left, right, &join_type);
 
         // Determine execution mode:
         let mode = execution_mode_from_children([left, right]);

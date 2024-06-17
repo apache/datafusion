@@ -332,7 +332,7 @@ mod tests {
             name: "a",
             is_distinct: false,
             input_type: &DataType::Float64,
-            args_num: 1,
+            input_exprs: &[datafusion_expr::col("a")],
         };
 
         let args2 = AccumulatorArgs {
@@ -343,7 +343,7 @@ mod tests {
             name: "a",
             is_distinct: false,
             input_type: &DataType::Float64,
-            args_num: 1,
+            input_exprs: &[datafusion_expr::col("a")],
         };
 
         let mut accum1 = agg1.accumulator(args1)?;
