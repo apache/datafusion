@@ -29,12 +29,12 @@ use arrow::datatypes::{
 };
 use arrow_schema::Field;
 
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_common::cast::as_list_array;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
 /// `accumulator_helper` is a macro accepting (ArrowPrimitiveType, BitwiseOperationType, bool)
 macro_rules! accumulator_helper {
@@ -88,9 +88,22 @@ macro_rules! downcast_bitwise_accumulator {
 /// `OPR_TYPE` is an expression that evaluates to the type of bitwise operation to be performed.
 macro_rules! make_bitwise_udaf_expr_and_func {
     ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $OPR_TYPE:expr) => {
-        make_udaf_expr!($EXPR_FN, expr_x, concat!("Returns the bitwise", stringify!($OPR_TYPE), "of a group of values"), $AGGREGATE_UDF_FN);
-        create_func!($EXPR_FN, $AGGREGATE_UDF_FN, BitwiseOperation::new($OPR_TYPE, stringify!($EXPR_FN)));
-    }
+        make_udaf_expr!(
+            $EXPR_FN,
+            expr_x,
+            concat!(
+                "Returns the bitwise",
+                stringify!($OPR_TYPE),
+                "of a group of values"
+            ),
+            $AGGREGATE_UDF_FN
+        );
+        create_func!(
+            $EXPR_FN,
+            $AGGREGATE_UDF_FN,
+            BitwiseOperation::new($OPR_TYPE, stringify!($EXPR_FN))
+        );
+    };
 }
 
 make_bitwise_udaf_expr_and_func!(bit_and, bit_and_udaf, BitwiseOperationType::And);
