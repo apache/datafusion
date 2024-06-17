@@ -37,6 +37,7 @@ members = [
     "datafusion/sql",
     "datafusion/sqllogictest",
     "datafusion/substrait",
+    "datafusion/franz",
     "datafusion/wasmtest",
     "datafusion-examples",
     "docs",
@@ -85,6 +86,7 @@ bigdecimal = "=0.4.1"
 bytes = "1.4"
 chrono = { version = "0.4.34", default-features = false }
 ctor = "0.2.0"
+<<<<<<< HEAD
 dashmap = "5.5.0"
 datafusion = { path = "datafusion/core", version = "39.0.0", default-features = false }
 datafusion-common = { path = "datafusion/common", version = "39.0.0", default-features = false }
@@ -103,6 +105,7 @@ datafusion-proto-common = { path = "datafusion/proto-common", version = "39.0.0"
 datafusion-sql = { path = "datafusion/sql", version = "39.0.0" }
 datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "39.0.0" }
 datafusion-substrait = { path = "datafusion/substrait", version = "39.0.0" }
+datafusion-franz = { path = "datafusion/franz", version = "39.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
