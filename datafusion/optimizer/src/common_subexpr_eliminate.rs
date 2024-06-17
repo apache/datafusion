@@ -79,15 +79,11 @@ type Identifier = String;
 /// ```
 type IdArray = Vec<(usize, Identifier)>;
 
-/// A map that contains statistics of expressions by their identifiers.
-/// It contains:
-/// - The number of occurrences and
-/// - The DataType
-/// of an expression.
+/// A map that contains the number of occurrences of expressions by their identifiers.
 type ExprStats = HashMap<Identifier, usize>;
 
-/// A map that contains the common expressions extracted during the second, rewriting
-/// traversal.
+/// A map that contains the common expressions and their alias extracted during the
+/// second, rewriting traversal.
 type CommonExprs = IndexMap<Identifier, (Expr, String)>;
 
 /// Performs Common Sub-expression Elimination optimization.
