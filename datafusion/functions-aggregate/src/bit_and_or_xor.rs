@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
 use arrow::datatypes::{
     ArrowNativeType, ArrowNumericType, DataType, Int16Type, Int32Type, Int64Type,
     Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
@@ -34,7 +34,31 @@ use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
+};
+
+use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use std::ops::{BitAndAssign, BitOrAssign, BitXorAssign};
+
+/// This macro helps create group accumulators based on bitwise operations typically used internally
+/// and might not be necessary for users to call directly.
+macro_rules! group_accumulator_helper {
+    ($t:ty, $dt:expr, $opr:expr) => {
+        match $opr {
+            BitwiseOperationType::And => Ok(Box::new(
+                PrimitiveGroupsAccumulator::<$t, _>::new($dt, |x, y| x.bitand_assign(y))
+                    .with_starting_value(!0),
+            )),
+            BitwiseOperationType::Or => Ok(Box::new(
+                PrimitiveGroupsAccumulator::<$t, _>::new($dt, |x, y| x.bitor_assign(y)),
+            )),
+            BitwiseOperationType::Xor => Ok(Box::new(
+                PrimitiveGroupsAccumulator::<$t, _>::new($dt, |x, y| x.bitxor_assign(y)),
+            )),
+        }
+    };
+}
 
 /// `accumulator_helper` is a macro accepting (ArrowPrimitiveType, BitwiseOperationType, bool)
 macro_rules! accumulator_helper {
@@ -161,7 +185,7 @@ impl AggregateUDFImpl for BitwiseOperation {
         if !arg_type.is_integer() {
             return exec_err!(
                 "[return_type] {} not supported for {}",
-                self.operation.to_string(),
+                self.name(),
                 arg_type
             );
         }
@@ -175,17 +199,44 @@ impl AggregateUDFImpl for BitwiseOperation {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         if self.operation == BitwiseOperationType::Xor && args.is_distinct {
             Ok(vec![Field::new_list(
-                format_state_name(args.name, "xor distinct"),
+                format_state_name(
+                    args.name,
+                    format!("{} distinct", self.name()).as_str(),
+                ),
                 Field::new("item", args.return_type.clone(), true),
                 false,
             )])
         } else {
             Ok(vec![Field::new(
-                format_state_name(args.name, self.operation.to_string().as_str()),
+                format_state_name(args.name, self.name()),
                 args.return_type.clone(),
                 true,
             )])
         }
+    }
+
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        let data_type = args.data_type;
+        let operation = &self.operation;
+        downcast_integer! {
+            data_type => (group_accumulator_helper, data_type, operation),
+            _ => not_impl_err!(
+                "GroupsAccumulator not supported for {} with {}",
+                self.name(),
+                data_type
+            ),
+        }
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::Identical
     }
 }
 
