@@ -133,7 +133,7 @@ struct Args {
 
     #[clap(
         long,
-        help = "The max number of rows to display for 'Table' format\n[default: 40] [possible values: numbers(0/10/...), inf(no limit)]",
+        help = "The max number of rows to display for 'Table' format\n[possible values: numbers(0/10/...), inf(no limit)]",
         default_value = "40"
     )]
     maxrows: MaxRows,

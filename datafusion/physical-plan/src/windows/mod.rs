@@ -90,6 +90,7 @@ pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
+    logical_args: &[Expr],
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
@@ -144,6 +145,7 @@ pub fn create_window_expr(
             let aggregate = udaf::create_aggregate_expr(
                 fun.as_ref(),
                 args,
+                logical_args,
                 &sort_exprs,
                 order_by,
                 input_schema,
@@ -752,6 +754,7 @@ mod tests {
                 &WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 "count".to_owned(),
                 &[col("a", &schema)?],
+                &[],
                 &[],
                 &[],
                 Arc::new(WindowFrame::new(None)),
