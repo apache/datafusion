@@ -5,12 +5,13 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
+    thread::current,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use arrow::{
     array::PrimitiveBuilder,
-    compute::{concat_batches, filter_record_batch},
+    compute::{concat_batches, filter_record_batch, kernels::window},
     datatypes::TimestampMillisecondType,
 };
 
@@ -19,6 +20,7 @@ use arrow_ord::cmp;
 use arrow_schema::{DataType, Field, Schema, SchemaBuilder, SchemaRef, TimeUnit};
 use datafusion_common::{internal_err, stats::Precision, DataFusionError, Statistics};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
+use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::UnKnownColumn,
@@ -174,7 +176,7 @@ impl FranzWindowFrame {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum FranzStreamingWindowType {
     Session(Duration),
     Sliding(Duration, Duration),
@@ -578,6 +580,8 @@ impl FranzWindowAggStream {
         window_type: FranzStreamingWindowType,
         aggregation_mode: AggregateMode,
     ) -> Result<Self> {
+        // TODO: 6/12/2024 Why was this commented out?
+
         // In WindowAggExec all partition by columns should be ordered.
         //if window_expr[0].partition_by().len() != ordered_partition_by_indices.len() {
         //    return internal_err!("All partition by columns should have an ordering");
@@ -713,8 +717,10 @@ impl FranzWindowAggStream {
                                         &batch,
                                         "franz_canonical_timestamp",
                                     )?;
-                                let window_length = self.get_window_length();
-                                let ranges = get_window_ranges(&watermark, window_length);
+                                let ranges = get_windows_for_watermark(
+                                    &watermark,
+                                    self.window_type,
+                                );
                                 let _ = self.ensure_window_frames_for_ranges(&ranges);
                                 for range in ranges {
                                     let frame =
@@ -732,6 +738,7 @@ impl FranzWindowAggStream {
                         }
                         Some(Err(e)) => Err(e),
                         None => {
+                            println!("none ya business");
                             Ok(RecordBatch::new_empty(self.output_schema_with_window()))
                         }
                     },
@@ -767,21 +774,40 @@ impl Stream for FranzWindowAggStream {
     }
 }
 
-fn get_window_ranges(
+fn get_windows_for_watermark(
     watermark: &RecordBatchWatermark,
-    window_length: Duration,
+    window_type: FranzStreamingWindowType,
 ) -> Vec<(SystemTime, SystemTime)> {
     let start_time = watermark.min_timestamp;
     let end_time = watermark.max_timestamp;
     let mut window_ranges = Vec::new();
-    let mut current_start = snap_to_window_start(start_time, window_length);
 
-    while current_start < end_time {
-        let current_end = current_start + window_length;
-        window_ranges.push((current_start, current_end));
-        current_start = current_end;
-    }
-
+    match window_type {
+        FranzStreamingWindowType::Session(_) => todo!(),
+        FranzStreamingWindowType::Sliding(window_length, slide) => {
+            let mut current_start =
+                snap_to_window_start(start_time - window_length, window_length);
+            while current_start <= end_time {
+                let current_end = current_start + window_length;
+                if start_time > current_end || end_time < current_start {
+                    // out of bounds
+                    current_start += slide;
+                    continue;
+                }
+                window_ranges.push((current_start, current_end));
+                current_start += slide;
+            }
+        }
+        FranzStreamingWindowType::Tumbling(window_length) => {
+            let mut current_start: SystemTime =
+                snap_to_window_start(start_time, window_length);
+            while current_start <= end_time {
+                let current_end = current_start + window_length;
+                window_ranges.push((current_start, current_end));
+                current_start = current_end;
+            }
+        }
+    };
     window_ranges
 }
 

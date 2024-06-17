@@ -58,6 +58,7 @@ default = [
     "compression",
     "parquet",
     "franz",
+    
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
