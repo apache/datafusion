@@ -30,7 +30,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions, TimeUnit};
 use datafusion::{
     config::ConfigOptions,
     dataframe::DataFrame,
-    datasource::{provider_as_source, TableProvider},
+    datasource::{continuous::KafkaSource, provider_as_source, TableProvider},
     execution::{
         context::{SessionContext, SessionState},
         RecordBatchStream,
@@ -57,8 +57,8 @@ use datafusion::{dataframe::DataFrameWriteOptions, prelude::*};
 use datafusion_common::config::CsvOptions;
 use datafusion_common::Result;
 use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
+
 use futures::StreamExt;
-use tonic::async_trait;
 use tracing_subscriber::{fmt::format::FmtSpan, FmtSubscriber};
 
 #[tokio::main(flavor = "multi_thread")]
@@ -134,7 +134,7 @@ async fn main() {
     };
 
     // Create a new streaming table
-    let kafka_source = StreamTable(Arc::new(_config));
+    let kafka_source = KafkaSource(Arc::new(_config));
     let mut config = ConfigOptions::default();
     let _ = config.set("datafusion.execution.batch_size", "32");
 
@@ -213,6 +213,8 @@ async fn main() {
     .await
     .unwrap();
     stream_monitor.start_server().await;
+    let sink = Box::new(stream_monitor) as Box<dyn FranzSink>;
+    let _ = windowed_df.sink(sink).await;
 }
 
 async fn print_stream(windowed_df: &DataFrame) {
@@ -231,112 +233,5 @@ async fn print_stream(windowed_df: &DataFrame) {
                 );
             }
         }
-    }
-}
-
-fn create_ordering(
-    schema: &Schema,
-    sort_order: &[Vec<Expr>],
-) -> Result<Vec<LexOrdering>> {
-    let mut all_sort_orders = vec![];
-
-    for exprs in sort_order {
-        // Construct PhysicalSortExpr objects from Expr objects:
-        let mut sort_exprs = vec![];
-        for expr in exprs {
-            match expr {
-                Expr::Sort(sort) => match sort.expr.as_ref() {
-                    Expr::Column(col) => match expressions::col(&col.name, schema) {
-                        Ok(expr) => {
-                            sort_exprs.push(PhysicalSortExpr {
-                                expr,
-                                options: SortOptions {
-                                    descending: !sort.asc,
-                                    nulls_first: sort.nulls_first,
-                                },
-                            });
-                        }
-                        // Cannot find expression in the projected_schema, stop iterating
-                        // since rest of the orderings are violated
-                        Err(_) => break,
-                    },
-                    expr => {
-                        return plan_err!(
-                            "Expected single column references in output_ordering, got {expr}"
-                        )
-                    }
-                },
-                expr => return plan_err!("Expected Expr::Sort in output_ordering, but got {expr}"),
-            }
-        }
-        if !sort_exprs.is_empty() {
-            all_sort_orders.push(sort_exprs);
-        }
-    }
-    Ok(all_sort_orders)
-}
-
-// Used to createa kafka source
-pub struct StreamTable(pub Arc<KafkaStreamConfig>);
-
-impl StreamTable {
-    /// Create a new [`StreamTable`] for the given [`StreamConfig`]
-    pub fn new(config: Arc<KafkaStreamConfig>) -> Self {
-        Self(config)
-    }
-
-    pub async fn create_physical_plan(
-        &self,
-        projection: Option<&Vec<usize>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let projected_schema = match projection {
-            Some(p) => {
-                let projected = self.0.schema.project(p)?;
-                create_ordering(&projected, &self.0.order)?
-            }
-            None => create_ordering(self.0.schema.as_ref(), &self.0.order)?,
-        };
-        let mut partition_streams = Vec::with_capacity(self.0.partitions as usize);
-
-        for part in 0..self.0.partitions {
-            let read_stream = Arc::new(KafkaStreamRead {
-                config: self.0.clone(),
-                assigned_partitions: vec![part],
-            });
-            partition_streams.push(read_stream as _);
-        }
-
-        Ok(Arc::new(StreamingTableExec::try_new(
-            self.0.schema.clone(),
-            partition_streams,
-            projection,
-            projected_schema,
-            true,
-        )?))
-    }
-}
-
-#[async_trait]
-impl TableProvider for StreamTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.0.schema.clone()
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::View
-    }
-
-    async fn scan(
-        &self,
-        _state: &SessionState,
-        projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        return self.create_physical_plan(projection).await;
     }
 }
