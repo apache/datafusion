@@ -2225,11 +2225,9 @@ impl Filter {
                     // subqueries could contain aliases so we don't recurse into those
                     Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
                 }
-                Expr::Alias(_) => Ok(Transformed::new(
-                    expr.unalias(),
-                    true,
-                    TreeNodeRecursion::Jump,
-                )),
+                Expr::Alias(Alias { expr, .. }) => {
+                    Ok(Transformed::new(*expr, true, TreeNodeRecursion::Jump))
+                }
                 _ => Ok(Transformed::no(expr)),
             }
         })
