@@ -300,18 +300,17 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     }) = expr
     {
         match (left.deref(), right.deref()) {
-            (Expr::Column(_), right) if !right.any_column_refs() => true,
-            (left, Expr::Column(_)) if !left.any_column_refs() => true,
+            (Expr::Column(_), right) => !right.any_column_refs(),
+            (left, Expr::Column(_)) => !left.any_column_refs(),
             (Expr::Cast(Cast { expr, .. }), right)
-                if matches!(expr.deref(), Expr::Column(_))
-                    && !right.any_column_refs() =>
+                if matches!(expr.deref(), Expr::Column(_)) =>
             {
-                true
+                !right.any_column_refs()
             }
             (left, Expr::Cast(Cast { expr, .. }))
-                if matches!(expr.deref(), Expr::Column(_)) && !left.any_column_refs() =>
+                if matches!(expr.deref(), Expr::Column(_)) =>
             {
-                true
+                !left.any_column_refs()
             }
             (_, _) => false,
         }
