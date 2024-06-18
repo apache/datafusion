@@ -31,7 +31,7 @@ use std::any::Any;
 make_udaf_expr_and_func!(
     StringAgg,
     string_agg,
-    expression,
+    expr delimiter,
     "Concatenates the values of string expressions and places separator values between them",
     string_agg_udaf
 );
