@@ -43,9 +43,15 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use test_utils::stagger_batch_with_seed;
 
+// Determines what Fuzz tests needs to run
+// Ideally all tests should match, but in reality some tests
+// passes only partial cases
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum JoinTest {
+    // compare NestedLoopJoin and HashJoin
     NljHj,
+    // compare HashJoin and SortMergeJoin, no need to compare SortMergeJoin and NestedLoopJoin
+    // because if existing variants both passed that means SortMergeJoin and NestedLoopJoin also passes
     HjSmj,
 }
 #[tokio::test]
