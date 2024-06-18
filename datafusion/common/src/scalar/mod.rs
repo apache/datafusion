@@ -1715,6 +1715,22 @@ impl ScalarValue {
                 )?;
                 Arc::new(array)
             }
+            DataType::Utf8View => {
+                let array = scalars
+                    .map(|sv| {
+                        if let ScalarValue::Utf8View(v) = sv {
+                            Ok(v.unwrap_or_default())
+                        } else {
+                            _internal_err!(
+                                "Inconsistent types in ScalarValue::iter_to_array. \
+                                Expected {data_type:?}, got {sv:?}"
+                            )
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let array = StringViewArray::from_iter_values(array.into_iter());
+                Arc::new(array)
+            }
             // explicitly enumerate unsupported types so newly added
             // types must be aknowledged, Time32 and Time64 types are
             // not supported if the TimeUnit is not valid (Time32 can
@@ -1726,7 +1742,6 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _)
-            | DataType::Utf8View
             | DataType::BinaryView
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
