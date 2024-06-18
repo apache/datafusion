@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This example shows how we can use the structures that DataFusion provide to perform
-//! SQL Analysis.
-//! We'll show how we can count the amount of join's in a query as well as how many
-//! join tree's there are with their respective join count
+//! This example shows how to use the structures that DataFusion provides to perform
+//! Analysis on SQL queries and their plans.
+//!
+//! As a motivating example, we show how to count the number of JOINs in a query
+//! as well as how many join tree's there are with their respective join count
 
 use std::sync::Arc;
 
@@ -37,7 +38,7 @@ fn total_join_count(plan: &LogicalPlan) -> usize {
 
     // We can use the TreeNode API to walk over a LogicalPlan.
     plan.apply(|node| {
-        // if we encouter a join we update the total
+        // if we encounter a join we update the running count
         if matches!(node, LogicalPlan::Join(_) | LogicalPlan::CrossJoin(_)) {
             total += 1;
         }
@@ -48,20 +49,26 @@ fn total_join_count(plan: &LogicalPlan) -> usize {
     total
 }
 
-/// Counts the total amount of joins and collects every join tree in the plan with their respective join count
-/// A join tree is defined as the largest sub trees which consistt entirely of joins
-///   
-/// For example:
-///       
+/// Counts the total number of joins in a plan and collects every join tree in
+/// the plan with their respective join count.
+///
+/// Join Tree Definition: the largest subtree consisting entirely of joins
+///
+/// For example, this plan:
+///
+/// ```text
 ///         JOIN
 ///         /  \
 ///       A   JOIN
 ///            /  \
 ///           B    C
-///       
-/// has a single join tree (A-B-C) which will result in (2, [2])
-/// but this plan:
-///       
+/// ```
+///
+/// has a single join tree `(A-B-C)` which will result in `(2, [2])`
+///
+/// This plan:
+///
+/// ```text
 ///         JOIN
 ///         /  \
 ///       A   GROUP
@@ -69,8 +76,9 @@ fn total_join_count(plan: &LogicalPlan) -> usize {
 ///             JOIN
 ///             /  \
 ///            B    C
-///       
-/// Has two join trees (A-, B-C) which will result in (2, [1, 1])
+/// ```
+///
+/// Has two join trees `(A-, B-C)` which will result in `(2, [1, 1])`
 fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
     // this works the same way as `total_count`, but now when we encounter a Join
     // we try to collect it's entire tree
@@ -94,9 +102,11 @@ fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
     (total, groups)
 }
 
-/// Count the entire join tree and return it's inputs using TreeNode API
-/// So if this function receives following plan:
-///       
+/// Count the entire join tree and return its inputs using TreeNode API
+///
+/// For example, if this function receives following plan:
+///
+/// ```text
 ///         JOIN
 ///         /  \
 ///       A   GROUP
@@ -104,16 +114,21 @@ fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
 ///             JOIN
 ///             /  \
 ///            B    C
+/// ```
 ///
-/// It will return (1, [A, GROUP])
+/// It will return `(1, [A, GROUP])`
 fn count_tree(join: &LogicalPlan) -> (usize, Vec<&LogicalPlan>) {
     let mut inputs = Vec::new();
     let mut total = 0;
 
     join.apply(|node| {
         // Some extra knowledge:
-        // optimized plans have their projections pushed down as far as possible, which sometimes results in a projection going in between 2 subsequent joins
-        // giving the illusion these joins are not "related", when in fact they are.
+        //
+        // optimized plans have their projections pushed down as far as
+        // possible, which sometimes results in a projection going in between 2
+        // subsequent joins giving the illusion these joins are not "related",
+        // when in fact they are.
+        //
         // This plan:
         //   JOIN
         //   /  \
@@ -122,7 +137,9 @@ fn count_tree(join: &LogicalPlan) -> (usize, Vec<&LogicalPlan>) {
         //       JOIN
         //       /  \
         //      B    C
+        //
         // is the same as:
+        //
         //   JOIN
         //   /  \
         // A   JOIN
@@ -150,8 +167,11 @@ fn count_tree(join: &LogicalPlan) -> (usize, Vec<&LogicalPlan>) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // To show how we can count the joins in a sql query we'll be using query 88 from the
-    // TPC-DS benchmark. It has a lot of joins, cross-joins and multiple join-trees, perfect for our example
+    // To show how we can count the joins in a sql query we'll be using query 88
+    // from the TPC-DS benchmark.
+    //
+    // q8 has many joins, cross-joins and multiple join-trees, perfect for our
+    // example:
 
     let tpcds_query_88 = "
 select  *
@@ -257,7 +277,7 @@ from
             Arc::new(MemTable::try_new(Arc::new(table.schema.clone()), vec![])?),
         )?;
     }
-    // We can create a logicalplan from a SQL query like this
+    // We can create a LogicalPlan from a SQL query like this
     let logical_plan = ctx.sql(tpcds_query_88).await?.into_optimized_plan()?;
 
     println!(
@@ -270,12 +290,14 @@ from
 
     println!("The plan has {total_join_count} joins.");
 
-    // Furthermore the 24 inner joins are 8 groups of 3 joins with the 7 cross-joins combining them
-    // we can get these groups using the `count_trees` method
+    // Furthermore the 24 inner joins are 8 groups of 3 joins with the 7
+    // cross-joins combining them we can get these groups using the
+    // `count_trees` method
     let (total_join_count, trees) = count_trees(&logical_plan);
     assert_eq!(
         (total_join_count, &trees),
-        // query 88 is very straightforward, we know the cross-join group is at the top of the plan followed by the INNER joins
+        // query 88 is very straightforward, we know the cross-join group is at
+        // the top of the plan followed by the INNER joins
         (31, &vec![7, 3, 3, 3, 3, 3, 3, 3, 3])
     );
 
