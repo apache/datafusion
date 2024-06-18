@@ -145,23 +145,6 @@ pub fn coerce_types(
         }
         AggregateFunction::NthValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
-        AggregateFunction::StringAgg => {
-            if !is_string_agg_supported_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            if !is_string_agg_supported_arg_type(&input_types[1]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}",
-                    agg_fun,
-                    input_types[1]
-                );
-            }
-            Ok(vec![LargeUtf8, input_types[1].clone()])
-        }
     }
 }
 
@@ -389,15 +372,6 @@ pub fn is_correlation_support_arg_type(arg_type: &DataType) -> bool {
 
 pub fn is_integer_arg_type(arg_type: &DataType) -> bool {
     arg_type.is_integer()
-}
-
-/// Return `true` if `arg_type` is of a [`DataType`] that the
-/// [`AggregateFunction::StringAgg`] aggregation can operate on.
-pub fn is_string_agg_supported_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Null
-    )
 }
 
 #[cfg(test)]
