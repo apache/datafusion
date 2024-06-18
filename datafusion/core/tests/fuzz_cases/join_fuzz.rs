@@ -432,6 +432,8 @@ impl JoinFuzzTestCase {
             let smj_rows = smj_collected.iter().fold(0, |acc, b| acc + b.num_rows());
             let nlj_rows = nlj_collected.iter().fold(0, |acc, b| acc + b.num_rows());
 
+            // if debug flag is set the test will save randomly generated inputs and outputs to user folders
+            // so it is easy to run debug on top of the failed test data
             if debug {
                 let out_dir_name = &format!("fuzz_test_debug_batch_size_{batch_size}");
                 Self::save_as_parquet(&self.input1, out_dir_name, "input1");
