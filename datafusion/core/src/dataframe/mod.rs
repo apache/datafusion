@@ -22,7 +22,6 @@ mod parquet;
 
 #[cfg(feature = "franz")]
 mod franz;
-pub use franz::*;
 
 use std::any::Any;
 use std::collections::HashMap;

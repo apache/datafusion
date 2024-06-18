@@ -805,7 +805,8 @@ impl LogicalPlan {
             }) => {
                 // Update schema with unnested column type.
                 unnest_with_options(unwrap_arc(input), exec_columns, options)
-            }
+            },
+            LogicalPlan::StreamingWindow(_, _) => Ok(self),
         }
     }
 

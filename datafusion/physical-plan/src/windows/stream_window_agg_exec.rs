@@ -37,6 +37,7 @@ use arrow_schema::{ArrowError, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::{
     stats::Precision, utils::evaluate_partition_ranges, ColumnStatistics,
     DataFusionError, Statistics,
+    utils::transpose,
 };
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{
@@ -48,7 +49,6 @@ use tracing::{debug, info};
 
 use crate::time::RecordBatchWatermark;
 use crate::{
-    common::transpose,
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     windows::calc_requirements,
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, ExecutionPlanProperties,
@@ -278,8 +278,8 @@ impl ExecutionPlan for FranzWindowExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

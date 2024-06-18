@@ -42,7 +42,7 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::from(self.plan)
             .franz_window(group_expr, aggr_expr, window_length, slide)?
             .build()?;
-        Ok(DataFrame::new(self.session_state, plan))
+        Ok(DataFrame::new(*self.session_state, plan))
     }
 
     /// TODO

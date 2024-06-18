@@ -5,13 +5,12 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
-    thread::current,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use arrow::{
     array::PrimitiveBuilder,
-    compute::{concat_batches, filter_record_batch, kernels::window},
+    compute::{concat_batches, filter_record_batch},
     datatypes::TimestampMillisecondType,
 };
 
@@ -20,7 +19,6 @@ use arrow_ord::cmp;
 use arrow_schema::{DataType, Field, Schema, SchemaBuilder, SchemaRef, TimeUnit};
 use datafusion_common::{internal_err, stats::Precision, DataFusionError, Statistics};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
-use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::UnKnownColumn,
@@ -379,8 +377,8 @@ impl ExecutionPlan for FranzStreamingWindowExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

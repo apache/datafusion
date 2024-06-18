@@ -24,7 +24,7 @@ impl PhysicalOptimizerRule for CoaslesceBeforeStreamingAggregate {
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
-        plan.transform(&|original| {
+        plan.transform(|original| {
             if let Some(streaming_aggr_exec) =
                 original.as_any().downcast_ref::<FranzStreamingWindowExec>()
             {

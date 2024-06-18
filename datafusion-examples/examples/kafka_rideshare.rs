@@ -43,6 +43,7 @@ use datafusion::{
         ExecutionPlan,
     },
 };
+use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_common::{
     franz_arrow::infer_arrow_schema_from_json_value, plan_err, ScalarValue,
 };

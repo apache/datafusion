@@ -66,6 +66,7 @@ impl KafkaSource {
             projection,
             projected_schema,
             true,
+            None,
         )?))
     }
 }
