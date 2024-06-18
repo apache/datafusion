@@ -540,7 +540,6 @@ impl serde::Serialize for AggregateFunction {
             Self::Grouping => "GROUPING",
             Self::BoolAnd => "BOOL_AND",
             Self::BoolOr => "BOOL_OR",
-            Self::StringAgg => "STRING_AGG",
             Self::NthValueAgg => "NTH_VALUE_AGG",
         };
         serializer.serialize_str(variant)
@@ -561,7 +560,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "GROUPING",
             "BOOL_AND",
             "BOOL_OR",
-            "STRING_AGG",
             "NTH_VALUE_AGG",
         ];
 
@@ -611,7 +609,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                     "GROUPING" => Ok(AggregateFunction::Grouping),
                     "BOOL_AND" => Ok(AggregateFunction::BoolAnd),
                     "BOOL_OR" => Ok(AggregateFunction::BoolOr),
-                    "STRING_AGG" => Ok(AggregateFunction::StringAgg),
                     "NTH_VALUE_AGG" => Ok(AggregateFunction::NthValueAgg),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }

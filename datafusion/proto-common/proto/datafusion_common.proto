@@ -248,6 +248,7 @@ message ScalarValue{
     bool   bool_value = 1;
     string utf8_value = 2;
     string large_utf8_value = 3;
+    string utf8_view_value = 23;
     int32  int8_value = 4;
     int32  int16_value = 5;
     int32  int32_value = 6;
@@ -281,6 +282,7 @@ message ScalarValue{
     ScalarDictionaryValue dictionary_value = 27;
     bytes binary_value = 28;
     bytes large_binary_value = 29;
+    bytes binary_view_value = 22;
     ScalarTime64Value time64_value = 30;
     IntervalDayTimeValue interval_daytime_value = 25;
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
@@ -318,8 +320,10 @@ message ArrowType{
     EmptyMessage FLOAT32 = 12 ;
     EmptyMessage FLOAT64 = 13 ;
     EmptyMessage UTF8 = 14 ;
+    EmptyMessage UTF8_VIEW = 35;
     EmptyMessage LARGE_UTF8 = 32;
     EmptyMessage BINARY = 15 ;
+    EmptyMessage BINARY_VIEW = 34;
     int32 FIXED_SIZE_BINARY = 16 ;
     EmptyMessage LARGE_BINARY = 31;
     EmptyMessage DATE32 = 17 ;

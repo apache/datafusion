@@ -22,7 +22,7 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{
-    field_not_found, internal_err, plan_datafusion_err, SchemaError,
+    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
 };
 use datafusion_expr::WindowUDF;
 use sqlparser::ast::TimezoneInfo;
@@ -139,16 +139,23 @@ impl IdentNormalizer {
 /// Common Table Expression (CTE) provided with WITH clause and
 /// Parameter Data Types provided with PREPARE statement and the query schema of the
 /// outer query plan
+///
+/// # Cloning
+///
+/// Only the `ctes` are truly cloned when the `PlannerContext` is cloned. This helps resolve
+/// scoping issues of CTEs. By using cloning, a subquery can inherit CTEs from the outer query
+/// and can also define its own private CTEs without affecting the outer query.
+///
 #[derive(Debug, Clone)]
 pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied
     /// in `PREPARE` statement
-    prepare_param_data_types: Vec<DataType>,
+    prepare_param_data_types: Arc<Vec<DataType>>,
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
     /// The query schema of the outer query plan, used to resolve the columns in subquery
-    outer_query_schema: Option<DFSchema>,
+    outer_query_schema: Option<DFSchemaRef>,
 }
 
 impl Default for PlannerContext {
@@ -161,7 +168,7 @@ impl PlannerContext {
     /// Create an empty PlannerContext
     pub fn new() -> Self {
         Self {
-            prepare_param_data_types: vec![],
+            prepare_param_data_types: Arc::new(vec![]),
             ctes: HashMap::new(),
             outer_query_schema: None,
         }
@@ -172,21 +179,21 @@ impl PlannerContext {
         mut self,
         prepare_param_data_types: Vec<DataType>,
     ) -> Self {
-        self.prepare_param_data_types = prepare_param_data_types;
+        self.prepare_param_data_types = prepare_param_data_types.into();
         self
     }
 
     // return a reference to the outer queries schema
     pub fn outer_query_schema(&self) -> Option<&DFSchema> {
-        self.outer_query_schema.as_ref()
+        self.outer_query_schema.as_ref().map(|s| s.as_ref())
     }
 
     /// sets the outer query schema, returning the existing one, if
     /// any
     pub fn set_outer_query_schema(
         &mut self,
-        mut schema: Option<DFSchema>,
-    ) -> Option<DFSchema> {
+        mut schema: Option<DFSchemaRef>,
+    ) -> Option<DFSchemaRef> {
         std::mem::swap(&mut self.outer_query_schema, &mut schema);
         schema
     }

@@ -564,7 +564,9 @@ impl<'a> Tokenizer<'a> {
 
             "Utf8" => Token::SimpleType(DataType::Utf8),
             "LargeUtf8" => Token::SimpleType(DataType::LargeUtf8),
+            "Utf8View" => Token::SimpleType(DataType::Utf8View),
             "Binary" => Token::SimpleType(DataType::Binary),
+            "BinaryView" => Token::SimpleType(DataType::BinaryView),
             "LargeBinary" => Token::SimpleType(DataType::LargeBinary),
 
             "Float16" => Token::SimpleType(DataType::Float16),
@@ -772,11 +774,13 @@ mod test {
             DataType::Interval(IntervalUnit::DayTime),
             DataType::Interval(IntervalUnit::MonthDayNano),
             DataType::Binary,
+            DataType::BinaryView,
             DataType::FixedSizeBinary(0),
             DataType::FixedSizeBinary(1234),
             DataType::FixedSizeBinary(-432),
             DataType::LargeBinary,
             DataType::Utf8,
+            DataType::Utf8View,
             DataType::LargeUtf8,
             DataType::Decimal128(7, 12),
             DataType::Decimal256(6, 13),
