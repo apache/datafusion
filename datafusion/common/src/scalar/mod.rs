@@ -1719,7 +1719,7 @@ impl ScalarValue {
                 let array = scalars
                     .map(|sv| {
                         if let ScalarValue::Utf8View(v) = sv {
-                            Ok(v.unwrap_or_default())
+                            Ok(v)
                         } else {
                             _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
@@ -1728,7 +1728,7 @@ impl ScalarValue {
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let array = StringViewArray::from_iter_values(array.into_iter());
+                let array = StringViewArray::from(array);
                 Arc::new(array)
             }
             // explicitly enumerate unsupported types so newly added
