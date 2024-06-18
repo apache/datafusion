@@ -66,10 +66,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         cte_query: Query,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // CTE expr don't need extend outer_query_schema,
-        // so we clone a new planner_context here.
-        let mut cte_planner_context = planner_context.clone();
-        self.query_to_plan(cte_query, &mut cte_planner_context)
+        self.query_to_plan(cte_query, planner_context)
     }
 
     fn recursive_cte(
@@ -113,8 +110,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // allow us to infer the schema to be used in the recursive term.
 
         // ---------- Step 1: Compile the static term ------------------
-        let static_plan =
-            self.set_expr_to_plan(*left_expr, &mut planner_context.clone())?;
+        let static_plan = self.set_expr_to_plan(*left_expr, planner_context)?;
 
         // Since the recursive CTEs include a component that references a
         // table with its name, like the example below:
@@ -166,8 +162,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // this uses the named_relation we inserted above to resolve the
         // relation. This ensures that the recursive term uses the named relation logical plan
         // and thus the 'continuance' physical plan as its input and source
-        let recursive_plan =
-            self.set_expr_to_plan(*right_expr, &mut planner_context.clone())?;
+        let recursive_plan = self.set_expr_to_plan(*right_expr, planner_context)?;
 
         // Check if the recursive term references the CTE itself,
         // if not, it is a non-recursive CTE
