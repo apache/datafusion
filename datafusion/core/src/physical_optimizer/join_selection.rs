@@ -42,6 +42,7 @@ use datafusion_expr::sort_properties::SortProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::joins::utils::{project_index_to_exprs, remap_join_projections_join_to_output};
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -193,8 +194,28 @@ pub fn swap_hash_join(
         Ok(Arc::new(new_join))
     } else {
         // TODO avoid adding ProjectionExec again and again, only adding Final Projection
+        // ADR: FIXME the projection inside the hash join functionality is not consistent
+        // see https://github.com/apache/datafusion/commit/afddb321e9a98ffc1947005c38b6b50a6ef2a401
+        // Failing to do the below code will create a projection exec with a projection that is
+        // possibly outside the schema.
+        let actual_projection = if new_join.projection.is_some() {
+            let tmp = remap_join_projections_join_to_output(
+                new_join.left().clone(),
+                new_join.right().clone(),
+                new_join.join_type(),
+                new_join.projection.clone(),
+            )?.unwrap();
+            project_index_to_exprs(
+               &tmp,
+               &new_join.schema()
+            )
+        } else {
+            swap_reverting_projection(&left.schema(), &right.schema())
+        };
+        // let swap_proj = swap_reverting_projection(&left.schema(), &right.schema());
+
         let proj = ProjectionExec::try_new(
-            swap_reverting_projection(&left.schema(), &right.schema()),
+            actual_projection,
             Arc::new(new_join),
         )?;
         Ok(Arc::new(proj))
