@@ -149,7 +149,7 @@ impl GroupValues for GroupValuesRows {
 
         let mut group_values = match self.group_values.take() {
             Some(group_values) => group_values,
-            None => self.row_converter.empty_rows(n_rows, 0),
+            None => self.row_converter.empty_rows(0, 0),
         };
 
         // tracks to which group each of the input rows belongs
