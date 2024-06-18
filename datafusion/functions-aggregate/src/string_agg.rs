@@ -40,7 +40,6 @@ make_udaf_expr_and_func!(
 #[derive(Debug)]
 pub struct StringAgg {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl StringAgg {
@@ -55,7 +54,6 @@ impl StringAgg {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![],
         }
     }
 }
@@ -99,10 +97,6 @@ impl AggregateUDFImpl for StringAgg {
                 &acc_args.input_exprs[1]
             ),
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
     }
 }
 
