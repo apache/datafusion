@@ -247,7 +247,7 @@ pub fn logical_plan_from_bytes_with_extension_codec(
 /// Serialize a PhysicalPlan as bytes
 pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    physical_plan_to_bytes_with_extension_codec(plan, &extension_codec)
+    physical_plan_to_bytes_with_extension_codec(plan, &[Arc::new(extension_codec)])
 }
 
 /// Serialize a PhysicalPlan as JSON
@@ -264,10 +264,10 @@ pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
 /// Serialize a PhysicalPlan as bytes, using the provided extension codec
 pub fn physical_plan_to_bytes_with_extension_codec(
     plan: Arc<dyn ExecutionPlan>,
-    extension_codec: &dyn PhysicalExtensionCodec,
+    extension_codecs: &[Arc<dyn PhysicalExtensionCodec>],
 ) -> Result<Bytes> {
     let protobuf =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, extension_codec)?;
+        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, extension_codecs)?;
     let mut buffer = BytesMut::new();
     protobuf
         .encode(&mut buffer)
@@ -293,16 +293,20 @@ pub fn physical_plan_from_bytes(
     ctx: &SessionContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    physical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
+    physical_plan_from_bytes_with_extension_codec(
+        bytes,
+        ctx,
+        &[Arc::new(extension_codec)],
+    )
 }
 
 /// Deserialize a PhysicalPlan from bytes
 pub fn physical_plan_from_bytes_with_extension_codec(
     bytes: &[u8],
     ctx: &SessionContext,
-    extension_codec: &dyn PhysicalExtensionCodec,
+    extension_codecs: &[Arc<dyn PhysicalExtensionCodec>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
         .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
-    protobuf.try_into_physical_plan(ctx, &ctx.runtime_env(), extension_codec)
+    protobuf.try_into_physical_plan(ctx, &ctx.runtime_env(), extension_codecs)
 }

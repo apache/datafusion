@@ -90,7 +90,7 @@ use datafusion_proto::protobuf;
 fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    roundtrip_test_and_return(exec_plan, &ctx, &codec)?;
+    roundtrip_test_and_return(exec_plan, &ctx, &[Arc::new(codec)])?;
     Ok(())
 }
 
@@ -103,14 +103,14 @@ fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
 fn roundtrip_test_and_return(
     exec_plan: Arc<dyn ExecutionPlan>,
     ctx: &SessionContext,
-    codec: &dyn PhysicalExtensionCodec,
+    codecs: &[Arc<dyn PhysicalExtensionCodec>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let proto: protobuf::PhysicalPlanNode =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec)
+        protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codecs)
             .expect("to proto");
     let runtime = ctx.runtime_env();
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(ctx, runtime.deref(), codec)
+        .try_into_physical_plan(ctx, runtime.deref(), codecs)
         .expect("from proto");
     assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
     Ok(result_exec_plan)
@@ -127,7 +127,7 @@ fn roundtrip_test_with_context(
     ctx: &SessionContext,
 ) -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
-    roundtrip_test_and_return(exec_plan, ctx, &codec)?;
+    roundtrip_test_and_return(exec_plan, ctx, &[Arc::new(codec)])?;
     Ok(())
 }
 
@@ -816,7 +816,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = ScalarUDFExtensionCodec {};
-    roundtrip_test_and_return(aggregate, &ctx, &codec)?;
+    roundtrip_test_and_return(aggregate, &ctx, &[Arc::new(codec)])?;
     Ok(())
 }
 
@@ -928,7 +928,7 @@ fn roundtrip_csv_sink() -> Result<()> {
             Some(sort_order),
         )),
         &ctx,
-        &codec,
+        &[Arc::new(codec)],
     )
     .unwrap();
 
