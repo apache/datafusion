@@ -585,6 +585,17 @@ macro_rules! get_data_page_statistics {
                 )),
                 Some(DataType::Int32) => Ok(Arc::new(Int32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Float16) => Ok(Arc::new(
+                    Float16Array::from_iter(
+                        [<$stat_type_prefix Float32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| Some(f16::from_f32(x)))
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
                 Some(DataType::Float32) => Ok(Arc::new(Float32Array::from_iter([<$stat_type_prefix Float32DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter([<$stat_type_prefix Float64DataPageStatsIterator>]::new($iterator).flatten()))),
                 _ => unimplemented!("Data type not supported for data page statistics"),

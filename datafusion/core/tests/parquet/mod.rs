@@ -594,7 +594,8 @@ fn make_f32_batch(v: Vec<f32>) -> RecordBatch {
 }
 
 fn make_f16_batch(v: Vec<f16>) -> RecordBatch {
-    let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Float16, true)]));
+    let schema: Arc<Schema> =
+        Arc::new(Schema::new(vec![Field::new("f", DataType::Float16, true)]));
     let array = Arc::new(Float16Array::from(v)) as ArrayRef;
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
