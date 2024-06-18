@@ -729,10 +729,14 @@ impl<'a> StatisticsConverter<'a> {
     ///   .iter()
     /// );
     /// ```
-    pub fn row_group_row_counts<I>(metadatas: I) -> Result<UInt64Array>
+    pub fn row_group_row_counts<I>(&self, metadatas: I) -> Result<Option<UInt64Array>>
     where
         I: IntoIterator<Item = &'a RowGroupMetaData>,
     {
+        let Some(_) = self.parquet_index else {
+            return Ok(None);
+        };
+
         let mut builder = UInt64Array::builder(10);
         for metadata in metadatas.into_iter() {
             let row_count = metadata.num_rows();
@@ -743,7 +747,7 @@ impl<'a> StatisticsConverter<'a> {
             })?;
             builder.append_value(row_count);
         }
-        Ok(builder.finish())
+        Ok(Some(builder.finish()))
     }
 
     /// Create a new `StatisticsConverter` to extract statistics for a column
