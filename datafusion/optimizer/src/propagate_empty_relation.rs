@@ -458,38 +458,32 @@ mod tests {
         let left_lp = if left_empty {
             let left_table_scan = test_table_scan()?;
 
-            let left = LogicalPlanBuilder::from(left_table_scan)
+            LogicalPlanBuilder::from(left_table_scan)
                 .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
-                .build()?;
-
-            left
+                .build()
         } else {
             let scan = test_table_scan_with_name("left").unwrap();
-            LogicalPlanBuilder::from(scan).build().unwrap()
-        };
+            LogicalPlanBuilder::from(scan).build()
+        }?;
 
         let right_lp = if right_empty {
             let right_table_scan = test_table_scan_with_name("right")?;
 
-            let right = LogicalPlanBuilder::from(right_table_scan)
+            LogicalPlanBuilder::from(right_table_scan)
                 .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
-                .build()?;
-
-            right
+                .build()
         } else {
             let scan = test_table_scan_with_name("right").unwrap();
-            LogicalPlanBuilder::from(scan).build().unwrap()
-        };
+            LogicalPlanBuilder::from(scan).build()
+        }?;
 
         let plan = LogicalPlanBuilder::from(left_lp)
             .join_using(
                 right_lp,
                 join_type,
                 vec![Column::from_name("a".to_string())],
-            )
-            .unwrap()
-            .build()
-            .unwrap();
+            )?
+            .build()?;
 
         let expected = "EmptyRelation";
 

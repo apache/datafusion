@@ -193,11 +193,9 @@ fn generate_optimized_plan_with_rules(
         .with_max_passes(1)
         .with_skip_failing_rules(false);
     let optimizer = Optimizer::with_rules(rules);
-    let optimized_plan = optimizer
+    optimizer
         .optimize(plan, config, observe)
-        .expect("failed to optimize plan");
-
-    optimized_plan
+        .expect("failed to optimize plan")
 }
 
 pub fn assert_optimized_plan_eq_with_rules(
