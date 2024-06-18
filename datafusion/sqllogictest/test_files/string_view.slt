@@ -20,14 +20,47 @@ create table test as values (arrow_cast('Andrew', 'Utf8View'), arrow_cast('X', '
                            (arrow_cast('Xiangpeng', 'Utf8View'), arrow_cast('Xiangpeng', 'Utf8View')),
                            (arrow_cast('Raphael', 'Utf8View'), arrow_cast('R', 'Utf8View'));
 
-query ?
+
+
+query B
+select arrow_cast('NULL', 'Utf8View') = arrow_cast('Andrew', 'Utf8View');
+----
+false
+
+query B
+select arrow_cast('NULL', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View');
+----
+true
+
+query B
+select arrow_cast('Andrew', 'Utf8View') = arrow_cast('Andrew', 'Utf8View');
+----
+true
+
+query B
+select arrow_cast('Xiangpeng', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View');
+----
+true
+
+query ??
 select * from test where column1 = column2;
+----
+Xiangpeng Xiangpeng
 
-query ?
+query ??
 select * from test where column1 <> column2;
+----
+Andrew X
+Raphael R
 
-query ?
+
+query ??
 select * from test where column1 = arrow_cast('Andrew', 'Utf8View');
+----
+Andrew X
 
-query ?
+query ??
 select * from test where column1 <> arrow_cast('Andrew', 'Utf8View');
+----
+Xiangpeng Xiangpeng
+Raphael R
