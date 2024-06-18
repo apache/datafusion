@@ -79,6 +79,7 @@ use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
     ScalarUDFImpl, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
+use datafusion_functions_aggregate::string_agg::StringAgg;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
@@ -356,6 +357,21 @@ fn rountrip_aggregate() -> Result<()> {
             Vec::new(),
             Vec::new(),
         ))],
+        // STRING_AGG
+        vec![udaf::create_aggregate_expr(
+            &AggregateUDF::new_from_impl(StringAgg::new()),
+            &[
+                cast(col("b", &schema)?, &schema, DataType::Utf8)?,
+                lit(ScalarValue::Utf8(Some(",".to_string()))),
+            ],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "STRING_AGG(name, ',')",
+            false,
+            false,
+        )?],
     ];
 
     for aggregates in test_cases {
