@@ -1033,6 +1033,8 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     use arrow::datatypes::IntervalUnit::*;
     use arrow::datatypes::TimeUnit::*;
 
+    println!("temp coercion: {lhs_type:?}, {rhs_type:?}");
+
     match (lhs_type, rhs_type) {
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
@@ -1055,7 +1057,9 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
                         ("UTC", "+00:00") | ("+00:00", "UTC") => Some(lhs_tz.clone()),
                         (lhs, rhs) if lhs == rhs => Some(lhs_tz.clone()),
                         // can't cast across timezones
-                        _ => None,
+                        _ => {
+                            return None;
+                        }
                     }
                 }
                 (Some(lhs_tz), None) => Some(lhs_tz.clone()),
