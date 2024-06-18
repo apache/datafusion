@@ -18,9 +18,9 @@
 //! This example shows how we can use the structures that DataFusion provide to perform
 //! SQL Analysis.
 //! We'll show how we can count the amount of join's in a query as well as how many
-//! join tree's there are
+//! join tree's there are with their respective join count
 
-use std::{fs, sync::Arc};
+use std::sync::Arc;
 
 use datafusion::common::Result;
 use datafusion::{
@@ -48,8 +48,29 @@ fn total_join_count(plan: &LogicalPlan) -> usize {
     total
 }
 
-/// Counts the total amount of joins and collects every join tree with it's join count
-/// The list of groups sums to the total count
+/// Counts the total amount of joins and collects every join tree in the plan with their respective join count
+/// A join tree is defined as the largest sub trees which consistt entirely of joins
+///   
+/// For example:
+///       
+///         JOIN
+///         /  \
+///       A   JOIN
+///            /  \
+///           B    C
+///       
+/// has a single join tree (A-B-C) which will result in (2, [2])
+/// but this plan:
+///       
+///         JOIN
+///         /  \
+///       A   GROUP
+///              |
+///             JOIN
+///             /  \
+///            B    C
+///       
+/// Has two join trees (A-, B-C) which will result in (2, [1, 1])
 fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
     // this works the same way as `total_count`, but now when we encounter a Join
     // we try to collect it's entire tree
@@ -73,7 +94,18 @@ fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
     (total, groups)
 }
 
-// count the entire join tree and return it's inputs using TreeNode API
+/// Count the entire join tree and return it's inputs using TreeNode API
+/// So if this function receives following plan:
+///       
+///         JOIN
+///         /  \
+///       A   GROUP
+///              |
+///             JOIN
+///             /  \
+///            B    C
+///
+/// It will return (1, [A, GROUP])
 fn count_tree(join: &LogicalPlan) -> (usize, Vec<&LogicalPlan>) {
     let mut inputs = Vec::new();
     let mut total = 0;
@@ -82,7 +114,21 @@ fn count_tree(join: &LogicalPlan) -> (usize, Vec<&LogicalPlan>) {
         // Some extra knowledge:
         // optimized plans have their projections pushed down as far as possible, which sometimes results in a projection going in between 2 subsequent joins
         // giving the illusion these joins are not "related", when in fact they are.
-        // just continue the recursion in this case
+        // This plan:
+        //   JOIN
+        //   /  \
+        // A   PROJECTION
+        //        |
+        //       JOIN
+        //       /  \
+        //      B    C
+        // is the same as:
+        //   JOIN
+        //   /  \
+        // A   JOIN
+        //     /  \
+        //    B    C
+        // we can continue the recursion in this case
         if let LogicalPlan::Projection(_) = node {
             return Ok(TreeNodeRecursion::Continue);
         }
@@ -107,6 +153,99 @@ async fn main() -> Result<()> {
     // To show how we can count the joins in a sql query we'll be using query 88 from the
     // TPC-DS benchmark. It has a lot of joins, cross-joins and multiple join-trees, perfect for our example
 
+    let tpcds_query_88 = "
+select  *
+from
+ (select count(*) h8_30_to_9
+ from store_sales, household_demographics , time_dim, store
+ where ss_sold_time_sk = time_dim.t_time_sk   
+     and ss_hdemo_sk = household_demographics.hd_demo_sk 
+     and ss_store_sk = s_store_sk
+     and time_dim.t_hour = 8
+     and time_dim.t_minute >= 30
+     and ((household_demographics.hd_dep_count = 3 and household_demographics.hd_vehicle_count<=3+2) or
+          (household_demographics.hd_dep_count = 0 and household_demographics.hd_vehicle_count<=0+2) or
+          (household_demographics.hd_dep_count = 1 and household_demographics.hd_vehicle_count<=1+2)) 
+     and store.s_store_name = 'ese') s1,
+ (select count(*) h9_to_9_30 
+ from store_sales, household_demographics , time_dim, store
+ where ss_sold_time_sk = time_dim.t_time_sk
+     and ss_hdemo_sk = household_demographics.hd_demo_sk
+     and ss_store_sk = s_store_sk 
+     and time_dim.t_hour = 9 
+     and time_dim.t_minute < 30
+     and ((household_demographics.hd_dep_count = 3 and household_demographics.hd_vehicle_count<=3+2) or
+          (household_demographics.hd_dep_count = 0 and household_demographics.hd_vehicle_count<=0+2) or
+          (household_demographics.hd_dep_count = 1 and household_demographics.hd_vehicle_count<=1+2))
+     and store.s_store_name = 'ese') s2,
+ (select count(*) h9_30_to_10 
+ from store_sales, household_demographics , time_dim, store
+ where ss_sold_time_sk = time_dim.t_time_sk
+     and ss_hdemo_sk = household_demographics.hd_demo_sk
+     and ss_store_sk = s_store_sk
+     and time_dim.t_hour = 9
+     and time_dim.t_minute >= 30
+     and ((household_demographics.hd_dep_count = 3 and household_demographics.hd_vehicle_count<=3+2) or
+          (household_demographics.hd_dep_count = 0 and household_demographics.hd_vehicle_count<=0+2) or
+          (household_demographics.hd_dep_count = 1 and household_demographics.hd_vehicle_count<=1+2))
+     and store.s_store_name = 'ese') s3,
+ (select count(*) h10_to_10_30
+ from store_sales, household_demographics , time_dim, store
+ where ss_sold_time_sk = time_dim.t_time_sk
+     and ss_hdemo_sk = household_demographics.hd_demo_sk
+     and ss_store_sk = s_store_sk
+     and time_dim.t_hour = 10 
+     and time_dim.t_minute < 30
+     and ((household_demographics.hd_dep_count = 3 and household_demographics.hd_vehicle_count<=3+2) or
+          (household_demographics.hd_dep_count = 0 and household_demographics.hd_vehicle_count<=0+2) or
+          (household_demographics.hd_dep_count = 1 and household_demographics.hd_vehicle_count<=1+2))
+     and store.s_store_name = 'ese') s4,
+ (select count(*) h10_30_to_11
+ from store_sales, household_demographics , time_dim, store
+ where ss_sold_time_sk = time_dim.t_time_sk
+     and ss_hdemo_sk = household_demographics.hd_demo_sk
+     and ss_store_sk = s_store_sk
+     and time_dim.t_hour = 10 
+     and time_dim.t_minute >= 30
+     and ((household_demographics.hd_dep_count = 3 and household_demographics.hd_vehicle_count<=3+2) or
+          (household_demographics.hd_dep_count = 0 and household_demographics.hd_vehicle_count<=0+2) or
+          (household_demographics.hd_dep_count = 1 and household_demographics.hd_vehicle_count<=1+2))
+     and store.s_store_name = 'ese') s5,
+ (select count(*) h11_to_11_30
+ from store_sales, household_demographics , time_dim, store
+ where ss_sold_time_sk = time_dim.t_time_sk
+     and ss_hdemo_sk = household_demographics.hd_demo_sk
+     and ss_store_sk = s_store_sk 
+     and time_dim.t_hour = 11
+     and time_dim.t_minute < 30
+     and ((household_demographics.hd_dep_count = 3 and household_demographics.hd_vehicle_count<=3+2) or
+          (household_demographics.hd_dep_count = 0 and household_demographics.hd_vehicle_count<=0+2) or
+          (household_demographics.hd_dep_count = 1 and household_demographics.hd_vehicle_count<=1+2))
+     and store.s_store_name = 'ese') s6,
+ (select count(*) h11_30_to_12
+ from store_sales, household_demographics , time_dim, store
+ where ss_sold_time_sk = time_dim.t_time_sk
+     and ss_hdemo_sk = household_demographics.hd_demo_sk
+     and ss_store_sk = s_store_sk
+     and time_dim.t_hour = 11
+     and time_dim.t_minute >= 30
+     and ((household_demographics.hd_dep_count = 3 and household_demographics.hd_vehicle_count<=3+2) or
+          (household_demographics.hd_dep_count = 0 and household_demographics.hd_vehicle_count<=0+2) or
+          (household_demographics.hd_dep_count = 1 and household_demographics.hd_vehicle_count<=1+2))
+     and store.s_store_name = 'ese') s7,
+ (select count(*) h12_to_12_30
+ from store_sales, household_demographics , time_dim, store
+ where ss_sold_time_sk = time_dim.t_time_sk
+     and ss_hdemo_sk = household_demographics.hd_demo_sk
+     and ss_store_sk = s_store_sk
+     and time_dim.t_hour = 12
+     and time_dim.t_minute < 30
+     and ((household_demographics.hd_dep_count = 3 and household_demographics.hd_vehicle_count<=3+2) or
+          (household_demographics.hd_dep_count = 0 and household_demographics.hd_vehicle_count<=0+2) or
+          (household_demographics.hd_dep_count = 1 and household_demographics.hd_vehicle_count<=1+2))
+     and store.s_store_name = 'ese') s8;";
+
+    // first set up the config
     let config = SessionConfig::default();
     let ctx = SessionContext::new_with_config(config);
 
@@ -118,12 +257,8 @@ async fn main() -> Result<()> {
             Arc::new(MemTable::try_new(Arc::new(table.schema.clone()), vec![])?),
         )?;
     }
-
-    let query_88 = "datafusion/core/tests/tpc-ds/88.sql";
-    let sql = fs::read_to_string(query_88).expect("Could not read query");
-
     // We can create a logicalplan from a SQL query like this
-    let logical_plan = ctx.sql(&sql).await?.into_optimized_plan()?;
+    let logical_plan = ctx.sql(tpcds_query_88).await?.into_optimized_plan()?;
 
     println!(
         "Optimized Logical Plan:\n\n{}\n",
