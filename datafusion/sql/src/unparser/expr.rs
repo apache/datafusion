@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::util::display::array_value_to_string;
 use core::fmt;
 use std::{fmt::Display, vec};
 
@@ -826,20 +827,17 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
             ScalarValue::IntervalDayTime(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::IntervalMonthDayNano(Some(i)) => {
-                let mut s = vec![];
-                if i.months != 0 {
-                    s.push(format!("{} MONTH", i.months));
-                }
-                if i.days != 0 {
-                    s.push(format!("{} DAY", i.days));
-                }
-                if i.nanoseconds != 0 {
-                    s.push(Self::process_interval_nanosecond(i.nanoseconds));
-                }
-
+            ScalarValue::IntervalMonthDayNano(Some(_i)) => {
+                let wrap_array = v.to_array()?;
+                let Some(result) = array_value_to_string(&wrap_array, 0).ok() else {
+                    return internal_err!(
+                        "Unable to convert IntervalMonthDayNano to string"
+                    );
+                };
                 let interval = Interval {
-                    value: Box::new(ast::Expr::Value(SingleQuotedString(s.join(" ")))),
+                    value: Box::new(ast::Expr::Value(SingleQuotedString(
+                        result.to_uppercase(),
+                    ))),
                     leading_field: None,
                     leading_precision: None,
                     last_field: None,
@@ -876,35 +874,6 @@ impl Unparser<'_> {
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(..) => not_impl_err!("Unsupported scalar: {v:?}"),
         }
-    }
-
-    fn process_interval_nanosecond(nano: i64) -> String {
-        let mut s = vec![];
-        let hour = nano / 3_600_000_000_000;
-        let minute = nano / 60_000_000_000 % 60;
-        let second = nano / 1_000_000_000 % 60;
-        let millisecond = nano / 1_000_000 % 1_000;
-        let microsecond = nano / 1_000 % 1_000;
-        let nanosecond = nano % 1_000;
-        if hour != 0 {
-            s.push(format!("{} HOUR", hour));
-        }
-        if minute != 0 {
-            s.push(format!("{} MINUTE", minute));
-        }
-        if second != 0 {
-            s.push(format!("{} SECOND", second));
-        }
-        if millisecond != 0 {
-            s.push(format!("{} MILLISECOND", millisecond));
-        }
-        if microsecond != 0 {
-            s.push(format!("{} MICROSECOND", microsecond));
-        }
-        if nanosecond != 0 {
-            s.push(format!("{} NANOSECOND", nanosecond));
-        }
-        s.join(" ")
     }
 
     fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
@@ -1305,71 +1274,28 @@ mod tests {
             (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
             (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
             (
-                interval_month_day_nano_lit("3 NANOSECOND"),
-                r#"INTERVAL '3 NANOSECOND'"#,
-            ),
-            (
-                interval_month_day_nano_lit("1000 NANOSECOND"),
-                r#"INTERVAL '1 MICROSECOND'"#,
-            ),
-            (
-                interval_month_day_nano_lit("1000000 NANOSECOND"),
-                r#"INTERVAL '1 MILLISECOND'"#,
-            ),
-            (
-                interval_month_day_nano_lit("1000000000 NANOSECOND"),
-                r#"INTERVAL '1 SECOND'"#,
-            ),
-            (
-                interval_month_day_nano_lit("1001001001 NANOSECOND"),
-                r#"INTERVAL '1 SECOND 1 MILLISECOND 1 MICROSECOND 1 NANOSECOND'"#,
-            ),
-            (
-                interval_month_day_nano_lit("3 SECOND"),
-                r#"INTERVAL '3 SECOND'"#,
-            ),
-            (
-                interval_month_day_nano_lit("3 MINUTE"),
-                r#"INTERVAL '3 MINUTE'"#,
-            ),
-            (
-                interval_month_day_nano_lit("3 HOUR"),
-                r#"INTERVAL '3 HOUR'"#,
-            ),
-            (
-                interval_month_day_nano_lit("3 HOUR 10 MINUTE 20 SECOND"),
-                r#"INTERVAL '3 HOUR 10 MINUTE 20 SECOND'"#,
-            ),
-            (interval_month_day_nano_lit("3 DAY"), r#"INTERVAL '3 DAY'"#),
-            (
-                interval_month_day_nano_lit("3 MONTH"),
-                r#"INTERVAL '3 MONTH'"#,
-            ),
-            (
-                interval_month_day_nano_lit("1 MONTH 1 DAY 10 SECOND"),
-                r#"INTERVAL '1 MONTH 1 DAY 10 SECOND'"#,
-            ),
-            (
-                interval_month_day_nano_lit("15 MONTH"),
-                r#"INTERVAL '15 MONTH'"#,
+                interval_month_day_nano_lit(
+                    "1 YEAR 1 MONTH 1 DAY 3 HOUR 10 MINUTE 20 SECOND",
+                ),
+                r#"INTERVAL '0 YEARS 13 MONS 1 DAYS 3 HOURS 10 MINS 20.000000000 SECS'"#,
             ),
             (
                 interval_month_day_nano_lit("1.5 MONTH"),
-                r#"INTERVAL '1 MONTH 15 DAY'"#,
+                r#"INTERVAL '0 YEARS 1 MONS 15 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
             ),
             (
                 interval_month_day_nano_lit("-3 MONTH"),
-                r#"INTERVAL '-3 MONTH'"#,
+                r#"INTERVAL '0 YEARS -3 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
             ),
             (
                 interval_month_day_nano_lit("1 MONTH")
                     .add(interval_month_day_nano_lit("1 DAY")),
-                r#"(INTERVAL '1 MONTH' + INTERVAL '1 DAY')"#,
+                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' + INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
             ),
             (
                 interval_month_day_nano_lit("1 MONTH")
                     .sub(interval_month_day_nano_lit("1 DAY")),
-                r#"(INTERVAL '1 MONTH' - INTERVAL '1 DAY')"#,
+                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
             ),
         ];
 
