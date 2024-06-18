@@ -52,7 +52,7 @@ OPTIONS:
 
         --maxrows <MAXROWS>
             The max number of rows to display for 'Table' format
-            [default: 40] [possible values: numbers(0/10/...), inf(no limit)]
+            [possible values: numbers(0/10/...), inf(no limit)] [default: 40]
 
         --mem-pool-type <MEM_POOL_TYPE>
             Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
