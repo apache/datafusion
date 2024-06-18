@@ -2801,3 +2801,26 @@ query B
 select current_time = current_time;
 ----
 true
+
+# Test temporal coercion for UTC
+query ?
+select arrow_cast('2024-06-17T11:00:00', 'Timestamp(Nanosecond, Some("UTC"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("UTC"))');
+----
+0 days -1 hours 0 mins 0.000000 secs
+
+query ?
+select arrow_cast('2024-06-17T13:00:00', 'Timestamp(Nanosecond, Some("+00:00"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("UTC"))');
+----
+0 days 1 hours 0 mins 0.000000 secs
+
+query ?
+select arrow_cast('2024-06-17T13:00:00', 'Timestamp(Nanosecond, Some("UTC"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("+00:00"))');
+----
+0 days 1 hours 0 mins 0.000000 secs
+
+# not supported: coercion across timezones
+query error
+select arrow_cast('2024-06-17T13:00:00', 'Timestamp(Nanosecond, Some("UTC"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("+01:00"))');
+
+query error
+select arrow_cast('2024-06-17T13:00:00', 'Timestamp(Nanosecond, Some("+00:00"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("+01:00"))');
