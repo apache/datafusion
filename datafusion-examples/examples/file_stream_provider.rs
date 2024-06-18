@@ -108,7 +108,8 @@ mod non_windows {
             // Reference time to use when deciding to fail the test
             let execution_start = Instant::now();
             if let Some(header) = maybe_header {
-                write_to_fifo(&file, &header, execution_start, broken_pipe_timeout).unwrap();
+                write_to_fifo(&file, &header, execution_start, broken_pipe_timeout)
+                    .unwrap();
             }
             for (cnt, line) in lines.iter().enumerate() {
                 while waiting_lock.load(Ordering::SeqCst) && cnt > wait_until {
@@ -185,7 +186,6 @@ mod non_windows {
 
         Ok(())
     }
-
 }
 
 #[tokio::main]
@@ -197,6 +197,6 @@ async fn main() -> datafusion_common::Result<()> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        non_windows::main()
+        non_windows::main().await
     }
 }
