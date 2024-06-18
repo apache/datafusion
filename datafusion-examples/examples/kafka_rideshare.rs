@@ -48,9 +48,10 @@ use datafusion_common::{
     franz_arrow::infer_arrow_schema_from_json_value, plan_err, ScalarValue,
 };
 use datafusion_expr::{
-    col, count, create_udwf, ident, max, min, Expr, LogicalPlanBuilder,
+    col, create_udwf, ident, max, min, Expr, LogicalPlanBuilder,
     PartitionEvaluator, TableType, Volatility, WindowFrame,
 };
+use datafusion_functions_aggregate::count::count;
 
 use datafusion::execution::SendableRecordBatchStream;
 

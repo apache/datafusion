@@ -52,7 +52,7 @@ apache-avro = { version = "0.16", default-features = false, features = [
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
-arrow-json = "51.0.0"
+arrow-json = { workspace = true }
 arrow-schema = { workspace = true }
 base64 = "0.22.1"
 chrono = { workspace = true }
@@ -64,6 +64,7 @@ object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 pyo3 = { version = "0.21.0", optional = true }
 serde_json = { workspace = true }
+sqlparser = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 instant = { version = "0.1", features = ["wasm-bindgen"] }

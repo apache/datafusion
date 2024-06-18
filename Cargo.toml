@@ -78,6 +78,7 @@ arrow-flight = { version = "52.0.0", features = [
 arrow-ipc = { version = "52.0.0", default-features = false, features = [
     "lz4",
 ] }
+arrow-json = { version = "52.0.0" }
 arrow-ord = { version = "52.0.0", default-features = false }
 arrow-schema = { version = "52.0.0", default-features = false }
 arrow-string = { version = "52.0.0", default-features = false }
@@ -92,6 +93,7 @@ datafusion-common = { path = "datafusion/common", version = "39.0.0", default-fe
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "39.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "39.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "39.0.0" }
+datafusion-franz = { path = "datafusion/franz", version = "39.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "39.0.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "39.0.0" }
 datafusion-functions-array = { path = "datafusion/functions-array", version = "39.0.0" }
@@ -104,7 +106,6 @@ datafusion-proto-common = { path = "datafusion/proto-common", version = "39.0.0"
 datafusion-sql = { path = "datafusion/sql", version = "39.0.0" }
 datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "39.0.0" }
 datafusion-substrait = { path = "datafusion/substrait", version = "39.0.0" }
-datafusion-franz = { path = "datafusion/franz", version = "39.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"

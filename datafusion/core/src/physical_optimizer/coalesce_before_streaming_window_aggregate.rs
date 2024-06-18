@@ -134,7 +134,7 @@ pub(crate) mod tests {
         let partial_agg = FranzStreamingWindowExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             source,
             Arc::clone(&schema),
@@ -167,7 +167,7 @@ pub(crate) mod tests {
         let partial_agg = FranzStreamingWindowExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             source,
             Arc::clone(&schema),

@@ -62,11 +62,12 @@ dashmap = { workspace = true }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
+datafusion-franz = { workspace = true }
+datafusion-functions = { workspace = true }
+datafusion-functions-aggregate = { workspace = true, default-features = true }
 datafusion-optimizer = { workspace = true, default-features = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
 datafusion-sql = { workspace = true }
-datafusion-functions = { workspace = true }
-datafusion-franz = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
@@ -88,8 +89,8 @@ nix = { version = "0.28.0", features = ["fs"] }
 
 [dependencies]
 apache-avro = "0.16.0"
-arrow-json = "51.0.0"
+arrow-json = { workspace = true }
 base64 = "0.22.0"
 tracing = "0.1.40"
-tracing-subscriber = "0.3.18"
 tracing-log = "0.2.0"
+tracing-subscriber = "0.3.18"
