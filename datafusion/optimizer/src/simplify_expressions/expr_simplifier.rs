@@ -2730,11 +2730,10 @@ mod tests {
         // unsupported cases
         assert_no_change(regex_match(col("c1"), lit("foo.*")));
         assert_no_change(regex_match(col("c1"), lit("(foo)")));
-        assert_no_change(regex_match(col("c1"), lit("^foo")));
-        assert_no_change(regex_match(col("c1"), lit("foo$")));
         assert_no_change(regex_match(col("c1"), lit("%")));
         assert_no_change(regex_match(col("c1"), lit("_")));
         assert_no_change(regex_match(col("c1"), lit("f%o")));
+        assert_no_change(regex_match(col("c1"), lit("^f%o")));
         assert_no_change(regex_match(col("c1"), lit("f_o")));
 
         // empty cases
@@ -2827,12 +2826,19 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("(foo|ba_r)*")));
         assert_no_change(regex_match(col("c1"), lit("(fo_o|ba_r)*")));
         assert_no_change(regex_match(col("c1"), lit("^(foo|bar)*")));
-        assert_no_change(regex_match(col("c1"), lit("^foo|bar$")));
         assert_no_change(regex_match(col("c1"), lit("^(foo)(bar)$")));
         assert_no_change(regex_match(col("c1"), lit("^")));
         assert_no_change(regex_match(col("c1"), lit("$")));
         assert_no_change(regex_match(col("c1"), lit("$^")));
         assert_no_change(regex_match(col("c1"), lit("$foo^")));
+
+        // regular expressions that match a partial literal
+        assert_change(regex_match(col("c1"), lit("^foo")), like(col("c1"), "foo%"));
+        assert_change(regex_match(col("c1"), lit("foo$")), like(col("c1"), "%foo"));
+        assert_change(
+            regex_match(col("c1"), lit("^foo|bar$")),
+            like(col("c1"), "foo%").or(like(col("c1"), "%bar")),
+        );
 
         // OR-chain
         assert_change(
