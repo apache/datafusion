@@ -31,7 +31,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::LogicalPlan;
 use test_utils::tpcds::tpcds_schemas;
 
-/// Counts the total amount of joins in a plan
+/// Counts the total number of joins in a plan
 fn total_join_count(plan: &LogicalPlan) -> usize {
     let mut total = 0;
 
