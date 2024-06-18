@@ -19,11 +19,11 @@ use arrow::util::display::array_value_to_string;
 use core::fmt;
 use std::{fmt::Display, vec};
 
-use arrow_array::{Date32Array, Date64Array};
+use arrow_array::{Date32Array, Date64Array, TimestampNanosecondArray};
 use arrow_schema::DataType;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Expr as AstExpr, Function, FunctionArg, Ident, Interval, UnaryOperator,
+    self, Expr as AstExpr, Function, FunctionArg, Ident, Interval, TimezoneInfo, UnaryOperator,
 };
 
 use datafusion_common::{
@@ -819,8 +819,49 @@ impl Unparser<'_> {
             ScalarValue::TimestampMicrosecond(None, _) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
-            ScalarValue::TimestampNanosecond(Some(_ts), _) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::TimestampNanosecond(Some(_ts), tz) => {
+                if let Some(tz) = tz {
+                    let result = v
+                        .to_array()?
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .ok_or(internal_datafusion_err!(
+                            "Unable to downcast to TimestampNanosecond from TimestampNanosecond scalar"
+                        ))?
+                        .value_as_datetime_with_tz(0, tz.parse()?)
+                        .ok_or(internal_datafusion_err!(
+                            "Unable to convert TimestampNanosecond to DateTime"
+                        ))?;
+                    Ok(ast::Expr::Cast {
+                        kind: ast::CastKind::Cast,
+                        expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
+                            result.to_string(),
+                        ))),
+                        data_type: ast::DataType::Timestamp(None, TimezoneInfo::None),
+                        format: None,
+                    })
+                } else {
+                    let result = v
+                        .to_array()?
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .ok_or(internal_datafusion_err!(
+                            "Unable to downcast to TimestampNanosecond from TimestampNanosecond scalar"
+                        ))?
+                        .value_as_datetime(0)
+                        .ok_or(internal_datafusion_err!(
+                            "Unable to convert TimestampNanosecond to NaiveDateTime"
+                        ))?;
+
+                    Ok(ast::Expr::Cast {
+                        kind: ast::CastKind::Cast,
+                        expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
+                            result.to_string(),
+                        ))),
+                        data_type: ast::DataType::Timestamp(None, TimezoneInfo::None),
+                        format: None,
+                    })
+                }
             }
             ScalarValue::TimestampNanosecond(None, _) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
@@ -1150,6 +1191,17 @@ mod tests {
             (
                 Expr::Literal(ScalarValue::Date32(Some(-1))),
                 r#"CAST('1969-12-31' AS DATE)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::TimestampNanosecond(Some(10001), None)),
+                r#"CAST('1970-01-01 00:00:00.000010001' AS TIMESTAMP)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::TimestampNanosecond(
+                    Some(10001),
+                    Some("+08:00".into()),
+                )),
+                r#"CAST('1970-01-01 08:00:00.000010001 +08:00' AS TIMESTAMP)"#,
             ),
             (sum(col("a")), r#"sum(a)"#),
             (
