@@ -125,11 +125,17 @@ impl serde::Serialize for ArrowType {
                 arrow_type::ArrowTypeEnum::Utf8(v) => {
                     struct_ser.serialize_field("UTF8", v)?;
                 }
+                arrow_type::ArrowTypeEnum::Utf8View(v) => {
+                    struct_ser.serialize_field("UTF8VIEW", v)?;
+                }
                 arrow_type::ArrowTypeEnum::LargeUtf8(v) => {
                     struct_ser.serialize_field("LARGEUTF8", v)?;
                 }
                 arrow_type::ArrowTypeEnum::Binary(v) => {
                     struct_ser.serialize_field("BINARY", v)?;
+                }
+                arrow_type::ArrowTypeEnum::BinaryView(v) => {
+                    struct_ser.serialize_field("BINARYVIEW", v)?;
                 }
                 arrow_type::ArrowTypeEnum::FixedSizeBinary(v) => {
                     struct_ser.serialize_field("FIXEDSIZEBINARY", v)?;
@@ -216,9 +222,13 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             "FLOAT32",
             "FLOAT64",
             "UTF8",
+            "UTF8_VIEW",
+            "UTF8VIEW",
             "LARGE_UTF8",
             "LARGEUTF8",
             "BINARY",
+            "BINARY_VIEW",
+            "BINARYVIEW",
             "FIXED_SIZE_BINARY",
             "FIXEDSIZEBINARY",
             "LARGE_BINARY",
@@ -258,8 +268,10 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             Float32,
             Float64,
             Utf8,
+            Utf8View,
             LargeUtf8,
             Binary,
+            BinaryView,
             FixedSizeBinary,
             LargeBinary,
             Date32,
@@ -312,8 +324,10 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             "FLOAT32" => Ok(GeneratedField::Float32),
                             "FLOAT64" => Ok(GeneratedField::Float64),
                             "UTF8" => Ok(GeneratedField::Utf8),
+                            "UTF8VIEW" | "UTF8_VIEW" => Ok(GeneratedField::Utf8View),
                             "LARGEUTF8" | "LARGE_UTF8" => Ok(GeneratedField::LargeUtf8),
                             "BINARY" => Ok(GeneratedField::Binary),
+                            "BINARYVIEW" | "BINARY_VIEW" => Ok(GeneratedField::BinaryView),
                             "FIXEDSIZEBINARY" | "FIXED_SIZE_BINARY" => Ok(GeneratedField::FixedSizeBinary),
                             "LARGEBINARY" | "LARGE_BINARY" => Ok(GeneratedField::LargeBinary),
                             "DATE32" => Ok(GeneratedField::Date32),
@@ -451,6 +465,13 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Utf8)
 ;
                         }
+                        GeneratedField::Utf8View => {
+                            if arrow_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("UTF8VIEW"));
+                            }
+                            arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Utf8View)
+;
+                        }
                         GeneratedField::LargeUtf8 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("LARGEUTF8"));
@@ -463,6 +484,13 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                                 return Err(serde::de::Error::duplicate_field("BINARY"));
                             }
                             arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Binary)
+;
+                        }
+                        GeneratedField::BinaryView => {
+                            if arrow_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("BINARYVIEW"));
+                            }
+                            arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::BinaryView)
 ;
                         }
                         GeneratedField::FixedSizeBinary => {
@@ -6255,6 +6283,9 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::LargeUtf8Value(v) => {
                     struct_ser.serialize_field("largeUtf8Value", v)?;
                 }
+                scalar_value::Value::Utf8ViewValue(v) => {
+                    struct_ser.serialize_field("utf8ViewValue", v)?;
+                }
                 scalar_value::Value::Int8Value(v) => {
                     struct_ser.serialize_field("int8Value", v)?;
                 }
@@ -6348,6 +6379,10 @@ impl serde::Serialize for ScalarValue {
                     #[allow(clippy::needless_borrow)]
                     struct_ser.serialize_field("largeBinaryValue", pbjson::private::base64::encode(&v).as_str())?;
                 }
+                scalar_value::Value::BinaryViewValue(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    struct_ser.serialize_field("binaryViewValue", pbjson::private::base64::encode(&v).as_str())?;
+                }
                 scalar_value::Value::Time64Value(v) => {
                     struct_ser.serialize_field("time64Value", v)?;
                 }
@@ -6383,6 +6418,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "utf8Value",
             "large_utf8_value",
             "largeUtf8Value",
+            "utf8_view_value",
+            "utf8ViewValue",
             "int8_value",
             "int8Value",
             "int16_value",
@@ -6439,6 +6476,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "binaryValue",
             "large_binary_value",
             "largeBinaryValue",
+            "binary_view_value",
+            "binaryViewValue",
             "time64_value",
             "time64Value",
             "interval_daytime_value",
@@ -6457,6 +6496,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             BoolValue,
             Utf8Value,
             LargeUtf8Value,
+            Utf8ViewValue,
             Int8Value,
             Int16Value,
             Int32Value,
@@ -6485,6 +6525,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             DictionaryValue,
             BinaryValue,
             LargeBinaryValue,
+            BinaryViewValue,
             Time64Value,
             IntervalDaytimeValue,
             IntervalMonthDayNano,
@@ -6515,6 +6556,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "boolValue" | "bool_value" => Ok(GeneratedField::BoolValue),
                             "utf8Value" | "utf8_value" => Ok(GeneratedField::Utf8Value),
                             "largeUtf8Value" | "large_utf8_value" => Ok(GeneratedField::LargeUtf8Value),
+                            "utf8ViewValue" | "utf8_view_value" => Ok(GeneratedField::Utf8ViewValue),
                             "int8Value" | "int8_value" => Ok(GeneratedField::Int8Value),
                             "int16Value" | "int16_value" => Ok(GeneratedField::Int16Value),
                             "int32Value" | "int32_value" => Ok(GeneratedField::Int32Value),
@@ -6543,6 +6585,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "dictionaryValue" | "dictionary_value" => Ok(GeneratedField::DictionaryValue),
                             "binaryValue" | "binary_value" => Ok(GeneratedField::BinaryValue),
                             "largeBinaryValue" | "large_binary_value" => Ok(GeneratedField::LargeBinaryValue),
+                            "binaryViewValue" | "binary_view_value" => Ok(GeneratedField::BinaryViewValue),
                             "time64Value" | "time64_value" => Ok(GeneratedField::Time64Value),
                             "intervalDaytimeValue" | "interval_daytime_value" => Ok(GeneratedField::IntervalDaytimeValue),
                             "intervalMonthDayNano" | "interval_month_day_nano" => Ok(GeneratedField::IntervalMonthDayNano),
@@ -6594,6 +6637,12 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                                 return Err(serde::de::Error::duplicate_field("largeUtf8Value"));
                             }
                             value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::LargeUtf8Value);
+                        }
+                        GeneratedField::Utf8ViewValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("utf8ViewValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::Utf8ViewValue);
                         }
                         GeneratedField::Int8Value => {
                             if value__.is_some() {
@@ -6771,6 +6820,12 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                                 return Err(serde::de::Error::duplicate_field("largeBinaryValue"));
                             }
                             value__ = map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| scalar_value::Value::LargeBinaryValue(x.0));
+                        }
+                        GeneratedField::BinaryViewValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("binaryViewValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| scalar_value::Value::BinaryViewValue(x.0));
                         }
                         GeneratedField::Time64Value => {
                             if value__.is_some() {
