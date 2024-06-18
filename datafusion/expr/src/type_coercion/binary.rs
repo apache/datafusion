@@ -1033,8 +1033,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     use arrow::datatypes::IntervalUnit::*;
     use arrow::datatypes::TimeUnit::*;
 
-    println!("temp coercion: {lhs_type:?}, {rhs_type:?}");
-
     match (lhs_type, rhs_type) {
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
