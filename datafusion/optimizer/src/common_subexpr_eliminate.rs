@@ -197,8 +197,8 @@ impl CommonSubexprEliminate {
         let mut new_input = new_input.data;
 
         if !common_exprs.is_empty() {
+            assert!(transformed);
             new_input = build_common_expr_project_plan(new_input, common_exprs)?;
-            transformed = true;
         }
 
         // return the transformed information
