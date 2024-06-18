@@ -510,81 +510,6 @@ async fn test_multiple_data_pages_nulls_and_negatives() {
 // . Different data types
 // . Different row group sizes
 
-// Float 16, 32, 64
-#[tokio::test]
-async fn test_float_16() {
-    let reader = TestReader {
-        scenario: Scenario::Float16,
-        row_per_group: 5,
-    }
-    .build()
-    .await;
-
-    Test {
-        reader: &reader,
-        expected_min: Arc::new(Float16Array::from(
-            vec![-5.0, -4.0, -0.0, 5.0]
-                .into_iter()
-                .map(f16::from_f32)
-                .collect::<Vec<_>>(),
-        )),
-        expected_max: Arc::new(Float16Array::from(
-            vec![-1.0, 0.0, 4.0, 9.0]
-                .into_iter()
-                .map(f16::from_f32)
-                .collect::<Vec<_>>(),
-        )),
-        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
-        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
-        column_name: "f",
-        check: Check::RowGroup,
-    }
-    .run();
-}
-
-#[tokio::test]
-async fn test_float_32() {
-    // This creates a parquet files of 3 columns named "f16", "f32", "f64"
-    let reader = TestReader {
-        scenario: Scenario::Float32,
-        row_per_group: 5,
-    }
-    .build()
-    .await;
-
-    Test {
-        reader: &reader,
-        expected_min: Arc::new(Float32Array::from(vec![-5.0, -4.0, -0.0, 5.0])),
-        expected_max: Arc::new(Float32Array::from(vec![-1.0, 0.0, 4.0, 9.0])),
-        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
-        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
-        column_name: "f",
-        check: Check::Both,
-    }
-    .run();
-}
-
-#[tokio::test]
-async fn test_float_64() {
-    let reader = TestReader {
-        scenario: Scenario::Float64,
-        row_per_group: 5,
-    }
-    .build()
-    .await;
-
-    Test {
-        reader: &reader,
-        expected_min: Arc::new(Float64Array::from(vec![-5.0, -4.0, -0.0, 5.0])),
-        expected_max: Arc::new(Float64Array::from(vec![-1.0, 0.0, 4.0, 9.0])),
-        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
-        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
-        column_name: "f",
-        check: Check::Both,
-    }
-    .run();
-}
-
 // Four different integer types
 #[tokio::test]
 async fn test_int_64() {
@@ -1608,7 +1533,29 @@ async fn test_float64() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "f",
-        check: Check::RowGroup,
+        check: Check::Both,
+    }
+    .run();
+}
+
+#[tokio::test]
+async fn test_float32() {
+    // This creates a parquet files of 3 columns named "f16", "f32", "f64"
+    let reader = TestReader {
+        scenario: Scenario::Float32,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        expected_min: Arc::new(Float32Array::from(vec![-5.0, -4.0, -0.0, 5.0])),
+        expected_max: Arc::new(Float32Array::from(vec![-1.0, 0.0, 4.0, 9.0])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        column_name: "f",
+        check: Check::Both,
     }
     .run();
 }
@@ -1641,7 +1588,7 @@ async fn test_float16() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "f",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }

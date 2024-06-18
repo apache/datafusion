@@ -552,6 +552,18 @@ make_data_page_stats_iterator!(MinInt32DataPageStatsIterator, min, Index::INT32,
 make_data_page_stats_iterator!(MaxInt32DataPageStatsIterator, max, Index::INT32, i32);
 make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min, Index::INT64, i64);
 make_data_page_stats_iterator!(MaxInt64DataPageStatsIterator, max, Index::INT64, i64);
+make_data_page_stats_iterator!(
+    MinFloat16DataPageStatsIterator,
+    min,
+    Index::FIXED_LEN_BYTE_ARRAY,
+    f16
+);
+make_data_page_stats_iterator!(
+    MaxFloat16DataPageStatsIterator,
+    max,
+    Index::FIXED_LEN_BYTE_ARRAY,
+    f16
+);
 make_data_page_stats_iterator!(MinFloat32DataPageStatsIterator, min, Index::FLOAT, f32);
 make_data_page_stats_iterator!(MaxFloat32DataPageStatsIterator, max, Index::FLOAT, f32);
 make_data_page_stats_iterator!(MinFloat64DataPageStatsIterator, min, Index::DOUBLE, f64);
@@ -700,6 +712,11 @@ where
             .map(|x| x.null_count.map(|x| x as u64))
             .collect::<Vec<_>>(),
         Index::DOUBLE(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::FIXED_LEN_BYTE_ARRAY(native_index) => native_index
             .indexes
             .iter()
             .map(|x| x.null_count.map(|x| x as u64))
