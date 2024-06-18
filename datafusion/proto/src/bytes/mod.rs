@@ -254,9 +254,11 @@ pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
 #[cfg(feature = "json")]
 pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    let protobuf =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, &extension_codec)
-            .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
+    let protobuf = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        plan,
+        &[Arc::new(extension_codec)],
+    )
+    .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     serde_json::to_string(&protobuf)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))
 }
@@ -284,7 +286,7 @@ pub fn physical_plan_from_json(
     let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    back.try_into_physical_plan(ctx, &ctx.runtime_env(), &extension_codec)
+    back.try_into_physical_plan(ctx, &ctx.runtime_env(), &[Arc::new(extension_codec)])
 }
 
 /// Deserialize a PhysicalPlan from bytes
