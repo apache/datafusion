@@ -26,6 +26,7 @@ use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
+use datafusion_common::file_options::file_type::{ExternalCSV, ExternalFileType};
 use datafusion_functions_aggregate::count::count_udaf;
 use prost::Message;
 
@@ -41,7 +42,7 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
-use datafusion_common::config::{FormatOptions, TableOptions};
+use datafusion_common::config::TableOptions;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
@@ -325,11 +326,13 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     table_options.set_file_format(FileType::CSV);
     table_options.set("format.delimiter", ";")?;
 
+    let file_type: Arc<dyn ExternalFileType> = Arc::new(ExternalCSV {});
+
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        format_options: FormatOptions::CSV(table_options.csv.clone()),
+        file_type,
         options: Default::default(),
     });
 
@@ -359,10 +362,12 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     parquet_format.global.dictionary_page_size_limit = 444;
     parquet_format.global.max_row_group_size = 555;
 
+    let file_type: Arc<dyn ExternalFileType> = Arc::new(ExternalCSV {});
+
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
-        format_options: FormatOptions::PARQUET(parquet_format.clone()),
+        file_type,
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         options: Default::default(),
     });
@@ -375,10 +380,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.parquet", copy_to.output_url);
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
-            assert_eq!(
-                copy_to.format_options,
-                FormatOptions::PARQUET(parquet_format)
-            );
+            assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());
         }
         _ => panic!(),
     }
@@ -391,11 +393,13 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
 
     let input = create_csv_scan(&ctx).await?;
 
+    let file_type: Arc<dyn ExternalFileType> = Arc::new(ExternalCSV {});
+
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.arrow".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        format_options: FormatOptions::ARROW,
+        file_type,
         options: Default::default(),
     });
 
@@ -406,7 +410,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.arrow", copy_to.output_url);
-            assert_eq!(FormatOptions::ARROW, copy_to.format_options);
+            assert_eq!("arrow".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
         }
         _ => panic!(),
@@ -432,11 +436,13 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     csv_format.time_format = Some("HH:mm:ss".to_string());
     csv_format.null_value = Some("NIL".to_string());
 
+    let file_type: Arc<dyn ExternalFileType> = Arc::new(ExternalCSV {});
+
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        format_options: FormatOptions::CSV(csv_format.clone()),
+        file_type,
         options: Default::default(),
     });
 
@@ -447,7 +453,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.csv", copy_to.output_url);
-            assert_eq!(FormatOptions::CSV(csv_format), copy_to.format_options);
+            assert_eq!("csv".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
         }
         _ => panic!(),

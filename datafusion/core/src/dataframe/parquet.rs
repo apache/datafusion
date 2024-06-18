@@ -17,13 +17,13 @@
 
 use std::sync::Arc;
 
+use crate::datasource::file_format::{format_as_file_type, parquet::ParquetFormat};
+
 use super::{
     DataFrame, DataFrameWriteOptions, DataFusionError, LogicalPlanBuilder, RecordBatch,
 };
 
-use datafusion_common::{
-    config::TableParquetOptions, file_options::file_type::ExternalCSV,
-};
+use datafusion_common::config::TableParquetOptions;
 
 impl DataFrame {
     /// Execute the `DataFrame` and write the results to Parquet file(s).
@@ -61,14 +61,18 @@ impl DataFrame {
             ));
         }
 
-        let props = writer_options
-            .unwrap_or_else(|| self.session_state.default_table_options().parquet);
+        let format = if let Some(parquet_opts) = writer_options {
+            ParquetFormat::default().with_options(parquet_opts)
+        } else {
+            ParquetFormat::default()
+        };
+
+        let file_type = format_as_file_type(Arc::new(format));
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            // TODO! update for parquet
-            Arc::new(ExternalCSV {}),
+            file_type,
             Default::default(),
             options.partition_by,
         )?

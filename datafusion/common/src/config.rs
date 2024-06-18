@@ -24,7 +24,7 @@ use std::str::FromStr;
 
 use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
-use crate::{DataFusionError, FileType, Result};
+use crate::{DataFusionError, Result};
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -1131,10 +1131,6 @@ pub struct TableOptions {
 
     /// Configuration options for JSON file handling.
     pub json: JsonOptions,
-
-    /// The current file format that the table operations should assume. This option allows
-    /// for dynamic switching between the supported file types (e.g., CSV, Parquet, JSON).
-    pub current_format: Option<FileType>,
 
     /// Optional extensions that can be used to extend or customize the behavior of the table
     /// options. Extensions can be registered using `Extensions::insert` and might include

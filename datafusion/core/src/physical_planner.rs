@@ -23,7 +23,7 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
-use crate::datasource::file_format::{file_type_to_format};
+use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::source_as_provider;
@@ -780,34 +780,9 @@ impl DefaultPhysicalPlanner {
                     table_partition_cols,
                     overwrite: false,
                 };
-                
-                let sink_format = file_type_to_format(file_type)?;
 
-                // let sink_format: Arc<dyn FileFormat> = match format_options {
-                //     FormatOptions::CSV(options) => {
-                //         table_options.csv = options.clone();
-                //         table_options.set_file_format(FileType::CSV);
-                //         table_options.alter_with_string_hash_map(source_option_tuples)?;
-                //         Arc::new(CsvFormat::default().with_options(table_options.csv))
-                //     }
-                //     FormatOptions::JSON(options) => {
-                //         table_options.json = options.clone();
-                //         table_options.set_file_format(FileType::JSON);
-                //         table_options.alter_with_string_hash_map(source_option_tuples)?;
-                //         Arc::new(JsonFormat::default().with_options(table_options.json))
-                //     }
-                //     #[cfg(feature = "parquet")]
-                //     FormatOptions::PARQUET(options) => {
-                //         table_options.parquet = options.clone();
-                //         table_options.set_file_format(FileType::PARQUET);
-                //         table_options.alter_with_string_hash_map(source_option_tuples)?;
-                //         Arc::new(
-                //             ParquetFormat::default().with_options(table_options.parquet),
-                //         )
-                //     }
-                //     FormatOptions::AVRO => Arc::new(AvroFormat {}),
-                //     FormatOptions::ARROW => Arc::new(ArrowFormat {}),
-                // };
+                let sink_format = file_type_to_format(file_type)?;
+                sink_format.update_options_from_string_hashmap(source_option_tuples)?;
 
                 sink_format
                     .create_writer_physical_plan(input_exec, session_state, config, None)

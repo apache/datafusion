@@ -32,6 +32,7 @@ pub mod parquet;
 pub mod write;
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
@@ -59,8 +60,20 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
-    fn get_ext(&self) -> String{
+    /// Returns the extension for this FileFormat, e.g. "csv"
+    fn get_ext(&self) -> String {
         panic!("Undefined get_ext")
+    }
+
+    /// Updates internal state based on options passed in via SQL strings, e.g.
+    /// COPY table TO custom.format OPTIONS (custom.option1 true)
+    fn update_options_from_string_hashmap(
+        &self,
+        _options: &HashMap<String, String>,
+    ) -> Result<()> {
+        not_impl_err!(
+            "Updating options from SQL strings unsupported for this FileFormat."
+        )
     }
 
     /// Infer the common schema of the provided objects. The objects will usually
@@ -111,38 +124,38 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     }
 }
 
-pub struct DefaultFileFormat{
-    file_format: Arc<dyn FileFormat>
+pub struct DefaultFileFormat {
+    file_format: Arc<dyn FileFormat>,
 }
 
-impl DefaultFileFormat{
-    pub fn new(file_format: Arc<dyn FileFormat>) -> Self{
-        Self{ file_format }
+impl DefaultFileFormat {
+    pub fn new(file_format: Arc<dyn FileFormat>) -> Self {
+        Self { file_format }
     }
 }
 
-impl ExternalFileType for DefaultFileFormat{
+impl ExternalFileType for DefaultFileFormat {
     fn as_any(&self) -> &dyn Any {
         self
     }
 }
 
-impl Display for DefaultFileFormat{
+impl Display for DefaultFileFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.file_format.fmt(f)
     }
 }
 
-impl GetExt for DefaultFileFormat{
+impl GetExt for DefaultFileFormat {
     fn get_ext(&self) -> String {
         self.file_format.get_ext()
     }
 }
 
 pub fn format_as_file_type(
-    file_format: Arc<dyn FileFormat>
-) -> Arc<dyn ExternalFileType>{
-    Arc::new(DefaultFileFormat{file_format})
+    file_format: Arc<dyn FileFormat>,
+) -> Arc<dyn ExternalFileType> {
+    Arc::new(DefaultFileFormat { file_format })
 }
 
 pub fn file_type_to_format(

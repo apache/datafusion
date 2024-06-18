@@ -251,13 +251,7 @@ message DistinctOnNode {
 message CopyToNode {
     LogicalPlanNode input = 1;
     string output_url = 2;
-    oneof format_options {
-      datafusion_common.CsvOptions csv = 8;
-      datafusion_common.JsonOptions json = 9;
-      datafusion_common.TableParquetOptions parquet = 10;
-      datafusion_common.AvroOptions avro = 11;
-      datafusion_common.ArrowOptions arrow = 12;
-    }
+    bytes file_type = 3;
     repeated string partition_by = 7;
 }
 

@@ -41,12 +41,11 @@ use datafusion::{
     },
     physical_plan::expressions::LikeExpr,
 };
-use datafusion_common::config::FormatOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 
 use crate::protobuf::{
-    self, copy_to_node, physical_aggregate_expr_node, physical_window_expr_node,
-    PhysicalSortExprNode, PhysicalSortExprNodeCollection,
+    self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
+    PhysicalSortExprNodeCollection,
 };
 
 use super::PhysicalExtensionCodec;
@@ -746,29 +745,6 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             output_schema: Some(conf.output_schema.as_ref().try_into()?),
             table_partition_cols,
             overwrite: conf.overwrite,
-        })
-    }
-}
-
-impl TryFrom<&FormatOptions> for copy_to_node::FormatOptions {
-    type Error = DataFusionError;
-    fn try_from(value: &FormatOptions) -> std::result::Result<Self, Self::Error> {
-        Ok(match value {
-            FormatOptions::CSV(options) => {
-                copy_to_node::FormatOptions::Csv(options.try_into()?)
-            }
-            FormatOptions::JSON(options) => {
-                copy_to_node::FormatOptions::Json(options.try_into()?)
-            }
-            FormatOptions::PARQUET(options) => {
-                copy_to_node::FormatOptions::Parquet(options.try_into()?)
-            }
-            FormatOptions::AVRO => {
-                copy_to_node::FormatOptions::Avro(protobuf::AvroOptions {})
-            }
-            FormatOptions::ARROW => {
-                copy_to_node::FormatOptions::Arrow(protobuf::ArrowOptions {})
-            }
         })
     }
 }

@@ -33,6 +33,7 @@ use crate::protobuf::{proto_error, FromProtoError, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::{file_type_to_format, format_as_file_type};
 use datafusion::{
     datasource::{
         file_format::{avro::AvroFormat, csv::CsvFormat, FileFormat},
@@ -43,6 +44,7 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
+use datafusion_common::file_options::file_type::ExternalFileType;
 use datafusion_common::{
     context, internal_datafusion_err, internal_err, not_impl_err, DataFusionError,
     Result, TableReference,
@@ -113,6 +115,22 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<()>;
+
+    fn try_decode_file_format(
+        &self,
+        _buf: &[u8],
+        _ctx: &SessionContext,
+    ) -> Result<Arc<dyn FileFormat>> {
+        not_impl_err!("LogicalExtensionCoden is not provided for file format")
+    }
+
+    fn try_encode_file_format(
+        &self,
+        _buf: &[u8],
+        _node: Arc<dyn FileFormat>,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         not_impl_err!("LogicalExtensionCodec is not provided for scalar function {name}")
@@ -829,12 +847,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: LogicalPlan =
                     into_logical_plan!(copy.input, ctx, extension_codec)?;
 
+                let file_type: Arc<dyn ExternalFileType> = format_as_file_type(
+                    extension_codec.try_decode_file_format(&copy.file_type, ctx)?,
+                );
+
                 Ok(datafusion_expr::LogicalPlan::Copy(
                     datafusion_expr::dml::CopyTo {
                         input: Arc::new(input),
                         output_url: copy.output_url.clone(),
                         partition_by: copy.partition_by.clone(),
-                        format_options: convert_required!(copy.format_options)?,
+                        file_type,
                         options: Default::default(),
                     },
                 ))
@@ -1609,7 +1631,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Copy(dml::CopyTo {
                 input,
                 output_url,
-                format_options,
+                file_type,
                 partition_by,
                 ..
             }) => {
@@ -1618,12 +1640,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec,
                 )?;
 
+                let buf = Vec::new();
+                extension_codec
+                    .try_encode_file_format(&buf, file_type_to_format(file_type)?)?;
+
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CopyTo(Box::new(
                         protobuf::CopyToNode {
                             input: Some(Box::new(input)),
                             output_url: output_url.to_string(),
-                            format_options: Some(format_options.try_into()?),
+                            file_type: buf,
                             partition_by: partition_by.clone(),
                         },
                     ))),

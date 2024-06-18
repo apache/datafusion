@@ -26,6 +26,9 @@ use std::sync::Arc;
 
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
+use crate::datasource::file_format::csv::CsvFormat;
+use crate::datasource::file_format::format_as_file_type;
+use crate::datasource::file_format::json::JsonFormat;
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
@@ -45,7 +48,6 @@ use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
-use datafusion_common::file_options::file_type::ExternalCSV;
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
@@ -1238,10 +1240,18 @@ impl DataFrame {
             ));
         }
 
+        let format = if let Some(csv_opts) = writer_options {
+            CsvFormat::default().with_options(csv_opts)
+        } else {
+            CsvFormat::default()
+        };
+
+        let file_type = format_as_file_type(Arc::new(format));
+
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            Arc::new(ExternalCSV {}),
+            file_type,
             HashMap::new(),
             options.partition_by,
         )?
@@ -1290,11 +1300,18 @@ impl DataFrame {
             ));
         }
 
+        let format = if let Some(json_opts) = writer_options {
+            JsonFormat::default().with_options(json_opts)
+        } else {
+            JsonFormat::default()
+        };
+
+        let file_type = format_as_file_type(Arc::new(format));
+
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            // TODO! update for json
-            Arc::new(ExternalCSV {}),
+            file_type,
             Default::default(),
             options.partition_by,
         )?

@@ -54,7 +54,7 @@ pub use error::{
     SharedResult,
 };
 pub use file_options::file_type::{
-    FileType, GetExt, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION,
+    GetExt, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION,
     DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
 };
 pub use functional_dependencies::{
