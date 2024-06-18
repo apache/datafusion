@@ -69,6 +69,8 @@ pub mod variance;
 pub mod approx_median;
 pub mod approx_percentile_cont;
 pub mod approx_percentile_cont_with_weight;
+pub mod bit_and_or_xor;
+pub mod string_agg;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;
@@ -84,6 +86,9 @@ pub mod expr_fn {
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
+    pub use super::bit_and_or_xor::bit_and;
+    pub use super::bit_and_or_xor::bit_or;
+    pub use super::bit_and_or_xor::bit_xor;
     pub use super::count::count;
     pub use super::count::count_distinct;
     pub use super::covariance::covar_pop;
@@ -134,6 +139,10 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         approx_distinct::approx_distinct_udaf(),
         approx_percentile_cont_udaf(),
         approx_percentile_cont_with_weight_udaf(),
+        string_agg::string_agg_udaf(),
+        bit_and_or_xor::bit_and_udaf(),
+        bit_and_or_xor::bit_or_udaf(),
+        bit_and_or_xor::bit_xor_udaf(),
     ]
 }
 

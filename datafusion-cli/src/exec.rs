@@ -23,12 +23,13 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::str::FromStr;
 
+use crate::cli_context::CliSessionContext;
 use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
     helper::{unescape_input, CliHelper},
-    object_storage::{get_object_store, register_options},
+    object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
 
@@ -38,7 +39,6 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::{collect, execute_stream, ExecutionPlanProperties};
-use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
@@ -50,7 +50,7 @@ use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
 pub async fn exec_from_commands(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     commands: Vec<String>,
     print_options: &PrintOptions,
 ) -> Result<()> {
@@ -63,7 +63,7 @@ pub async fn exec_from_commands(
 
 /// run and execute SQL statements and commands from a file, against a context with the given print options
 pub async fn exec_from_lines(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     reader: &mut BufReader<File>,
     print_options: &PrintOptions,
 ) -> Result<()> {
@@ -103,7 +103,7 @@ pub async fn exec_from_lines(
 }
 
 pub async fn exec_from_files(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     files: Vec<String>,
     print_options: &PrintOptions,
 ) -> Result<()> {
@@ -122,7 +122,7 @@ pub async fn exec_from_files(
 
 /// run and execute SQL statements and commands against a context with the given print options
 pub async fn exec_from_repl(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     print_options: &mut PrintOptions,
 ) -> rustyline::Result<()> {
     let mut rl = Editor::new()?;
@@ -205,7 +205,7 @@ pub async fn exec_from_repl(
 }
 
 pub(super) async fn exec_and_print(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     print_options: &PrintOptions,
     sql: String,
 ) -> Result<()> {
@@ -292,10 +292,10 @@ impl AdjustedPrintOptions {
 }
 
 async fn create_plan(
-    ctx: &mut SessionContext,
+    ctx: &mut dyn CliSessionContext,
     statement: Statement,
 ) -> Result<LogicalPlan, DataFusionError> {
-    let mut plan = ctx.state().statement_to_plan(statement).await?;
+    let mut plan = ctx.session_state().statement_to_plan(statement).await?;
 
     // Note that cmd is a mutable reference so that create_external_table function can remove all
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
@@ -354,7 +354,7 @@ async fn create_plan(
 /// alteration fails, or if the object store cannot be retrieved and registered
 /// successfully.
 pub(crate) async fn register_object_store_and_config_extensions(
-    ctx: &SessionContext,
+    ctx: &dyn CliSessionContext,
     location: &String,
     options: &HashMap<String, String>,
     format: Option<FileType>,
@@ -369,17 +369,18 @@ pub(crate) async fn register_object_store_and_config_extensions(
     let url = table_path.as_ref();
 
     // Register the options based on the scheme extracted from the location
-    register_options(ctx, scheme);
+    ctx.register_table_options_extension_from_scheme(scheme);
 
     // Clone and modify the default table options based on the provided options
-    let mut table_options = ctx.state().default_table_options().clone();
+    let mut table_options = ctx.session_state().default_table_options().clone();
     if let Some(format) = format {
         table_options.set_file_format(format);
     }
     table_options.alter_with_string_hash_map(options)?;
 
     // Retrieve the appropriate object store based on the scheme, URL, and modified table options
-    let store = get_object_store(&ctx.state(), scheme, url, &table_options).await?;
+    let store =
+        get_object_store(&ctx.session_state(), scheme, url, &table_options).await?;
 
     // Register the retrieved object store in the session context's runtime environment
     ctx.register_object_store(url, store);
@@ -394,6 +395,7 @@ mod tests {
     use datafusion::common::config::FormatOptions;
     use datafusion::common::plan_err;
 
+    use datafusion::prelude::SessionContext;
     use url::Url;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {

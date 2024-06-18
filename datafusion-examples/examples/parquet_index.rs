@@ -526,7 +526,11 @@ impl ParquetMetadataIndexBuilder {
             reader.schema(),
             reader.parquet_schema(),
         )?;
-        let row_counts = StatisticsConverter::row_group_row_counts(row_groups.iter())?;
+        let row_counts = converter
+            .row_group_row_counts(row_groups.iter())?
+            .ok_or_else(|| {
+                internal_datafusion_err!("Row group row counts are missing")
+            })?;
         let value_column_mins = converter.row_group_mins(row_groups.iter())?;
         let value_column_maxes = converter.row_group_maxes(row_groups.iter())?;
 
