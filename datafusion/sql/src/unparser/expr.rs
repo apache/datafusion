@@ -709,12 +709,20 @@ impl Unparser<'_> {
                 ast::Value::SingleQuotedString(str.to_string()),
             )),
             ScalarValue::Utf8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Utf8View(Some(str)) => Ok(ast::Expr::Value(
+                ast::Value::SingleQuotedString(str.to_string()),
+            )),
+            ScalarValue::Utf8View(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::LargeUtf8(Some(str)) => Ok(ast::Expr::Value(
                 ast::Value::SingleQuotedString(str.to_string()),
             )),
             ScalarValue::LargeUtf8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Binary(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::BinaryView(Some(_)) => {
+                not_impl_err!("Unsupported scalar: {v:?}")
+            }
+            ScalarValue::BinaryView(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::FixedSizeBinary(..) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
