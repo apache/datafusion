@@ -33,7 +33,7 @@ use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
 use datafusion_expr::{col, Expr, ExprSchemable};
 use indexmap::IndexMap;
 
-const CSE_PREFIX: &str = "__cse";
+const CSE_PREFIX: &str = "__common_expr";
 
 /// Identifier that represents a subexpression tree.
 ///
@@ -929,8 +929,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[sum(__cse_1 AS test.a * Int32(1) - test.b), sum(__cse_1 AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]\
-        \n  Projection: test.a * (Int32(1) - test.b) AS __cse_1, test.a, test.b, test.c\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * Int32(1) - test.b), sum(__common_expr_1 AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]\
+        \n  Projection: test.a * (Int32(1) - test.b) AS __common_expr_1, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, None);
@@ -949,8 +949,8 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __cse_1 - test.c AS alias1 * __cse_1 AS test.a + test.b, __cse_1 AS test.a + test.b\
-        \n  Projection: test.a + test.b AS __cse_1, test.a, test.b, test.c\
+        let expected = "Projection: __common_expr_1 - test.c AS alias1 * __common_expr_1 AS test.a + test.b, __common_expr_1 AS test.a + test.b\
+        \n  Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, None);
@@ -1002,8 +1002,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: __cse_1 AS col1, __cse_1 AS col2, col3, __cse_3 AS AVG(test.c), __cse_2 AS col4, __cse_2 AS col5, col6, __cse_4 AS my_agg(test.c)\
-        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS __cse_1, my_agg(test.a) AS __cse_2, AVG(test.b) AS col3, AVG(test.c) AS __cse_3, my_agg(test.b) AS col6, my_agg(test.c) AS __cse_4]]\
+        let expected = "Projection: __common_expr_1 AS col1, __common_expr_1 AS col2, col3, __common_expr_3 AS AVG(test.c), __common_expr_2 AS col4, __common_expr_2 AS col5, col6, __common_expr_4 AS my_agg(test.c)\
+        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS __common_expr_1, my_agg(test.a) AS __common_expr_2, AVG(test.b) AS col3, AVG(test.c) AS __common_expr_3, my_agg(test.b) AS col6, my_agg(test.c) AS __common_expr_4]]\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, None);
@@ -1021,8 +1021,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: Int32(1) + __cse_1 AS AVG(test.a), Int32(1) - __cse_1 AS AVG(test.a), Int32(1) + __cse_2 AS my_agg(test.a), Int32(1) - __cse_2 AS my_agg(test.a)\
-        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS __cse_1, my_agg(test.a) AS __cse_2]]\
+        let expected = "Projection: Int32(1) + __common_expr_1 AS AVG(test.a), Int32(1) - __common_expr_1 AS AVG(test.a), Int32(1) + __common_expr_2 AS my_agg(test.a), Int32(1) - __common_expr_2 AS my_agg(test.a)\
+        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS __common_expr_1, my_agg(test.a) AS __common_expr_2]]\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, None);
@@ -1038,8 +1038,8 @@ mod test {
             )?
             .build()?;
 
-        let expected ="Aggregate: groupBy=[[]], aggr=[[AVG(__cse_1) AS col1, my_agg(__cse_1) AS col2]]\
-        \n  Projection: UInt32(1) + test.a AS __cse_1, test.a, test.b, test.c\
+        let expected ="Aggregate: groupBy=[[]], aggr=[[AVG(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]\
+        \n  Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, None);
@@ -1055,8 +1055,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[__cse_1 AS UInt32(1) + test.a]], aggr=[[AVG(__cse_1) AS col1, my_agg(__cse_1) AS col2]]\
-        \n  Projection: UInt32(1) + test.a AS __cse_1, test.a, test.b, test.c\
+        let expected = "Aggregate: groupBy=[[__common_expr_1 AS UInt32(1) + test.a]], aggr=[[AVG(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]\
+        \n  Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, None);
@@ -1076,9 +1076,9 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: UInt32(1) + test.a, UInt32(1) + __cse_2 AS col1, UInt32(1) - __cse_2 AS col2, __cse_4 AS AVG(UInt32(1) + test.a), UInt32(1) + __cse_3 AS col3, UInt32(1) - __cse_3 AS col4, __cse_5 AS my_agg(UInt32(1) + test.a)\
-        \n  Aggregate: groupBy=[[__cse_1 AS UInt32(1) + test.a]], aggr=[[AVG(__cse_1) AS __cse_2, my_agg(__cse_1) AS __cse_3, AVG(__cse_1 AS UInt32(1) + test.a) AS __cse_4, my_agg(__cse_1 AS UInt32(1) + test.a) AS __cse_5]]\
-        \n    Projection: UInt32(1) + test.a AS __cse_1, test.a, test.b, test.c\
+        let expected = "Projection: UInt32(1) + test.a, UInt32(1) + __common_expr_2 AS col1, UInt32(1) - __common_expr_2 AS col2, __common_expr_4 AS AVG(UInt32(1) + test.a), UInt32(1) + __common_expr_3 AS col3, UInt32(1) - __common_expr_3 AS col4, __common_expr_5 AS my_agg(UInt32(1) + test.a)\
+        \n  Aggregate: groupBy=[[__common_expr_1 AS UInt32(1) + test.a]], aggr=[[AVG(__common_expr_1) AS __common_expr_2, my_agg(__common_expr_1) AS __common_expr_3, AVG(__common_expr_1 AS UInt32(1) + test.a) AS __common_expr_4, my_agg(__common_expr_1 AS UInt32(1) + test.a) AS __common_expr_5]]\
+        \n    Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, None);
@@ -1103,9 +1103,9 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: table.test.col.a, UInt32(1) + __cse_2 AS AVG(UInt32(1) + table.test.col.a), __cse_2 AS AVG(UInt32(1) + table.test.col.a)\
-        \n  Aggregate: groupBy=[[table.test.col.a]], aggr=[[AVG(__cse_1 AS UInt32(1) + table.test.col.a) AS __cse_2]]\
-        \n    Projection: UInt32(1) + table.test.col.a AS __cse_1, table.test.col.a\
+        let expected = "Projection: table.test.col.a, UInt32(1) + __common_expr_2 AS AVG(UInt32(1) + table.test.col.a), __common_expr_2 AS AVG(UInt32(1) + table.test.col.a)\
+        \n  Aggregate: groupBy=[[table.test.col.a]], aggr=[[AVG(__common_expr_1 AS UInt32(1) + table.test.col.a) AS __common_expr_2]]\
+        \n    Projection: UInt32(1) + table.test.col.a AS __common_expr_1, table.test.col.a\
         \n      TableScan: table.test";
 
         assert_optimized_plan_eq(expected, &plan, None);
@@ -1124,8 +1124,8 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __cse_1 AS first, __cse_1 AS second\
-        \n  Projection: Int32(1) + test.a AS __cse_1, test.a, test.b, test.c\
+        let expected = "Projection: __common_expr_1 AS first, __common_expr_1 AS second\
+        \n  Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, None);
@@ -1295,8 +1295,8 @@ mod test {
             .build()?;
 
         let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __cse_1 - Int32(10) > __cse_1\
-        \n    Projection: Int32(1) + test.a AS __cse_1, test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 - Int32(10) > __common_expr_1\
+        \n    Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, None);
@@ -1346,42 +1346,46 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let config = &OptimizerContext::new();
-        let __cse_1 = config.alias_generator().next(CSE_PREFIX);
+        let common_expr_1 = config.alias_generator().next(CSE_PREFIX);
         let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .project(vec![(col("a") + col("b")).alias(__cse_1.clone()), col("c")])?
             .project(vec![
-                col(__cse_1.clone()).alias("c1"),
-                col(__cse_1).alias("c2"),
+                (col("a") + col("b")).alias(common_expr_1.clone()),
+                col("c"),
+            ])?
+            .project(vec![
+                col(common_expr_1.clone()).alias("c1"),
+                col(common_expr_1).alias("c2"),
                 (col("c") + lit(2)).alias("c3"),
                 (col("c") + lit(2)).alias("c4"),
             ])?
             .build()?;
 
-        let expected =
-            "Projection: __cse_1 AS c1, __cse_1 AS c2, __cse_2 AS c3, __cse_2 AS c4\
-        \n  Projection: test.c + Int32(2) AS __cse_2, __cse_1, test.c\
-        \n    Projection: test.a + test.b AS __cse_1, test.c\
+        let expected = "Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 AS c3, __common_expr_2 AS c4\
+        \n  Projection: test.c + Int32(2) AS __common_expr_2, __common_expr_1, test.c\
+        \n    Projection: test.a + test.b AS __common_expr_1, test.c\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, Some(config));
 
         let config = &OptimizerContext::new();
-        let ___cse_1 = config.alias_generator().next(CSE_PREFIX);
-        let __cse_2 = config.alias_generator().next(CSE_PREFIX);
+        let _common_expr_1 = config.alias_generator().next(CSE_PREFIX);
+        let common_expr_2 = config.alias_generator().next(CSE_PREFIX);
         let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .project(vec![(col("a") + col("b")).alias(__cse_2.clone()), col("c")])?
             .project(vec![
-                col(__cse_2.clone()).alias("c1"),
-                col(__cse_2).alias("c2"),
+                (col("a") + col("b")).alias(common_expr_2.clone()),
+                col("c"),
+            ])?
+            .project(vec![
+                col(common_expr_2.clone()).alias("c1"),
+                col(common_expr_2).alias("c2"),
                 (col("c") + lit(2)).alias("c3"),
                 (col("c") + lit(2)).alias("c4"),
             ])?
             .build()?;
 
-        let expected =
-            "Projection: __cse_2 AS c1, __cse_2 AS c2, __cse_3 AS c3, __cse_3 AS c4\
-        \n  Projection: test.c + Int32(2) AS __cse_3, __cse_2, test.c\
-        \n    Projection: test.a + test.b AS __cse_2, test.c\
+        let expected = "Projection: __common_expr_2 AS c1, __common_expr_2 AS c2, __common_expr_3 AS c3, __common_expr_3 AS c4\
+        \n  Projection: test.c + Int32(2) AS __common_expr_3, __common_expr_2, test.c\
+        \n    Projection: test.a + test.b AS __common_expr_2, test.c\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan, Some(config));
