@@ -23,7 +23,8 @@ use arrow_array::{Date32Array, Date64Array, TimestampNanosecondArray};
 use arrow_schema::DataType;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Expr as AstExpr, Function, FunctionArg, Ident, Interval, TimezoneInfo, UnaryOperator,
+    self, Expr as AstExpr, Function, FunctionArg, Ident, Interval, TimezoneInfo,
+    UnaryOperator,
 };
 
 use datafusion_common::{
