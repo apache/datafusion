@@ -175,8 +175,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     let _ = converter.row_group_mins(row_groups.iter()).unwrap();
                     let _ = converter.row_group_maxes(row_groups.iter()).unwrap();
                     let _ = converter.row_group_null_counts(row_groups.iter()).unwrap();
-                    let _ = StatisticsConverter::row_group_row_counts(row_groups.iter())
-                        .unwrap();
+                    let _ = converter.row_group_row_counts(row_groups.iter()).unwrap();
                 })
             },
         );

@@ -26,7 +26,6 @@ pub(crate) mod correlation;
 pub(crate) mod covariance;
 pub(crate) mod grouping;
 pub(crate) mod nth_value;
-pub(crate) mod string_agg;
 #[macro_use]
 pub(crate) mod min_max;
 pub(crate) mod groups_accumulator;
