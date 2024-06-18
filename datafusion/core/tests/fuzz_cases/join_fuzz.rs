@@ -441,6 +441,7 @@ impl JoinFuzzTestCase {
             let nlj_rows = nlj_collected.iter().fold(0, |acc, b| acc + b.num_rows());
 
             if debug {
+                println!("The debug is ON. Input data will be saved");
                 let out_dir_name = &format!("fuzz_test_debug_batch_size_{batch_size}");
                 Self::save_as_parquet(&self.input1, out_dir_name, "input1");
                 Self::save_as_parquet(&self.input2, out_dir_name, "input2");
@@ -557,7 +558,7 @@ impl JoinFuzzTestCase {
     fn save_as_parquet(input: &[RecordBatch], output_dir: &str, out_name: &str) {
         let out_path = &format!("{output_dir}/{out_name}");
         std::fs::remove_dir_all(out_path).unwrap_or(());
-        std::fs::create_dir(out_path).unwrap();
+        std::fs::create_dir_all(out_path).unwrap();
 
         input.iter().enumerate().for_each(|(idx, batch)| {
             let mut file =
@@ -572,6 +573,8 @@ impl JoinFuzzTestCase {
             writer.write(batch).unwrap();
             writer.close().unwrap();
         });
+
+        println!("The data {out_name} saved as parquet into {out_path}");
     }
 }
 
