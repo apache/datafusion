@@ -554,6 +554,8 @@ make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min, Index::INT64,
 make_data_page_stats_iterator!(MaxInt64DataPageStatsIterator, max, Index::INT64, i64);
 make_data_page_stats_iterator!(MinFloat32DataPageStatsIterator, min, Index::FLOAT, f32);
 make_data_page_stats_iterator!(MaxFloat32DataPageStatsIterator, max, Index::FLOAT, f32);
+make_data_page_stats_iterator!(MinFloat64DataPageStatsIterator, min, Index::DOUBLE, f64);
+make_data_page_stats_iterator!(MaxFloat64DataPageStatsIterator, max, Index::DOUBLE, f64);
 
 macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
@@ -584,6 +586,7 @@ macro_rules! get_data_page_statistics {
                 Some(DataType::Int32) => Ok(Arc::new(Int32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Float32) => Ok(Arc::new(Float32Array::from_iter([<$stat_type_prefix Float32DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter([<$stat_type_prefix Float64DataPageStatsIterator>]::new($iterator).flatten()))),
                 _ => unimplemented!("Data type not supported for data page statistics"),
             }
         }
@@ -681,6 +684,11 @@ where
             .map(|x| x.null_count.map(|x| x as u64))
             .collect::<Vec<_>>(),
         Index::FLOAT(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::DOUBLE(native_index) => native_index
             .indexes
             .iter()
             .map(|x| x.null_count.map(|x| x as u64))

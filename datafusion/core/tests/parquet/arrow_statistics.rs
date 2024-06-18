@@ -565,6 +565,27 @@ async fn test_float_32() {
     .run();
 }
 
+#[tokio::test]
+async fn test_float_64() {
+    let reader = TestReader {
+        scenario: Scenario::Float64,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        expected_min: Arc::new(Float64Array::from(vec![-5.0, -4.0, -0.0, 5.0])),
+        expected_max: Arc::new(Float64Array::from(vec![-1.0, 0.0, 4.0, 9.0])),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        column_name: "f",
+        check: Check::Both,
+    }
+    .run();
+}
+
 // Four different integer types
 #[tokio::test]
 async fn test_int_64() {
