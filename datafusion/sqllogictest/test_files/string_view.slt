@@ -18,9 +18,8 @@
 statement ok
 create table test as values (arrow_cast('Andrew', 'Utf8View'), arrow_cast('X', 'Utf8View')),
                            (arrow_cast('Xiangpeng', 'Utf8View'), arrow_cast('Xiangpeng', 'Utf8View')),
-                           (arrow_cast('Raphael', 'Utf8View'), arrow_cast('R', 'Utf8View'));
-
-
+                           (arrow_cast('Raphael', 'Utf8View'), arrow_cast('R', 'Utf8View')),
+                           (arrow_cast(NULL, 'Utf8View'), arrow_cast('R', 'Utf8View'));
 
 query B
 select arrow_cast('NULL', 'Utf8View') = arrow_cast('Andrew', 'Utf8View');
