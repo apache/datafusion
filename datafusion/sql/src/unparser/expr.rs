@@ -821,9 +821,8 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
             ScalarValue::TimestampNanosecond(Some(_ts), tz) => {
-                if let Some(tz) = tz {
-                    let result = v
-                        .to_array()?
+                let result = if let Some(tz) = tz {
+                    v.to_array()?
                         .as_any()
                         .downcast_ref::<TimestampNanosecondArray>()
                         .ok_or(internal_datafusion_err!(
@@ -832,18 +831,9 @@ impl Unparser<'_> {
                         .value_as_datetime_with_tz(0, tz.parse()?)
                         .ok_or(internal_datafusion_err!(
                             "Unable to convert TimestampNanosecond to DateTime"
-                        ))?;
-                    Ok(ast::Expr::Cast {
-                        kind: ast::CastKind::Cast,
-                        expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
-                            result.to_string(),
-                        ))),
-                        data_type: ast::DataType::Timestamp(None, TimezoneInfo::None),
-                        format: None,
-                    })
+                        ))?.to_string()
                 } else {
-                    let result = v
-                        .to_array()?
+                    v.to_array()?
                         .as_any()
                         .downcast_ref::<TimestampNanosecondArray>()
                         .ok_or(internal_datafusion_err!(
@@ -852,17 +842,14 @@ impl Unparser<'_> {
                         .value_as_datetime(0)
                         .ok_or(internal_datafusion_err!(
                             "Unable to convert TimestampNanosecond to NaiveDateTime"
-                        ))?;
-
-                    Ok(ast::Expr::Cast {
-                        kind: ast::CastKind::Cast,
-                        expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
-                            result.to_string(),
-                        ))),
-                        data_type: ast::DataType::Timestamp(None, TimezoneInfo::None),
-                        format: None,
-                    })
-                }
+                        ))?.to_string()
+                };
+                Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
+                    expr: Box::new(ast::Expr::Value(SingleQuotedString(result))),
+                    data_type: ast::DataType::Timestamp(None, TimezoneInfo::None),
+                    format: None,
+                })
             }
             ScalarValue::TimestampNanosecond(None, _) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
