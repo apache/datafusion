@@ -718,13 +718,21 @@ impl<'a> StatisticsConverter<'a> {
     ///
     /// # Example
     /// ```no_run
+    /// # use arrow::datatypes::Schema;
+    /// # use arrow_array::ArrayRef;
     /// # use parquet::file::metadata::ParquetMetaData;
     /// # use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
     /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
-    /// // Given the metadata for a parquet file
+    /// # fn get_arrow_schema() -> Schema { unimplemented!() }
+    /// // Given the metadata for a parquet file and the arrow schema
     /// let metadata: ParquetMetaData = get_parquet_metadata();
+    /// let arrow_schema: Schema = get_arrow_schema();
+    /// let parquet_schema = metadata.file_metadata().schema_descr();
+    /// // create a converter
+    /// let converter = StatisticsConverter::try_new("foo", &arrow_schema, parquet_schema)
+    ///   .unwrap();
     /// // get the row counts for each row group
-    /// let row_counts = StatisticsConverter::row_group_row_counts(metadata
+    /// let row_counts = converter.row_group_row_counts(metadata
     ///   .row_groups()
     ///   .iter()
     /// );
