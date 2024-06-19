@@ -89,6 +89,8 @@ pub mod expr_fn {
     pub use super::bit_and_or_xor::bit_and;
     pub use super::bit_and_or_xor::bit_or;
     pub use super::bit_and_or_xor::bit_xor;
+    pub use super::bool_and_or::bool_and;
+    pub use super::bool_and_or::bool_or;
     pub use super::count::count;
     pub use super::count::count_distinct;
     pub use super::covariance::covar_pop;
