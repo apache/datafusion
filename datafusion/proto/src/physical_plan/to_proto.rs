@@ -23,11 +23,10 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr,
-    CastExpr, Column, Correlation, CumeDist, DistinctArrayAgg, DistinctBitXor, Grouping,
-    InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr,
-    NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank, RankType, RowNumber,
-    StringAgg, TryCastExpr, WindowShift,
+    ArrayAgg, Avg, BinaryExpr, BoolAnd, BoolOr, CaseExpr, CastExpr, Column, Correlation,
+    CumeDist, DistinctArrayAgg, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal,
+    Max, Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile,
+    OrderSensitiveArrayAgg, Rank, RankType, RowNumber, TryCastExpr, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -241,15 +240,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
 
     let inner = if aggr_expr.downcast_ref::<Grouping>().is_some() {
         protobuf::AggregateFunction::Grouping
-    } else if aggr_expr.downcast_ref::<BitAnd>().is_some() {
-        protobuf::AggregateFunction::BitAnd
-    } else if aggr_expr.downcast_ref::<BitOr>().is_some() {
-        protobuf::AggregateFunction::BitOr
-    } else if aggr_expr.downcast_ref::<BitXor>().is_some() {
-        protobuf::AggregateFunction::BitXor
-    } else if aggr_expr.downcast_ref::<DistinctBitXor>().is_some() {
-        distinct = true;
-        protobuf::AggregateFunction::BitXor
     } else if aggr_expr.downcast_ref::<BoolAnd>().is_some() {
         protobuf::AggregateFunction::BoolAnd
     } else if aggr_expr.downcast_ref::<BoolOr>().is_some() {
@@ -269,8 +259,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::Avg
     } else if aggr_expr.downcast_ref::<Correlation>().is_some() {
         protobuf::AggregateFunction::Correlation
-    } else if aggr_expr.downcast_ref::<StringAgg>().is_some() {
-        protobuf::AggregateFunction::StringAgg
     } else if aggr_expr.downcast_ref::<NthValueAgg>().is_some() {
         protobuf::AggregateFunction::NthValueAgg
     } else {

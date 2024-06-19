@@ -538,12 +538,8 @@ impl serde::Serialize for AggregateFunction {
             Self::ArrayAgg => "ARRAY_AGG",
             Self::Correlation => "CORRELATION",
             Self::Grouping => "GROUPING",
-            Self::BitAnd => "BIT_AND",
-            Self::BitOr => "BIT_OR",
-            Self::BitXor => "BIT_XOR",
             Self::BoolAnd => "BOOL_AND",
             Self::BoolOr => "BOOL_OR",
-            Self::StringAgg => "STRING_AGG",
             Self::NthValueAgg => "NTH_VALUE_AGG",
         };
         serializer.serialize_str(variant)
@@ -562,12 +558,8 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "ARRAY_AGG",
             "CORRELATION",
             "GROUPING",
-            "BIT_AND",
-            "BIT_OR",
-            "BIT_XOR",
             "BOOL_AND",
             "BOOL_OR",
-            "STRING_AGG",
             "NTH_VALUE_AGG",
         ];
 
@@ -615,12 +607,8 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                     "ARRAY_AGG" => Ok(AggregateFunction::ArrayAgg),
                     "CORRELATION" => Ok(AggregateFunction::Correlation),
                     "GROUPING" => Ok(AggregateFunction::Grouping),
-                    "BIT_AND" => Ok(AggregateFunction::BitAnd),
-                    "BIT_OR" => Ok(AggregateFunction::BitOr),
-                    "BIT_XOR" => Ok(AggregateFunction::BitXor),
                     "BOOL_AND" => Ok(AggregateFunction::BoolAnd),
                     "BOOL_OR" => Ok(AggregateFunction::BoolOr),
-                    "STRING_AGG" => Ok(AggregateFunction::StringAgg),
                     "NTH_VALUE_AGG" => Ok(AggregateFunction::NthValueAgg),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
