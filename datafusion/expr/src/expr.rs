@@ -1193,9 +1193,9 @@ impl Expr {
         }
     }
 
-    /// Recursively potentially multiple aliases from an expression.
+    /// Recursively removed potentially multiple aliases from an expression.
     ///
-    /// This method removes nested aliases and returns `Transformed`
+    /// This method removes nested aliases and returns [`Transformed`]
     /// to signal if the expression was changed.
     ///
     /// # Example
@@ -1203,15 +1203,15 @@ impl Expr {
     /// # use datafusion_expr::col;
     /// // `foo as "bar"` is unaliased to `foo`
     /// let expr = col("foo").alias("bar");
-    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    /// assert_eq!(expr.unalias_nested().data, col("foo"));
     ///
-    /// // `foo as "bar" + baz` is not unaliased
+    /// // `foo as "bar" + baz` is  unaliased
     /// let expr = col("foo").alias("bar") + col("baz");
-    /// assert_eq!(expr.clone().unalias_nested(), expr);
+    /// assert_eq!(expr.clone().unalias_nested().data, col("foo") + col("baz"));
     ///
     /// // `foo as "bar" as "baz" is unalaised to foo
     /// let expr = col("foo").alias("bar").alias("baz");
-    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    /// assert_eq!(expr.unalias_nested().data, col("foo"));
     /// ```
     pub fn unalias_nested(self) -> Transformed<Expr> {
         self.transform_down(|expr| {
