@@ -135,7 +135,7 @@ impl AggregateUDFImpl for BoolAnd {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            format_state_name(args.name, "bool_and"),
+            format_state_name(args.name, self.name()),
             DataType::Boolean,
             true,
         )])
@@ -262,7 +262,7 @@ impl AggregateUDFImpl for BoolOr {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            format_state_name(args.name, "bool_or"),
+            format_state_name(args.name, self.name()),
             DataType::Boolean,
             true,
         )])
