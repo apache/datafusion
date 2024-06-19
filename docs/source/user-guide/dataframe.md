@@ -64,6 +64,7 @@ execution. The plan is evaluated (executed) when an action method is invoked, su
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | aggregate           | Perform an aggregate query with optional grouping expressions.                                                                             |
 | distinct            | Filter out duplicate rows.                                                                                                                 |
+| distinct_on         | Filter out duplicate rows based on provided expressions.                                                                                   |
 | except              | Calculate the exception of two DataFrames. The two DataFrames must have exactly the same schema                                            |
 | filter              | Filter a DataFrame to only include rows that match the specified filter expression.                                                        |
 | intersect           | Calculate the intersection of two DataFrames. The two DataFrames must have exactly the same schema                                         |
