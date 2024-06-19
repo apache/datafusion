@@ -266,6 +266,15 @@ fn optimize_projections(
             let schema = aggregate.input.schema();
             let necessary_indices =
                 RequiredIndicies::new().with_exprs(schema, all_exprs_iter)?;
+
+            //TODO: This is a bit of a hack to make sure canonical timestamps aren't erased by the optimizer.
+            //      Ideally we want to have a concept of canonical timestamps that optimizer rules are aware of and
+            //      thus don't mess with them.
+            let col = schema
+                .index_of_column_by_name(None, "franz_canonical_timestamp")
+                .unwrap();
+
+            let necessary_indices = necessary_indices.append(&[col]);
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
 
             return optimize_projections(
