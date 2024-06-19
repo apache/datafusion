@@ -1,0 +1,51 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test push down filter
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+CREATE TABLE IF NOT EXISTS v AS VALUES(1,[1,2,3]),(2,[3,4,5]);
+
+query I
+select uc2 from (select unnest(column2) as uc2, column1 from v) where column1 = 2;
+----
+3
+4
+5
+
+# test push down filter for unnest with filter on non-unnest column
+# filter plan is pushed down into projection plan
+query TT
+explain select uc2 from (select unnest(column2) as uc2, column1 from v) where column1 = 2;
+----
+logical_plan
+01)Projection: unnest(v.column2) AS uc2
+02)--Unnest: lists[unnest(v.column2)] structs[]
+03)----Projection: v.column2 AS unnest(v.column2), v.column1
+04)------Filter: v.column1 = Int64(2)
+05)--------TableScan: v projection=[column1, column2]
+
+# TODO: fix the query
+query error DataFusion error: External error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) > Int64
+select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > 3;
+
+# test push down filter for unnest with filter on unnest column
+# query TT
+# explain select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > 3;
