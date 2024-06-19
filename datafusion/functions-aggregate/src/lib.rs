@@ -143,6 +143,8 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         bit_and_or_xor::bit_and_udaf(),
         bit_and_or_xor::bit_or_udaf(),
         bit_and_or_xor::bit_xor_udaf(),
+        bool_and_or::bool_and_udaf(),
+        bool_and_or::bool_or_udaf(),
     ]
 }
 
