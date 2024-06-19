@@ -31,8 +31,9 @@ use crate::{
     Signature, Volatility,
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
+use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, Result, ScalarValue};
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Not;
@@ -668,6 +669,11 @@ impl WindowUDFImpl for SimpleWindowUDF {
     fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
         (self.partition_evaluator_factory)()
     }
+}
+
+pub fn interval_month_day_nano_lit(value: &str) -> Expr {
+    let interval = parse_interval_month_day_nano(value).ok();
+    Expr::Literal(ScalarValue::IntervalMonthDayNano(interval))
 }
 
 #[cfg(test)]

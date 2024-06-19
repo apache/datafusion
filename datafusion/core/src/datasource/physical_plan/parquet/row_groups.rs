@@ -384,10 +384,12 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
             .map(|counts| Arc::new(counts) as ArrayRef)
     }
 
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
         // row counts are the same for all columns in a row group
-        StatisticsConverter::row_group_row_counts(self.metadata_iter())
+        self.statistics_converter(column)
+            .and_then(|c| c.row_group_row_counts(self.metadata_iter()))
             .ok()
+            .flatten()
             .map(|counts| Arc::new(counts) as ArrayRef)
     }
 

@@ -325,11 +325,9 @@ impl<'a> Test<'a> {
                 Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
             );
 
-            let row_counts = StatisticsConverter::row_group_row_counts(
-                reader.metadata().row_groups().iter(),
-            )
-            .unwrap();
-            let row_counts = Some(row_counts);
+            let row_counts = converter
+                .row_group_row_counts(reader.metadata().row_groups().iter())
+                .unwrap();
             assert_eq!(
                 row_counts, expected_row_counts,
                 "{column_name}: Mismatch with expected row counts. \
@@ -611,6 +609,94 @@ async fn test_int_8() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "i8",
+        check: Check::Both,
+    }
+    .run();
+}
+
+#[tokio::test]
+async fn test_float_16() {
+    // This creates a parquet files of 1 column named f
+    let reader = TestReader {
+        scenario: Scenario::Float16,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Float16Array::from(vec![
+            f16::from_f32(-5.),
+            f16::from_f32(-4.),
+            f16::from_f32(-0.),
+            f16::from_f32(5.),
+        ])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Float16Array::from(vec![
+            f16::from_f32(-1.),
+            f16::from_f32(0.),
+            f16::from_f32(4.),
+            f16::from_f32(9.),
+        ])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        column_name: "f",
+        check: Check::Both,
+    }
+    .run();
+}
+
+#[tokio::test]
+async fn test_float_32() {
+    // This creates a parquet files of 1 column named f
+    let reader = TestReader {
+        scenario: Scenario::Float32,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Float32Array::from(vec![-5., -4., -0., 5.0])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Float32Array::from(vec![-1., 0., 4., 9.])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        column_name: "f",
+        check: Check::Both,
+    }
+    .run();
+}
+
+#[tokio::test]
+async fn test_float_64() {
+    // This creates a parquet files of 1 column named f
+    let reader = TestReader {
+        scenario: Scenario::Float64,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Float64Array::from(vec![-5., -4., -0., 5.0])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Float64Array::from(vec![-1., 0., 4., 9.])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        column_name: "f",
         check: Check::Both,
     }
     .run();
@@ -2010,24 +2096,9 @@ async fn test_column_non_existent() {
         // nulls are [0, 0, 0, 0]
         expected_null_counts: UInt64Array::from(vec![None, None, None, None]),
         // row counts are [5, 5, 5, 5]
-        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
-        column_name: "i_do_not_exist",
-        check: Check::RowGroup,
-    }
-    .run_with_schema(&schema);
-
-    Test {
-        reader: &reader,
-        // mins are [-5, -4, 0, 5]
-        expected_min: Arc::new(Int64Array::from(vec![None, None, None, None])),
-        // maxes are [-1, 0, 4, 9]
-        expected_max: Arc::new(Int64Array::from(vec![None, None, None, None])),
-        // nulls are [0, 0, 0, 0]
-        expected_null_counts: UInt64Array::from(vec![None, None, None, None]),
-        // row counts are [5, 5, 5, 5]
         expected_row_counts: None,
         column_name: "i_do_not_exist",
-        check: Check::DataPage,
+        check: Check::Both,
     }
     .run_with_schema(&schema);
 }

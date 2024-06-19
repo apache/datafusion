@@ -33,8 +33,9 @@ use arrow_array::{
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 use half::f16;
+use parquet::data_type::FixedLenByteArray;
 use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
-use parquet::file::page_index::index::Index;
+use parquet::file::page_index::index::{Index, PageIndex};
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use paste::paste;
@@ -495,7 +496,7 @@ macro_rules! get_statistics {
 }
 
 macro_rules! make_data_page_stats_iterator {
-    ($iterator_type: ident, $func: ident, $index_type: path, $stat_value_type: ty) => {
+    ($iterator_type: ident, $func: expr, $index_type: path, $stat_value_type: ty) => {
         struct $iterator_type<'a, I>
         where
             I: Iterator<Item = (usize, &'a Index)>,
@@ -526,7 +527,7 @@ macro_rules! make_data_page_stats_iterator {
                             native_index
                                 .indexes
                                 .iter()
-                                .map(|x| x.$func)
+                                .map(|x| $func(x))
                                 .collect::<Vec<_>>(),
                         ),
                         // No matching `Index` found;
@@ -548,11 +549,66 @@ macro_rules! make_data_page_stats_iterator {
     };
 }
 
-make_data_page_stats_iterator!(MinInt32DataPageStatsIterator, min, Index::INT32, i32);
-make_data_page_stats_iterator!(MaxInt32DataPageStatsIterator, max, Index::INT32, i32);
-make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min, Index::INT64, i64);
-make_data_page_stats_iterator!(MaxInt64DataPageStatsIterator, max, Index::INT64, i64);
-
+make_data_page_stats_iterator!(
+    MinInt32DataPageStatsIterator,
+    |x: &PageIndex<i32>| { x.min },
+    Index::INT32,
+    i32
+);
+make_data_page_stats_iterator!(
+    MaxInt32DataPageStatsIterator,
+    |x: &PageIndex<i32>| { x.max },
+    Index::INT32,
+    i32
+);
+make_data_page_stats_iterator!(
+    MinInt64DataPageStatsIterator,
+    |x: &PageIndex<i64>| { x.min },
+    Index::INT64,
+    i64
+);
+make_data_page_stats_iterator!(
+    MaxInt64DataPageStatsIterator,
+    |x: &PageIndex<i64>| { x.max },
+    Index::INT64,
+    i64
+);
+make_data_page_stats_iterator!(
+    MinFloat16DataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
+make_data_page_stats_iterator!(
+    MaxFloat16DataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
+make_data_page_stats_iterator!(
+    MinFloat32DataPageStatsIterator,
+    |x: &PageIndex<f32>| { x.min },
+    Index::FLOAT,
+    f32
+);
+make_data_page_stats_iterator!(
+    MaxFloat32DataPageStatsIterator,
+    |x: &PageIndex<f32>| { x.max },
+    Index::FLOAT,
+    f32
+);
+make_data_page_stats_iterator!(
+    MinFloat64DataPageStatsIterator,
+    |x: &PageIndex<f64>| { x.min },
+    Index::DOUBLE,
+    f64
+);
+make_data_page_stats_iterator!(
+    MaxFloat64DataPageStatsIterator,
+    |x: &PageIndex<f64>| { x.max },
+    Index::DOUBLE,
+    f64
+);
 macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
         paste! {
@@ -581,6 +637,19 @@ macro_rules! get_data_page_statistics {
                 )),
                 Some(DataType::Int32) => Ok(Arc::new(Int32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Float16) => Ok(Arc::new(
+                    Float16Array::from_iter(
+                        [<$stat_type_prefix Float16DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| Some(from_bytes_to_f16(x.data())))
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::Float32) => Ok(Arc::new(Float32Array::from_iter([<$stat_type_prefix Float32DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter([<$stat_type_prefix Float64DataPageStatsIterator>]::new($iterator).flatten()))),
                 _ => unimplemented!()
             }
         }
@@ -677,6 +746,21 @@ where
             .iter()
             .map(|x| x.null_count.map(|x| x as u64))
             .collect::<Vec<_>>(),
+        Index::FLOAT(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::DOUBLE(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::FIXED_LEN_BYTE_ARRAY(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
         _ => unimplemented!(),
     });
 
@@ -718,21 +802,33 @@ impl<'a> StatisticsConverter<'a> {
     ///
     /// # Example
     /// ```no_run
+    /// # use arrow::datatypes::Schema;
+    /// # use arrow_array::ArrayRef;
     /// # use parquet::file::metadata::ParquetMetaData;
     /// # use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
     /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
-    /// // Given the metadata for a parquet file
+    /// # fn get_arrow_schema() -> Schema { unimplemented!() }
+    /// // Given the metadata for a parquet file and the arrow schema
     /// let metadata: ParquetMetaData = get_parquet_metadata();
+    /// let arrow_schema: Schema = get_arrow_schema();
+    /// let parquet_schema = metadata.file_metadata().schema_descr();
+    /// // create a converter
+    /// let converter = StatisticsConverter::try_new("foo", &arrow_schema, parquet_schema)
+    ///   .unwrap();
     /// // get the row counts for each row group
-    /// let row_counts = StatisticsConverter::row_group_row_counts(metadata
+    /// let row_counts = converter.row_group_row_counts(metadata
     ///   .row_groups()
     ///   .iter()
     /// );
     /// ```
-    pub fn row_group_row_counts<I>(metadatas: I) -> Result<UInt64Array>
+    pub fn row_group_row_counts<I>(&self, metadatas: I) -> Result<Option<UInt64Array>>
     where
         I: IntoIterator<Item = &'a RowGroupMetaData>,
     {
+        let Some(_) = self.parquet_index else {
+            return Ok(None);
+        };
+
         let mut builder = UInt64Array::builder(10);
         for metadata in metadatas.into_iter() {
             let row_count = metadata.num_rows();
@@ -743,7 +839,7 @@ impl<'a> StatisticsConverter<'a> {
             })?;
             builder.append_value(row_count);
         }
-        Ok(builder.finish())
+        Ok(Some(builder.finish()))
     }
 
     /// Create a new `StatisticsConverter` to extract statistics for a column
