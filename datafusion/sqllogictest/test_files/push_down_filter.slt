@@ -44,7 +44,7 @@ logical_plan
 
 # TODO: fix the query
 query error DataFusion error: External error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) > Int64
-select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > [];
+select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > 3;
 
 # test push down filter for unnest with filter on unnest column
 # query TT
