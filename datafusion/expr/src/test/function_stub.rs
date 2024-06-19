@@ -21,6 +21,8 @@
 
 use std::any::Any;
 
+use crate::type_coercion::aggregates::NUMERICS;
+use crate::Volatility::Immutable;
 use crate::{
     expr::AggregateFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -32,8 +34,6 @@ use arrow::datatypes::{
     DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use datafusion_common::{exec_err, not_impl_err, Result};
-use crate::type_coercion::aggregates::NUMERICS;
-use crate::Volatility::Immutable;
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
@@ -289,7 +289,6 @@ impl AggregateUDFImpl for Count {
     }
 }
 
-
 /// Testing stub implementation of AVERAGE aggregate
 #[derive(Debug)]
 pub struct Average {
@@ -301,7 +300,7 @@ impl Average {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("mean")],
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Immutable)
+            signature: Signature::uniform(1, NUMERICS.to_vec(), Immutable),
         }
     }
 }
@@ -325,15 +324,18 @@ impl AggregateUDFImpl for Average {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        todo!()
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
     }
 
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        todo!()
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        not_impl_err!("no impl for stub")
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        not_impl_err!("no impl for stub")
     }
 }

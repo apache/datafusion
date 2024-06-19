@@ -156,8 +156,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::{
-        test::function_stub::avg, cast, col, lit, logical_plan::builder::LogicalTableSource, min, try_cast,
-        LogicalPlanBuilder,
+        cast, col, lit, logical_plan::builder::LogicalTableSource, min,
+        test::function_stub::avg, try_cast, LogicalPlanBuilder,
     };
 
     use super::*;
