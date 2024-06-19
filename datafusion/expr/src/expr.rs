@@ -33,7 +33,9 @@ use crate::{
 use crate::{window_frame, Volatility};
 
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
@@ -1193,9 +1195,8 @@ impl Expr {
 
     /// Recursively potentially multiple aliases from an expression.
     ///
-    /// If the expression is not an alias, the expression is returned unchanged.
-    /// This method removes directly nested aliases, but not other nested
-    /// aliases.
+    /// This method removes nested aliases and returns `Transformed`
+    /// to signal if the expression was changed.
     ///
     /// # Example
     /// ```
@@ -1212,11 +1213,22 @@ impl Expr {
     /// let expr = col("foo").alias("bar").alias("baz");
     /// assert_eq!(expr.unalias_nested(), col("foo"));
     /// ```
-    pub fn unalias_nested(self) -> Expr {
-        match self {
-            Expr::Alias(alias) => alias.expr.unalias_nested(),
-            _ => self,
-        }
+    pub fn unalias_nested(self) -> Transformed<Expr> {
+        self.transform_down(|expr| {
+            match expr {
+                Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_) => {
+                    // subqueries could contain aliases so we don't recurse into those
+                    Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
+                }
+                Expr::Alias(Alias { expr, .. }) => {
+                    // directly recurse into the alias expression
+                    // as we just modified the tree structure
+                    Ok(Transformed::yes(expr.unalias_nested().data))
+                }
+                _ => Ok(Transformed::no(expr)),
+            }
+        })
+        .expect("unalias_nested doesn't return err")
     }
 
     /// Return `self IN <list>` if `negated` is false, otherwise
