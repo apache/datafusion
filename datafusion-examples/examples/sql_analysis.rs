@@ -23,11 +23,11 @@
 
 use std::sync::Arc;
 
-use datafusion::common::Result;
 use datafusion::{
     datasource::MemTable,
     execution::context::{SessionConfig, SessionContext},
 };
+use datafusion::common::Result;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::LogicalPlan;
 use test_utils::tpcds::tpcds_schemas;
