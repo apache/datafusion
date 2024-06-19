@@ -1214,20 +1214,30 @@ impl Expr {
     /// assert_eq!(expr.unalias_nested().data, col("foo"));
     /// ```
     pub fn unalias_nested(self) -> Transformed<Expr> {
-        self.transform_down(|expr| {
-            match expr {
-                Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_) => {
-                    // subqueries could contain aliases so we don't recurse into those
-                    Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
+        self.transform_down_up(
+            |expr| {
+                // f_down: skip subqueries.  Check in f_down to avoid recursing into them
+                let recursion = if matches!(
+                    expr,
+                    Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_)
+                ) {
+                    // subqueries could contain aliases so don't recurse into those
+                    TreeNodeRecursion::Jump
+                } else {
+                    TreeNodeRecursion::Continue
+                };
+                Ok(Transformed::new(expr, false, recursion))
+            },
+            |expr| {
+                // f_up: unalias on up so we can remove nested aliases like
+                // `(x as foo) as bar`
+                if let Expr::Alias(Alias { expr, .. }) = expr {
+                    Ok(Transformed::yes(*expr))
+                } else {
+                    Ok(Transformed::no(expr))
                 }
-                Expr::Alias(Alias { expr, .. }) => {
-                    // directly recurse into the alias expression
-                    // as we just modified the tree structure
-                    Ok(Transformed::yes(expr.unalias_nested().data))
-                }
-                _ => Ok(Transformed::no(expr)),
-            }
-        })
+            },
+        )
         // unreachable code: internal closure doesn't return err
         .unwrap()
     }
