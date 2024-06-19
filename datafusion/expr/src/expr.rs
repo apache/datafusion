@@ -1228,7 +1228,8 @@ impl Expr {
                 _ => Ok(Transformed::no(expr)),
             }
         })
-        .expect("unalias_nested doesn't return err")
+        // unreachable code: internal closure doesn't return err
+        .unwrap()
     }
 
     /// Return `self IN <list>` if `negated` is false, otherwise
