@@ -21,10 +21,9 @@ use arrow::array::{
 };
 use arrow::compute::sum;
 use arrow::datatypes::{
-    i256, ArrowNativeType, Decimal128Type, Decimal256Type, DecimalType, Float64Type,
-    UInt64Type,
+    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType, Field,
+    Float64Type, UInt64Type,
 };
-use arrow_schema::{DataType, Field};
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
@@ -591,5 +590,35 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
             avg_return_type(dict_value_type.as_ref())
         }
         other => exec_err!("AVG does not support {other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_avg_return_type() -> Result<()> {
+        let observed = Average::default().return_type(&[DataType::Float32])?;
+        assert_eq!(DataType::Float64, observed);
+
+        let observed = Average::default().return_type(&[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        let observed = Average::default().return_type(&[DataType::Int32])?;
+        assert_eq!(DataType::Float64, observed);
+
+        let observed = Average::default().return_type(&[DataType::Decimal128(10, 6)])?;
+        assert_eq!(DataType::Decimal128(14, 10), observed);
+
+        let observed = Average::default().return_type(&[DataType::Decimal128(36, 6)])?;
+        assert_eq!(DataType::Decimal128(38, 10), observed);
+        Ok(())
+    }
+
+    #[test]
+    fn test_avg_no_utf8() {
+        let observed = Average::default().return_type(&[DataType::Utf8]);
+        assert!(observed.is_err());
     }
 }

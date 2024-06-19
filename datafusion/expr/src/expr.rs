@@ -2238,7 +2238,6 @@ mod test {
             "nth_value",
             "min",
             "max",
-            "avg",
         ];
         for name in names {
             let fun = find_df_window_func(name).unwrap();

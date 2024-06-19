@@ -72,7 +72,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
                         _: &dyn SimplifyInfo| {
             Ok(Expr::WindowFunction(WindowFunction {
                 fun: datafusion_expr::WindowFunctionDefinition::AggregateFunction(
-                    AggregateFunction::Avg,
+                    AggregateFunction::Max,
                 ),
                 args: window_function.args,
                 partition_by: window_function.partition_by,

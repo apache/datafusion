@@ -15,21 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::{Field, Schema};
-use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
-use datafusion_expr::function::{AggregateFunctionSimplification, StateFieldsArgs};
-use datafusion_expr::simplify::SimplifyInfo;
-
 use std::{any::Any, sync::Arc};
+
+use arrow_schema::{Field, Schema};
 
 use datafusion::arrow::{array::Float32Array, record_batch::RecordBatch};
 use datafusion::error::Result;
+use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use datafusion::{assert_batches_eq, prelude::*};
 use datafusion_common::cast::as_float64_array;
+use datafusion_expr::function::{AggregateFunctionSimplification, StateFieldsArgs};
+use datafusion_expr::simplify::SimplifyInfo;
+use datafusion_expr::test::function_stub::avg_udaf;
 use datafusion_expr::{
-    expr::{AggregateFunction, AggregateFunctionDefinition},
-    function::AccumulatorArgs,
-    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
+    expr::AggregateFunction, function::AccumulatorArgs, Accumulator, AggregateUDF,
+    AggregateUDFImpl, GroupsAccumulator, Signature,
 };
 
 /// This example shows how to use the AggregateUDFImpl::simplify API to simplify/replace user
@@ -92,18 +92,14 @@ impl AggregateUDFImpl for BetterAvgUdaf {
         // with build-in aggregate function to illustrate the use
         let simplify = |aggregate_function: datafusion_expr::expr::AggregateFunction,
                         _: &dyn SimplifyInfo| {
-            Ok(Expr::AggregateFunction(AggregateFunction {
-                func_def: AggregateFunctionDefinition::BuiltIn(
-                    // yes it is the same Avg, `BetterAvgUdaf` was just a
-                    // marketing pitch :)
-                    datafusion_expr::aggregate_function::AggregateFunction::Avg,
-                ),
-                args: aggregate_function.args,
-                distinct: aggregate_function.distinct,
-                filter: aggregate_function.filter,
-                order_by: aggregate_function.order_by,
-                null_treatment: aggregate_function.null_treatment,
-            }))
+            Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                avg_udaf(),
+                vec![],
+                false,
+                None,
+                None,
+                None,
+            )))
         };
 
         Some(Box::new(simplify))

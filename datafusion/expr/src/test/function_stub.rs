@@ -88,7 +88,7 @@ create_func!(Average, avg_udaf);
 
 pub fn avg(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new_udf(
-        crate::test::function_stub::avg_udaf(),
+        avg_udaf(),
         vec![expr],
         false,
         None,
@@ -317,7 +317,7 @@ impl AggregateUDFImpl for Average {
     }
 
     fn name(&self) -> &str {
-        "average"
+        "avg"
     }
 
     fn signature(&self) -> &Signature {
@@ -332,10 +332,10 @@ impl AggregateUDFImpl for Average {
         not_impl_err!("no impl for stub")
     }
 
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
         not_impl_err!("no impl for stub")
+    }
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }
