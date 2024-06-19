@@ -932,7 +932,7 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
         (LargeUtf8, Utf8) => Some(LargeUtf8),
         (Utf8, LargeUtf8) => Some(LargeUtf8),
         (LargeUtf8, LargeUtf8) => Some(LargeUtf8),
-        (Utf8View, Utf8View) => Some(Utf8View),
+        (Utf8View, Utf8View) | (Utf8View, Utf8) | (Utf8, Utf8View) => Some(Utf8View),
         _ => None,
     }
 }

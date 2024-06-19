@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+
+# test StringViewArray with Utf8View columns
 statement ok
 create table test as values (arrow_cast('Andrew', 'Utf8View'), arrow_cast('X', 'Utf8View')),
                            (arrow_cast('Xiangpeng', 'Utf8View'), arrow_cast('Xiangpeng', 'Utf8View')),
@@ -63,3 +65,40 @@ select * from test where column1 <> arrow_cast('Andrew', 'Utf8View');
 ----
 Xiangpeng Xiangpeng
 Raphael R
+
+statement ok
+drop table test;
+
+
+# test StringViewArray with Utf8 and Utf8View columns
+statement ok
+create table test as values ('Andrew', arrow_cast('X', 'Utf8View')),
+                            ('Xiangpeng', arrow_cast('Xiangpeng', 'Utf8View')),
+                            ('Raphael', arrow_cast('R', 'Utf8View')),
+                            (NULL, arrow_cast('R', 'Utf8View'));
+
+query T?
+select * from test where column1 = column2;
+----
+Xiangpeng Xiangpeng
+
+query T?
+select * from test where column1 <> column2;
+----
+Andrew X
+Raphael R
+
+
+query T?
+select * from test where column1 = arrow_cast('Andrew', 'Utf8View');
+----
+Andrew X
+
+query T?
+select * from test where column1 <> arrow_cast('Andrew', 'Utf8View');
+----
+Xiangpeng Xiangpeng
+Raphael R
+
+statement ok
+drop table test;
