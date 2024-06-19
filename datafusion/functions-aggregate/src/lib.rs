@@ -70,8 +70,8 @@ pub mod approx_median;
 pub mod approx_percentile_cont;
 pub mod approx_percentile_cont_with_weight;
 pub mod bit_and_or_xor;
+pub mod bool_and_or;
 pub mod string_agg;
-
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;
 use datafusion_common::Result;
