@@ -68,6 +68,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -75,7 +76,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
-use sqlparser::ast::Expr as SQLExpr;
 
 /// Execution context for registering data sources and executing queries.
 /// See [`SessionContext`] for a higher level API.
@@ -491,10 +491,11 @@ impl SessionState {
         Ok(statement)
     }
 
+    /// parse a sql string into a sqlparser-rs AST [`SQLExpr`].
     pub fn sql_to_expr(
         &self,
         sql: &str,
-        dialect: &str
+        dialect: &str,
     ) -> datafusion_common::Result<SQLExpr> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
@@ -550,20 +551,25 @@ impl SessionState {
             }
         }
 
-        let query = SqlToRel::new_with_options(
-            &provider,
-            self.get_parser_options(),
-        );
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.statement_to_plan(statement)
     }
 
     fn get_parser_options(&self) -> ParserOptions {
         ParserOptions {
-            parse_float_as_decimal: self.config.options().sql_parser.parse_float_as_decimal,
-            enable_ident_normalization: self.config.options().sql_parser.enable_ident_normalization,
+            parse_float_as_decimal: self
+                .config
+                .options()
+                .sql_parser
+                .parse_float_as_decimal,
+            enable_ident_normalization: self
+                .config
+                .options()
+                .sql_parser
+                .enable_ident_normalization,
         }
     }
-    
+
     /// Creates a [`LogicalPlan`] from the provided SQL string. This
     /// interface will plan any SQL DataFusion supports, including DML
     /// like `CREATE TABLE`, and `COPY` (which can write to local
@@ -586,12 +592,14 @@ impl SessionState {
         Ok(plan)
     }
 
+    /// Creates a datafusion style ast [`Expr`] from a SQL string..
     pub async fn create_logical_expr(
         &self,
         sql: &str,
+        df_schema: &DFSchema,
     ) -> datafusion_common::Result<Expr> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
-        
+
         let sql_expr = self.sql_to_expr(sql, dialect)?;
 
         let provider = SessionContextProvider {
@@ -599,14 +607,9 @@ impl SessionState {
             tables: HashMap::new(),
         };
 
-        let query = SqlToRel::new_with_options(
-            &provider,
-            self.get_parser_options(),
-        );
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
 
-        let schema = DFSchema::empty();
-
-        query.sql_to_expr(sql_expr, &schema, &mut PlannerContext::new())
+        query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
     /// Optimizes the logical plan by applying optimizer rules.

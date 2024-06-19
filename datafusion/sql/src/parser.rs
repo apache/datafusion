@@ -22,7 +22,8 @@ use std::fmt;
 
 use sqlparser::{
     ast::{
-        ColumnDef, ColumnOptionDef, Expr, ObjectName, OrderByExpr, Query, Statement as SQLStatement, TableConstraint, Value
+        ColumnDef, ColumnOptionDef, Expr, ObjectName, OrderByExpr, Query,
+        Statement as SQLStatement, TableConstraint, Value,
     },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},

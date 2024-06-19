@@ -487,17 +487,25 @@ impl SessionContext {
     }
 
     /// Creates logical expresssions from SQL query text.
-    /// 
+    ///
     /// # Example: Parsing SQL queries
-    /// 
+    ///
     /// ```
-    /// use datafusion::prelude::SessionContext;
-    /// let mut ctx = SessionContext::new();
-    /// 
-    /// ctx.parse_sql("SELECT 1 + 1").await.unwrap();
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion::prelude::*;
+    /// # use datafusion_common::DFSchema;
+    /// let sql = "SELECT a FROM t WHERE b = 1";
+    /// // provide type information that `a` is an Int32
+    /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+    /// let df_schema = DFSchema::try_from(schema).unwrap();
+    ///
+    /// let expr = SessionContext::new()
+    ///  .parse_sql(sql, &df_schema)
+    ///  .await?;
     /// ```
-    pub async fn parse_sql(&self, sql: &str) -> Result<Expr> {
-        self.state().create_logical_expr(sql).await
+    pub async fn parse_sql(&self, sql: &str, df_schema: &DFSchema) -> Result<Expr> {
+        self.state().create_logical_expr(sql, df_schema).await
     }
 
     /// Execute the [`LogicalPlan`], return a [`DataFrame`]. This API
