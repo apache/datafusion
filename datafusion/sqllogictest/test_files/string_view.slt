@@ -226,6 +226,7 @@ logical_plan
 02)--Filter: test.column1_utf8view = Utf8View("Andrew")
 03)----TableScan: test projection=[column1_utf8, column1_utf8view]
 
+# should not be casting the column: https://github.com/apache/datafusion/issues/10998
 query TT
 explain SELECT column1_utf8 from test where column1_utf8 = arrow_cast('Andrew', 'Utf8View');
 ----
