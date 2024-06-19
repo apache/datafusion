@@ -15,99 +15,251 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
-# test StringViewArray with Utf8View columns
-statement ok
-create table test as values (arrow_cast('Andrew', 'Utf8View'), arrow_cast('X', 'Utf8View')),
-                           (arrow_cast('Xiangpeng', 'Utf8View'), arrow_cast('Xiangpeng', 'Utf8View')),
-                           (arrow_cast('Raphael', 'Utf8View'), arrow_cast('R', 'Utf8View')),
-                           (arrow_cast(NULL, 'Utf8View'), arrow_cast('R', 'Utf8View'));
-
-query B
-select arrow_cast('NULL', 'Utf8View') = arrow_cast('Andrew', 'Utf8View');
-----
-false
-
-query B
-select arrow_cast('NULL', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View');
-----
-true
-
-query B
-select arrow_cast('Andrew', 'Utf8View') = arrow_cast('Andrew', 'Utf8View');
-----
-true
-
-query B
-select arrow_cast('Xiangpeng', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View');
-----
-true
-
-query ??
-select * from test where column1 = column2;
-----
-Xiangpeng Xiangpeng
-
-query ??
-select * from test where column1 <> column2;
-----
-Andrew X
-Raphael R
-
-query ??
-select * from test where column1 = arrow_cast('Andrew', 'Utf8View');
-----
-Andrew X
-
-query ??
-select * from test where column1 = 'Andrew';
-----
-Andrew X
-
-query ??
-select * from test where column1 <> arrow_cast('Andrew', 'Utf8View');
-----
-Xiangpeng Xiangpeng
-Raphael R
-
-query ??
-select * from test where column1 <> 'Andrew';
-----
-Xiangpeng Xiangpeng
-Raphael R
+########
+## Test setup
+########
 
 statement ok
-drop table test;
+create table test_source as values
+    ('Andrew', 'X'),
+    ('Xiangpeng', 'Xiangpeng'),
+    ('Raphael', 'R'),
+    (NULL, 'R')
+;
 
-
-# test StringViewArray with Utf8 and Utf8View columns
+# Table with the different combination of column types
 statement ok
-create table test as values ('Andrew', arrow_cast('X', 'Utf8View')),
-                            ('Xiangpeng', arrow_cast('Xiangpeng', 'Utf8View')),
-                            ('Raphael', arrow_cast('R', 'Utf8View')),
-                            (NULL, arrow_cast('R', 'Utf8View'));
+create table test as
+SELECT
+  arrow_cast(column1, 'Utf8') as column1_utf8,
+  arrow_cast(column2, 'Utf8') as column2_utf8,
+  arrow_cast(column1, 'Utf8View') as column1_utf8view,
+  arrow_cast(column2, 'Utf8View') as column2_utf8view,
+  arrow_cast(column1, 'Dictionary(Int32, Utf8)') as column1_dict,
+  arrow_cast(column2, 'Dictionary(Int32, Utf8)') as column2_dict
+FROM test_source;
 
-query T?
-select * from test where column1 = column2;
+statement ok
+drop table test_source
+
+########
+## StringView to StringView
+########
+
+# StringView scalar to StringView scalar
+
+query BBBB
+select
+  arrow_cast('NULL', 'Utf8View') = arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('NULL', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') = arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Xiangpeng', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View');
+----
+false true true true
+
+
+# StringView column to StringView column comparison as filters
+
+query TT
+select column1_utf8, column2_utf8 from test where column1_utf8view = column2_utf8view;
 ----
 Xiangpeng Xiangpeng
 
-query T?
-select * from test where column1 <> column2;
+query TT
+select column1_utf8, column2_utf8 from test where column1_utf8view <> column2_utf8view;
 ----
 Andrew X
 Raphael R
 
-query T?
-select * from test where column1 = arrow_cast('Andrew', 'Utf8View');
+# StringView column to StringView column
+query TTBB
+select
+  column1_utf8, column2_utf8,
+  column1_utf8view = column2_utf8view,
+  column1_utf8view <> column2_utf8view
+from test;
 ----
-Andrew X
+Andrew X false true
+Xiangpeng Xiangpeng true false
+Raphael R false true
+NULL R NULL NULL
 
-query T?
-select * from test where column1 <> arrow_cast('Andrew', 'Utf8View');
+# StringView column to StringView scalar comparison
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_utf8view                 = arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') = column1_utf8view,
+  column1_utf8view                 <> arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') <> column1_utf8view
+from test;
 ----
-Xiangpeng Xiangpeng
-Raphael R
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+########
+## StringView to String
+########
+
+# test StringViewArray with Utf8 columns
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_utf8view  = column2_utf8,
+  column2_utf8      = column1_utf8view,
+  column1_utf8view <> column2_utf8,
+  column2_utf8     <> column1_utf8view
+from test;
+----
+Andrew X false false true true
+Xiangpeng Xiangpeng true true false false
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+# StringView column to String scalar
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_utf8view                 = arrow_cast('Andrew', 'Utf8'),
+  arrow_cast('Andrew', 'Utf8')     = column1_utf8view,
+  column1_utf8view                 <> arrow_cast('Andrew', 'Utf8'),
+  arrow_cast('Andrew', 'Utf8')     <> column1_utf8view
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+# String column to StringView scalar
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_utf8                     = arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') = column1_utf8,
+  column1_utf8                    <> arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') <> column1_utf8
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+
+########
+## StringView to Dictionary
+########
+
+# test StringViewArray with Dictionary columns
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_utf8view  = column2_dict,
+  column2_dict      = column1_utf8view,
+  column1_utf8view <> column2_dict,
+  column2_dict     <> column1_utf8view
+from test;
+----
+Andrew X false false true true
+Xiangpeng Xiangpeng true true false false
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+# StringView column to Dict scalar
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_utf8view                 = arrow_cast('Andrew', 'Dictionary(Int32, Utf8)'),
+  arrow_cast('Andrew', 'Dictionary(Int32, Utf8)')     = column1_utf8view,
+  column1_utf8view                 <> arrow_cast('Andrew', 'Dictionary(Int32, Utf8)'),
+  arrow_cast('Andrew', 'Dictionary(Int32, Utf8)')     <> column1_utf8view
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+# Dict column to StringView scalar
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_dict                     = arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') = column1_dict,
+  column1_dict                    <> arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') <> column1_dict
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+
+########
+## Coercion Rules
+########
+
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+
+# Filter should have a StringView literal and no column cast
+query TT
+explain SELECT column1_utf8 from test where column1_utf8view = 'Andrew';
+----
+logical_plan
+01)Projection: test.column1_utf8
+02)--Filter: test.column1_utf8view = Utf8View("Andrew")
+03)----TableScan: test projection=[column1_utf8, column1_utf8view]
+
+# reverse order should be the same
+query TT
+explain SELECT column1_utf8 from test where 'Andrew' = column1_utf8view;
+----
+logical_plan
+01)Projection: test.column1_utf8
+02)--Filter: test.column1_utf8view = Utf8View("Andrew")
+03)----TableScan: test projection=[column1_utf8, column1_utf8view]
+
+# should not be casting the column: https://github.com/apache/datafusion/issues/10998
+query TT
+explain SELECT column1_utf8 from test where column1_utf8 = arrow_cast('Andrew', 'Utf8View');
+----
+logical_plan
+01)Filter: CAST(test.column1_utf8 AS Utf8View) = Utf8View("Andrew")
+02)--TableScan: test projection=[column1_utf8]
+
+query TT
+explain SELECT column1_utf8 from test where column1_utf8view = arrow_cast('Andrew', 'Dictionary(Int32, Utf8)');
+----
+logical_plan
+01)Projection: test.column1_utf8
+02)--Filter: test.column1_utf8view = Utf8View("Andrew")
+03)----TableScan: test projection=[column1_utf8, column1_utf8view]
+
+# compare string / stringview
+# Should cast string -> stringview (which is cheap), not stringview -> string (which is not)
+query TT
+explain SELECT column1_utf8 from test where column1_utf8view = column2_utf8;
+----
+logical_plan
+01)Projection: test.column1_utf8
+02)--Filter: test.column1_utf8view = CAST(test.column2_utf8 AS Utf8View)
+03)----TableScan: test projection=[column1_utf8, column2_utf8, column1_utf8view]
+
+query TT
+explain SELECT column1_utf8 from test where column2_utf8 = column1_utf8view;
+----
+logical_plan
+01)Projection: test.column1_utf8
+02)--Filter: CAST(test.column2_utf8 AS Utf8View) = test.column1_utf8view
+03)----TableScan: test projection=[column1_utf8, column2_utf8, column1_utf8view]
+
 
 statement ok
 drop table test;
