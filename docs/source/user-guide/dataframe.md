@@ -61,7 +61,7 @@ not actually performing any transformations. This approach allows for the overal
 execution. The plan is evaluated (executed) when an action method is invoked, such as `collect`.
 
 | Function            | Notes                                                                                                                                      |
-|---------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | aggregate           | Perform an aggregate query with optional grouping expressions.                                                                             |
 | distinct            | Filter out duplicate rows.                                                                                                                 |
 | drop_columns        | Create a projection with all but the provided column names.                                                                                |
