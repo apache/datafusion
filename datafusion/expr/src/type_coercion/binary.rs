@@ -991,6 +991,7 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
         (Binary | Utf8, Binary) | (Binary, Utf8) => Some(Binary),
         (LargeBinary | Binary | Utf8 | LargeUtf8, LargeBinary)
         | (LargeBinary, Binary | Utf8 | LargeUtf8) => Some(LargeBinary),
+        (BinaryView, BinaryView) | (BinaryView, Binary) | (Binary, BinaryView) => Some(BinaryView),
         _ => None,
     }
 }
