@@ -73,7 +73,8 @@ Raphael R
 query ??
 select * from test where column1 <> 'Andrew';
 ----
-Andrew X
+Xiangpeng Xiangpeng
+Raphael R
 
 statement ok
 drop table test;
