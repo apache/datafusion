@@ -57,7 +57,7 @@ pub struct Average {
 impl Average {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Immutable),
+            signature: Signature::user_defined(Immutable),
             aliases: vec![String::from("mean")],
         }
     }
@@ -86,10 +86,7 @@ impl AggregateUDFImpl for Average {
         avg_return_type(&arg_types[0])
     }
 
-    fn accumulator(
-        &self,
-        acc_args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         use DataType::*;
         // instantiate specialized accumulator based for the type
         match (acc_args.input_type, acc_args.data_type) {
@@ -126,7 +123,6 @@ impl AggregateUDFImpl for Average {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        // FIXME: Verify with new version of SUM
         Ok(vec![
             Field::new(
                 format_state_name(&self.name(), "count"),
@@ -237,7 +233,6 @@ impl AggregateUDFImpl for Average {
                 DataType::Decimal128(p, s) => Ok(DataType::Decimal128(*p, *s)),
                 DataType::Decimal256(p, s) => Ok(DataType::Decimal256(*p, *s)),
                 d if d.is_numeric() => Ok(DataType::Float64),
-                // FIXME: Write Test
                 DataType::Dictionary(_, v) => return coerced_type(v.as_ref()),
                 _ => exec_err!("AVG not supported for {}", data_type),
             };
@@ -317,7 +312,6 @@ struct DecimalAvgAccumulator<T: DecimalType + ArrowNumericType + Debug> {
     target_scale: i8,
 }
 
-
 impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumulator<T> {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
@@ -339,7 +333,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
                     self.target_precision,
                     self.target_scale,
                 )?
-                    .avg(v, T::Native::from_usize(self.count as usize).unwrap())
+                .avg(v, T::Native::from_usize(self.count as usize).unwrap())
             })
             .transpose()?;
 
@@ -395,9 +389,9 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
 /// T::Native and a total count
 #[derive(Debug)]
 struct AvgGroupsAccumulator<T, F>
-    where
-        T: ArrowNumericType + Send,
-        F: Fn(T::Native, u64) -> Result<T::Native> + Send,
+where
+    T: ArrowNumericType + Send,
+    F: Fn(T::Native, u64) -> Result<T::Native> + Send,
 {
     /// The type of the internal sum
     sum_data_type: DataType,
@@ -419,9 +413,9 @@ struct AvgGroupsAccumulator<T, F>
 }
 
 impl<T, F> AvgGroupsAccumulator<T, F>
-    where
-        T: ArrowNumericType + Send,
-        F: Fn(T::Native, u64) -> Result<T::Native> + Send,
+where
+    T: ArrowNumericType + Send,
+    F: Fn(T::Native, u64) -> Result<T::Native> + Send,
 {
     pub fn new(sum_data_type: &DataType, return_data_type: &DataType, avg_fn: F) -> Self {
         debug!(
@@ -441,9 +435,9 @@ impl<T, F> AvgGroupsAccumulator<T, F>
 }
 
 impl<T, F> GroupsAccumulator for AvgGroupsAccumulator<T, F>
-    where
-        T: ArrowNumericType + Send,
-        F: Fn(T::Native, u64) -> Result<T::Native> + Send,
+where
+    T: ArrowNumericType + Send,
+    F: Fn(T::Native, u64) -> Result<T::Native> + Send,
 {
     fn update_batch(
         &mut self,
