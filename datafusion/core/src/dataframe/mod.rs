@@ -2227,7 +2227,7 @@ mod tests {
         let plan = t
             .distinct_on(vec![col("c1")], vec![col("aggregate_test_100.c1")], None)
             .unwrap();
-        
+
         let sql_plan =
             create_plan("select distinct on (c1) c1 from aggregate_test_100").await?;
 
