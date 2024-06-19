@@ -50,7 +50,7 @@ $ pacman -S protobuf
 $ brew install protobuf
 ```
 
-You will want to verify the version installed is `3.15` or greater, which introduced support for explicit [field presence](https://github.com/protocolbuffers/protobuf/blob/v3.15.0/docs/field_presence.md). Older versions may fail to compile.
+You will want to verify the version installed is `3.15` or greater, which has support for explicit [field presence](https://github.com/protocolbuffers/protobuf/blob/v3.15.0/docs/field_presence.md). Older versions may fail to compile.
 
 ```shell
 $ protoc --version
