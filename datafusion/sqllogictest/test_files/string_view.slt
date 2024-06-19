@@ -54,9 +54,13 @@ select * from test where column1 <> column2;
 Andrew X
 Raphael R
 
-
 query ??
 select * from test where column1 = arrow_cast('Andrew', 'Utf8View');
+----
+Andrew X
+
+query ??
+select * from test where column1 = 'Andrew';
 ----
 Andrew X
 
@@ -65,6 +69,11 @@ select * from test where column1 <> arrow_cast('Andrew', 'Utf8View');
 ----
 Xiangpeng Xiangpeng
 Raphael R
+
+query ??
+select * from test where column1 <> 'Andrew';
+----
+Andrew X
 
 statement ok
 drop table test;
@@ -87,7 +96,6 @@ select * from test where column1 <> column2;
 ----
 Andrew X
 Raphael R
-
 
 query T?
 select * from test where column1 = arrow_cast('Andrew', 'Utf8View');
