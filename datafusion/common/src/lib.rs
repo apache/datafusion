@@ -70,6 +70,7 @@ pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::UnnestOptions;
 pub use utils::project_schema;
+pub use file_options::file_type::FileType;
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.
