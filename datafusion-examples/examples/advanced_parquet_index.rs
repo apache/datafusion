@@ -181,36 +181,42 @@ async fn main() -> Result<()> {
     // the underlying parquet reader makes 10 IO requests, one for each row group
 
     // Now, run a query that has a predicate that our index can handle
+    //
+    // For this query, the access plan specifies skipping 8 row groups
+    // and scanning 2 of them. The skipped row groups are not read at all:
+    //
+    // [Skip, Skip, Scan, Skip, Skip, Skip, Skip, Scan, Skip, Skip]
+    //
+    // Note that the parquet reader makes 2 IO requests - one for the data from
+    // each row group.
     println!("** Select data, predicate `id IN (250, 750)`");
     ctx.sql("SELECT text FROM index_table WHERE id IN (250, 750)")
         .await?
         .show()
         .await?;
-    // in this case, the access plan specifies skipping 8 row groups
-    // and scanning 2 of them. The skipped row groups are not read at all
-    //
-    // [Skip, Skip, Scan, Skip, Skip, Skip, Skip, Scan, Skip, Skip]
-    //
-    // Note that the parquet reader only does 2 IOs - one for the data from each
-    // row group.
 
     // Finally, demonstrate scanning sub ranges within the row groups.
     // Parquet's minimum decode unit is a page, so specifying ranges
     // within a row group can be used to skip pages within a row group.
+    //
+    // For this query, the access plan specifies skipping all but the last row
+    // group and within the last row group, reading only the row with id 950
+    //
+    // [Skip, Skip, Skip, Skip, Skip, Skip, Skip, Skip, Skip, Selection(skip 49, select 1, skip 50)]
+    //
+    // Note that the parquet reader makes a single IO request - for the data
+    // pages that must be decoded
+    //
+    // Note: in order to prune pages, the Page Index must be loaded and the
+    // ParquetExec will load it on demand if not present. To avoid a second IO
+    // during query, this example loaded the Page Index pre-emptively by setting
+    // `ArrowReader::with_page_index` in `IndexedFile::try_new`
     provider.set_use_row_selection(true);
     println!("** Select data, predicate `id = 950`");
     ctx.sql("SELECT text  FROM index_table WHERE id = 950")
         .await?
         .show()
         .await?;
-    // In this case, the access plan specifies skipping all but the last row group
-    // and within the last row group, reading only the row with id 950
-    //
-    // [Skip, Skip, Skip, Skip, Skip, Skip, Skip, Skip, Skip, Selection(skip 49, select 1, skip 50)]
-    //
-    // In order to prune pages, the Page Index must be loaded. This PageIndex is
-    // loaded in a separate IO request, so the parquet reader makes 2 IO
-    // requests for this query.
 
     Ok(())
 }
