@@ -340,14 +340,6 @@ impl Accumulator for BoolOrAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         self.update_batch(states)
     }
-
-    fn retract_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
-        todo!()
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        todo!()
-    }
 }
 
 // #[cfg(test)]
