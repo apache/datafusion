@@ -18,10 +18,7 @@
 //! [`ScalarUDFImpl`] definitions for array_to_string and string_to_array functions.
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Float32Array, Float64Array, GenericListArray,
-    Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, ListBuilder,
-    OffsetSizeTrait, StringArray, StringBuilder, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    Array, ArrayRef, AsArray, BooleanArray, Float32Array, Float64Array, GenericListArray, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, ListBuilder, OffsetSizeTrait, StringArray, StringBuilder, UInt16Array, UInt32Array, UInt64Array, UInt8Array
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_expr::TypeSignature;
@@ -281,21 +278,51 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
                 Ok(arg)
             }
-            Dictionary(..) => {
-                let any_dict_array = arr
-                    .as_any_dictionary_opt()
-                    .ok_or_else( || {
-                        DataFusionError::Internal(
-                            format!("could not cast {} to AnyDictionaryArray", arr.data_type())
-                        )
-                    })?;
-                compute_array_to_string(
-                    arg,
-                    any_dict_array.values().clone(),
-                    delimiter.clone(),
-                    null_string.clone(),
-                    with_null_string,
-                )?;
+            Dictionary(_,_) => {
+                let any_dict_array = arr.as_any_dictionary_opt().ok_or_else( || {
+                    DataFusionError::Internal(
+                        format!("could not cast {} to AnyDictionaryArray", arr.data_type())
+                    )
+                })?;
+
+                let mut values: Vec<String> = vec!();
+                macro_rules! array_function {
+                    ($ARRAY_TYPE:ident) => {{
+                        for x in downcast_arg!(any_dict_array.values(), $ARRAY_TYPE) {
+                            if let Some(x) = x {
+                                values.push(x.to_string());
+                            }    
+                        }
+                    }};
+                }
+                call_array_function!(
+                    any_dict_array.values().data_type(), 
+                    false
+                );
+
+                let mut keys: Vec<usize> = vec!();
+                macro_rules! array_function {
+                    ($ARRAY_TYPE:ident) => {{
+                        for x in downcast_arg!(any_dict_array.keys(), $ARRAY_TYPE) {
+                            if let Some(x) = x {
+                                keys.push(x.to_string().parse::<usize>().unwrap());
+                            }    
+                        }
+                    }};
+                }
+                call_array_function!(
+                    any_dict_array.keys().data_type(), 
+                    false
+                );
+
+                for (i, key) in keys.iter().enumerate() {
+                    if let Some(v) = values.get(*key){
+                        arg.push_str(v);
+                        if i < keys.len()-1{
+                            arg.push_str(&delimiter);
+                        }
+                    }
+                }
 
                 Ok(arg)
             }
