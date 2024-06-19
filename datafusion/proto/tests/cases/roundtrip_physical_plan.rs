@@ -65,7 +65,7 @@ use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
 use datafusion::physical_plan::{
-    udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
+    udaf, AggregateExpr, DisplayAs, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -74,7 +74,7 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
     ScalarUDFImpl, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
@@ -1073,4 +1073,165 @@ fn roundtrip_interleave() -> Result<()> {
     let inputs: Vec<Arc<dyn ExecutionPlan>> = vec![Arc::new(left), Arc::new(right)];
     let interleave = InterleaveExec::try_new(inputs)?;
     roundtrip_test(Arc::new(interleave))
+}
+
+#[derive(Debug)]
+struct ParentExec {
+    input: Arc<dyn ExecutionPlan>,
+}
+
+impl DisplayAs for ParentExec {
+    fn fmt_as(
+        &self,
+        _t: datafusion::physical_plan::DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "ParentExec")
+    }
+}
+
+impl ExecutionPlan for ParentExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+        unreachable!()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        unreachable!()
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::TaskContext>,
+    ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
+        unreachable!()
+    }
+}
+
+#[derive(Debug)]
+struct ParentPhysicalExtensionCodec;
+
+impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        _registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if buf == "ParentExec".as_bytes() {
+            Ok(Arc::new(ParentExec {
+                input: inputs[0].clone(),
+            }))
+        } else {
+            internal_err!("Not supported")
+        }
+    }
+
+    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
+        if node.as_any().downcast_ref::<ParentExec>().is_some() {
+            buf.extend_from_slice("ParentExec".as_bytes());
+            Ok(())
+        } else {
+            internal_err!("Not supported")
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ChildExec {}
+
+impl DisplayAs for ChildExec {
+    fn fmt_as(
+        &self,
+        _t: datafusion::physical_plan::DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "ChildExec")
+    }
+}
+
+impl ExecutionPlan for ChildExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+        unreachable!()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        todo!()
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::TaskContext>,
+    ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
+        unreachable!()
+    }
+}
+
+#[derive(Debug)]
+struct ChildPhysicalExtensionCodec;
+
+impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        _inputs: &[Arc<dyn ExecutionPlan>],
+        _registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if buf == "ChildExec".as_bytes() {
+            Ok(Arc::new(ChildExec {}))
+        } else {
+            internal_err!("Not supported")
+        }
+    }
+
+    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
+        if node.as_any().downcast_ref::<ChildExec>().is_some() {
+            buf.extend_from_slice("ChildExec".as_bytes());
+            Ok(())
+        } else {
+            internal_err!("Not supported")
+        }
+    }
+}
+
+#[test]
+fn multi_extension_codecs() -> Result<()> {
+    let exec_plan = Arc::new(ParentExec {
+        input: Arc::new(ChildExec {}),
+    });
+    let ctx = SessionContext::new();
+    let parent_extension_codec = ParentPhysicalExtensionCodec {};
+    let child_extension_codec = ChildPhysicalExtensionCodec {};
+    roundtrip_test_and_return(
+        exec_plan,
+        &ctx,
+        &[
+            Arc::new(parent_extension_codec),
+            Arc::new(child_extension_codec),
+        ],
+    )?;
+    Ok(())
 }
