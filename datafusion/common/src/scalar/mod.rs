@@ -1570,6 +1570,7 @@ impl ScalarValue {
             DataType::UInt16 => build_array_primitive!(UInt16Array, UInt16),
             DataType::UInt32 => build_array_primitive!(UInt32Array, UInt32),
             DataType::UInt64 => build_array_primitive!(UInt64Array, UInt64),
+            DataType::Utf8View => build_array_string!(StringViewArray, Utf8View),
             DataType::Utf8 => build_array_string!(StringArray, Utf8),
             DataType::LargeUtf8 => build_array_string!(LargeStringArray, LargeUtf8),
             DataType::Binary => build_array_string!(BinaryArray, Binary),
@@ -1713,22 +1714,6 @@ impl ScalarValue {
                     array.into_iter(),
                     *size,
                 )?;
-                Arc::new(array)
-            }
-            DataType::Utf8View => {
-                let array = scalars
-                    .map(|sv| {
-                        if let ScalarValue::Utf8View(v) = sv {
-                            Ok(v)
-                        } else {
-                            _internal_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
-                                Expected {data_type:?}, got {sv:?}"
-                            )
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let array = StringViewArray::from(array);
                 Arc::new(array)
             }
             // explicitly enumerate unsupported types so newly added
