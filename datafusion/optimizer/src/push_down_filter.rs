@@ -939,7 +939,29 @@ impl OptimizerRule for PushDownFilter {
     }
 }
 
-/// return transformed projection plan and optinal filter's predicate
+/// Attempts to push `predicate` into a `FilterExec` below `projection
+///
+/// # Returns
+/// (plan, remaining_predicate)
+///
+/// `plan` is a LogicalPlan for `projection` with possibly a new FilterExec below it.
+/// `remaining_predicate` is any part of the predicate that could not be pushed down
+///
+/// # Example
+///
+/// Pushing a predicate like `foo=5 AND bar=6` with an input plan like this:
+///
+/// ```text
+/// Projection(foo, c+d as bar)
+/// ```
+///
+/// Might result in returning `remaining_predicate` of `bar=6` and a plan like
+///
+/// ```text
+/// Projection(foo, c+d as bar)
+///  Filter(foo=5)
+///   ...
+/// ```
 fn rewrite_projection(
     predicate: Expr,
     projection: Projection,
