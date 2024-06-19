@@ -1178,7 +1178,7 @@ impl ExecutionPlan for ChildExec {
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        todo!()
+        unreachable!()
     }
 
     fn execute(
