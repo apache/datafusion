@@ -28,7 +28,6 @@ use datafusion_common::{
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{
-    aggregate_function::AggregateFunction::{Max, Min},
     col,
     expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan},
@@ -71,26 +70,6 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
     let mut aggregate_count = 0;
     for expr in aggr_expr {
         if let Expr::AggregateFunction(AggregateFunction {
-            func_def: AggregateFunctionDefinition::BuiltIn(fun),
-            distinct,
-            args,
-            filter,
-            order_by,
-            null_treatment: _,
-        }) = expr
-        {
-            if filter.is_some() || order_by.is_some() {
-                return Ok(false);
-            }
-            aggregate_count += 1;
-            if *distinct {
-                for e in args {
-                    fields_set.insert(e);
-                }
-            } else if !matches!(fun, Min | Max) {
-                return Ok(false);
-            }
-        } else if let Expr::AggregateFunction(AggregateFunction {
             func_def: AggregateFunctionDefinition::UDF(fun),
             distinct,
             args,
@@ -107,7 +86,10 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
                 for e in args {
                     fields_set.insert(e);
                 }
-            } else if fun.name() != "sum" && fun.name() != "MIN" && fun.name() != "MAX" {
+            } else if fun.name() != "sum"
+                && fun.name().to_lowercase() != "min"
+                && fun.name().to_lowercase() != "max"
+            {
                 return Ok(false);
             }
         } else {
@@ -173,6 +155,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             //
                             // First aggregate(from bottom) refers to `test.a` column.
                             // Second aggregate refers to the `group_alias_0` column, Which is a valid field in the first aggregate.
+
                             // If we were to write plan above as below without alias
                             //
                             // Aggregate: groupBy=[[test.a + Int32(1)]], aggr=[[count(alias1)]] [group_alias_0:Int32, count(alias1):Int64;N]\
@@ -200,55 +183,6 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 let outer_aggr_exprs = aggr_expr
                     .into_iter()
                     .map(|aggr_expr| match aggr_expr {
-                        Expr::AggregateFunction(AggregateFunction {
-                            func_def: AggregateFunctionDefinition::BuiltIn(fun),
-                            mut args,
-                            distinct,
-                            ..
-                        }) => {
-                            if distinct {
-                                if args.len() != 1 {
-                                    return internal_err!("DISTINCT aggregate should have exactly one argument");
-                                }
-                                let arg = args.swap_remove(0);
-
-                                if group_fields_set.insert(arg.display_name()?) {
-                                    inner_group_exprs
-                                        .push(arg.alias(SINGLE_DISTINCT_ALIAS));
-                                }
-                                Ok(Expr::AggregateFunction(AggregateFunction::new(
-                                    fun,
-                                    vec![col(SINGLE_DISTINCT_ALIAS)],
-                                    false, // intentional to remove distinct here
-                                    None,
-                                    None,
-                                    None,
-                                )))
-                                // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
-                            } else {
-                                index += 1;
-                                let alias_str = format!("alias{}", index);
-                                inner_aggr_exprs.push(
-                                    Expr::AggregateFunction(AggregateFunction::new(
-                                        fun.clone(),
-                                        args,
-                                        false,
-                                        None,
-                                        None,
-                                        None,
-                                    ))
-                                    .alias(&alias_str),
-                                );
-                                Ok(Expr::AggregateFunction(AggregateFunction::new(
-                                    fun,
-                                    vec![col(&alias_str)],
-                                    false,
-                                    None,
-                                    None,
-                                    None,
-                                )))
-                            }
-                        }
                         Expr::AggregateFunction(AggregateFunction {
                             func_def: AggregateFunctionDefinition::UDF(udf),
                             mut args,
@@ -355,11 +289,11 @@ mod tests {
     use crate::test::*;
     use datafusion_expr::expr::{self, GroupingSet};
     use datafusion_expr::ExprFunctionExt;
-    use datafusion_expr::{
-        lit, logical_plan::builder::LogicalPlanBuilder, max, min, AggregateFunction,
-    };
+    use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_functions_aggregate::expr_fn::{count, count_distinct, sum};
+    use datafusion_functions_aggregate::expr_fn::{
+        count, count_distinct, max, max_distinct, min, sum,
+    };
     use datafusion_functions_aggregate::sum::sum_udaf;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
@@ -520,17 +454,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],
-                vec![
-                    count_distinct(col("b")),
-                    Expr::AggregateFunction(expr::AggregateFunction::new(
-                        AggregateFunction::Max,
-                        vec![col("b")],
-                        true,
-                        None,
-                        None,
-                        None,
-                    )),
-                ],
+                vec![count_distinct(col("b")), max_distinct(col("b"))],
             )?
             .build()?;
         // Should work
@@ -587,14 +511,7 @@ mod tests {
                 vec![
                     sum(col("c")),
                     count_distinct(col("b")),
-                    Expr::AggregateFunction(expr::AggregateFunction::new(
-                        AggregateFunction::Max,
-                        vec![col("b")],
-                        true,
-                        None,
-                        None,
-                        None,
-                    )),
+                    max_distinct(col("b")),
                 ],
             )?
             .build()?;

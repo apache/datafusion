@@ -50,7 +50,7 @@ use datafusion_common::{
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::{MaxAccumulator, MinAccumulator};
+use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
 

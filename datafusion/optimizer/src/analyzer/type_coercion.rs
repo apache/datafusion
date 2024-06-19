@@ -47,9 +47,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprFunctionExt, ExprSchemable,
-    LogicalPlan, Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator, ScalarUDF,
+    WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -401,24 +400,6 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 order_by,
                 null_treatment,
             }) => match func_def {
-                AggregateFunctionDefinition::BuiltIn(fun) => {
-                    let new_expr = coerce_agg_exprs_for_signature(
-                        &fun,
-                        args,
-                        self.schema,
-                        &fun.signature(),
-                    )?;
-                    Ok(Transformed::yes(Expr::AggregateFunction(
-                        expr::AggregateFunction::new(
-                            fun,
-                            new_expr,
-                            distinct,
-                            filter,
-                            order_by,
-                            null_treatment,
-                        ),
-                    )))
-                }
                 AggregateFunctionDefinition::UDF(fun) => {
                     let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
                         args,
@@ -449,14 +430,6 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     coerce_window_frame(window_frame, self.schema, &order_by)?;
 
                 let args = match &fun {
-                    expr::WindowFunctionDefinition::AggregateFunction(fun) => {
-                        coerce_agg_exprs_for_signature(
-                            fun,
-                            args,
-                            self.schema,
-                            &fun.signature(),
-                        )?
-                    }
                     expr::WindowFunctionDefinition::AggregateUDF(udf) => {
                         coerce_arguments_for_signature_with_aggregate_udf(
                             args,
@@ -690,33 +663,6 @@ fn coerce_arguments_for_fun(
     } else {
         Ok(expressions)
     }
-}
-
-/// Returns the coerced exprs for each `input_exprs`.
-/// Get the coerced data type from `aggregate_rule::coerce_types` and add `try_cast` if the
-/// data type of `input_exprs` need to be coerced.
-fn coerce_agg_exprs_for_signature(
-    agg_fun: &AggregateFunction,
-    input_exprs: Vec<Expr>,
-    schema: &DFSchema,
-    signature: &Signature,
-) -> Result<Vec<Expr>> {
-    if input_exprs.is_empty() {
-        return Ok(input_exprs);
-    }
-    let current_types = input_exprs
-        .iter()
-        .map(|e| e.get_type(schema))
-        .collect::<Result<Vec<_>>>()?;
-
-    let coerced_types =
-        type_coercion::aggregates::coerce_types(agg_fun, &current_types, signature)?;
-
-    input_exprs
-        .into_iter()
-        .enumerate()
-        .map(|(i, expr)| expr.cast_to(&coerced_types[i], schema))
-        .collect()
 }
 
 fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {

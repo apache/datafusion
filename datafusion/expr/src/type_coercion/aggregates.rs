@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Deref;
+use crate::TypeSignature;
 
 use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -23,8 +23,6 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::{internal_err, plan_err, Result};
-
-use crate::{AggregateFunction, Signature, TypeSignature};
 
 pub static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
 
@@ -84,25 +82,6 @@ pub static TIMES: &[DataType] = &[
     DataType::Time64(TimeUnit::Nanosecond),
 ];
 
-/// Returns the coerced data type for each `input_types`.
-/// Different aggregate function with different input data type will get corresponding coerced data type.
-pub fn coerce_types(
-    agg_fun: &AggregateFunction,
-    input_types: &[DataType],
-    signature: &Signature,
-) -> Result<Vec<DataType>> {
-    // Validate input_types matches (at least one of) the func signature.
-    check_arg_count(agg_fun.name(), input_types, &signature.type_signature)?;
-
-    match agg_fun {
-        AggregateFunction::Min | AggregateFunction::Max => {
-            // min and max support the dictionary data type
-            // unpack the dictionary to get the value
-            get_min_max_result_type(input_types)
-        }
-    }
-}
-
 /// Validate the length of `input_types` matches the `signature` for `agg_fun`.
 ///
 /// This method DOES NOT validate the argument types - only that (at least one,
@@ -161,22 +140,6 @@ pub fn check_arg_count(
         }
     }
     Ok(())
-}
-
-fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
-    // make sure that the input types only has one element.
-    assert_eq!(input_types.len(), 1);
-    // min and max support the dictionary data type
-    // unpack the dictionary to get the value
-    match &input_types[0] {
-        DataType::Dictionary(_, dict_value_type) => {
-            // TODO add checker, if the value type is complex data type
-            Ok(vec![dict_value_type.deref().clone()])
-        }
-        // TODO add checker for datatype which min and max supported
-        // For example, the `Struct` and `Map` type are not supported in the MIN and MAX function
-        _ => Ok(input_types.to_vec()),
-    }
 }
 
 /// function return type of a sum
@@ -348,33 +311,6 @@ pub fn coerce_avg_type(func_name: &str, arg_types: &[DataType]) -> Result<Vec<Da
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn test_aggregate_coerce_types() {
-        // test input args with error number input types
-        let fun = AggregateFunction::Min;
-        let input_types = vec![DataType::Int64, DataType::Int32];
-        let signature = fun.signature();
-        let result = coerce_types(&fun, &input_types, &signature);
-        assert_eq!("Error during planning: The function MIN expects 1 arguments, but 2 were provided", result.unwrap_err().strip_backtrace());
-
-        // test count, array_agg, approx_distinct, min, max.
-        // the coerced types is same with input types
-        let funs = vec![AggregateFunction::Min, AggregateFunction::Max];
-        let input_types = vec![
-            vec![DataType::Int32],
-            vec![DataType::Decimal128(10, 2)],
-            vec![DataType::Decimal256(1, 1)],
-            vec![DataType::Utf8],
-        ];
-        for fun in funs {
-            for input_type in &input_types {
-                let signature = fun.signature();
-                let result = coerce_types(&fun, input_type, &signature);
-                assert_eq!(*input_type, result.unwrap());
-            }
-        }
-    }
-
     #[test]
     fn test_variance_return_data_type() -> Result<()> {
         let data_type = DataType::Float64;
