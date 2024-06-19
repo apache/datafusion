@@ -80,6 +80,14 @@ make_udaf_expr_and_func!(
     bool_and_udaf
 );
 
+make_udaf_expr_and_func!(
+    BoolOr,
+    bool_or,
+    expression,
+    "The values to combine with `OR`",
+    bool_or_udaf
+);
+
 /// BOOL_AND aggregate expression
 #[derive(Debug)]
 pub struct BoolAnd {
