@@ -1,0 +1,113 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+# test StringViewArray with Utf8View columns
+statement ok
+create table test as values (arrow_cast('Andrew', 'Utf8View'), arrow_cast('X', 'Utf8View')),
+                           (arrow_cast('Xiangpeng', 'Utf8View'), arrow_cast('Xiangpeng', 'Utf8View')),
+                           (arrow_cast('Raphael', 'Utf8View'), arrow_cast('R', 'Utf8View')),
+                           (arrow_cast(NULL, 'Utf8View'), arrow_cast('R', 'Utf8View'));
+
+query B
+select arrow_cast('NULL', 'Utf8View') = arrow_cast('Andrew', 'Utf8View');
+----
+false
+
+query B
+select arrow_cast('NULL', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View');
+----
+true
+
+query B
+select arrow_cast('Andrew', 'Utf8View') = arrow_cast('Andrew', 'Utf8View');
+----
+true
+
+query B
+select arrow_cast('Xiangpeng', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View');
+----
+true
+
+query ??
+select * from test where column1 = column2;
+----
+Xiangpeng Xiangpeng
+
+query ??
+select * from test where column1 <> column2;
+----
+Andrew X
+Raphael R
+
+query ??
+select * from test where column1 = arrow_cast('Andrew', 'Utf8View');
+----
+Andrew X
+
+query ??
+select * from test where column1 = 'Andrew';
+----
+Andrew X
+
+query ??
+select * from test where column1 <> arrow_cast('Andrew', 'Utf8View');
+----
+Xiangpeng Xiangpeng
+Raphael R
+
+query ??
+select * from test where column1 <> 'Andrew';
+----
+Xiangpeng Xiangpeng
+Raphael R
+
+statement ok
+drop table test;
+
+
+# test StringViewArray with Utf8 and Utf8View columns
+statement ok
+create table test as values ('Andrew', arrow_cast('X', 'Utf8View')),
+                            ('Xiangpeng', arrow_cast('Xiangpeng', 'Utf8View')),
+                            ('Raphael', arrow_cast('R', 'Utf8View')),
+                            (NULL, arrow_cast('R', 'Utf8View'));
+
+query T?
+select * from test where column1 = column2;
+----
+Xiangpeng Xiangpeng
+
+query T?
+select * from test where column1 <> column2;
+----
+Andrew X
+Raphael R
+
+query T?
+select * from test where column1 = arrow_cast('Andrew', 'Utf8View');
+----
+Andrew X
+
+query T?
+select * from test where column1 <> arrow_cast('Andrew', 'Utf8View');
+----
+Xiangpeng Xiangpeng
+Raphael R
+
+statement ok
+drop table test;

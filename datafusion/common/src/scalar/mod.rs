@@ -1570,6 +1570,7 @@ impl ScalarValue {
             DataType::UInt16 => build_array_primitive!(UInt16Array, UInt16),
             DataType::UInt32 => build_array_primitive!(UInt32Array, UInt32),
             DataType::UInt64 => build_array_primitive!(UInt64Array, UInt64),
+            DataType::Utf8View => build_array_string!(StringViewArray, Utf8View),
             DataType::Utf8 => build_array_string!(StringArray, Utf8),
             DataType::LargeUtf8 => build_array_string!(LargeStringArray, LargeUtf8),
             DataType::Binary => build_array_string!(BinaryArray, Binary),
@@ -1726,7 +1727,6 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _)
-            | DataType::Utf8View
             | DataType::BinaryView
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
