@@ -486,6 +486,20 @@ impl SessionContext {
         self.execute_logical_plan(plan).await
     }
 
+    /// Creates logical expresssions from SQL query text.
+    /// 
+    /// # Example: Parsing SQL queries
+    /// 
+    /// ```
+    /// use datafusion::prelude::SessionContext;
+    /// let mut ctx = SessionContext::new();
+    /// 
+    /// ctx.parse_sql("SELECT 1 + 1").await.unwrap();
+    /// ```
+    pub async fn parse_sql(&self, sql: &str) -> Result<Expr> {
+        self.state().create_logical_expr(sql).await
+    }
+
     /// Execute the [`LogicalPlan`], return a [`DataFrame`]. This API
     /// is not featured limited (so all SQL such as `CREATE TABLE` and
     /// `COPY` will be run).
