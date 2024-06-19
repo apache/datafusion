@@ -18,7 +18,6 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
@@ -30,9 +29,7 @@ use arrow::datatypes::Field;
 use datafusion_common::internal_err;
 use datafusion_common::{downcast_value, not_impl_err};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::function::{
-    AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
-};
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
@@ -167,27 +164,12 @@ impl AggregateUDFImpl for BoolAnd {
         Ok(Box::<BoolAndAccumulator>::default())
     }
 
-    fn with_beneficial_ordering(
-        self: Arc<Self>,
-        _beneficial_ordering: bool,
-    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
-        todo!()
-    }
-
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
     }
 
-    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
-        todo!()
-    }
-
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
-    }
-
-    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        todo!()
     }
 }
 
@@ -222,14 +204,6 @@ impl Accumulator for BoolAndAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         self.update_batch(states)
-    }
-
-    fn retract_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
-        todo!()
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        todo!()
     }
 }
 
@@ -317,27 +291,12 @@ impl AggregateUDFImpl for BoolOr {
         Ok(Box::<BoolOrAccumulator>::default())
     }
 
-    fn with_beneficial_ordering(
-        self: Arc<Self>,
-        _beneficial_ordering: bool,
-    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
-        todo!()
-    }
-
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
     }
 
-    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
-        todo!()
-    }
-
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
-    }
-
-    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        todo!()
     }
 }
 
