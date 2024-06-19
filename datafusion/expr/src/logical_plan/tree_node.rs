@@ -380,7 +380,6 @@ pub fn unwrap_arc(plan: Arc<LogicalPlan>) -> LogicalPlan {
 }
 
 /// Applies `f` to rewrite a `Arc<LogicalPlan>` without copying, if possible
-#[inline(always)]
 fn rewrite_arc<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
     plan: Arc<LogicalPlan>,
     mut f: F,
@@ -389,7 +388,6 @@ fn rewrite_arc<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
 }
 
 /// rewrite a `Vec` of `Arc<LogicalPlan>` without copying, if possible
-#[inline(always)]
 fn rewrite_arcs<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
     input_plans: Vec<Arc<LogicalPlan>>,
     mut f: F,
