@@ -435,7 +435,7 @@ mod tests {
         assert_together_optimized_plan(plan, expected, true)
     }
 
-    fn empty_left_and_right_lp_empty(
+    fn assert_empty_left_empty_right_lp(
         left_empty: bool,
         right_empty: bool,
         join_type: JoinType,
@@ -478,28 +478,28 @@ mod tests {
     #[test]
     fn test_join_empty_propagation_rules() -> Result<()> {
         // test left join with empty left
-        empty_left_and_right_lp_empty(true, false, JoinType::Left, true)?;
+        assert_empty_left_empty_right_lp(true, false, JoinType::Left, true)?;
 
         // test right join with empty right
-        empty_left_and_right_lp_empty(false, true, JoinType::Right, true)?;
+        assert_empty_left_empty_right_lp(false, true, JoinType::Right, true)?;
 
         // test left semi join with empty left
-        empty_left_and_right_lp_empty(true, false, JoinType::LeftSemi, true)?;
+        assert_empty_left_empty_right_lp(true, false, JoinType::LeftSemi, true)?;
 
         // test left semi join with empty right
-        empty_left_and_right_lp_empty(false, true, JoinType::LeftSemi, true)?;
+        assert_empty_left_empty_right_lp(false, true, JoinType::LeftSemi, true)?;
 
         // test right semi join with empty left
-        empty_left_and_right_lp_empty(true, false, JoinType::RightSemi, true)?;
+        assert_empty_left_empty_right_lp(true, false, JoinType::RightSemi, true)?;
 
         // test right semi join with empty right
-        empty_left_and_right_lp_empty(false, true, JoinType::RightSemi, true)?;
+        assert_empty_left_empty_right_lp(false, true, JoinType::RightSemi, true)?;
 
         // test left anti join empty left
-        empty_left_and_right_lp_empty(true, false, JoinType::LeftAnti, true)?;
+        assert_empty_left_empty_right_lp(true, false, JoinType::LeftAnti, true)?;
 
         // test right anti join empty right
-        empty_left_and_right_lp_empty(false, true, JoinType::RightAnti, true)
+        assert_empty_left_empty_right_lp(false, true, JoinType::RightAnti, true)
     }
 
     #[test]
@@ -507,28 +507,28 @@ mod tests {
         // these cases should not result in an empty relation
 
         // test left join with empty right
-        empty_left_and_right_lp_empty(false, true, JoinType::Left, false)?;
+        assert_empty_left_empty_right_lp(false, true, JoinType::Left, false)?;
 
         // test right join with empty left
-        empty_left_and_right_lp_empty(true, false, JoinType::Right, false)?;
+        assert_empty_left_empty_right_lp(true, false, JoinType::Right, false)?;
 
         // test left semi with non-empty left and right
-        empty_left_and_right_lp_empty(false, false, JoinType::LeftSemi, false)?;
+        assert_empty_left_empty_right_lp(false, false, JoinType::LeftSemi, false)?;
 
         // test right semi with non-empty left and right
-        empty_left_and_right_lp_empty(false, false, JoinType::RightSemi, false)?;
+        assert_empty_left_empty_right_lp(false, false, JoinType::RightSemi, false)?;
 
         // test left anti join with non-empty left and right
-        empty_left_and_right_lp_empty(false, false, JoinType::LeftAnti, false)?;
+        assert_empty_left_empty_right_lp(false, false, JoinType::LeftAnti, false)?;
 
         // test left anti with non-empty left and empty right
-        empty_left_and_right_lp_empty(false, true, JoinType::LeftAnti, false)?;
+        assert_empty_left_empty_right_lp(false, true, JoinType::LeftAnti, false)?;
 
         // test right anti join with non-empty left and right
-        empty_left_and_right_lp_empty(false, false, JoinType::RightAnti, false)?;
+        assert_empty_left_empty_right_lp(false, false, JoinType::RightAnti, false)?;
 
         // test right anti with empty left and non-empty right
-        empty_left_and_right_lp_empty(true, false, JoinType::RightAnti, false)
+        assert_empty_left_empty_right_lp(true, false, JoinType::RightAnti, false)
     }
 
     #[test]
