@@ -94,11 +94,11 @@ impl AggregateUDFImpl for BetterAvgUdaf {
                         _: &dyn SimplifyInfo| {
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                 avg_udaf(),
-                vec![],
-                false,
-                None,
-                None,
-                None,
+                aggregate_function.args,
+                aggregate_function.distinct,
+                aggregate_function.filter,
+                aggregate_function.order_by,
+                aggregate_function.null_treatment,
             )))
         };
 
