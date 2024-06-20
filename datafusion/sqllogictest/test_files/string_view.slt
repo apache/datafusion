@@ -33,6 +33,8 @@ create table test as
 SELECT
   arrow_cast(column1, 'Utf8') as column1_utf8,
   arrow_cast(column2, 'Utf8') as column2_utf8,
+  arrow_cast(column1, 'LargeUtf8') as column1_large_utf8,
+  arrow_cast(column2, 'LargeUtf8') as column2_large_utf8,
   arrow_cast(column1, 'Utf8View') as column1_utf8view,
   arrow_cast(column2, 'Utf8View') as column2_utf8view,
   arrow_cast(column1, 'Dictionary(Int32, Utf8)') as column1_dict,
@@ -118,6 +120,22 @@ Xiangpeng Xiangpeng true true false false
 Raphael R false false true true
 NULL R NULL NULL NULL NULL
 
+# test StringViewArray with LargeUtf8 columns
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_utf8view  = column2_large_utf8,
+  column2_large_utf8      = column1_utf8view,
+  column1_utf8view <> column2_large_utf8,
+  column2_large_utf8     <> column1_utf8view
+from test;
+----
+Andrew X false false true true
+Xiangpeng Xiangpeng true true false false
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+
 # StringView column to String scalar
 query TTBBBB
 select
@@ -126,6 +144,21 @@ select
   arrow_cast('Andrew', 'Utf8')     = column1_utf8view,
   column1_utf8view                 <> arrow_cast('Andrew', 'Utf8'),
   arrow_cast('Andrew', 'Utf8')     <> column1_utf8view
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+# StringView column to LargeString scalar
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_utf8view                 = arrow_cast('Andrew', 'LargeUtf8'),
+  arrow_cast('Andrew', 'LargeUtf8')     = column1_utf8view,
+  column1_utf8view                 <> arrow_cast('Andrew', 'LargeUtf8'),
+  arrow_cast('Andrew', 'LargeUtf8')     <> column1_utf8view
 from test;
 ----
 Andrew X true true false false
@@ -148,6 +181,20 @@ Xiangpeng Xiangpeng false false true true
 Raphael R false false true true
 NULL R NULL NULL NULL NULL
 
+# LargeString column to StringView scalar
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_large_utf8                     = arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') = column1_large_utf8,
+  column1_large_utf8                    <> arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') <> column1_large_utf8
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
 
 ########
 ## StringView to Dictionary
