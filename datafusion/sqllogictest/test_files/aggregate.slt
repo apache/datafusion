@@ -1785,29 +1785,42 @@ select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' unio
 ----
 00:00:00 00:00:02
 
-# aggregate_decimal_min
-query RT
-select min(c1), arrow_typeof(min(c1)) from d_table
+# aggregate Interval(MonthDayNano) min/max
+query error
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (interval '1 month'),
+  (interval '2 months'),
+  (interval '2 month 15 days'),
+  (interval '-2 month')
 ----
--100.009 Decimal128(10, 3)
+DataFusion error: Internal error: Min/Max accumulator not implemented for type Interval(MonthDayNano).
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
-# aggregate_decimal_max
-query RT
-select max(c1), arrow_typeof(max(c1)) from d_table
-----
-110.009 Decimal128(10, 3)
 
-# aggregate_decimal_sum
-query RT
-select sum(c1), arrow_typeof(sum(c1)) from d_table
+# aggregate Interval(DayTime) min/max
+query T??
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (arrow_cast('60 minutes', 'Interval(DayTime)')),
+  (arrow_cast('-3 minutes', 'Interval(DayTime)')),
+  (arrow_cast('30 minutes', 'Interval(DayTime)'));
 ----
-100 Decimal128(20, 3)
+Interval(DayTime) 0 years 0 mons 0 days 0 hours -3 mins 0.000 secs 0 years 0 mons 0 days 1 hours 0 mins 0.000 secs
 
-# aggregate_decimal_avg
-query RT
-select avg(c1), arrow_typeof(avg(c1)) from d_table
+# aggregate Interval(YearMonth) min/max
+query error
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (arrow_cast('-1 year', 'Interval(YearMonth)')),
+  (arrow_cast('13 months', 'Interval(YearMonth)')),
+  (arrow_cast('1 year', 'Interval(YearMonth)'));
 ----
-5 Decimal128(14, 7)
+DataFusion error: Internal error: Min/Max accumulator not implemented for type Interval(YearMonth).
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
 
 # aggregate
