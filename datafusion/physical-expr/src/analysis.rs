@@ -28,7 +28,7 @@ use crate::PhysicalExpr;
 use arrow::datatypes::Schema;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
+    internal_datafusion_err, internal_err, ColumnStatistics, Result, ScalarValue,
 };
 use datafusion_expr::interval_arithmetic::{cardinality_ratio, Interval};
 
@@ -94,12 +94,13 @@ impl ExprBoundaries {
         col_stats: &ColumnStatistics,
         col_index: usize,
     ) -> Result<Self> {
-        let field = schema.fields()
-            .get(col_index)
-            .ok_or_else(|| DataFusionError::Internal(
-                format!("Could not create `ExprBoundaries`: in `try_from_column` `col_index` has gone out of bounds with a value of {col_index}, the schema has {} columns while.", schema.fields.len())
-                )
-            )?;
+        let field = schema.fields().get(col_index).ok_or_else(|| {
+            internal_datafusion_err!(
+                "Could not create `ExprBoundaries`: in `try_from_column` `col_index` 
+                has gone out of bounds with a value of {col_index}, the schema has {} columns.",
+                schema.fields.len()
+            )
+        })?;
         let empty_field =
             ScalarValue::try_from(field.data_type()).unwrap_or(ScalarValue::Null);
         let interval = Interval::try_new(
