@@ -741,39 +741,31 @@ impl OptimizerRule for PushDownFilter {
 
                         let unnest_predicate = conjunction(unnest_predicates);
                         if new_projection.transformed {
-                            match keep_predicate {
-                                None => match unnest_predicate {
-                                    None => {
-                                        Ok(Transformed::yes(LogicalPlan::Unnest(unnest)))
-                                    }
-                                    Some(unnest_predicate) => Ok(Transformed::yes(
-                                        LogicalPlan::Filter(Filter::try_new(
-                                            unnest_predicate,
-                                            Arc::new(LogicalPlan::Unnest(unnest)),
-                                        )?),
-                                    )),
-                                },
-                                Some(keep_predicate) => match unnest_predicate {
-                                    None => Ok(Transformed::yes(LogicalPlan::Filter(
+                            match (keep_predicate, unnest_predicate) {
+                                (None, None) => {
+                                    Ok(Transformed::yes(LogicalPlan::Unnest(unnest)))
+                                }
+                                (Some(predicate), None) | (None, Some(predicate)) => {
+                                    Ok(Transformed::yes(LogicalPlan::Filter(
                                         Filter::try_new(
-                                            keep_predicate,
+                                            predicate,
                                             Arc::new(LogicalPlan::Unnest(unnest)),
                                         )?,
-                                    ))),
-                                    Some(unnest_predicate) => {
-                                        let predicate = conjunction(vec![
-                                            unnest_predicate,
-                                            keep_predicate,
-                                        ])
-                                        .unwrap(); // Safe to unwrap since filters is non-empty
-                                        Ok(Transformed::yes(LogicalPlan::Filter(
-                                            Filter::try_new(
-                                                predicate,
-                                                Arc::new(LogicalPlan::Unnest(unnest)),
-                                            )?,
-                                        )))
-                                    }
-                                },
+                                    )))
+                                }
+                                (Some(keep_predicate), Some(unnest_predicate)) => {
+                                    let predicate = conjunction(vec![
+                                        keep_predicate,
+                                        unnest_predicate,
+                                    ])
+                                    .unwrap(); // Safe to unwrap since filters is non-empty
+                                    Ok(Transformed::yes(LogicalPlan::Filter(
+                                        Filter::try_new(
+                                            predicate,
+                                            Arc::new(LogicalPlan::Unnest(unnest)),
+                                        )?,
+                                    )))
+                                }
                             }
                         } else {
                             filter.input = Arc::new(LogicalPlan::Unnest(unnest));
@@ -1001,9 +993,9 @@ impl OptimizerRule for PushDownFilter {
 /// # Args
 /// - predicates: Split predicates like `[foo=5, bar=6]`
 /// - projection: The target projection plan to push down the predicates
-/// 
+///
 /// # Example
-/// 
+///
 /// Pushing a predicate like `foo=5 AND bar=6` with an input plan like this:
 ///
 /// ```text
