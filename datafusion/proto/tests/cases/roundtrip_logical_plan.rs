@@ -60,6 +60,7 @@ use datafusion_expr::{
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_functions_aggregate::expr_fn::{bit_and, bit_or, bit_xor};
+use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -669,6 +670,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         bit_and(lit(2)),
         bit_or(lit(2)),
         bit_xor(lit(2)),
+        string_agg(col("a").cast_to(&DataType::Utf8, &schema)?, lit("|")),
     ];
 
     // ensure expressions created with the expr api can be round tripped
