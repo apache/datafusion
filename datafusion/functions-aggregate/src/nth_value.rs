@@ -22,25 +22,140 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use crate::aggregate::array_agg_ordered::merge_ordered_arrays;
-use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
-use crate::expressions::{format_state_name, Literal};
-use crate::{
-    reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
-};
-
 use arrow_array::cast::AsArray;
 use arrow_array::{new_empty_array, ArrayRef, StructArray};
 use arrow_schema::{DataType, Field, Fields};
+
 use datafusion_common::utils::{array_into_list_array, get_row_at_idx};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
-use datafusion_expr::utils::AggregateOrderSensitivity;
-use datafusion_expr::Accumulator;
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
+use datafusion_expr::{
+    Accumulator, AggregateUDF, AggregateUDFImpl, Expr, Signature, Volatility,
+};
+use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
+use datafusion_physical_expr_common::sort_expr::{
+    limited_convert_logical_sort_exprs_to_physical, LexOrdering, PhysicalSortExpr,
+};
+
+use crate::array_agg_ordered::merge_ordered_arrays;
+
+make_udaf_expr_and_func!(
+    NthValueAgg,
+    nth_value,
+    expression,
+    "Computes the nth value",
+    nth_value_udaf
+);
 
 /// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
 #[derive(Debug)]
+pub struct NthValueAgg {
+    signature: Signature,
+    alias: Vec<String>,
+    reverse: bool,
+}
+
+impl Default for NthValueAgg {
+    fn default() -> Self {
+        Self {
+            signature: Signature::any(2, Volatility::Immutable),
+            alias: vec!["nth_value".to_string()],
+            reverse: false,
+        }
+    }
+}
+
+impl AggregateUDFImpl for NthValueAgg {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "NTH_VALUE"
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.alias
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].clone())
+    }
+
+    fn state_fields(
+        &self,
+        args: datafusion_expr::function::StateFieldsArgs,
+    ) -> Result<Vec<arrow_schema::Field>> {
+        let mut fields = vec![Field::new_list(
+            format_state_name(args.name, "nth_value"),
+            Field::new("item", args.input_type.clone(), true),
+            true,
+        )];
+        if !args.ordering_fields.is_empty() {
+            fields.push(Field::new_list(
+                format_state_name(args.name, "nth_value_orderings"),
+                Field::new(
+                    "item",
+                    DataType::Struct(Fields::from(args.ordering_fields.to_vec())),
+                    true,
+                ),
+                true,
+            ));
+        }
+        Ok(fields)
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let n = match acc_args.input_exprs[1] {
+            Expr::Literal(ScalarValue::Int64(Some(n))) => {
+                if self.reverse {
+                    -n
+                } else {
+                    n
+                }
+            }
+            _ => return exec_err!("Second argument of NTH_VALUE needs to be a literal"),
+        };
+
+        let ordering_req = limited_convert_logical_sort_exprs_to_physical(
+            acc_args.sort_exprs,
+            acc_args.schema,
+        )?;
+
+        let ordering_dtypes = ordering_req
+            .iter()
+            .map(|e| e.expr.data_type(acc_args.schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Box::new(NthValueAccumulator::try_new(
+            n,
+            acc_args.input_type,
+            &ordering_dtypes,
+            ordering_req,
+        )?))
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::HardRequirement
+    }
+
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::Reversed(Arc::new(AggregateUDF::from(Self {
+            signature: self.signature.clone(),
+            alias: self.alias.clone(),
+            reverse: !self.reverse,
+        })))
+    }
+}
+
+/*
 pub struct NthValueAgg {
     /// Column name
     name: String,
@@ -80,6 +195,7 @@ impl NthValueAgg {
         }
     }
 }
+
 
 impl AggregateExpr for NthValueAgg {
     fn as_any(&self) -> &dyn Any {
@@ -162,6 +278,7 @@ impl PartialEq<dyn Any> for NthValueAgg {
             .unwrap_or(false)
     }
 }
+*/
 
 #[derive(Debug)]
 pub(crate) struct NthValueAccumulator {

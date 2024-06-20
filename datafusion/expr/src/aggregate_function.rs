@@ -17,13 +17,12 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
-use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 use crate::utils;
 use crate::{type_coercion::aggregates::*, Signature, Volatility};
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 
 use strum_macros::EnumIter;
@@ -39,10 +38,6 @@ pub enum AggregateFunction {
     Max,
     /// Average
     Avg,
-    /// Aggregation into an array
-    ArrayAgg,
-    /// N'th value in a group according to some ordering
-    NthValue,
     /// Correlation
     Correlation,
     /// Grouping
@@ -56,8 +51,6 @@ impl AggregateFunction {
             Min => "MIN",
             Max => "MAX",
             Avg => "AVG",
-            ArrayAgg => "ARRAY_AGG",
-            NthValue => "NTH_VALUE",
             Correlation => "CORR",
             Grouping => "GROUPING",
         }
@@ -79,8 +72,6 @@ impl FromStr for AggregateFunction {
             "max" => AggregateFunction::Max,
             "mean" => AggregateFunction::Avg,
             "min" => AggregateFunction::Min,
-            "array_agg" => AggregateFunction::ArrayAgg,
-            "nth_value" => AggregateFunction::NthValue,
             // statistical
             "corr" => AggregateFunction::Correlation,
             // other
@@ -124,13 +115,7 @@ impl AggregateFunction {
                 correlation_return_type(&coerced_data_types[0])
             }
             AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
-            AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
-                "item",
-                coerced_data_types[0].clone(),
-                true,
-            )))),
             AggregateFunction::Grouping => Ok(DataType::Int32),
-            AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
         }
     }
 }
@@ -153,9 +138,7 @@ impl AggregateFunction {
     pub fn signature(&self) -> Signature {
         // note: the physical expression must accept the type returned by this function or the execution panics.
         match self {
-            AggregateFunction::Grouping | AggregateFunction::ArrayAgg => {
-                Signature::any(1, Volatility::Immutable)
-            }
+            AggregateFunction::Grouping => Signature::any(1, Volatility::Immutable),
             AggregateFunction::Min | AggregateFunction::Max => {
                 let valid = STRINGS
                     .iter()
@@ -171,7 +154,6 @@ impl AggregateFunction {
             AggregateFunction::Avg => {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
-            AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
             AggregateFunction::Correlation => {
                 Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
             }

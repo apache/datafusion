@@ -95,7 +95,6 @@ pub fn coerce_types(
     check_arg_count(agg_fun.name(), input_types, &signature.type_signature)?;
 
     match agg_fun {
-        AggregateFunction::ArrayAgg => Ok(input_types.to_vec()),
         AggregateFunction::Min | AggregateFunction::Max => {
             // min and max support the dictionary data type
             // unpack the dictionary to get the value
@@ -131,7 +130,6 @@ pub fn coerce_types(
             }
             Ok(vec![Float64, Float64])
         }
-        AggregateFunction::NthValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
     }
 }
@@ -383,11 +381,7 @@ mod tests {
 
         // test count, array_agg, approx_distinct, min, max.
         // the coerced types is same with input types
-        let funs = vec![
-            AggregateFunction::ArrayAgg,
-            AggregateFunction::Min,
-            AggregateFunction::Max,
-        ];
+        let funs = vec![AggregateFunction::Min, AggregateFunction::Max];
         let input_types = vec![
             vec![DataType::Int32],
             vec![DataType::Decimal128(10, 2)],

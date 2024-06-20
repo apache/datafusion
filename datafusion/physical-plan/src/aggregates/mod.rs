@@ -1194,11 +1194,11 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::expr::Sort;
+    use datafusion_expr::Expr;
+    use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::median::median_udaf;
-    use datafusion_physical_expr::expressions::{
-        lit, FirstValue, LastValue, OrderSensitiveArrayAgg,
-    };
+    use datafusion_physical_expr::expressions::{lit, FirstValue, LastValue};
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
@@ -2145,42 +2145,44 @@ mod tests {
         let col_a = &col("a", &test_schema)?;
         let col_b = &col("b", &test_schema)?;
         let col_c = &col("c", &test_schema)?;
-        let mut eq_properties = EquivalenceProperties::new(test_schema);
+        let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         // Columns a and b are equal.
         eq_properties.add_equal_conditions(col_a, col_b)?;
         // Aggregate requirements are
         // [None], [a ASC], [a ASC, b ASC, c ASC], [a ASC, b ASC] respectively
-        let order_by_exprs = vec![
+        let order_by_names = vec![
             None,
-            Some(vec![PhysicalSortExpr {
-                expr: col_a.clone(),
-                options: options1,
-            }]),
-            Some(vec![
-                PhysicalSortExpr {
-                    expr: col_a.clone(),
-                    options: options1,
-                },
-                PhysicalSortExpr {
-                    expr: col_b.clone(),
-                    options: options1,
-                },
-                PhysicalSortExpr {
-                    expr: col_c.clone(),
-                    options: options1,
-                },
-            ]),
-            Some(vec![
-                PhysicalSortExpr {
-                    expr: col_a.clone(),
-                    options: options1,
-                },
-                PhysicalSortExpr {
-                    expr: col_b.clone(),
-                    options: options1,
-                },
-            ]),
+            Some(vec!["a"]),
+            Some(vec!["a", "b", "c"]),
+            Some(vec!["a", "b"]),
         ];
+        let sort_exprs = order_by_names.clone().into_iter().map(|maybe_names| {
+            maybe_names.map(|names| {
+                names
+                    .iter()
+                    .map(|name| {
+                        Expr::Sort(Sort {
+                            expr: Box::new(Expr::Column(
+                                datafusion_common::Column::new_unqualified(*name),
+                            )),
+                            asc: true,
+                            nulls_first: false,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+        });
+        let order_by_exprs = order_by_names.into_iter().map(|maybe_names| {
+            maybe_names.map(|names| {
+                names
+                    .into_iter()
+                    .map(|name| PhysicalSortExpr {
+                        expr: col(name, &test_schema).unwrap(),
+                        options: options1,
+                    })
+                    .collect::<Vec<_>>()
+            })
+        });
         let common_requirement = vec![
             PhysicalSortExpr {
                 expr: col_a.clone(),
@@ -2192,16 +2194,20 @@ mod tests {
             },
         ];
         let mut aggr_exprs = order_by_exprs
-            .into_iter()
-            .map(|order_by_expr| {
-                Arc::new(OrderSensitiveArrayAgg::new(
-                    col_a.clone(),
+            .zip(sort_exprs)
+            .map(|(order_by_expr, sort_expr)| {
+                create_aggregate_expr(
+                    &array_agg_udaf(),
+                    &[col_a.clone()],
+                    &[],
+                    &sort_expr.unwrap_or_default(),
+                    &order_by_expr.unwrap_or_default(),
+                    &test_schema,
                     "array_agg",
-                    DataType::Int32,
                     false,
-                    vec![],
-                    order_by_expr.unwrap_or_default(),
-                )) as _
+                    false,
+                )
+                .unwrap()
             })
             .collect::<Vec<_>>();
         let group_by = PhysicalGroupBy::new_single(vec![]);

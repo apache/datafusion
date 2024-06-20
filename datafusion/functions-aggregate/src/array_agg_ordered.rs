@@ -18,27 +18,22 @@
 //! Defines physical expressions which specify ordering requirement
 //! that can evaluated at runtime during query execution
 
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
-use crate::expressions::format_state_name;
-use crate::{
-    reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
-};
-
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use arrow_array::cast::AsArray;
 use arrow_array::{new_empty_array, Array, ArrayRef, StructArray};
 use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::{array_into_list_array, compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_expr::Accumulator;
+use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
+/*
 /// Expression for a `ARRAY_AGG(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
@@ -164,6 +159,7 @@ impl PartialEq<dyn Any> for OrderSensitiveArrayAgg {
             .unwrap_or(false)
     }
 }
+*/
 
 #[derive(Debug)]
 pub(crate) struct OrderSensitiveArrayAggAccumulator {
@@ -544,12 +540,12 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
-    use crate::aggregate::array_agg_ordered::merge_ordered_arrays;
-
     use arrow_array::{Array, ArrayRef, Int64Array};
     use arrow_schema::SortOptions;
     use datafusion_common::utils::get_row_at_idx;
     use datafusion_common::{Result, ScalarValue};
+
+    use crate::array_agg_ordered::merge_ordered_arrays;
 
     #[test]
     fn test_merge_asc() -> Result<()> {

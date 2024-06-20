@@ -17,22 +17,17 @@
 
 //! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use arrow_array::cast::AsArray;
-
-use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr};
 
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
+/*
 /// Expression for a ARRAY_AGG(DISTINCT) aggregation.
 #[derive(Debug)]
 pub struct DistinctArrayAgg {
@@ -114,9 +109,10 @@ impl PartialEq<dyn Any> for DistinctArrayAgg {
             .unwrap_or(false)
     }
 }
+*/
 
 #[derive(Debug)]
-struct DistinctArrayAggAccumulator {
+pub(crate) struct DistinctArrayAggAccumulator {
     values: HashSet<ScalarValue>,
     datatype: DataType,
 }
@@ -177,9 +173,10 @@ impl Accumulator for DistinctArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
 
+    use std::sync::Arc;
+
     use super::*;
-    use crate::expressions::col;
-    use crate::expressions::tests::aggregate;
+    use crate::array_agg::array_agg_udaf;
     use arrow::array::Int32Array;
     use arrow::datatypes::Schema;
     use arrow::record_batch::RecordBatch;
@@ -187,7 +184,10 @@ mod tests {
     use arrow_array::Array;
     use arrow_array::ListArray;
     use arrow_buffer::OffsetBuffer;
+    use arrow_schema::Field;
     use datafusion_common::internal_err;
+    use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
+    use datafusion_physical_expr_common::expressions::column::col;
 
     // arrow::compute::sort can't sort nested ListArray directly, so we compare the scalar values pair-wise.
     fn compare_list_contents(
@@ -241,13 +241,31 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", datatype.clone(), false)]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![input])?;
 
-        let agg = Arc::new(DistinctArrayAgg::new(
-            col("a", &schema)?,
-            "bla".to_string(),
-            datatype,
+        let agg = create_aggregate_expr(
+            &array_agg_udaf(),
+            &vec![col("a", &schema)?],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "array_agg_distinct",
+            false,
             true,
-        ));
-        let actual = aggregate(&batch, agg)?;
+        )?;
+
+        let actual = {
+            let mut accum = agg.create_accumulator()?;
+            let expr = agg.expressions();
+            let values = expr
+                .iter()
+                .map(|e| {
+                    e.evaluate(&batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            accum.update_batch(&values)?;
+            accum.evaluate()?
+        };
         compare_list_contents(expected, actual)
     }
 
@@ -258,12 +276,18 @@ mod tests {
         datatype: DataType,
     ) -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", datatype.clone(), false)]);
-        let agg = Arc::new(DistinctArrayAgg::new(
-            col("a", &schema)?,
-            "bla".to_string(),
-            datatype,
+
+        let agg = create_aggregate_expr(
+            &array_agg_udaf(),
+            &vec![col("a", &schema)?],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "array_agg_distinct",
+            false,
             true,
-        ));
+        )?;
 
         let mut accum1 = agg.create_accumulator()?;
         let mut accum2 = agg.create_accumulator()?;

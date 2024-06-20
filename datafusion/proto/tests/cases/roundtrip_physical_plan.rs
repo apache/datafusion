@@ -22,6 +22,7 @@ use std::vec;
 
 use arrow::csv::WriterBuilder;
 use datafusion::functions_aggregate::sum::sum_udaf;
+use datafusion_functions_aggregate::nth_value::NthValueAgg;
 use prost::Message;
 
 use datafusion::arrow::array::ArrayRef;
@@ -38,7 +39,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
-use datafusion::physical_expr::expressions::{Max, NthValueAgg};
+use datafusion::physical_expr::expressions::Max;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -348,15 +349,20 @@ fn rountrip_aggregate() -> Result<()> {
             DataType::Float64,
         ))],
         // NTH_VALUE
-        vec![Arc::new(NthValueAgg::new(
-            col("b", &schema)?,
-            1,
-            "NTH_VALUE(b, 1)".to_string(),
-            DataType::Int64,
+        vec![udaf::create_aggregate_expr(
+            &AggregateUDF::new_from_impl(NthValueAgg::default()),
+            &[
+                cast(col("b", &schema)?, &schema, DataType::Utf8)?,
+                lit(ScalarValue::Int64(Some(1))),
+            ],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "NTH_VALUE(b, 1)",
             false,
-            Vec::new(),
-            Vec::new(),
-        ))],
+            false,
+        )?],
         // STRING_AGG
         vec![udaf::create_aggregate_expr(
             &AggregateUDF::new_from_impl(StringAgg::new()),

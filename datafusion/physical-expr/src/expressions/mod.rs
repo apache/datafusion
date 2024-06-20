@@ -35,16 +35,12 @@ mod try_cast;
 pub mod helpers {
     pub use crate::aggregate::min_max::{max, min};
 }
-pub use crate::aggregate::array_agg::ArrayAgg;
-pub use crate::aggregate::array_agg_distinct::DistinctArrayAgg;
-pub use crate::aggregate::array_agg_ordered::OrderSensitiveArrayAgg;
 pub use crate::aggregate::average::Avg;
 pub use crate::aggregate::average::AvgAccumulator;
 pub use crate::aggregate::build_in::create_aggregate_expr;
 pub use crate::aggregate::correlation::Correlation;
 pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::min_max::{Max, MaxAccumulator, Min, MinAccumulator};
-pub use crate::aggregate::nth_value::NthValueAgg;
 pub use crate::aggregate::stats::StatsType;
 pub use crate::window::cume_dist::{cume_dist, CumeDist};
 pub use crate::window::lead_lag::{lag, lead, WindowShift};

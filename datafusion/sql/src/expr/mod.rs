@@ -17,6 +17,9 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
+use datafusion_expr::expr::AggregateFunctionDefinition;
+use datafusion_functions_aggregate::array_agg::ArrayAgg;
+use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use sqlparser::ast::{CastKind, Expr as SQLExpr, Subscript, TrimWhereField, Value};
 
 use datafusion_common::{
@@ -26,8 +29,8 @@ use datafusion_common::{
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    lit, AggregateFunction, Between, BinaryExpr, Cast, Expr, ExprSchemable,
-    GetFieldAccess, Like, Literal, Operator, TryCast,
+    lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
+    Operator, TryCast,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -596,18 +599,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// TODO: this should likely be done in ArrayAgg::simplify when it is moved to a UDAF
     fn simplify_array_index_expr(expr: &Expr, index: &Expr) -> Option<Expr> {
         fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
-            agg_func.func_def
-                == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(
-                    AggregateFunction::ArrayAgg,
-                )
+            match agg_func.func_def {
+                AggregateFunctionDefinition::UDF(ref udf) => {
+                    udf.inner().as_any().downcast_ref::<ArrayAgg>().is_some()
+                }
+                _ => false,
+            }
         }
         match expr {
             Expr::AggregateFunction(agg_func) if is_array_agg(agg_func) => {
                 let mut new_args = agg_func.args.clone();
                 new_args.push(index.clone());
                 Some(Expr::AggregateFunction(
-                    datafusion_expr::expr::AggregateFunction::new(
-                        AggregateFunction::NthValue,
+                    datafusion_expr::expr::AggregateFunction::new_udf(
+                        nth_value_udaf(),
                         new_args,
                         agg_func.distinct,
                         agg_func.filter.clone(),

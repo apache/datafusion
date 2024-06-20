@@ -40,6 +40,7 @@ path = "src/lib.rs"
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
+arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -48,3 +49,6 @@ datafusion-physical-expr-common = { workspace = true }
 log = { workspace = true }
 paste = "1.0.14"
 sqlparser = { workspace = true }
+
+[dev-dependencies]
+arrow-buffer = { workspace = true }

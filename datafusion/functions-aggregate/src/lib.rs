@@ -56,11 +56,15 @@
 pub mod macros;
 
 pub mod approx_distinct;
+pub mod array_agg;
+pub mod array_agg_distinct;
+pub mod array_agg_ordered;
 pub mod count;
 pub mod covariance;
 pub mod first_last;
 pub mod hyperloglog;
 pub mod median;
+pub mod nth_value;
 pub mod regr;
 pub mod stddev;
 pub mod sum;
@@ -86,6 +90,7 @@ pub mod expr_fn {
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
+    pub use super::array_agg::array_agg;
     pub use super::bit_and_or_xor::bit_and;
     pub use super::bit_and_or_xor::bit_or;
     pub use super::bit_and_or_xor::bit_xor;
@@ -98,6 +103,7 @@ pub mod expr_fn {
     pub use super::first_last::first_value;
     pub use super::first_last::last_value;
     pub use super::median::median;
+    pub use super::nth_value::nth_value;
     pub use super::regr::regr_avgx;
     pub use super::regr::regr_avgy;
     pub use super::regr::regr_count;
@@ -117,6 +123,7 @@ pub mod expr_fn {
 /// Returns all default aggregate functions
 pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
     vec![
+        array_agg::array_agg_udaf(),
         first_last::first_value_udaf(),
         first_last::last_value_udaf(),
         covariance::covar_samp_udaf(),
@@ -124,6 +131,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         covariance::covar_pop_udaf(),
         median::median_udaf(),
         count::count_udaf(),
+        nth_value::nth_value_udaf(),
         regr::regr_slope_udaf(),
         regr::regr_intercept_udaf(),
         regr::regr_count_udaf(),
@@ -177,7 +185,11 @@ mod tests {
         for func in all_default_aggregate_functions() {
             // TODO: remove this
             // These functions are in intermidiate migration state, skip them
-            if func.name().to_lowercase() == "count" {
+            let name_lower_case = func.name().to_lowercase();
+            if name_lower_case == "count"
+                || name_lower_case == "array_agg"
+                || name_lower_case == "nth_value"
+            {
                 continue;
             }
             assert!(
