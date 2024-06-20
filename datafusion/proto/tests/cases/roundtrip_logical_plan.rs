@@ -26,7 +26,7 @@ use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
-use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::format_as_file_type;
 use datafusion_functions_aggregate::count::count_udaf;
 use prost::Message;
@@ -47,7 +47,7 @@ use datafusion_common::config::TableOptions;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
-    DataFusionError, FileType, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -323,11 +323,7 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let ctx = SessionContext::new();
 
     let input = create_csv_scan(&ctx).await?;
-    let mut table_options = ctx.copied_table_options();
-    table_options.set_file_format(FileType::CSV);
-    table_options.set("format.delimiter", ";")?;
-
-    let file_type = format_as_file_type(Arc::new(CsvFormat::default()));;
+    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
@@ -363,7 +359,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     parquet_format.global.dictionary_page_size_limit = 444;
     parquet_format.global.max_row_group_size = 555;
 
-    let file_type = format_as_file_type(Arc::new(CsvFormat::default()));;
+    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
@@ -394,7 +390,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
 
     let input = create_csv_scan(&ctx).await?;
 
-    let file_type = format_as_file_type(Arc::new(CsvFormat::default()));
+    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
@@ -437,7 +433,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     csv_format.time_format = Some("HH:mm:ss".to_string());
     csv_format.null_value = Some("NIL".to_string());
 
-    let file_type = format_as_file_type(Arc::new(CsvFormat::default()));
+    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),

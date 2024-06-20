@@ -54,8 +54,8 @@ pub use error::{
     SharedResult,
 };
 pub use file_options::file_type::{
-    GetExt, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION,
-    DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
+    GetExt, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
+    DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
 };
 pub use functional_dependencies::{
     aggregate_functional_dependencies, get_required_group_by_exprs_indices,
@@ -70,7 +70,6 @@ pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::UnnestOptions;
 pub use utils::project_schema;
-pub use file_options::file_type::FileType;
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.

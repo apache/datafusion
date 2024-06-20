@@ -33,7 +33,7 @@ use crate::protobuf::{proto_error, FromProtoError, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::{file_type_to_format, format_as_file_type};
+use datafusion::datasource::file_format::{file_type_to_format, format_as_file_type, FileFormatFactory};
 use datafusion::{
     datasource::{
         file_format::{avro::AvroFormat, csv::CsvFormat, FileFormat},
@@ -44,7 +44,7 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::file_options::file_type::ExternalFileType;
+use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     context, internal_datafusion_err, internal_err, not_impl_err, DataFusionError,
     Result, TableReference,
@@ -120,14 +120,14 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         &self,
         _buf: &[u8],
         _ctx: &SessionContext,
-    ) -> Result<Arc<dyn FileFormat>> {
+    ) -> Result<Arc<dyn FileFormatFactory>> {
         not_impl_err!("LogicalExtensionCoden is not provided for file format")
     }
 
     fn try_encode_file_format(
         &self,
         _buf: &[u8],
-        _node: Arc<dyn FileFormat>,
+        _node: Arc<dyn FileFormatFactory>,
     ) -> Result<()> {
         Ok(())
     }
@@ -847,7 +847,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: LogicalPlan =
                     into_logical_plan!(copy.input, ctx, extension_codec)?;
 
-                let file_type: Arc<dyn ExternalFileType> = format_as_file_type(
+                let file_type: Arc<dyn FileType> = format_as_file_type(
                     extension_codec.try_decode_file_format(&copy.file_type, ctx)?,
                 );
 

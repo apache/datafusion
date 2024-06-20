@@ -42,12 +42,26 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use datafusion_common::file_options::file_type::ExternalFileType;
+use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use async_trait::async_trait;
+use file_compression_type::FileCompressionType;
 use object_store::{ObjectMeta, ObjectStore};
+
+/// A factory struct which produces [FileFormat] structs based on session and command level options
+pub trait FileFormatFactory: Sync + Send + GetExt {
+    /// Initialize a [FileFormat] and configure based on session and command level options
+    fn create(
+        &self,
+        state: &SessionState,
+        format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>>;
+
+    /// Initialize a [FileFormat] with all options set to default values
+    fn default(&self) -> Arc<dyn FileFormat>;
+}
 
 /// This trait abstracts all the file format specific implementations
 /// from the [`TableProvider`]. This helps code re-utilization across
@@ -60,21 +74,14 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
-    /// Returns the extension for this FileFormat, e.g. "csv"
-    fn get_ext(&self) -> String {
-        panic!("Undefined get_ext")
-    }
+    /// Returns the extension for this FileFormat, e.g. "file.csv" -> csv
+    fn get_ext(&self) -> String;
 
-    /// Updates internal state based on options passed in via SQL strings, e.g.
-    /// COPY table TO custom.format OPTIONS (custom.option1 true)
-    fn update_options_from_string_hashmap(
+    /// Returns the extension for this FileFormat when compressed, e.g. "file.csv.gz" -> csv
+    fn get_ext_with_compression(
         &self,
-        _options: &HashMap<String, String>,
-    ) -> Result<()> {
-        not_impl_err!(
-            "Updating options from SQL strings unsupported for this FileFormat."
-        )
-    }
+        _file_compression_type: &FileCompressionType,
+    ) -> Result<String>;
 
     /// Infer the common schema of the provided objects. The objects will usually
     /// be analysed up to a given number of records or files (as specified in the
@@ -124,17 +131,23 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     }
 }
 
+/// A container of [FileFormat] which also implements [FileType].
+/// This enables converting an Arc<dyn FileFormat> to an Arc<dyn FileType>.
+/// The former trait is a superset of the latter trait, which includes execution time
+/// relevant methods. [FileType] is only used in logical planning and only implements
+/// the subset of methods required during logical planning.
 pub struct DefaultFileFormat {
-    file_format: Arc<dyn FileFormat>,
+    file_format_factory: Arc<dyn FileFormatFactory>,
 }
 
 impl DefaultFileFormat {
-    pub fn new(file_format: Arc<dyn FileFormat>) -> Self {
-        Self { file_format }
+    /// Constructs a [DefaultFileFormat] wrapper from a [FileFormatFactory]
+    pub fn new(file_format_factory: Arc<dyn FileFormatFactory>) -> Self {
+        Self { file_format_factory }
     }
 }
 
-impl ExternalFileType for DefaultFileFormat {
+impl FileType for DefaultFileFormat {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -142,31 +155,35 @@ impl ExternalFileType for DefaultFileFormat {
 
 impl Display for DefaultFileFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.file_format.fmt(f)
+        self.file_format_factory.default().fmt(f)
     }
 }
 
 impl GetExt for DefaultFileFormat {
     fn get_ext(&self) -> String {
-        self.file_format.get_ext()
+        self.file_format_factory.get_ext()
     }
 }
 
+/// Converts a [FileFormatFactory] to a [FileType]
 pub fn format_as_file_type(
-    file_format: Arc<dyn FileFormat>,
-) -> Arc<dyn ExternalFileType> {
-    Arc::new(DefaultFileFormat { file_format })
+    file_format_factory: Arc<dyn FileFormatFactory>,
+) -> Arc<dyn FileType> {
+    Arc::new(DefaultFileFormat { file_format_factory })
 }
 
+/// Converts a [FileType] to a [FileFormatFactory].
+/// Returns an error if the [FileType] cannot be
+/// downcasted to a [DefaultFileFormat].
 pub fn file_type_to_format(
-    file_type: &Arc<dyn ExternalFileType>,
-) -> datafusion_common::Result<Arc<dyn FileFormat>> {
+    file_type: &Arc<dyn FileType>,
+) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
     match file_type
         .as_ref()
         .as_any()
         .downcast_ref::<DefaultFileFormat>()
     {
-        Some(source) => Ok(source.file_format.clone()),
+        Some(source) => Ok(source.file_format_factory.clone()),
         _ => internal_err!("FileType was not DefaultFileFormat"),
     }
 }

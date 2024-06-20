@@ -26,9 +26,9 @@ use std::sync::Arc;
 
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
-use crate::datasource::file_format::csv::CsvFormat;
+use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::format_as_file_type;
-use crate::datasource::file_format::json::JsonFormat;
+use crate::datasource::file_format::json::JsonFormatFactory;
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
@@ -1241,12 +1241,12 @@ impl DataFrame {
         }
 
         let format = if let Some(csv_opts) = writer_options {
-            CsvFormat::default().with_options(csv_opts)
+            Arc::new(CsvFormatFactory::new_with_options(csv_opts))
         } else {
-            CsvFormat::default()
+            Arc::new(CsvFormatFactory::new())
         };
 
-        let file_type = format_as_file_type(Arc::new(format));
+        let file_type = format_as_file_type(format);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
@@ -1301,12 +1301,12 @@ impl DataFrame {
         }
 
         let format = if let Some(json_opts) = writer_options {
-            JsonFormat::default().with_options(json_opts)
+            Arc::new(JsonFormatFactory::new_with_options(json_opts))
         } else {
-            JsonFormat::default()
+            Arc::new(JsonFormatFactory::new())
         };
 
-        let file_type = format_as_file_type(Arc::new(format));
+        let file_type = format_as_file_type(format);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,

@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::datasource::file_format::{format_as_file_type, parquet::ParquetFormat};
+use crate::datasource::file_format::{format_as_file_type, parquet::ParquetFormatFactory};
 
 use super::{
     DataFrame, DataFrameWriteOptions, DataFusionError, LogicalPlanBuilder, RecordBatch,
@@ -62,12 +62,12 @@ impl DataFrame {
         }
 
         let format = if let Some(parquet_opts) = writer_options {
-            ParquetFormat::default().with_options(parquet_opts)
+            Arc::new(ParquetFormatFactory::new_with_options(parquet_opts))
         } else {
-            ParquetFormat::default()
+            Arc::new(ParquetFormatFactory::new())
         };
 
-        let file_type = format_as_file_type(Arc::new(format));
+        let file_type = format_as_file_type(format);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
