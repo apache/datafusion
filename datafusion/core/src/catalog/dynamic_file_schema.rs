@@ -16,9 +16,8 @@ use crate::execution::context::SessionState;
 /// Wraps another schema provider
 pub struct DynamicFileSchemaProvider {
     inner: Arc<dyn SchemaProvider>,
-    state_store: StateStore
+    state_store: StateStore,
 }
-
 
 impl DynamicFileSchemaProvider {
     pub fn new(inner: Arc<dyn SchemaProvider>) -> Self {
@@ -58,13 +57,15 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         }
         let optimized_url = substitute_tilde(name.to_owned());
         let table_url = ListingTableUrl::parse(optimized_url.as_str())?;
-        let state = &self.state_store.get_state()
+        let state = &self
+            .state_store
+            .get_state()
             .upgrade()
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
             .read()
             .clone();
         let cfg = ListingTableConfig::new(table_url.clone())
-            .infer(&state)
+            .infer(state)
             .await?;
 
         Ok(Some(Arc::new(ListingTable::try_new(cfg)?)))
@@ -90,13 +91,13 @@ fn substitute_tilde(cur: String) -> String {
 }
 
 pub struct StateStore {
-    state: Arc<Mutex<Option<Weak<RwLock<SessionState>>>>>
+    state: Arc<Mutex<Option<Weak<RwLock<SessionState>>>>>,
 }
 
 impl StateStore {
     pub fn new() -> Self {
         Self {
-            state: Arc::new(Mutex::new(None))
+            state: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -107,5 +108,11 @@ impl StateStore {
 
     pub fn get_state(&self) -> Weak<RwLock<SessionState>> {
         self.state.lock().clone().unwrap()
+    }
+}
+
+impl Default for StateStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
