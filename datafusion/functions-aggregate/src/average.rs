@@ -124,12 +124,12 @@ impl AggregateUDFImpl for Average {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                format_state_name(&self.name(), "count"),
+                format_state_name(args.name, "count"),
                 DataType::UInt64,
                 true,
             ),
             Field::new(
-                format_state_name(&self.name(), "sum"),
+                format_state_name(args.name, "sum"),
                 args.input_type.clone(),
                 true,
             ),
