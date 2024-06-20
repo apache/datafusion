@@ -31,6 +31,7 @@ use sqlparser::ast::NullTreatment;
 use std::sync::{Arc, OnceLock};
 
 mod simplification;
+mod parse_sql_expr;
 
 #[test]
 fn test_octet_length() {
