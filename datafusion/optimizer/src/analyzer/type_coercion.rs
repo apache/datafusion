@@ -1001,14 +1001,12 @@ mod test {
         Ok(())
     }
 
-    #[ignore]
     #[test]
     fn agg_function_case() -> Result<()> {
-        // FIXME
         let empty = empty();
         let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             avg_udaf(),
-            vec![lit(12i64)],
+            vec![cast(lit(12i64), DataType::Float64)],
             false,
             None,
             None,
@@ -1021,7 +1019,7 @@ mod test {
         let empty = empty_with_type(DataType::Int32);
         let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             avg_udaf(),
-            vec![col("a")],
+            vec![cast(col("a"), DataType::Float64)],
             false,
             None,
             None,
@@ -1033,10 +1031,8 @@ mod test {
         Ok(())
     }
 
-    #[ignore]
     #[test]
     fn agg_function_invalid_input_avg() -> Result<()> {
-        // FIXME
         let empty = empty();
         let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             avg_udaf(),
@@ -1051,7 +1047,7 @@ mod test {
             .unwrap()
             .strip_backtrace();
         assert_eq!(
-            "Error during planning: No function matches the given name and argument types 'AVG(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tAVG(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)",
+            "Error during planning: Error during planning: Coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'avg(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tavg(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)",
             err
         );
         Ok(())
