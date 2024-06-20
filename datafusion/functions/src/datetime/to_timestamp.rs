@@ -143,8 +143,13 @@ impl ScalarUDFImpl for ToTimestampFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, None))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::Timestamp(_, Some(tz)) => {
+                Ok(Timestamp(Nanosecond, Some(tz.clone())))
+            }
+            _ => Ok(Timestamp(Nanosecond, None)),
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -166,6 +171,9 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 .cast_to(&Timestamp(Nanosecond, None), None),
             DataType::Null | DataType::Float64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
+            }
+            DataType::Timestamp(_, Some(tz)) => {
+                args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
@@ -193,8 +201,11 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Second, None))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::Timestamp(_, Some(tz)) => Ok(Timestamp(Second, Some(tz.clone()))),
+            _ => Ok(Timestamp(Second, None)),
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -213,6 +224,9 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Second, None), None)
+            }
+            DataType::Timestamp(_, Some(tz)) => {
+                args[0].cast_to(&Timestamp(Second, Some(tz)), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds")
@@ -240,8 +254,13 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Millisecond, None))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::Timestamp(_, Some(tz)) => {
+                Ok(Timestamp(Millisecond, Some(tz.clone())))
+            }
+            _ => Ok(Timestamp(Millisecond, None)),
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -260,6 +279,9 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Millisecond, None), None)
+            }
+            DataType::Timestamp(_, Some(tz)) => {
+                args[0].cast_to(&Timestamp(Millisecond, Some(tz)), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampMillisecondType>(args, "to_timestamp_millis")
@@ -287,8 +309,13 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Microsecond, None))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::Timestamp(_, Some(tz)) => {
+                Ok(Timestamp(Microsecond, Some(tz.clone())))
+            }
+            _ => Ok(Timestamp(Microsecond, None)),
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -307,6 +334,9 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Microsecond, None), None)
+            }
+            DataType::Timestamp(_, Some(tz)) => {
+                args[0].cast_to(&Timestamp(Microsecond, Some(tz)), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampMicrosecondType>(args, "to_timestamp_micros")
@@ -334,8 +364,13 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, None))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::Timestamp(_, Some(tz)) => {
+                Ok(Timestamp(Nanosecond, Some(tz.clone())))
+            }
+            _ => Ok(Timestamp(Nanosecond, None)),
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -354,6 +389,9 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
+            }
+            DataType::Timestamp(_, Some(tz)) => {
+                args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp_nanos")
