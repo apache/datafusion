@@ -998,8 +998,12 @@ impl OptimizerRule for PushDownFilter {
 /// `plan` is a LogicalPlan for `projection` with possibly a new FilterExec below it.
 /// `remaining_predicate` is any part of the predicate that could not be pushed down
 ///
+/// # Args
+/// - predicates: Split predicates like `[foo=5, bar=6]`
+/// - projection: The target projection plan to push down the predicates
+/// 
 /// # Example
-///
+/// 
 /// Pushing a predicate like `foo=5 AND bar=6` with an input plan like this:
 ///
 /// ```text
