@@ -26,6 +26,7 @@ use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::utils as expr_utils;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr, Operator};
 
+use datafusion_common::tree_node::Transformed;
 use log::{debug, trace};
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -43,6 +44,7 @@ pub fn optimize_children(
     let mut new_inputs = Vec::with_capacity(plan.inputs().len());
     let mut plan_is_changed = false;
     for input in plan.inputs() {
+        #[allow(deprecated)]
         let new_input = optimizer.try_optimize(input, config)?;
         plan_is_changed = plan_is_changed || new_input.is_some();
         new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
@@ -52,6 +54,33 @@ pub fn optimize_children(
         plan.with_new_exprs(exprs, new_inputs).map(Some)
     } else {
         Ok(None)
+    }
+}
+
+pub fn rewrite_children(
+    optimizer: &impl OptimizerRule,
+    plan: LogicalPlan,
+    config: &dyn OptimizerConfig,
+) -> Result<Transformed<LogicalPlan>> {
+    let mut new_inputs = Vec::with_capacity(plan.inputs().len());
+    let mut plan_is_changed = false;
+    for input in plan.inputs() {
+        if optimizer.supports_rewrite() {
+            let new_input = optimizer.rewrite(input.clone(), config)?;
+            plan_is_changed = plan_is_changed || new_input.transformed;
+            new_inputs.push(new_input.data);
+        } else {
+            #[allow(deprecated)]
+            let new_input = optimizer.try_optimize(input, config)?;
+            plan_is_changed = plan_is_changed || new_input.is_some();
+            new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
+        }
+    }
+    if plan_is_changed {
+        let exprs = plan.expressions();
+        Ok(Transformed::yes(plan.with_new_exprs(exprs, new_inputs)?))
+    } else {
+        Ok(Transformed::no(plan))
     }
 }
 

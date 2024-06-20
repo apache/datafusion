@@ -18,7 +18,7 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
 };
@@ -133,31 +133,33 @@ impl OptimizerRule for MyOptimizerRule {
 
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _plan: &LogicalPlan,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        unreachable!()
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
         // recurse down and optimize children first
-        let optimized_plan = utils::optimize_children(self, plan, config)?;
-        match optimized_plan {
-            Some(LogicalPlan::Filter(filter)) => {
+        let optimized_plan = utils::rewrite_children(self, plan, config)?;
+        optimized_plan.map_data(|plan| match plan {
+            LogicalPlan::Filter(filter) => {
                 let predicate = my_rewrite(filter.predicate.clone())?;
-                Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                Ok(LogicalPlan::Filter(Filter::try_new(
                     predicate,
-                    filter.input,
-                )?)))
+                    filter.input.clone(),
+                )?))
             }
-            Some(optimized_plan) => Ok(Some(optimized_plan)),
-            None => match plan {
-                LogicalPlan::Filter(filter) => {
-                    let predicate = my_rewrite(filter.predicate.clone())?;
-                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        filter.input.clone(),
-                    )?)))
-                }
-                _ => Ok(None),
-            },
-        }
+            _ => Ok(plan),
+        })
     }
 }
 

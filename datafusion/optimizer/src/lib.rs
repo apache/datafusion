@@ -61,7 +61,7 @@ pub mod test;
 
 pub use analyzer::{Analyzer, AnalyzerRule};
 pub use optimizer::{Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule};
-pub use utils::optimize_children;
+pub use utils::{optimize_children, rewrite_children};
 
 pub(crate) mod join_key_set;
 mod plan_signature;
