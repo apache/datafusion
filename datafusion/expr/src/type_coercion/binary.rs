@@ -930,13 +930,13 @@ fn string_concat_internal_coercion(
 fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
+        // If Utf8View is in any side, we coerce to Utf8View.
+        (Utf8View, Utf8View | Utf8 | LargeUtf8) | (Utf8 | LargeUtf8, Utf8View) => {
+            Some(Utf8View)
+        }
+        // Then, if LargeUtf8 is in any side, we coerce to LargeUtf8.
+        (LargeUtf8, Utf8 | LargeUtf8) | (Utf8, LargeUtf8) => Some(LargeUtf8),
         (Utf8, Utf8) => Some(Utf8),
-        (LargeUtf8, Utf8) | (Utf8, LargeUtf8) | (LargeUtf8, LargeUtf8) => Some(LargeUtf8),
-        (Utf8View, Utf8View)
-        | (Utf8View, Utf8)
-        | (Utf8, Utf8View)
-        | (LargeUtf8, Utf8View)
-        | (Utf8View, LargeUtf8) => Some(Utf8View),
         _ => None,
     }
 }
