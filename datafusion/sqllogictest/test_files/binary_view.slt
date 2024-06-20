@@ -1,0 +1,154 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+########
+## Test setup
+########
+
+statement ok
+create table test_source as values
+    ('Andrew', 'X'),
+    ('Xiangpeng', 'Xiangpeng'),
+    ('Raphael', 'R'),
+    (NULL, 'R')
+;
+
+# Table with the different combination of column types
+statement ok
+CREATE TABLE test AS
+SELECT
+  arrow_cast(column1, 'Utf8') as column1_utf8,
+  arrow_cast(column2, 'Utf8') as column2_utf8,
+  arrow_cast(column1, 'Binary') AS column1_binary,
+  arrow_cast(column2, 'Binary') AS column2_binary,
+  arrow_cast(arrow_cast(column1, 'Binary'), 'BinaryView') AS column1_binaryview,
+  arrow_cast(arrow_cast(column2, 'Binary'), 'BinaryView') AS column2_binaryview,
+  arrow_cast(column1, 'Dictionary(Int32, Binary)') AS column1_dict,
+  arrow_cast(column2, 'Dictionary(Int32, Binary)') AS column2_dict
+FROM test_source;
+
+statement ok
+drop table test_source
+
+########
+## BinaryView to BinaryView
+########
+
+# BinaryView scalar to BinaryView scalar
+
+query BBBB
+SELECT
+  arrow_cast(arrow_cast('NULL', 'Binary'), 'BinaryView') = arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') AS comparison1,
+  arrow_cast(arrow_cast('NULL', 'Binary'), 'BinaryView') <> arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') AS comparison2,
+  arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') = arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') AS comparison3,
+  arrow_cast(arrow_cast('Xiangpeng', 'Binary'), 'BinaryView') <> arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') AS comparison4;
+----
+false true true true
+
+
+# BinaryView column to BinaryView column comparison as filters
+
+query TT
+select column1_utf8, column2_utf8 from test where column1_binaryview = column2_binaryview;
+----
+Xiangpeng Xiangpeng
+
+query TT
+select column1_utf8, column2_utf8 from test where column1_binaryview <> column2_binaryview;
+----
+Andrew X
+Raphael R
+
+# BinaryView column to BinaryView column
+query TTBB
+select
+  column1_utf8, column2_utf8,
+  column1_binaryview = column2_binaryview,
+  column1_binaryview <> column2_binaryview
+from test;
+----
+Andrew X false true
+Xiangpeng Xiangpeng true false
+Raphael R false true
+NULL R NULL NULL
+
+# BinaryView column to BinaryView scalar comparison
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_binaryview                 = arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView'),
+  arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') = column1_binaryview,
+  column1_binaryview                 <> arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView'),
+  arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') <> column1_binaryview
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+########
+## BinaryView to Binary
+########
+
+# test BinaryViewArray with Binary columns
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_binaryview  = column2_binary,
+  column2_binary      = column1_binaryview,
+  column1_binaryview <> column2_binary,
+  column2_binary     <> column1_binaryview
+from test;
+----
+Andrew X false false true true
+Xiangpeng Xiangpeng true true false false
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+# BinaryView column to Binary scalar
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_binaryview                 = arrow_cast('Andrew', 'Binary'),
+  arrow_cast('Andrew', 'Binary')     = column1_binaryview,
+  column1_binaryview                <> arrow_cast('Andrew', 'Binary'),
+  arrow_cast('Andrew', 'Binary')     <> column1_binaryview
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+# Binary column to BinaryView scalar
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_binary                     = arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView'),
+  arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') = column1_binary,
+  column1_binary                     <> arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView'),
+  arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') <> column1_binary
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+statement ok
+drop table test;
