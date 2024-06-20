@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Defines `Avg` & `Mean` aggregate & accumulators
+
 use arrow::array::{
     self, Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType,
     AsArray, PrimitiveArray, PrimitiveBuilder, UInt64Array,
@@ -40,7 +42,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 make_udaf_expr_and_func!(
-    Average,
+    Avg,
     avg,
     expression,
     "Returns the avg of a group of values.",
@@ -48,12 +50,12 @@ make_udaf_expr_and_func!(
 );
 
 #[derive(Debug)]
-pub struct Average {
+pub struct Avg {
     signature: Signature,
     aliases: Vec<String>,
 }
 
-impl Average {
+impl Avg {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Immutable),
@@ -62,13 +64,13 @@ impl Average {
     }
 }
 
-impl Default for Average {
+impl Default for Avg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AggregateUDFImpl for Average {
+impl AggregateUDFImpl for Avg {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -599,26 +601,26 @@ mod tests {
 
     #[test]
     fn test_avg_return_type() -> Result<()> {
-        let observed = Average::default().return_type(&[DataType::Float32])?;
+        let observed = Avg::default().return_type(&[DataType::Float32])?;
         assert_eq!(DataType::Float64, observed);
 
-        let observed = Average::default().return_type(&[DataType::Float64])?;
+        let observed = Avg::default().return_type(&[DataType::Float64])?;
         assert_eq!(DataType::Float64, observed);
 
-        let observed = Average::default().return_type(&[DataType::Int32])?;
+        let observed = Avg::default().return_type(&[DataType::Int32])?;
         assert_eq!(DataType::Float64, observed);
 
-        let observed = Average::default().return_type(&[DataType::Decimal128(10, 6)])?;
+        let observed = Avg::default().return_type(&[DataType::Decimal128(10, 6)])?;
         assert_eq!(DataType::Decimal128(14, 10), observed);
 
-        let observed = Average::default().return_type(&[DataType::Decimal128(36, 6)])?;
+        let observed = Avg::default().return_type(&[DataType::Decimal128(36, 6)])?;
         assert_eq!(DataType::Decimal128(38, 10), observed);
         Ok(())
     }
 
     #[test]
     fn test_avg_no_utf8() {
-        let observed = Average::default().return_type(&[DataType::Utf8]);
+        let observed = Avg::default().return_type(&[DataType::Utf8]);
         assert!(observed.is_err());
     }
 }

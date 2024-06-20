@@ -84,7 +84,7 @@ pub fn count(expr: Expr) -> Expr {
     ))
 }
 
-create_func!(Average, avg_udaf);
+create_func!(Avg, avg_udaf);
 
 pub fn avg(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new_udf(
@@ -289,14 +289,14 @@ impl AggregateUDFImpl for Count {
     }
 }
 
-/// Testing stub implementation of AVERAGE aggregate
+/// Testing stub implementation of avg aggregate
 #[derive(Debug)]
-pub struct Average {
+pub struct Avg {
     signature: Signature,
     aliases: Vec<String>,
 }
 
-impl Average {
+impl Avg {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("mean")],
@@ -305,13 +305,13 @@ impl Average {
     }
 }
 
-impl Default for Average {
+impl Default for Avg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AggregateUDFImpl for Average {
+impl AggregateUDFImpl for Avg {
     fn as_any(&self) -> &dyn Any {
         self
     }
