@@ -265,6 +265,7 @@ impl DataFrame {
                     .schema()
                     .qualified_field_with_unqualified_name(name)
             })
+            .filter(|r| r.is_ok())
             .collect::<Result<Vec<_>>>()?;
         let expr: Vec<Expr> = self
             .plan
@@ -1837,7 +1838,6 @@ mod tests {
     #[tokio::test]
     async fn drop_columns() -> Result<()> {
         // build plan using Table API
-
         let t = test_table().await?;
         let t2 = t.drop_columns(&["c2", "c11"])?;
         let plan = t2.plan.clone();
@@ -1850,6 +1850,95 @@ mod tests {
 
         // the two plans should be identical
         assert_same_plan(&plan, &sql_plan);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_with_duplicates() -> Result<()> {
+        // build plan using Table API
+        let t = test_table().await?;
+        let t2 = t.drop_columns(&["c2", "c11", "c2", "c2"])?;
+        let plan = t2.plan.clone();
+
+        // build query using SQL
+        let sql_plan = create_plan(
+            "SELECT c1,c3,c4,c5,c6,c7,c8,c9,c10,c12,c13 FROM aggregate_test_100",
+        )
+        .await?;
+
+        // the two plans should be identical
+        assert_same_plan(&plan, &sql_plan);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_with_nonexistent_columns() -> Result<()> {
+        // build plan using Table API
+        let t = test_table().await?;
+        let t2 = t.drop_columns(&["canada", "c2", "rocks"])?;
+        let plan = t2.plan.clone();
+
+        // build query using SQL
+        let sql_plan = create_plan(
+            "SELECT c1,c3,c4,c5,c6,c7,c8,c9,c10,c11,c12,c13 FROM aggregate_test_100",
+        )
+        .await?;
+
+        // the two plans should be identical
+        assert_same_plan(&plan, &sql_plan);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_with_empty_array() -> Result<()> {
+        // build plan using Table API
+        let t = test_table().await?;
+        let t2 = t.drop_columns(&[])?;
+        let plan = t2.plan.clone();
+
+        // build query using SQL
+        let sql_plan = create_plan(
+            "SELECT c1,c2,c3,c4,c5,c6,c7,c8,c9,c10,c11,c12,c13 FROM aggregate_test_100",
+        )
+        .await?;
+
+        // the two plans should be identical
+        assert_same_plan(&plan, &sql_plan);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_with_quotes() -> Result<()> {
+        // define data with a column name that has a "." in it:
+        let array1: Int32Array = [1, 10].into_iter().collect();
+        let array2: Int32Array = [2, 11].into_iter().collect();
+        let batch = RecordBatch::try_from_iter(vec![
+            ("f\"c1", Arc::new(array1) as _),
+            ("f\"c2", Arc::new(array2) as _),
+        ])?;
+
+        let ctx = SessionContext::new();
+        ctx.register_batch("t", batch)?;
+
+        let df = ctx.table("t").await?.drop_columns(&["f\"c1"])?;
+
+        let df_results = df.collect().await?;
+
+        assert_batches_sorted_eq!(
+            [
+                "+------+",
+                "| f\"c2 |",
+                "+------+",
+                "| 2    |",
+                "| 11   |",
+                "+------+"
+            ],
+            &df_results
+        );
 
         Ok(())
     }
