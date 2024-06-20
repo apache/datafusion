@@ -626,6 +626,10 @@ mod tests {
         let sort_exprs2 = vec![sort_expr_options("a", &source2.schema(), sort_opts)];
         let left = sort_exec(sort_exprs1, source1);
         let right = sort_exec(sort_exprs2, source2);
+        let right = Arc::new(RepartitionExec::try_new(
+            right,
+            Partitioning::RoundRobinBatch(10),
+        )?);
         let left_jcol = col("c9", &left.schema()).unwrap();
         let right_jcol = col("a", &right.schema()).unwrap();
         let left = Arc::new(RepartitionExec::try_new(
@@ -646,8 +650,9 @@ mod tests {
                 "  RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1",
                 "    SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]",
                 "      MemoryExec: partitions=1, partition_sizes=[0]",
-                "  SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-                "    MemoryExec: partitions=1, partition_sizes=[0]",
+                "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+                "      MemoryExec: partitions=1, partition_sizes=[0]",
             ],
         );
         assert_sanity_check(&smj, false);
