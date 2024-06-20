@@ -497,8 +497,9 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.distinct_on(vec![col("a")], vec![col("a"), col("b")], None)?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
+    ///   // Return a single row (a, b) for each distinct value of a  
+    ///   .distinct_on(vec![col("a")], vec![col("a"), col("b")], None)?;
     /// # Ok(())
     /// # }
     /// ```
