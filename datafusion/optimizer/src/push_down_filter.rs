@@ -725,6 +725,8 @@ impl OptimizerRule for PushDownFilter {
                     }
                 }
 
+                // Unnest predicates should not be pushed down.
+                // If no non-unnest predicates exist, early return
                 if non_unnest_predicates.is_empty() {
                     filter.input = Arc::new(LogicalPlan::Unnest(unnest));
                     return Ok(Transformed::no(LogicalPlan::Filter(filter)));
@@ -762,7 +764,8 @@ impl OptimizerRule for PushDownFilter {
                                         let predicate = conjunction(vec![
                                             unnest_predicate,
                                             keep_predicate,
-                                        ]).unwrap(); // Safe to unwrap since filters is non-empty
+                                        ])
+                                        .unwrap(); // Safe to unwrap since filters is non-empty
                                         Ok(Transformed::yes(LogicalPlan::Filter(
                                             Filter::try_new(
                                                 predicate,
