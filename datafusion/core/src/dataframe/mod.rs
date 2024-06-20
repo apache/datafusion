@@ -179,7 +179,7 @@ impl DataFrame {
 
     /// Creates logical expression from a SQL query text.
     /// The expression is created and processed againt the current schema.
-    /// 
+    ///
     /// # Example: Parsing SQL queries
     /// ```
     /// use arrow::datatypes::{DataType, Field, Schema};
@@ -192,22 +192,20 @@ impl DataFrame {
     ///     let sql = "a > 1 and b in (1, 10)";
     ///     let expected = col("a").gt(lit(1 as i64))
     ///       .and(col("b").in_list(vec![lit(1 as i64), lit(10 as i64)], false));
-    /// 
+    ///
     ///     let ctx = SessionContext::new();
     ///     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     ///     let expr = df.parse_sql_expr(sql).await?;
-    /// 
+    ///
     ///     assert_eq!(expected, expr);
-    /// 
+    ///
     ///     Ok(())
     /// }
     /// ```
     pub async fn parse_sql_expr(&self, sql: &str) -> Result<Expr> {
         let df_schema = self.schema();
 
-        self.session_state
-            .create_logical_expr(sql, df_schema)
-            .await
+        self.session_state.create_logical_expr(sql, df_schema).await
     }
 
     /// Consume the DataFrame and produce a physical plan

@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::{error::Result, prelude::{ParquetReadOptions, SessionContext}};
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::{
+    error::Result,
+    prelude::{ParquetReadOptions, SessionContext},
+};
 use datafusion_common::DFSchema;
 use datafusion_expr::{col, lit};
-use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_sql::unparser::Unparser;
 
 #[tokio::main]
@@ -34,8 +37,7 @@ async fn main() -> Result<()> {
 async fn simple_session_context_parse_sql_expr_demo() -> Result<()> {
     let sql = "a < 5 OR a = 8";
     let expr = col("a").lt(lit(5_i64)).or(col("a").eq(lit(8_i64)));
-    
-    
+
     // provide type information that `a` is an Int32
     let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
     let df_schema = DFSchema::try_from(schema).unwrap();
@@ -51,8 +53,10 @@ async fn simple_session_context_parse_sql_expr_demo() -> Result<()> {
 /// DataFusion can parse a SQL text to an logical expression using schema at [`DataFrame`].
 async fn simple_dataframe_parse_sql_expr_demo() -> Result<()> {
     let sql = "int_col < 5 OR double_col = 8.0";
-    let expr = col("int_col").lt(lit(5_i64)).or(col("double_col").eq(lit(8.0_f64)));
-    
+    let expr = col("int_col")
+        .lt(lit(5_i64))
+        .or(col("double_col").eq(lit(8.0_f64)));
+
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
     let df = ctx
@@ -72,7 +76,7 @@ async fn simple_dataframe_parse_sql_expr_demo() -> Result<()> {
 /// DataFusion can parse a SQL text and convert it back to SQL using [`Unparser`].
 async fn round_trip_parse_sql_expr_demo() -> Result<()> {
     let sql = "((int_col < 5) OR (double_col = 8))";
-    
+
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
     let df = ctx

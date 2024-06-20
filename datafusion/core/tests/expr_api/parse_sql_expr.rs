@@ -17,7 +17,7 @@
 
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
-use datafusion_common::{DFSchemaRef, ToDFSchema, Result};
+use datafusion_common::{DFSchemaRef, Result, ToDFSchema};
 use datafusion_expr::Expr;
 use datafusion_sql::unparser::Unparser;
 
@@ -84,7 +84,7 @@ async fn round_trip_dataframe(sql: &str) -> Result<()> {
 
     Ok(())
 }
- 
+
 fn unparse_sql_expr(expr: &Expr) -> Result<String> {
     let unparser = Unparser::default();
 
