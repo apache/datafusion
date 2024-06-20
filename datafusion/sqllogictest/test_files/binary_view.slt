@@ -35,6 +35,8 @@ SELECT
   arrow_cast(column2, 'Utf8') as column2_utf8,
   arrow_cast(column1, 'Binary') AS column1_binary,
   arrow_cast(column2, 'Binary') AS column2_binary,
+  arrow_cast(column1, 'LargeBinary') AS column1_large_binary,
+  arrow_cast(column2, 'LargeBinary') AS column2_large_binary,
   arrow_cast(arrow_cast(column1, 'Binary'), 'BinaryView') AS column1_binaryview,
   arrow_cast(arrow_cast(column2, 'Binary'), 'BinaryView') AS column2_binaryview,
   arrow_cast(column1, 'Dictionary(Int32, Binary)') AS column1_dict,
@@ -120,6 +122,21 @@ Xiangpeng Xiangpeng true true false false
 Raphael R false false true true
 NULL R NULL NULL NULL NULL
 
+# test BinaryViewArray with LargeBinary columns
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_binaryview  = column2_large_binary,
+  column2_large_binary      = column1_binaryview,
+  column1_binaryview <> column2_large_binary,
+  column2_large_binary     <> column1_binaryview
+from test;
+----
+Andrew X false false true true
+Xiangpeng Xiangpeng true true false false
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
 # BinaryView column to Binary scalar
 query TTBBBB
 select
@@ -135,6 +152,21 @@ Xiangpeng Xiangpeng false false true true
 Raphael R false false true true
 NULL R NULL NULL NULL NULL
 
+# BinaryView column to LargeBinary scalar
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_binaryview                 = arrow_cast('Andrew', 'LargeBinary'),
+  arrow_cast('Andrew', 'LargeBinary')     = column1_binaryview,
+  column1_binaryview                <> arrow_cast('Andrew', 'LargeBinary'),
+  arrow_cast('Andrew', 'LargeBinary')     <> column1_binaryview
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
 # Binary column to BinaryView scalar
 query TTBBBB
 select
@@ -143,6 +175,22 @@ select
   arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') = column1_binary,
   column1_binary                     <> arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView'),
   arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') <> column1_binary
+from test;
+----
+Andrew X true true false false
+Xiangpeng Xiangpeng false false true true
+Raphael R false false true true
+NULL R NULL NULL NULL NULL
+
+
+# LargeBinary column to BinaryView scalar
+query TTBBBB
+select
+  column1_utf8, column2_utf8,
+  column1_large_binary                     = arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView'),
+  arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') = column1_large_binary,
+  column1_large_binary                     <> arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView'),
+  arrow_cast(arrow_cast('Andrew', 'Binary'), 'BinaryView') <> column1_large_binary
 from test;
 ----
 Andrew X true true false false
