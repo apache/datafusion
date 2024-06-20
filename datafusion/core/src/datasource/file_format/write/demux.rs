@@ -246,6 +246,7 @@ async fn hive_style_partitions_demuxer(
 
     let exec_options = &context.session_config().options().execution;
     let max_buffered_recordbatches = exec_options.max_buffered_batches_per_output_file;
+    let keep_partition_by_columns = exec_options.keep_partition_by_columns;
 
     // To support non string partition col types, cast the type to &str first
     let mut value_map: HashMap<Vec<String>, Sender<RecordBatch>> = HashMap::new();
@@ -298,9 +299,12 @@ async fn hive_style_partitions_demuxer(
                 }
             };
 
-            // remove partitions columns
-            let final_batch_to_send =
-                remove_partition_by_columns(&parted_batch, &partition_by)?;
+            let final_batch_to_send = if keep_partition_by_columns {
+                parted_batch
+            } else {
+                // remove partitions columns
+                remove_partition_by_columns(&parted_batch, &partition_by)?
+            };
 
             // Finally send the partial batch partitioned by distinct value!
             part_tx.send(final_batch_to_send).await.map_err(|_| {
