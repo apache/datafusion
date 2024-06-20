@@ -693,8 +693,9 @@ impl OptimizerRule for PushDownFilter {
                 insert_below(LogicalPlan::SubqueryAlias(subquery_alias), new_filter)
             }
             LogicalPlan::Projection(projection) => {
+                let predicates = split_conjunction_owned(filter.predicate.clone());
                 let (new_projection, keep_predicate) =
-                    rewrite_projection(filter.predicate.clone(), projection)?;
+                    rewrite_projection(predicates, projection)?;
                 if new_projection.transformed {
                     match keep_predicate {
                         None => Ok(new_projection),
@@ -709,11 +710,22 @@ impl OptimizerRule for PushDownFilter {
                 }
             }
             LogicalPlan::Unnest(mut unnest) => {
-                // collect all the Expr::Column in predicate recursively
-                let mut accum: HashSet<Column> = HashSet::new();
-                expr_to_columns(&filter.predicate, &mut accum)?;
+                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let mut non_unnest_predicates = vec![];
+                let mut unnest_predicates = vec![];
+                for predicate in predicates {
+                    // collect all the Expr::Column in predicate recursively
+                    let mut accum: HashSet<Column> = HashSet::new();
+                    expr_to_columns(&predicate, &mut accum)?;
 
-                if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                    if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                        unnest_predicates.push(predicate);
+                    } else {
+                        non_unnest_predicates.push(predicate);
+                    }
+                }
+
+                if non_unnest_predicates.is_empty() {
                     filter.input = Arc::new(LogicalPlan::Unnest(unnest));
                     return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                 }
@@ -722,18 +734,43 @@ impl OptimizerRule for PushDownFilter {
                 match unwrap_arc(unnest.input) {
                     LogicalPlan::Projection(projection) => {
                         let (new_projection, keep_predicate) =
-                            rewrite_projection(filter.predicate.clone(), projection)?;
+                            rewrite_projection(non_unnest_predicates, projection)?;
                         unnest.input = Arc::new(new_projection.data);
 
+                        let unnest_predicate = conjunction(unnest_predicates);
                         if new_projection.transformed {
                             match keep_predicate {
-                                None => Ok(Transformed::yes(LogicalPlan::Unnest(unnest))),
-                                Some(keep_predicate) => Ok(Transformed::yes(
-                                    LogicalPlan::Filter(Filter::try_new(
-                                        keep_predicate,
-                                        Arc::new(LogicalPlan::Unnest(unnest)),
-                                    )?),
-                                )),
+                                None => match unnest_predicate {
+                                    None => {
+                                        Ok(Transformed::yes(LogicalPlan::Unnest(unnest)))
+                                    }
+                                    Some(unnest_predicate) => Ok(Transformed::yes(
+                                        LogicalPlan::Filter(Filter::try_new(
+                                            unnest_predicate,
+                                            Arc::new(LogicalPlan::Unnest(unnest)),
+                                        )?),
+                                    )),
+                                },
+                                Some(keep_predicate) => match unnest_predicate {
+                                    None => Ok(Transformed::yes(LogicalPlan::Filter(
+                                        Filter::try_new(
+                                            keep_predicate,
+                                            Arc::new(LogicalPlan::Unnest(unnest)),
+                                        )?,
+                                    ))),
+                                    Some(unnest_predicate) => {
+                                        let predicate = conjunction(vec![
+                                            unnest_predicate,
+                                            keep_predicate,
+                                        ]).unwrap(); // Safe to unwrap since filters is non-empty
+                                        Ok(Transformed::yes(LogicalPlan::Filter(
+                                            Filter::try_new(
+                                                predicate,
+                                                Arc::new(LogicalPlan::Unnest(unnest)),
+                                            )?,
+                                        )))
+                                    }
+                                },
                             }
                         } else {
                             filter.input = Arc::new(LogicalPlan::Unnest(unnest));
@@ -974,7 +1011,7 @@ impl OptimizerRule for PushDownFilter {
 ///   ...
 /// ```
 fn rewrite_projection(
-    predicate: Expr,
+    predicates: Vec<Expr>,
     projection: Projection,
 ) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
     // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
@@ -994,7 +1031,7 @@ fn rewrite_projection(
 
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
-    for expr in split_conjunction_owned(predicate) {
+    for expr in predicates {
         if contain(&expr, &volatile_map) {
             keep_predicates.push(expr);
         } else {

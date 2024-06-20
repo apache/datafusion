@@ -73,10 +73,11 @@ explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v
 ----
 logical_plan
 01)Projection: unnest(v.column2) AS uc2, v.column1
-02)--Filter: unnest(v.column2) > Int64(3) AND v.column1 = Int64(2)
+02)--Filter: unnest(v.column2) > Int64(3)
 03)----Unnest: lists[unnest(v.column2)] structs[]
 04)------Projection: v.column2 AS unnest(v.column2), v.column1
-05)--------TableScan: v projection=[column1, column2]
+05)--------Filter: v.column1 = Int64(2)
+06)----------TableScan: v projection=[column1, column2]
 
 
 statement ok
