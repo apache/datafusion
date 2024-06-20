@@ -108,6 +108,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
+dirs = "4.0.0"
 flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
 glob = "0.3.0"

@@ -17,6 +17,7 @@
 
 //! [`SessionState`]: information required to run queries in a session
 
+use crate::catalog::dynamic_file_schema::{DynamicFileSchemaProvider};
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
@@ -196,11 +197,14 @@ impl SessionState {
 
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
+            let schema = DynamicFileSchemaProvider::new(
+                Arc::new(MemorySchemaProvider::new()),
+            );
 
             default_catalog
                 .register_schema(
                     &config.options().catalog.default_schema,
-                    Arc::new(MemorySchemaProvider::new()),
+                    Arc::new(schema),
                 )
                 .expect("memory catalog provider can register schema");
 

@@ -75,6 +75,7 @@ use url::Url;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+use crate::catalog::dynamic_file_schema::DynamicFileSchemaProvider;
 
 mod avro;
 mod csv;
@@ -305,10 +306,14 @@ impl SessionContext {
 
     /// Creates a new `SessionContext` using the provided [`SessionState`]
     pub fn new_with_state(state: SessionState) -> Self {
+        let state_ref =  Arc::new(RwLock::new(state.clone()));
+        state.schema_for_ref("datafusion.public.xx").unwrap()
+            .as_any().downcast_ref::<DynamicFileSchemaProvider>().unwrap()
+            .with_state(Arc::downgrade(&state_ref));
         Self {
-            session_id: state.session_id().to_string(),
+            session_id: state_ref.clone().read().session_id().to_string(),
             session_start_time: Utc::now(),
-            state: Arc::new(RwLock::new(state)),
+            state: state_ref,
         }
     }
 
