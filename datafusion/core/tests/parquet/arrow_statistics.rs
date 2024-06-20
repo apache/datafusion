@@ -1352,7 +1352,7 @@ async fn test_uint() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
         column_name: "u8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1363,7 +1363,7 @@ async fn test_uint() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
         column_name: "u16",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1374,7 +1374,7 @@ async fn test_uint() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
         column_name: "u32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1385,7 +1385,7 @@ async fn test_uint() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
         column_name: "u64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
