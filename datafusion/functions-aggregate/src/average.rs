@@ -88,6 +88,9 @@ impl AggregateUDFImpl for Avg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return exec_err!("avg(DISTINCT) aggregations are not available")
+        }
         use DataType::*;
         // instantiate specialized accumulator based for the type
         match (acc_args.input_type, acc_args.data_type) {
@@ -225,7 +228,7 @@ impl AggregateUDFImpl for Avg {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 1 {
-            return exec_err!("AVG expects exactly one argument.");
+            return exec_err!("avg expects exactly one argument.");
         }
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
         // smallint, int, bigint, real, double precision, decimal, or interval
