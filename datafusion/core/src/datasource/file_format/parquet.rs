@@ -119,6 +119,7 @@ impl FileFormatFactory for ParquetFormatFactory{
 
             },
             Some(parquet_options) => {
+                println!("{:?}", parquet_options);
                 let mut parquet_options = parquet_options.clone();
                 for (k, v) in format_options{
                     parquet_options.set(k, v)?;
@@ -126,7 +127,8 @@ impl FileFormatFactory for ParquetFormatFactory{
                 parquet_options
             }
         };
-        
+
+        println!("{:?}", parquet_options);
         
         Ok(Arc::new(ParquetFormat::default().with_options(parquet_options)))
     }

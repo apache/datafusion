@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
 
+use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::source_as_provider;
@@ -69,7 +70,7 @@ use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    config_datafusion_err, exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -777,13 +778,8 @@ impl DefaultPhysicalPlanner {
                     table_partition_cols,
                     overwrite: false,
                 };
-                // TODO, how not to lose options inside FileType (which is actually FileFormat)
-                let sink_format = session_state
-                    .get_file_format_factory(&file_type.get_ext())
-                    .ok_or(config_datafusion_err!(
-                        "Unable to copy to format {}! Could not find FileFormat.",
-                        file_type.get_ext()
-                    ))?
+
+                let sink_format = file_type_to_format(file_type)?
                     .create(session_state, &source_option_tuples)?;
 
                 sink_format
