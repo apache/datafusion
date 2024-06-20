@@ -19,14 +19,14 @@ use std::any::Any;
 
 use arrow_schema::DataType;
 
-use datafusion::{error::Result, execution::options::CsvReadOptions};
 use datafusion::execution::context::SessionContext;
-use datafusion_expr::{
-    Expr, expr::WindowFunction, PartitionEvaluator,
-    Signature, simplify::SimplifyInfo, Volatility, WindowUDF, WindowUDFImpl,
-};
+use datafusion::{error::Result, execution::options::CsvReadOptions};
 use datafusion_expr::function::WindowFunctionSimplification;
 use datafusion_expr::test::function_stub::avg_udaf;
+use datafusion_expr::{
+    expr::WindowFunction, simplify::SimplifyInfo, Expr, PartitionEvaluator, Signature,
+    Volatility, WindowUDF, WindowUDFImpl,
+};
 
 /// This UDWF will show how to use the WindowUDFImpl::simplify() API
 #[derive(Debug, Clone)]

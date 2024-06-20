@@ -4972,6 +4972,22 @@ CREATE TABLE float_table (
 ( 32768.3, arrow_cast('NAN','Float32'), 32768.3, 32768.3 ),
 ( 27.3,    27.3,                        27.3,    arrow_cast('NAN','Float64') );
 
+# Test string_agg with largeutf8
+statement ok
+create table string_agg_large_utf8 (c string) as values 
+  (arrow_cast('a', 'LargeUtf8')),
+  (arrow_cast('b', 'LargeUtf8')),
+  (arrow_cast('c', 'LargeUtf8'))
+;
+
+query T
+SELECT STRING_AGG(c, ',') FROM string_agg_large_utf8;
+----
+a,b,c
+
+statement ok
+drop table string_agg_large_utf8;
+
 query RRRRI
 select min(col_f32), max(col_f32), avg(col_f32), sum(col_f32), count(col_f32) from float_table;
 ----

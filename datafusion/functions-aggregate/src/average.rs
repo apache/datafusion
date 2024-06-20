@@ -89,7 +89,7 @@ impl AggregateUDFImpl for Avg {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
-            return exec_err!("avg(DISTINCT) aggregations are not available")
+            return exec_err!("avg(DISTINCT) aggregations are not available");
         }
         use DataType::*;
         // instantiate specialized accumulator based for the type

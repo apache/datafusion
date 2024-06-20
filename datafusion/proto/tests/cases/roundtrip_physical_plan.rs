@@ -48,7 +48,7 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, NthValue,
-    PhysicalSortExpr, StringAgg,
+    PhysicalSortExpr,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::DataSinkExec;
@@ -81,6 +81,7 @@ use datafusion_expr::{
     ScalarUDFImpl, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::string_agg::StringAgg;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
@@ -350,12 +351,20 @@ fn rountrip_aggregate() -> Result<()> {
             Vec::new(),
         ))],
         // STRING_AGG
-        vec![Arc::new(StringAgg::new(
-            cast(col("b", &schema)?, &schema, DataType::Utf8)?,
-            lit(ScalarValue::Utf8(Some(",".to_string()))),
-            "STRING_AGG(name, ',')".to_string(),
-            DataType::Utf8,
-        ))],
+        vec![udaf::create_aggregate_expr(
+            &AggregateUDF::new_from_impl(StringAgg::new()),
+            &[
+                cast(col("b", &schema)?, &schema, DataType::Utf8)?,
+                lit(ScalarValue::Utf8(Some(",".to_string()))),
+            ],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "STRING_AGG(name, ',')",
+            false,
+            false,
+        )?],
     ];
 
     for aggregates in test_cases {

@@ -45,12 +45,6 @@ pub enum AggregateFunction {
     Correlation,
     /// Grouping
     Grouping,
-    /// Bool And
-    BoolAnd,
-    /// Bool Or
-    BoolOr,
-    /// String aggregation
-    StringAgg,
 }
 
 impl AggregateFunction {
@@ -63,9 +57,6 @@ impl AggregateFunction {
             NthValue => "NTH_VALUE",
             Correlation => "CORR",
             Grouping => "GROUPING",
-            BoolAnd => "BOOL_AND",
-            BoolOr => "BOOL_OR",
-            StringAgg => "STRING_AGG",
         }
     }
 }
@@ -81,13 +72,10 @@ impl FromStr for AggregateFunction {
     fn from_str(name: &str) -> Result<AggregateFunction> {
         Ok(match name {
             // general
-            "bool_and" => AggregateFunction::BoolAnd,
-            "bool_or" => AggregateFunction::BoolOr,
             "max" => AggregateFunction::Max,
             "min" => AggregateFunction::Min,
             "array_agg" => AggregateFunction::ArrayAgg,
             "nth_value" => AggregateFunction::NthValue,
-            "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
             // other
@@ -127,9 +115,6 @@ impl AggregateFunction {
                 // The coerced_data_types is same with input_types.
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
-                Ok(DataType::Boolean)
-            }
             AggregateFunction::Correlation => {
                 correlation_return_type(&coerced_data_types[0])
             }
@@ -140,7 +125,6 @@ impl AggregateFunction {
             )))),
             AggregateFunction::Grouping => Ok(DataType::Int32),
             AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
-            AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
         }
     }
 }
@@ -165,15 +149,9 @@ impl AggregateFunction {
                     .collect::<Vec<_>>();
                 Signature::uniform(1, valid, Volatility::Immutable)
             }
-            AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
-                Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
-            }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
             AggregateFunction::Correlation => {
                 Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
-            }
-            AggregateFunction::StringAgg => {
-                Signature::uniform(2, STRINGS.to_vec(), Volatility::Immutable)
             }
         }
     }
