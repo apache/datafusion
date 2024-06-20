@@ -34,30 +34,7 @@ use log::{debug, trace};
 /// type. Useful for optimizer rules which want to leave the type
 /// of plan unchanged but still apply to the children.
 /// This also handles the case when the `plan` is a [`LogicalPlan::Explain`].
-///
-/// Returning `Ok(None)` indicates that the plan can't be optimized by the `optimizer`.
 pub fn optimize_children(
-    optimizer: &impl OptimizerRule,
-    plan: &LogicalPlan,
-    config: &dyn OptimizerConfig,
-) -> Result<Option<LogicalPlan>> {
-    let mut new_inputs = Vec::with_capacity(plan.inputs().len());
-    let mut plan_is_changed = false;
-    for input in plan.inputs() {
-        #[allow(deprecated)]
-        let new_input = optimizer.try_optimize(input, config)?;
-        plan_is_changed = plan_is_changed || new_input.is_some();
-        new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
-    }
-    if plan_is_changed {
-        let exprs = plan.expressions();
-        plan.with_new_exprs(exprs, new_inputs).map(Some)
-    } else {
-        Ok(None)
-    }
-}
-
-pub fn rewrite_children(
     optimizer: &impl OptimizerRule,
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,

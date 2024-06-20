@@ -149,7 +149,7 @@ impl OptimizerRule for MyOptimizerRule {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
         // recurse down and optimize children first
-        let optimized_plan = utils::rewrite_children(self, plan, config)?;
+        let optimized_plan = utils::optimize_children(self, plan, config)?;
         optimized_plan.map_data(|plan| match plan {
             LogicalPlan::Filter(filter) => {
                 let predicate = my_rewrite(filter.predicate.clone())?;

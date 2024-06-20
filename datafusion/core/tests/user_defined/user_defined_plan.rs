@@ -80,7 +80,7 @@ use datafusion::{
         Expr, Extension, Limit, LogicalPlan, Sort, UserDefinedLogicalNode,
         UserDefinedLogicalNodeCore,
     },
-    optimizer::{rewrite_children, OptimizerConfig, OptimizerRule},
+    optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
     physical_expr::EquivalenceProperties,
     physical_plan::{
         DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
@@ -332,7 +332,7 @@ impl OptimizerRule for TopKOptimizerRule {
 
         // If we didn't find the Limit/Sort combination, recurse as
         // normal and build the result.
-        rewrite_children(self, plan, config)
+        optimize_children(self, plan, config)
     }
 }
 
