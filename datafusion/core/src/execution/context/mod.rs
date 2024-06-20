@@ -491,20 +491,30 @@ impl SessionContext {
     /// # Example: Parsing SQL queries
     ///
     /// ```
-    /// # use std::sync::Arc;
-    /// # use arrow::datatypes::{DataType, Field, Schema};
-    /// # use datafusion::prelude::*;
-    /// # use datafusion_common::DFSchema;
-    /// let sql = "SELECT a FROM t WHERE b = 1";
-    /// // provide type information that `a` is an Int32
-    /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-    /// let df_schema = DFSchema::try_from(schema).unwrap();
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion::prelude::*;
+    /// use datafusion_common::{DFSchema, Result};
     ///
-    /// let expr = SessionContext::new()
-    ///  .parse_sql(sql, &df_schema)
-    ///  .await?;
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     // datafusion will parse number as i64 first.
+    ///     let sql = "a > 10";
+    ///     let expected = col("a").gt(lit(10 as i64));
+    ///   
+    ///     // provide type information that `a` is an Int32
+    ///     let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+    ///     let df_schema = DFSchema::try_from(schema).unwrap();
+    ///
+    ///     let expr = SessionContext::new()
+    ///      .parse_sql_expr(sql, &df_schema)
+    ///      .await?;
+    ///
+    ///     assert_eq!(expected, expr);
+    ///   
+    ///     Ok(())
+    /// }
     /// ```
-    pub async fn parse_sql(&self, sql: &str, df_schema: &DFSchema) -> Result<Expr> {
+    pub async fn parse_sql_expr(&self, sql: &str, df_schema: &DFSchema) -> Result<Expr> {
         self.state().create_logical_expr(sql, df_schema).await
     }
 
