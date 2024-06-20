@@ -198,25 +198,19 @@ fn generate_optimized_plan_with_rules(
         .expect("failed to optimize plan")
 }
 
-pub fn assert_optimized_plan_eq_with_rules(
+pub fn assert_optimized_plan_with_rules(
     rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     plan: LogicalPlan,
     expected: &str,
+    eq: bool,
 ) -> Result<()> {
     let optimized_plan = generate_optimized_plan_with_rules(rules, plan);
     let formatted_plan = format!("{optimized_plan:?}");
-    assert_eq!(formatted_plan, expected);
-    Ok(())
-}
-
-pub fn assert_optimized_plan_ne_with_rules(
-    rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
-    plan: LogicalPlan,
-    expected: &str,
-) -> Result<()> {
-    let optimized_plan = generate_optimized_plan_with_rules(rules, plan);
-    let formatted_plan = format!("{optimized_plan:?}");
-    assert_ne!(formatted_plan, expected);
+    if eq {
+        assert_eq!(formatted_plan, expected);
+    } else {
+        assert_ne!(formatted_plan, expected);
+    }
     Ok(())
 }
 

@@ -255,9 +255,8 @@ mod tests {
     use crate::eliminate_filter::EliminateFilter;
     use crate::eliminate_nested_union::EliminateNestedUnion;
     use crate::test::{
-        assert_optimized_plan_eq, assert_optimized_plan_eq_with_rules,
-        assert_optimized_plan_ne_with_rules, test_table_scan, test_table_scan_fields,
-        test_table_scan_with_name,
+        assert_optimized_plan_eq, assert_optimized_plan_with_rules, test_table_scan,
+        test_table_scan_fields, test_table_scan_with_name,
     };
 
     use super::*;
@@ -266,11 +265,12 @@ mod tests {
         assert_optimized_plan_eq(Arc::new(PropagateEmptyRelation::new()), plan, expected)
     }
 
-    fn assert_together_optimized_plan_eq(
+    fn assert_together_optimized_plan(
         plan: LogicalPlan,
         expected: &str,
+        eq: bool,
     ) -> Result<()> {
-        assert_optimized_plan_eq_with_rules(
+        assert_optimized_plan_with_rules(
             vec![
                 Arc::new(EliminateFilter::new()),
                 Arc::new(EliminateNestedUnion::new()),
@@ -278,21 +278,7 @@ mod tests {
             ],
             plan,
             expected,
-        )
-    }
-
-    fn assert_together_optimized_plan_ne(
-        plan: LogicalPlan,
-        expected: &str,
-    ) -> Result<()> {
-        assert_optimized_plan_ne_with_rules(
-            vec![
-                Arc::new(EliminateFilter::new()),
-                Arc::new(EliminateNestedUnion::new()),
-                Arc::new(PropagateEmptyRelation::new()),
-            ],
-            plan,
-            expected,
+            eq,
         )
     }
 
@@ -328,7 +314,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(plan, expected)
+        assert_together_optimized_plan(plan, expected, true)
     }
 
     #[test]
@@ -341,7 +327,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
         let expected = "TableScan: test";
-        assert_together_optimized_plan_eq(plan, expected)
+        assert_together_optimized_plan(plan, expected, true)
     }
 
     #[test]
@@ -366,7 +352,7 @@ mod tests {
         let expected = "Union\
             \n  TableScan: test1\
             \n  TableScan: test4";
-        assert_together_optimized_plan_eq(plan, expected)
+        assert_together_optimized_plan(plan, expected, true)
     }
 
     #[test]
@@ -391,7 +377,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(plan, expected)
+        assert_together_optimized_plan(plan, expected, true)
     }
 
     #[test]
@@ -418,7 +404,7 @@ mod tests {
         let expected = "Union\
             \n  TableScan: test2\
             \n  TableScan: test3";
-        assert_together_optimized_plan_eq(plan, expected)
+        assert_together_optimized_plan(plan, expected, true)
     }
 
     #[test]
@@ -431,7 +417,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
         let expected = "TableScan: test";
-        assert_together_optimized_plan_eq(plan, expected)
+        assert_together_optimized_plan(plan, expected, true)
     }
 
     #[test]
@@ -446,7 +432,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(plan, expected)
+        assert_together_optimized_plan(plan, expected, true)
     }
 
     fn empty_left_and_right_lp_empty(
@@ -486,12 +472,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-
-        if eq {
-            assert_together_optimized_plan_eq(plan, expected)
-        } else {
-            assert_together_optimized_plan_ne(plan, expected)
-        }
+        assert_together_optimized_plan(plan, expected, eq)
     }
 
     #[test]
@@ -580,6 +561,6 @@ mod tests {
         let expected = "Projection: a, b, c\
         \n  TableScan: test";
 
-        assert_together_optimized_plan_eq(plan, expected)
+        assert_together_optimized_plan(plan, expected, true)
     }
 }
