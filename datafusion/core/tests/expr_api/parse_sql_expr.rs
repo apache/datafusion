@@ -53,17 +53,17 @@ async fn round_trip_parse_sql_expr() -> Result<()> {
     ];
 
     for test in tests {
-        round_trip_session_context(test).await?;
+        round_trip_session_context(test)?;
         round_trip_dataframe(test).await?;
     }
 
     Ok(())
 }
 
-async fn round_trip_session_context(sql: &str) -> Result<()> {
+fn round_trip_session_context(sql: &str) -> Result<()> {
     let ctx = SessionContext::new();
     let df_schema = schema();
-    let expr = ctx.parse_sql_expr(sql, &df_schema).await?;
+    let expr = ctx.parse_sql_expr(sql, &df_schema)?;
     let sql2 = unparse_sql_expr(&expr)?;
     assert_eq!(sql, sql2);
 
@@ -78,7 +78,7 @@ async fn round_trip_dataframe(sql: &str) -> Result<()> {
             CsvReadOptions::default(),
         )
         .await?;
-    let expr = df.parse_sql_expr(sql).await?;
+    let expr = df.parse_sql_expr(sql)?;
     let sql2 = unparse_sql_expr(&expr)?;
     assert_eq!(sql, sql2);
 

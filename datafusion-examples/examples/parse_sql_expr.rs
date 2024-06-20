@@ -15,7 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, Schema};
+use std::sync::Arc;
+
+use arrow::{
+    array::{Float64Array, Int64Array, RecordBatch},
+    datatypes::{DataType, Field, Schema},
+};
 use datafusion::{
     error::Result,
     prelude::{ParquetReadOptions, SessionContext},
@@ -27,14 +32,15 @@ use datafusion_sql::unparser::Unparser;
 #[tokio::main]
 async fn main() -> Result<()> {
     // See how to evaluate expressions
-    simple_session_context_parse_sql_expr_demo().await?;
+    simple_session_context_parse_sql_expr_demo()?;
     simple_dataframe_parse_sql_expr_demo().await?;
+    query_parquet_demo().await?;
     round_trip_parse_sql_expr_demo().await?;
     Ok(())
 }
 
 /// DataFusion can parse a SQL text to an logical expression agianst a schema at [`SessionContext`].
-async fn simple_session_context_parse_sql_expr_demo() -> Result<()> {
+fn simple_session_context_parse_sql_expr_demo() -> Result<()> {
     let sql = "a < 5 OR a = 8";
     let expr = col("a").lt(lit(5_i64)).or(col("a").eq(lit(8_i64)));
 
@@ -43,7 +49,7 @@ async fn simple_session_context_parse_sql_expr_demo() -> Result<()> {
     let df_schema = DFSchema::try_from(schema).unwrap();
     let ctx = SessionContext::new();
 
-    let parsed_expr = ctx.parse_sql_expr(sql, &df_schema).await?;
+    let parsed_expr = ctx.parse_sql_expr(sql, &df_schema)?;
 
     assert_eq!(parsed_expr, expr);
 
@@ -66,9 +72,54 @@ async fn simple_dataframe_parse_sql_expr_demo() -> Result<()> {
         )
         .await?;
 
-    let parsed_expr = df.parse_sql_expr(sql).await?;
+    let parsed_expr = df.parse_sql_expr(sql)?;
 
     assert_eq!(parsed_expr, expr);
+
+    Ok(())
+}
+
+async fn query_parquet_demo() -> Result<()> {
+    let ctx = SessionContext::new();
+    let testdata = datafusion::test_util::parquet_test_data();
+    let df = ctx
+        .read_parquet(
+            &format!("{testdata}/alltypes_plain.parquet"),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+
+    let df = df
+        .clone()
+        .select(vec![
+            df.parse_sql_expr("int_col")?,
+            df.parse_sql_expr("double_col")?,
+        ])?
+        .filter(df.parse_sql_expr("int_col < 5 OR double_col = 8.0")?)?
+        .aggregate(
+            vec![df.parse_sql_expr("double_col")?],
+            vec![df.parse_sql_expr("SUM(int_col) as sum_int_col")?],
+        )?
+        .sort(vec![col("double_col").sort(false, false)])?
+        .limit(0, Some(1))?;
+
+    let result = df.collect().await?;
+
+    assert_eq!(result.len(), 1);
+    let expected = format!(
+        "{:?}",
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("double_col", DataType::Float64, true),
+                Field::new("sum(?table?.int_col)", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(Float64Array::from(vec![10.1])),
+                Arc::new(Int64Array::from(vec![4])),
+            ],
+        )?
+    );
+    assert_eq!(format!("{:?}", result[0]), expected);
 
     Ok(())
 }
@@ -86,7 +137,7 @@ async fn round_trip_parse_sql_expr_demo() -> Result<()> {
         )
         .await?;
 
-    let parsed_expr = df.parse_sql_expr(sql).await?;
+    let parsed_expr = df.parse_sql_expr(sql)?;
 
     let unparser = Unparser::default();
     let round_trip_sql = unparser.expr_to_sql(&parsed_expr)?.to_string();

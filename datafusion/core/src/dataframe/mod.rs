@@ -195,17 +195,17 @@ impl DataFrame {
     ///
     ///     let ctx = SessionContext::new();
     ///     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    ///     let expr = df.parse_sql_expr(sql).await?;
+    ///     let expr = df.parse_sql_expr(sql)?;
     ///
     ///     assert_eq!(expected, expr);
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn parse_sql_expr(&self, sql: &str) -> Result<Expr> {
+    pub fn parse_sql_expr(&self, sql: &str) -> Result<Expr> {
         let df_schema = self.schema();
 
-        self.session_state.create_logical_expr(sql, df_schema).await
+        self.session_state.create_logical_expr(sql, df_schema)
     }
 
     /// Consume the DataFrame and produce a physical plan

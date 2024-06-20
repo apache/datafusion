@@ -506,16 +506,15 @@ impl SessionContext {
     ///     let df_schema = DFSchema::try_from(schema).unwrap();
     ///
     ///     let expr = SessionContext::new()
-    ///      .parse_sql_expr(sql, &df_schema)
-    ///      .await?;
+    ///      .parse_sql_expr(sql, &df_schema)?;
     ///
     ///     assert_eq!(expected, expr);
     ///   
     ///     Ok(())
     /// }
     /// ```
-    pub async fn parse_sql_expr(&self, sql: &str, df_schema: &DFSchema) -> Result<Expr> {
-        self.state().create_logical_expr(sql, df_schema).await
+    pub fn parse_sql_expr(&self, sql: &str, df_schema: &DFSchema) -> Result<Expr> {
+        self.state().create_logical_expr(sql, df_schema)
     }
 
     /// Execute the [`LogicalPlan`], return a [`DataFrame`]. This API

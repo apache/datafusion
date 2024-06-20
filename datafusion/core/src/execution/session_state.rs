@@ -593,7 +593,7 @@ impl SessionState {
     }
 
     /// Creates a datafusion style ast [`Expr`] from a SQL string..
-    pub async fn create_logical_expr(
+    pub fn create_logical_expr(
         &self,
         sql: &str,
         df_schema: &DFSchema,
