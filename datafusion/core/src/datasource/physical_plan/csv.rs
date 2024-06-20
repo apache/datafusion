@@ -58,6 +58,7 @@ pub struct CsvExec {
     delimiter: u8,
     quote: u8,
     escape: Option<u8>,
+    comment: Option<u8>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Compression type of the file associated with CsvExec
@@ -73,6 +74,7 @@ impl CsvExec {
         delimiter: u8,
         quote: u8,
         escape: Option<u8>,
+        comment: Option<u8>,
         file_compression_type: FileCompressionType,
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
@@ -92,6 +94,7 @@ impl CsvExec {
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
             cache,
+            comment,
         }
     }
 
@@ -111,6 +114,11 @@ impl CsvExec {
     /// The quote character
     pub fn quote(&self) -> u8 {
         self.quote
+    }
+
+    /// Lines beginning with this byte are ignored.
+    pub fn comment(&self) -> Option<u8> {
+        self.comment
     }
 
     /// The escape character
@@ -234,6 +242,7 @@ impl ExecutionPlan for CsvExec {
             quote: self.quote,
             escape: self.escape,
             object_store,
+            comment: self.comment,
         });
 
         let opener = CsvOpener {
@@ -265,9 +274,11 @@ pub struct CsvConfig {
     quote: u8,
     escape: Option<u8>,
     object_store: Arc<dyn ObjectStore>,
+    comment: Option<u8>,
 }
 
 impl CsvConfig {
+    #[allow(clippy::too_many_arguments)]
     /// Returns a [`CsvConfig`]
     pub fn new(
         batch_size: usize,
@@ -277,6 +288,7 @@ impl CsvConfig {
         delimiter: u8,
         quote: u8,
         object_store: Arc<dyn ObjectStore>,
+        comment: Option<u8>,
     ) -> Self {
         Self {
             batch_size,
@@ -287,6 +299,7 @@ impl CsvConfig {
             quote,
             escape: None,
             object_store,
+            comment,
         }
     }
 }
@@ -308,6 +321,9 @@ impl CsvConfig {
         }
         if let Some(escape) = self.escape {
             builder = builder.with_escape(escape)
+        }
+        if let Some(comment) = self.comment {
+            builder = builder.with_comment(comment);
         }
 
         builder
@@ -570,6 +586,7 @@ mod tests {
             b',',
             b'"',
             None,
+            None,
             file_compression_type.to_owned(),
         );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
@@ -635,6 +652,7 @@ mod tests {
             true,
             b',',
             b'"',
+            None,
             None,
             file_compression_type.to_owned(),
         );
@@ -702,6 +720,7 @@ mod tests {
             b',',
             b'"',
             None,
+            None,
             file_compression_type.to_owned(),
         );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
@@ -765,6 +784,7 @@ mod tests {
             b',',
             b'"',
             None,
+            None,
             file_compression_type.to_owned(),
         );
         assert_eq!(14, csv.base_config.file_schema.fields().len());
@@ -826,6 +846,7 @@ mod tests {
             true,
             b',',
             b'"',
+            None,
             None,
             file_compression_type.to_owned(),
         );
@@ -921,6 +942,7 @@ mod tests {
             b',',
             b'"',
             None,
+            None,
             file_compression_type.to_owned(),
         );
 
@@ -965,7 +987,7 @@ mod tests {
 
         let data = bytes::Bytes::from("a,b\n1,2\n3,4");
         let path = object_store::path::Path::from("a.csv");
-        store.put(&path, data).await.unwrap();
+        store.put(&path, data.into()).await.unwrap();
 
         let url = Url::parse("memory://").unwrap();
         session_ctx.register_object_store(&url, Arc::new(store));

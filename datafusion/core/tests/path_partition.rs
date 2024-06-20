@@ -45,10 +45,10 @@ use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::stream::{self, BoxStream};
 use object_store::{
-    path::Path, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
-    ObjectMeta, ObjectStore, PutOptions, PutResult,
+    path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
+    ObjectStore, PutOptions, PutResult,
 };
-use tokio::io::AsyncWrite;
+use object_store::{Attributes, MultipartUpload, PutMultipartOpts, PutPayload};
 use url::Url;
 
 #[tokio::test]
@@ -631,24 +631,17 @@ impl ObjectStore for MirroringObjectStore {
     async fn put_opts(
         &self,
         _location: &Path,
-        _bytes: Bytes,
+        _put_payload: PutPayload,
         _opts: PutOptions,
     ) -> object_store::Result<PutResult> {
         unimplemented!()
     }
 
-    async fn put_multipart(
+    async fn put_multipart_opts(
         &self,
         _location: &Path,
-    ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        unimplemented!()
-    }
-
-    async fn abort_multipart(
-        &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
-    ) -> object_store::Result<()> {
+        _opts: PutMultipartOpts,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
         unimplemented!()
     }
 
@@ -673,6 +666,7 @@ impl ObjectStore for MirroringObjectStore {
             range: 0..meta.size,
             payload: GetResultPayload::File(file, path),
             meta,
+            attributes: Attributes::default(),
         })
     }
 

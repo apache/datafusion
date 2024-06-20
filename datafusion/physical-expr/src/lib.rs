@@ -17,7 +17,9 @@
 
 pub mod aggregate;
 pub mod analysis;
-pub mod binary_map;
+pub mod binary_map {
+    pub use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
+}
 pub mod equivalence;
 pub mod expressions;
 pub mod functions;

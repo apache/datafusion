@@ -15,17 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, SqlToRel};
-use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::Operator;
-use sqlparser::ast::JsonOperator;
-
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    pub(crate) fn parse_sql_json_access(&self, op: JsonOperator) -> Result<Operator> {
-        match op {
-            JsonOperator::AtArrow => Ok(Operator::AtArrow),
-            JsonOperator::ArrowAt => Ok(Operator::ArrowAt),
-            _ => not_impl_err!("Unsupported SQL json operator {op:?}"),
-        }
-    }
-}
+pub mod function_stub;

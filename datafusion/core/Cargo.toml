@@ -30,7 +30,7 @@ authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version and fails with
 # "Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in 'arrow-datafusion/Cargo.toml'"
 # https://github.com/foresterre/cargo-msrv/issues/590
-rust-version = "1.73"
+rust-version = "1.75"
 
 [lints]
 workspace = true
@@ -134,6 +134,7 @@ xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
+arrow-buffer = { workspace = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }

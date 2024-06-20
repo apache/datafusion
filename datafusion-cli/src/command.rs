@@ -17,6 +17,7 @@
 
 //! Command within CLI
 
+use crate::cli_context::CliSessionContext;
 use crate::exec::{exec_and_print, exec_from_lines};
 use crate::functions::{display_all_functions, Function};
 use crate::print_format::PrintFormat;
@@ -28,7 +29,6 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::exec_err;
 use datafusion::common::instant::Instant;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::prelude::SessionContext;
 use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
@@ -55,7 +55,7 @@ pub enum OutputFormat {
 impl Command {
     pub async fn execute(
         &self,
-        ctx: &mut SessionContext,
+        ctx: &mut dyn CliSessionContext,
         print_options: &mut PrintOptions,
     ) -> Result<()> {
         match self {

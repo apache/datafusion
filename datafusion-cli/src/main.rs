@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::process::ExitCode;
-use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
 use datafusion::error::{DataFusionError, Result};
@@ -31,6 +30,7 @@ use datafusion_cli::catalog::DynamicFileCatalog;
 use datafusion_cli::functions::ParquetMetadataFunc;
 use datafusion_cli::{
     exec,
+    pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
     DATAFUSION_CLI_VERSION,
@@ -41,24 +41,6 @@ use mimalloc::MiMalloc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
-
-#[derive(PartialEq, Debug)]
-enum PoolType {
-    Greedy,
-    Fair,
-}
-
-impl FromStr for PoolType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Greedy" | "greedy" => Ok(PoolType::Greedy),
-            "Fair" | "fair" => Ok(PoolType::Fair),
-            _ => Err(format!("Invalid memory pool type '{}'", s)),
-        }
-    }
-}
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
@@ -127,13 +109,14 @@ struct Args {
 
     #[clap(
         long,
-        help = "Specify the memory pool type 'greedy' or 'fair', default to 'greedy'"
+        help = "Specify the memory pool type 'greedy' or 'fair'",
+        default_value_t = PoolType::Greedy
     )]
-    mem_pool_type: Option<PoolType>,
+    mem_pool_type: PoolType,
 
     #[clap(
         long,
-        help = "The max number of rows to display for 'Table' format\n[default: 40] [possible values: numbers(0/10/...), inf(no limit)]",
+        help = "The max number of rows to display for 'Table' format\n[possible values: numbers(0/10/...), inf(no limit)]",
         default_value = "40"
     )]
     maxrows: MaxRows,
@@ -177,18 +160,14 @@ async fn main_inner() -> Result<()> {
     let rt_config =
         // set memory pool size
         if let Some(memory_limit) = args.memory_limit {
+            // unwrap is safe here because is_valid_memory_pool_size already checked the value
             let memory_limit = extract_memory_pool_size(&memory_limit).unwrap();
             // set memory pool type
-            if let Some(mem_pool_type) = args.mem_pool_type {
-                match mem_pool_type {
-                    PoolType::Greedy => rt_config
-                        .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit))),
-                    PoolType::Fair => rt_config
-                        .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit))),
-                }
-            } else {
-                rt_config
-                .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
+            match args.mem_pool_type {
+                PoolType::Fair => rt_config
+                    .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit))),
+                PoolType::Greedy => rt_config
+                    .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
             }
         } else {
             rt_config

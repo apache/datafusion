@@ -22,6 +22,19 @@ use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 /// Maximum number of regex alternations (`foo|bar|...`) that will be expanded into multiple `LIKE` expressions.
 const MAX_REGEX_ALTERNATIONS_EXPANSION: usize = 4;
 
+/// Tries to convert a regexp expression to a `LIKE` or `Eq`/`NotEq` expression.
+///
+/// This function also validates the regex pattern. And will return error if the
+/// pattern is invalid.
+///
+/// Typical cases this function can simplify:
+/// - empty regex pattern to `LIKE '%'`
+/// - literal regex patterns to `LIKE '%foo%'`
+/// - full anchored regex patterns (e.g. `^foo$`) to `= 'foo'`
+/// - partial anchored regex patterns (e.g. `^foo`) to `LIKE 'foo%'`
+/// - combinations (alternatives) of the above, will be concatenated with `OR` or `AND`
+///
+/// Dev note: unit tests of this function are in `expr_simplifier.rs`, case `test_simplify_regex`.
 pub fn simplify_regex_expr(
     left: Box<Expr>,
     op: Operator,
@@ -53,13 +66,15 @@ pub fn simplify_regex_expr(
         }
     }
 
-    // leave untouched if optimization didn't work
+    // Leave untouched if optimization didn't work
     Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }))
 }
 
 #[derive(Debug)]
 struct OperatorMode {
+    /// Negative match.
     not: bool,
+    /// Ignore case (`true` for case-insensitive).
     i: bool,
 }
 
@@ -80,6 +95,7 @@ impl OperatorMode {
         Self { not, i }
     }
 
+    /// Creates an [`LIKE`](Expr::Like) from the given `LIKE` pattern.
     fn expr(&self, expr: Box<Expr>, pattern: String) -> Expr {
         let like = Like {
             negated: self.not,
@@ -92,6 +108,7 @@ impl OperatorMode {
         Expr::Like(like)
     }
 
+    /// Creates an [`Expr::BinaryExpr`] of "`left` = `right`" or "`left` != `right`".
     fn expr_matches_literal(&self, left: Box<Expr>, right: Box<Expr>) -> Expr {
         let op = if self.not {
             Operator::NotEq
@@ -118,7 +135,7 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
     Some(s)
 }
 
-/// returns a str represented by `Literal` if it contains a valid utf8
+/// Returns a str represented by `Literal` if it contains a valid utf8
 /// sequence and is safe for like (has no '%' and '_')
 fn like_str_from_literal(l: &Literal) -> Option<&str> {
     // if not utf8, no good
@@ -131,7 +148,7 @@ fn like_str_from_literal(l: &Literal) -> Option<&str> {
     }
 }
 
-/// returns a str represented by `Literal` if it contains a valid utf8
+/// Returns a str represented by `Literal` if it contains a valid utf8
 fn str_from_literal(l: &Literal) -> Option<&str> {
     // if not utf8, no good
     let s = std::str::from_utf8(&l.0).ok()?;
@@ -143,7 +160,7 @@ fn is_safe_for_like(c: char) -> bool {
     (c != '%') && (c != '_')
 }
 
-/// returns true if the elements in a `Concat` pattern are:
+/// Returns true if the elements in a `Concat` pattern are:
 /// - `[Look::Start, Look::End]`
 /// - `[Look::Start, Literal(_), Look::End]`
 fn is_anchored_literal(v: &[Hir]) -> bool {
@@ -157,10 +174,9 @@ fn is_anchored_literal(v: &[Hir]) -> bool {
         v.last().expect("length checked"),
     );
     if !matches!(first_last,
-    (s, e) if s.kind() == &HirKind::Look(Look::Start)
+        (s, e) if s.kind() == &HirKind::Look(Look::Start)
         && e.kind() == &HirKind::Look(Look::End)
-         )
-    {
+    ) {
         return false;
     }
 
@@ -170,7 +186,7 @@ fn is_anchored_literal(v: &[Hir]) -> bool {
         .all(|h| matches!(h.kind(), HirKind::Literal(_)))
 }
 
-/// returns true if the elements in a `Concat` pattern are:
+/// Returns true if the elements in a `Concat` pattern are:
 /// - `[Look::Start, Capture(Alternation(Literals...)), Look::End]`
 fn is_anchored_capture(v: &[Hir]) -> bool {
     if v.len() != 3
@@ -197,7 +213,33 @@ fn is_anchored_capture(v: &[Hir]) -> bool {
     true
 }
 
-/// extracts a string literal expression assuming that [`is_anchored_literal`]
+/// Returns the `LIKE` pattern if the `Concat` pattern is partial anchored:
+/// - `[Look::Start, Literal(_)]`
+/// - `[Literal(_), Look::End]`
+/// Full anchored patterns are handled by [`anchored_literal_to_expr`].
+fn partial_anchored_literal_to_like(v: &[Hir]) -> Option<String> {
+    if v.len() != 2 {
+        return None;
+    }
+
+    let (lit, match_begin) = match (&v[0].kind(), &v[1].kind()) {
+        (HirKind::Look(Look::Start), HirKind::Literal(l)) => {
+            (like_str_from_literal(l)?, true)
+        }
+        (HirKind::Literal(l), HirKind::Look(Look::End)) => {
+            (like_str_from_literal(l)?, false)
+        }
+        _ => return None,
+    };
+
+    if match_begin {
+        Some(format!("{}%", lit))
+    } else {
+        Some(format!("%{}", lit))
+    }
+}
+
+/// Extracts a string literal expression assuming that [`is_anchored_literal`]
 /// returned true.
 fn anchored_literal_to_expr(v: &[Hir]) -> Option<Expr> {
     match v.len() {
@@ -246,6 +288,7 @@ fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
     None
 }
 
+/// Tries to lower (transform) a simple regex pattern to a LIKE expression.
 fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
     match hir.kind() {
         HirKind::Empty => {
@@ -265,7 +308,9 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
                 .map(|right| left.clone().in_list(right, mode.not));
         }
         HirKind::Concat(inner) => {
-            if let Some(pattern) = collect_concat_to_like_string(inner) {
+            if let Some(pattern) = partial_anchored_literal_to_like(inner)
+                .or(collect_concat_to_like_string(inner))
+            {
                 return Some(mode.expr(Box::new(left.clone()), pattern));
             }
         }
@@ -274,6 +319,9 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
     None
 }
 
+/// Calls [`lower_simple`] for each alternative and combine the results with `or` or `and`
+/// based on [`OperatorMode`]. Any fail attempt to lower an alternative will makes this
+/// function to return `None`.
 fn lower_alt(mode: &OperatorMode, left: &Expr, alts: &[Hir]) -> Option<Expr> {
     let mut accu: Option<Expr> = None;
 

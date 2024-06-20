@@ -336,7 +336,7 @@ select arrow_cast(timestamp '2000-01-01T00:00:00Z', 'Timestamp(Nanosecond, Some(
 ----
 2000-01-01T00:00:00+08:00
 
-statement error DataFusion error: Arrow error: Parser error: Invalid timezone "\+25:00": '\+25:00' is not a valid timezone
+statement error DataFusion error: Arrow error: Parser error: Invalid timezone "\+25:00": failed to parse timezone
 select arrow_cast(timestamp '2000-01-01T00:00:00', 'Timestamp(Nanosecond, Some( "+25:00" ))');
 
 
@@ -422,3 +422,13 @@ query ?
 select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');
 ----
 [1, 2, 3]
+
+# Tests for Utf8View
+query ?T
+select arrow_cast('MyAwesomeString', 'Utf8View'), arrow_typeof(arrow_cast('MyAwesomeString', 'Utf8View'))
+----
+MyAwesomeString Utf8View
+
+# Fails until we update arrow-rs with support for https://github.com/apache/arrow-rs/pull/5894
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: arrow_cast"\)
+arrow_cast('MyAwesomeString', 'BinaryView'), arrow_typeof(arrow_cast('MyAwesomeString', 'BinaryView'))

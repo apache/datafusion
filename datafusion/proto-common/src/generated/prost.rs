@@ -275,6 +275,14 @@ pub struct ScalarDictionaryValue {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IntervalDayTimeValue {
+    #[prost(int32, tag = "1")]
+    pub days: i32,
+    #[prost(int32, tag = "2")]
+    pub milliseconds: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IntervalMonthDayNanoValue {
     #[prost(int32, tag = "1")]
     pub months: i32,
@@ -318,7 +326,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34, 42"
+        tags = "33, 1, 2, 3, 23, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 35, 36, 37, 38, 26, 27, 28, 29, 22, 30, 25, 31, 34, 42"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -337,6 +345,8 @@ pub mod scalar_value {
         Utf8Value(::prost::alloc::string::String),
         #[prost(string, tag = "3")]
         LargeUtf8Value(::prost::alloc::string::String),
+        #[prost(string, tag = "23")]
+        Utf8ViewValue(::prost::alloc::string::String),
         #[prost(int32, tag = "4")]
         Int8Value(i32),
         #[prost(int32, tag = "5")]
@@ -378,8 +388,6 @@ pub mod scalar_value {
         Date64Value(i64),
         #[prost(int32, tag = "24")]
         IntervalYearmonthValue(i32),
-        #[prost(int64, tag = "25")]
-        IntervalDaytimeValue(i64),
         #[prost(int64, tag = "35")]
         DurationSecondValue(i64),
         #[prost(int64, tag = "36")]
@@ -396,8 +404,12 @@ pub mod scalar_value {
         BinaryValue(::prost::alloc::vec::Vec<u8>),
         #[prost(bytes, tag = "29")]
         LargeBinaryValue(::prost::alloc::vec::Vec<u8>),
+        #[prost(bytes, tag = "22")]
+        BinaryViewValue(::prost::alloc::vec::Vec<u8>),
         #[prost(message, tag = "30")]
         Time64Value(super::ScalarTime64Value),
+        #[prost(message, tag = "25")]
+        IntervalDaytimeValue(super::IntervalDayTimeValue),
         #[prost(message, tag = "31")]
         IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
         #[prost(message, tag = "34")]
@@ -432,7 +444,7 @@ pub struct Decimal256 {
 pub struct ArrowType {
     #[prost(
         oneof = "arrow_type::ArrowTypeEnum",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 32, 15, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33"
     )]
     pub arrow_type_enum: ::core::option::Option<arrow_type::ArrowTypeEnum>,
 }
@@ -474,10 +486,14 @@ pub mod arrow_type {
         Float64(super::EmptyMessage),
         #[prost(message, tag = "14")]
         Utf8(super::EmptyMessage),
+        #[prost(message, tag = "35")]
+        Utf8View(super::EmptyMessage),
         #[prost(message, tag = "32")]
         LargeUtf8(super::EmptyMessage),
         #[prost(message, tag = "15")]
         Binary(super::EmptyMessage),
+        #[prost(message, tag = "34")]
+        BinaryView(super::EmptyMessage),
         #[prost(int32, tag = "16")]
         FixedSizeBinary(i32),
         #[prost(message, tag = "31")]
@@ -600,6 +616,9 @@ pub struct CsvOptions {
     /// Optional representation of null value
     #[prost(string, tag = "12")]
     pub null_value: ::prost::alloc::string::String,
+    /// Optional comment character as a byte
+    #[prost(bytes = "vec", tag = "13")]
+    pub comment: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[allow(clippy::derive_partial_eq_without_eq)]

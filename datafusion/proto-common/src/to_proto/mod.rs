@@ -24,8 +24,8 @@ use crate::protobuf_common::{
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
-    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
-    UnionMode,
+    DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
+    SchemaRef, TimeUnit, UnionMode,
 };
 use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator};
 use datafusion_common::{
@@ -347,6 +347,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
+            ScalarValue::Utf8View(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::Utf8ViewValue(s.to_owned())
+                })
+            }
             ScalarValue::List(arr) => {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
@@ -452,11 +457,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::IntervalYearmonthValue(*s)
                 })
             }
-            ScalarValue::IntervalDayTime(val) => {
-                create_proto_scalar(val.as_ref(), &data_type, |s| {
-                    Value::IntervalDaytimeValue(*s)
-                })
-            }
             ScalarValue::Null => Ok(protobuf::ScalarValue {
                 value: Some(Value::NullValue((&data_type).try_into()?)),
             }),
@@ -464,6 +464,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             ScalarValue::Binary(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::BinaryValue(s.to_owned())
+                })
+            }
+            ScalarValue::BinaryView(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::BinaryViewValue(s.to_owned())
                 })
             }
             ScalarValue::LargeBinary(val) => {
@@ -524,6 +529,20 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                         ),
                     })
                 })
+            }
+
+            ScalarValue::IntervalDayTime(val) => {
+                let value = if let Some(v) = val {
+                    let (days, milliseconds) = IntervalDayTimeType::to_parts(*v);
+                    Value::IntervalDaytimeValue(protobuf::IntervalDayTimeValue {
+                        days,
+                        milliseconds,
+                    })
+                } else {
+                    Value::NullValue((&data_type).try_into()?)
+                };
+
+                Ok(protobuf::ScalarValue { value: Some(value) })
             }
 
             ScalarValue::IntervalMonthDayNano(v) => {
@@ -885,6 +904,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             timestamp_tz_format: opts.timestamp_tz_format.clone().unwrap_or_default(),
             time_format: opts.time_format.clone().unwrap_or_default(),
             null_value: opts.null_value.clone().unwrap_or_default(),
+            comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
         })
     }
 }

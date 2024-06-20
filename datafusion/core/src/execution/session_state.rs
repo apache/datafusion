@@ -66,15 +66,12 @@ use datafusion_optimizer::{
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_sql::parser::{CopyToSource, CopyToStatement, DFParser, Statement};
-use datafusion_sql::planner::{
-    object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel,
-};
+use datafusion_sql::parser::{DFParser, Statement};
+use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
 use sqlparser::dialect::dialect_from_str;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::ops::ControlFlow;
 use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
@@ -141,8 +138,23 @@ impl Debug for SessionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionState")
             .field("session_id", &self.session_id)
-            // TODO should we print out more?
-            .finish()
+            .field("analyzer", &"...")
+            .field("optimizer", &"...")
+            .field("physical_optimizers", &"...")
+            .field("query_planner", &"...")
+            .field("catalog_list", &"...")
+            .field("table_functions", &"...")
+            .field("scalar_functions", &self.scalar_functions)
+            .field("aggregate_functions", &self.aggregate_functions)
+            .field("window_functions", &self.window_functions)
+            .field("serializer_registry", &"...")
+            .field("config", &self.config)
+            .field("table_options", &self.table_options)
+            .field("execution_props", &self.execution_props)
+            .field("table_factories", &"...")
+            .field("runtime_env", &self.runtime_env)
+            .field("function_factory", &"...")
+            .finish_non_exhaustive()
     }
 }
 
@@ -478,91 +490,22 @@ impl SessionState {
         Ok(statement)
     }
 
-    /// Resolve all table references in the SQL statement.
+    /// Resolve all table references in the SQL statement. Does not include CTE references.
+    ///
+    /// See [`catalog::resolve_table_references`] for more information.
+    ///
+    /// [`catalog::resolve_table_references`]: crate::catalog::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &datafusion_sql::parser::Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
-        use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
-        use datafusion_sql::parser::Statement as DFStatement;
-        use sqlparser::ast::*;
-
-        // Getting `TableProviders` is async but planing is not -- thus pre-fetch
-        // table providers for all relations referenced in this query
-        let mut relations = hashbrown::HashSet::with_capacity(10);
-
-        struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
-
-        impl<'a> RelationVisitor<'a> {
-            /// Record that `relation` was used in this statement
-            fn insert(&mut self, relation: &ObjectName) {
-                self.0.get_or_insert_with(relation, |_| relation.clone());
-            }
-        }
-
-        impl<'a> Visitor for RelationVisitor<'a> {
-            type Break = ();
-
-            fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<()> {
-                self.insert(relation);
-                ControlFlow::Continue(())
-            }
-
-            fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<()> {
-                if let Statement::ShowCreate {
-                    obj_type: ShowCreateObject::Table | ShowCreateObject::View,
-                    obj_name,
-                } = statement
-                {
-                    self.insert(obj_name)
-                }
-                ControlFlow::Continue(())
-            }
-        }
-
-        let mut visitor = RelationVisitor(&mut relations);
-        fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor<'_>) {
-            match statement {
-                DFStatement::Statement(s) => {
-                    let _ = s.as_ref().visit(visitor);
-                }
-                DFStatement::CreateExternalTable(table) => {
-                    visitor
-                        .0
-                        .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
-                }
-                DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
-                    CopyToSource::Relation(table_name) => {
-                        visitor.insert(table_name);
-                    }
-                    CopyToSource::Query(query) => {
-                        query.visit(visitor);
-                    }
-                },
-                DFStatement::Explain(explain) => {
-                    visit_statement(&explain.statement, visitor)
-                }
-            }
-        }
-
-        visit_statement(statement, &mut visitor);
-
-        // Always include information_schema if available
-        if self.config.information_schema() {
-            for s in INFORMATION_SCHEMA_TABLES {
-                relations.insert(ObjectName(vec![
-                    Ident::new(INFORMATION_SCHEMA),
-                    Ident::new(*s),
-                ]));
-            }
-        }
-
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        relations
-            .into_iter()
-            .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
-            .collect::<datafusion_common::Result<_>>()
+        let (table_refs, _) = crate::catalog::resolve_table_references(
+            statement,
+            enable_ident_normalization,
+        )?;
+        Ok(table_refs)
     }
 
     /// Convert an AST Statement into a LogicalPlan

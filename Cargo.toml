@@ -52,8 +52,8 @@ homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
-rust-version = "1.73"
-version = "38.0.0"
+rust-version = "1.75"
+version = "39.0.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -64,54 +64,66 @@ version = "38.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "51.0.0", features = ["prettyprint"] }
-arrow-array = { version = "51.0.0", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "51.0.0", default-features = false }
-arrow-flight = { version = "51.0.0", features = ["flight-sql-experimental"] }
-arrow-ipc = { version = "51.0.0", default-features = false, features = ["lz4"] }
-arrow-ord = { version = "51.0.0", default-features = false }
-arrow-schema = { version = "51.0.0", default-features = false }
-arrow-string = { version = "51.0.0", default-features = false }
+arrow = { version = "52.0.0", features = [
+    "prettyprint",
+] }
+arrow-array = { version = "52.0.0", default-features = false, features = [
+    "chrono-tz",
+] }
+arrow-buffer = { version = "52.0.0", default-features = false }
+arrow-flight = { version = "52.0.0", features = [
+    "flight-sql-experimental",
+] }
+arrow-ipc = { version = "52.0.0", default-features = false, features = [
+    "lz4",
+] }
+arrow-ord = { version = "52.0.0", default-features = false }
+arrow-schema = { version = "52.0.0", default-features = false }
+arrow-string = { version = "52.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
 chrono = { version = "0.4.34", default-features = false }
 ctor = "0.2.0"
-dashmap = "5.4.0"
-datafusion = { path = "datafusion/core", version = "38.0.0", default-features = false }
-datafusion-common = { path = "datafusion/common", version = "38.0.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "38.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "38.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "38.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "38.0.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "38.0.0" }
-datafusion-functions-array = { path = "datafusion/functions-array", version = "38.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "38.0.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "38.0.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "38.0.0", default-features = false }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "38.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "38.0.0" }
-datafusion-proto-common = { path = "datafusion/proto-common", version = "38.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "38.0.0" }
-datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "38.0.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "38.0.0" }
+dashmap = "5.5.0"
+datafusion = { path = "datafusion/core", version = "39.0.0", default-features = false }
+datafusion-common = { path = "datafusion/common", version = "39.0.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "39.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "39.0.0" }
+datafusion-expr = { path = "datafusion/expr", version = "39.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "39.0.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "39.0.0" }
+datafusion-functions-array = { path = "datafusion/functions-array", version = "39.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "39.0.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "39.0.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "39.0.0", default-features = false }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "39.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "39.0.0" }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "39.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "39.0.0" }
+datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "39.0.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "39.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
 half = { version = "2.2.1", default-features = false }
-hashbrown = { version = "0.14", features = ["raw"] }
+hashbrown = { version = "0.14.5", features = ["raw"] }
 indexmap = "2.0.0"
 itertools = "0.12"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = { version = "0.9.1", default-features = false }
+object_store = { version = "0.10.1", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "51.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
+parquet = { version = "52.0.0", default-features = false, features = [
+    "arrow",
+    "async",
+    "object_store",
+] }
 rand = "0.8"
 regex = "1.8"
 rstest = "0.21.0"
 serde_json = "1"
-sqlparser = { version = "0.45.0", features = ["visitor"] }
+sqlparser = { version = "0.47", features = ["visitor"] }
 tempfile = "3"
 thiserror = "1.0.44"
 tokio = { version = "1.36", features = ["macros", "rt", "sync"] }

@@ -25,8 +25,8 @@ use arrow::array::{ArrayRef, AsArray};
 use arrow::buffer::Buffer;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
-    i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
-    UnionFields, UnionMode,
+    i256, DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    Schema, TimeUnit, UnionFields, UnionMode,
 };
 use arrow::ipc::{reader::read_record_batch, root_as_message};
 
@@ -224,8 +224,10 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::Float32(_) => DataType::Float32,
             arrow_type::ArrowTypeEnum::Float64(_) => DataType::Float64,
             arrow_type::ArrowTypeEnum::Utf8(_) => DataType::Utf8,
+            arrow_type::ArrowTypeEnum::Utf8View(_) => DataType::Utf8View,
             arrow_type::ArrowTypeEnum::LargeUtf8(_) => DataType::LargeUtf8,
             arrow_type::ArrowTypeEnum::Binary(_) => DataType::Binary,
+            arrow_type::ArrowTypeEnum::BinaryView(_) => DataType::BinaryView,
             arrow_type::ArrowTypeEnum::FixedSizeBinary(size) => {
                 DataType::FixedSizeBinary(*size)
             }
@@ -361,6 +363,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
         Ok(match value {
             Value::BoolValue(v) => Self::Boolean(Some(*v)),
             Value::Utf8Value(v) => Self::Utf8(Some(v.to_owned())),
+            Value::Utf8ViewValue(v) => Self::Utf8View(Some(v.to_owned())),
             Value::LargeUtf8Value(v) => Self::LargeUtf8(Some(v.to_owned())),
             Value::Int8Value(v) => Self::Int8(Some(*v as i8)),
             Value::Int16Value(v) => Self::Int16(Some(*v as i16)),
@@ -525,7 +528,6 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 }
             }
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
-            Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
             Value::DurationSecondValue(v) => Self::DurationSecond(Some(*v)),
             Value::DurationMillisecondValue(v) => Self::DurationMillisecond(Some(*v)),
             Value::DurationMicrosecondValue(v) => Self::DurationMicrosecond(Some(*v)),
@@ -572,7 +574,11 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 Self::Dictionary(Box::new(index_type), Box::new(value))
             }
             Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
+            Value::BinaryViewValue(v) => Self::BinaryView(Some(v.clone())),
             Value::LargeBinaryValue(v) => Self::LargeBinary(Some(v.clone())),
+            Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(
+                IntervalDayTimeType::make_value(v.days, v.milliseconds),
+            )),
             Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
                 IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
             )),
@@ -865,6 +871,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .then(|| proto_opts.time_format.clone()),
             null_value: (!proto_opts.null_value.is_empty())
                 .then(|| proto_opts.null_value.clone()),
+            comment: proto_opts.comment.first().copied(),
         })
     }
 }

@@ -17,11 +17,9 @@
 
 use arrow::{array::ArrayRef, datatypes::Schema};
 use arrow_array::BooleanArray;
-use arrow_schema::FieldRef;
-use datafusion_common::{Column, ScalarValue};
+use datafusion_common::{Column, Result, ScalarValue};
 use parquet::basic::Type;
 use parquet::data_type::Decimal;
-use parquet::file::metadata::ColumnChunkMetaData;
 use parquet::schema::types::SchemaDescriptor;
 use parquet::{
     arrow::{async_reader::AsyncFileReader, ParquetRecordBatchStreamBuilder},
@@ -29,65 +27,41 @@ use parquet::{
     file::metadata::RowGroupMetaData,
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::datasource::listing::FileRange;
-use crate::datasource::physical_plan::parquet::statistics::{
-    max_statistics, min_statistics, parquet_column,
-};
+use crate::datasource::physical_plan::parquet::statistics::parquet_column;
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
-use super::ParquetFileMetrics;
+use super::{ParquetAccessPlan, ParquetFileMetrics, StatisticsConverter};
 
-/// Tracks which RowGroups within a parquet file should be scanned.
+/// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
 ///
-/// This struct encapsulates the various types of pruning that can be applied to
-/// a set of row groups within a parquet file, progressively narrowing down the
-/// set of row groups that should be scanned.
-#[derive(Debug, PartialEq)]
-pub struct RowGroupSet {
-    /// `row_groups[i]` is true if the i-th row group should be scanned
-    row_groups: Vec<bool>,
+/// This struct implements the various types of pruning that are applied to a
+/// set of row groups within a parquet file, progressively narrowing down the
+/// set of row groups (and ranges/selections within those row groups) that
+/// should be scanned, based on the available metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowGroupAccessPlanFilter {
+    /// which row groups should be accessed
+    access_plan: ParquetAccessPlan,
 }
 
-impl RowGroupSet {
-    /// Create a new `RowGroupSet` with all row groups set to true (will be scanned)
-    pub fn new(num_row_groups: usize) -> Self {
-        Self {
-            row_groups: vec![true; num_row_groups],
-        }
+impl RowGroupAccessPlanFilter {
+    /// Create a new `RowGroupPlanBuilder` for pruning out the groups to scan
+    /// based on metadata and statistics
+    pub fn new(access_plan: ParquetAccessPlan) -> Self {
+        Self { access_plan }
     }
 
-    /// Set the i-th row group to false (should not be scanned)
-    pub fn do_not_scan(&mut self, idx: usize) {
-        self.row_groups[idx] = false;
-    }
-
-    /// Return true if the i-th row group should be scanned
-    fn should_scan(&self, idx: usize) -> bool {
-        self.row_groups[idx]
-    }
-
-    /// Return the total number of row groups (not the total number to be scanned)
-    pub fn len(&self) -> usize {
-        self.row_groups.len()
-    }
-
-    /// Return true if there are no row groups
+    /// Return true if there are no row groups to scan
     pub fn is_empty(&self) -> bool {
-        self.row_groups.is_empty()
+        self.access_plan.is_empty()
     }
 
-    /// Return an iterator over the row group indexes that should be scanned
-    pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        self.row_groups
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, &b)| if b { Some(idx) } else { None })
-    }
-
-    /// Return a `Vec` of row group indices that should be scanned
-    pub fn indexes(&self) -> Vec<usize> {
-        self.iter().collect()
+    /// Returns the inner access plan
+    pub fn build(self) -> ParquetAccessPlan {
+        self.access_plan
     }
 
     /// Prune remaining row groups to only those  within the specified range.
@@ -97,9 +71,9 @@ impl RowGroupSet {
     /// # Panics
     /// if `groups.len() != self.len()`
     pub fn prune_by_range(&mut self, groups: &[RowGroupMetaData], range: &FileRange) {
-        assert_eq!(groups.len(), self.len());
+        assert_eq!(groups.len(), self.access_plan.len());
         for (idx, metadata) in groups.iter().enumerate() {
-            if !self.should_scan(idx) {
+            if !self.access_plan.should_scan(idx) {
                 continue;
             }
 
@@ -113,7 +87,7 @@ impl RowGroupSet {
                 .dictionary_page_offset()
                 .unwrap_or_else(|| col.data_page_offset());
             if !range.contains(offset) {
-                self.do_not_scan(idx);
+                self.access_plan.skip(idx);
             }
         }
     }
@@ -135,33 +109,38 @@ impl RowGroupSet {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
-        assert_eq!(groups.len(), self.len());
-        for (idx, metadata) in groups.iter().enumerate() {
-            if !self.should_scan(idx) {
-                continue;
-            }
-            let pruning_stats = RowGroupPruningStatistics {
-                parquet_schema,
-                row_group_metadata: metadata,
-                arrow_schema,
-            };
-            match predicate.prune(&pruning_stats) {
-                Ok(values) => {
-                    // NB: false means don't scan row group
-                    if !values[0] {
+        assert_eq!(groups.len(), self.access_plan.len());
+        // Indexes of row groups still to scan
+        let row_group_indexes = self.access_plan.row_group_indexes();
+        let row_group_metadatas = row_group_indexes
+            .iter()
+            .map(|&i| &groups[i])
+            .collect::<Vec<_>>();
+
+        let pruning_stats = RowGroupPruningStatistics {
+            parquet_schema,
+            row_group_metadatas,
+            arrow_schema,
+        };
+
+        // try to prune the row groups in a single call
+        match predicate.prune(&pruning_stats) {
+            Ok(values) => {
+                // values[i] is false means the predicate could not be true for row group i
+                for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
+                    if !value {
+                        self.access_plan.skip(*idx);
                         metrics.row_groups_pruned_statistics.add(1);
-                        self.do_not_scan(idx);
-                        continue;
+                    } else {
+                        metrics.row_groups_matched_statistics.add(1);
                     }
                 }
-                // stats filter array could not be built
-                // don't prune this row group
-                Err(e) => {
-                    log::debug!("Error evaluating row group predicate values {e}");
-                    metrics.predicate_evaluation_errors.add(1);
-                }
             }
-            metrics.row_groups_matched_statistics.add(1);
+            // stats filter array could not be built, so we can't prune
+            Err(e) => {
+                log::debug!("Error evaluating row group predicate values {e}");
+                metrics.predicate_evaluation_errors.add(1);
+            }
         }
     }
 
@@ -179,9 +158,9 @@ impl RowGroupSet {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
-        assert_eq!(builder.metadata().num_row_groups(), self.len());
-        for idx in 0..self.len() {
-            if !self.should_scan(idx) {
+        assert_eq!(builder.metadata().num_row_groups(), self.access_plan.len());
+        for idx in 0..self.access_plan.len() {
+            if !self.access_plan.should_scan(idx) {
                 continue;
             }
 
@@ -230,7 +209,7 @@ impl RowGroupSet {
 
             if prune_group {
                 metrics.row_groups_pruned_bloom_filter.add(1);
-                self.do_not_scan(idx)
+                self.access_plan.skip(idx)
             } else if !stats.column_sbbf.is_empty() {
                 metrics.row_groups_matched_bloom_filter.add(1);
             }
@@ -360,49 +339,58 @@ impl PruningStatistics for BloomFilterStatistics {
     }
 }
 
-/// Wraps [`RowGroupMetaData`] in a way that implements [`PruningStatistics`]
-///
-/// Note: This should be implemented for an array of [`RowGroupMetaData`] instead
-/// of per row-group
+/// Wraps a slice of [`RowGroupMetaData`] in a way that implements [`PruningStatistics`]
 struct RowGroupPruningStatistics<'a> {
     parquet_schema: &'a SchemaDescriptor,
-    row_group_metadata: &'a RowGroupMetaData,
+    row_group_metadatas: Vec<&'a RowGroupMetaData>,
     arrow_schema: &'a Schema,
 }
 
 impl<'a> RowGroupPruningStatistics<'a> {
-    /// Lookups up the parquet column by name
-    fn column(&self, name: &str) -> Option<(&ColumnChunkMetaData, &FieldRef)> {
-        let (idx, field) = parquet_column(self.parquet_schema, self.arrow_schema, name)?;
-        Some((self.row_group_metadata.column(idx), field))
+    /// Return an iterator over the row group metadata
+    fn metadata_iter(&'a self) -> impl Iterator<Item = &'a RowGroupMetaData> + 'a {
+        self.row_group_metadatas.iter().copied()
+    }
+
+    fn statistics_converter<'b>(
+        &'a self,
+        column: &'b Column,
+    ) -> Result<StatisticsConverter<'a>> {
+        StatisticsConverter::try_new(&column.name, self.arrow_schema, self.parquet_schema)
     }
 }
 
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let (column, field) = self.column(&column.name)?;
-        min_statistics(field.data_type(), std::iter::once(column.statistics())).ok()
+        self.statistics_converter(column)
+            .and_then(|c| c.row_group_mins(self.metadata_iter()))
+            .ok()
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let (column, field) = self.column(&column.name)?;
-        max_statistics(field.data_type(), std::iter::once(column.statistics())).ok()
+        self.statistics_converter(column)
+            .and_then(|c| c.row_group_maxes(self.metadata_iter()))
+            .ok()
     }
 
     fn num_containers(&self) -> usize {
-        1
+        self.row_group_metadatas.len()
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let (c, _) = self.column(&column.name)?;
-        let scalar = ScalarValue::UInt64(Some(c.statistics()?.null_count()));
-        scalar.to_array().ok()
+        self.statistics_converter(column)
+            .and_then(|c| c.row_group_null_counts(self.metadata_iter()))
+            .ok()
+            .map(|counts| Arc::new(counts) as ArrayRef)
     }
 
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let (c, _) = self.column(&column.name)?;
-        let scalar = ScalarValue::UInt64(Some(c.num_values() as u64));
-        scalar.to_array().ok()
+        // row counts are the same for all columns in a row group
+        self.statistics_converter(column)
+            .and_then(|c| c.row_group_row_counts(self.metadata_iter()))
+            .ok()
+            .flatten()
+            .map(|counts| Arc::new(counts) as ArrayRef)
     }
 
     fn contained(
@@ -429,6 +417,7 @@ mod tests {
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
+    use parquet::file::metadata::ColumnChunkMetaData;
     use parquet::{
         basic::Type as PhysicalType, file::statistics::Statistics as ParquetStatistics,
         schema::types::SchemaDescPtr,
@@ -500,7 +489,7 @@ mod tests {
         );
 
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupSet::new(2);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -534,7 +523,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         // missing statistics for first row group mean that the result from the predicate expression
         // is null / undefined so the first row group can't be filtered out
-        let mut row_groups = RowGroupSet::new(2);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -581,7 +570,7 @@ mod tests {
         let groups = &[rgm1, rgm2];
         // the first row group is still filtered out because the predicate expression can be partially evaluated
         // when conditions are joined using AND
-        let mut row_groups = RowGroupSet::new(2);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -599,7 +588,7 @@ mod tests {
 
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
-        let mut row_groups = RowGroupSet::new(2);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -655,7 +644,7 @@ mod tests {
         let groups = &[rgm1, rgm2];
         // the first row group should be left because c1 is greater than zero
         // the second should be filtered out because c1 is less than zero
-        let mut row_groups = RowGroupSet::new(2);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &file_schema,
             &schema_descr,
@@ -704,7 +693,7 @@ mod tests {
 
         let metrics = parquet_file_metrics();
         // First row group was filtered out because it contains no null value on "c2".
-        let mut row_groups = RowGroupSet::new(2);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -736,7 +725,8 @@ mod tests {
         let metrics = parquet_file_metrics();
         // bool = NULL always evaluates to NULL (and thus will not
         // pass predicates. Ideally these should both be false
-        let mut row_groups = RowGroupSet::new(groups.len());
+        let mut row_groups =
+            RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(groups.len()));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -796,7 +786,7 @@ mod tests {
             vec![ParquetStatistics::int32(Some(100), None, None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupSet::new(3);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -864,7 +854,7 @@ mod tests {
             vec![ParquetStatistics::int32(None, Some(2), None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupSet::new(4);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(4));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -915,7 +905,7 @@ mod tests {
             vec![ParquetStatistics::int64(None, None, None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupSet::new(3);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -989,7 +979,7 @@ mod tests {
             )],
         );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupSet::new(3);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -1052,7 +1042,7 @@ mod tests {
             vec![ParquetStatistics::byte_array(None, None, None, 0, false)],
         );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupSet::new(3);
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
@@ -1179,7 +1169,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(pruned_row_groups.indexes().is_empty());
+        assert!(pruned_row_groups.access_plan.row_group_indexes().is_empty());
     }
 
     #[tokio::test]
@@ -1251,12 +1241,12 @@ mod tests {
 
     impl ExpectedPruning {
         /// asserts that the pruned row group match this expectation
-        fn assert(&self, row_groups: &RowGroupSet) {
-            let num_row_groups = row_groups.len();
+        fn assert(&self, row_groups: &RowGroupAccessPlanFilter) {
+            let num_row_groups = row_groups.access_plan.len();
             assert!(num_row_groups > 0);
             let num_pruned = (0..num_row_groups)
                 .filter_map(|i| {
-                    if row_groups.should_scan(i) {
+                    if row_groups.access_plan.should_scan(i) {
                         None
                     } else {
                         Some(1)
@@ -1278,14 +1268,14 @@ mod tests {
                     );
                 }
                 ExpectedPruning::Some(expected) => {
-                    let actual = row_groups.indexes();
+                    let actual = row_groups.access_plan.row_group_indexes();
                     assert_eq!(expected, &actual, "Unexpected row groups pruned. Expected {expected:?}, got {actual:?}");
                 }
             }
         }
     }
 
-    fn assert_pruned(row_groups: RowGroupSet, expected: ExpectedPruning) {
+    fn assert_pruned(row_groups: RowGroupAccessPlanFilter, expected: ExpectedPruning) {
         expected.assert(&row_groups);
     }
 
@@ -1386,7 +1376,7 @@ mod tests {
         file_name: &str,
         data: bytes::Bytes,
         pruning_predicate: &PruningPredicate,
-    ) -> Result<RowGroupSet> {
+    ) -> Result<RowGroupAccessPlanFilter> {
         use object_store::{ObjectMeta, ObjectStore};
 
         let object_meta = ObjectMeta {
@@ -1398,7 +1388,7 @@ mod tests {
         };
         let in_memory = object_store::memory::InMemory::new();
         in_memory
-            .put(&object_meta.location, data)
+            .put(&object_meta.location, data.into())
             .await
             .expect("put parquet file into in memory object store");
 
@@ -1411,7 +1401,8 @@ mod tests {
         };
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 
-        let mut pruned_row_groups = RowGroupSet::new(builder.metadata().num_row_groups());
+        let access_plan = ParquetAccessPlan::new_all(builder.metadata().num_row_groups());
+        let mut pruned_row_groups = RowGroupAccessPlanFilter::new(access_plan);
         pruned_row_groups
             .prune_by_bloom_filters(
                 pruning_predicate.schema(),

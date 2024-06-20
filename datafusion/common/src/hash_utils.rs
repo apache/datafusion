@@ -24,6 +24,8 @@ use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::row::Rows;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use arrow_buffer::IntervalDayTime;
+use arrow_buffer::IntervalMonthDayNano;
 
 use crate::cast::{
     as_boolean_array, as_fixed_size_list_array, as_generic_binary_array,
@@ -72,7 +74,7 @@ macro_rules! hash_value {
     };
 }
 hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64);
-hash_value!(bool, str, [u8]);
+hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! hash_float_value {
     ($(($t:ty, $i:ty)),+) => {

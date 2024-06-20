@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
-use crate::datasource::stream::{StreamConfig, StreamTable};
+use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::error::Result;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -43,7 +43,8 @@ use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunctionDefinition};
+use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
+use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_plan::displayable;
@@ -62,7 +63,8 @@ async fn register_current_csv(
 
     match infinite {
         true => {
-            let config = StreamConfig::new_file(schema, path.into());
+            let source = FileStreamProvider::new_file(schema, path.into());
+            let config = StreamConfig::new(Arc::new(source));
             ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
         }
         false => {
@@ -239,9 +241,10 @@ pub fn bounded_window_exec(
     Arc::new(
         crate::physical_plan::windows::BoundedWindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+                &WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 "count".to_owned(),
                 &[col(col_name, &schema).unwrap()],
+                &[],
                 &[],
                 &sort_exprs,
                 Arc::new(WindowFrame::new(Some(false))),

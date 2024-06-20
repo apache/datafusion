@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use arrow_buffer::ToByteSlice;
 use datafusion::arrow::datatypes::IntervalUnit;
 use datafusion::logical_expr::{
     CrossJoin, Distinct, Like, Partitioning, WindowFrameUnits,
@@ -114,7 +115,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
             input: Some(*to_substrait_rel(plan, ctx, &mut extension_info)?),
-            names: plan.schema().field_names(),
+            names: to_substrait_named_struct(plan.schema())?.names,
         })),
     }];
 
@@ -1949,7 +1950,7 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
         }
         ScalarValue::IntervalMonthDayNano(Some(i)) => {
             // treat `i128` as two contiguous `i64`
-            let bytes = i.to_le_bytes();
+            let bytes = i.to_byte_slice();
             let i64_param = Parameter {
                 parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
                     kind: Some(r#type::Kind::I64(r#type::I64 {
@@ -1971,7 +1972,7 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
             )
         }
         ScalarValue::IntervalDayTime(Some(i)) => {
-            let bytes = i.to_le_bytes();
+            let bytes = i.to_byte_slice();
             (
                 LiteralType::UserDefined(UserDefined {
                     type_reference: INTERVAL_DAY_TIME_TYPE_REF,
@@ -2308,14 +2309,12 @@ mod test {
         round_trip_type(DataType::Decimal128(10, 2))?;
         round_trip_type(DataType::Decimal256(30, 2))?;
 
-        for nullable in [true, false] {
-            round_trip_type(DataType::List(
-                Field::new_list_field(DataType::Int32, nullable).into(),
-            ))?;
-            round_trip_type(DataType::LargeList(
-                Field::new_list_field(DataType::Int32, nullable).into(),
-            ))?;
-        }
+        round_trip_type(DataType::List(
+            Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
+        round_trip_type(DataType::LargeList(
+            Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
 
         round_trip_type(DataType::Struct(
             vec![

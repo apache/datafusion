@@ -455,6 +455,8 @@ async fn fetch_schema(
 }
 
 /// Read and parse the statistics of the Parquet file at location `path`
+///
+/// See [`statistics_from_parquet_meta`] for more details
 async fn fetch_statistics(
     store: &dyn ObjectStore,
     table_schema: SchemaRef,
@@ -462,6 +464,17 @@ async fn fetch_statistics(
     metadata_size_hint: Option<usize>,
 ) -> Result<Statistics> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
+    statistics_from_parquet_meta(&metadata, table_schema).await
+}
+
+/// Convert statistics in  [`ParquetMetaData`] into [`Statistics`]
+///
+/// The statistics are calculated for each column in the table schema
+/// using the row group statistics in the parquet metadata.
+pub async fn statistics_from_parquet_meta(
+    metadata: &ParquetMetaData,
+    table_schema: SchemaRef,
+) -> Result<Statistics> {
     let file_metadata = metadata.file_metadata();
 
     let file_schema = parquet_to_arrow_schema(
@@ -1115,7 +1128,6 @@ mod tests {
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow_schema::Field;
     use async_trait::async_trait;
-    use bytes::Bytes;
     use datafusion_common::cast::{
         as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
         as_int32_array, as_timestamp_nanosecond_array,
@@ -1129,7 +1141,8 @@ mod tests {
     use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::{
-        GetOptions, GetResult, ListResult, MultipartId, PutOptions, PutResult,
+        GetOptions, GetResult, ListResult, MultipartUpload, PutMultipartOpts, PutOptions,
+        PutPayload, PutResult,
     };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -1252,25 +1265,17 @@ mod tests {
         async fn put_opts(
             &self,
             _location: &Path,
-            _bytes: Bytes,
+            _payload: PutPayload,
             _opts: PutOptions,
         ) -> object_store::Result<PutResult> {
             Err(object_store::Error::NotImplemented)
         }
 
-        async fn put_multipart(
+        async fn put_multipart_opts(
             &self,
             _location: &Path,
-        ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>
-        {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn abort_multipart(
-            &self,
-            _location: &Path,
-            _multipart_id: &MultipartId,
-        ) -> object_store::Result<()> {
+            _opts: PutMultipartOpts,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
             Err(object_store::Error::NotImplemented)
         }
 
@@ -1406,6 +1411,66 @@ mod tests {
             .expect("error reading metadata with hint");
 
         assert_eq!(store.request_count(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistics_from_parquet_metadata() -> Result<()> {
+        // Data for column c1: ["Foo", null, "bar"]
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())]).unwrap();
+
+        // Data for column c2: [1, 2, null]
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+        let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)]).unwrap();
+
+        // Use store_parquet to write each batch to its own file
+        // . batch1 written into first file and includes:
+        //    - column c1 that has 3 rows with one null. Stats min and max of string column is missing for this test even the column has values
+        // . batch2 written into second file and includes:
+        //    - column c2 that has 3 rows with one null. Stats min and max of int are avaialble and 1 and 2 respectively
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let (files, _file_names) = store_parquet(vec![batch1, batch2], false).await?;
+
+        let state = SessionContext::new().state();
+        let format = ParquetFormat::default();
+        let schema = format.infer_schema(&state, &store, &files).await.unwrap();
+
+        let null_i64 = ScalarValue::Int64(None);
+        let null_utf8 = ScalarValue::Utf8(None);
+
+        // Fetch statistics for first file
+        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
+        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        //
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        // column c1
+        let c1_stats = &stats.column_statistics[0];
+        assert_eq!(c1_stats.null_count, Precision::Exact(1));
+        assert_eq!(c1_stats.max_value, Precision::Absent);
+        assert_eq!(c1_stats.min_value, Precision::Absent);
+        // column c2: missing from the file so the table treats all 3 rows as null
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c2_stats.null_count, Precision::Exact(3));
+        assert_eq!(c2_stats.max_value, Precision::Exact(null_i64.clone()));
+        assert_eq!(c2_stats.min_value, Precision::Exact(null_i64.clone()));
+
+        // Fetch statistics for second file
+        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[1], None).await?;
+        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        // column c1: missing from the file so the table treats all 3 rows as null
+        let c1_stats = &stats.column_statistics[0];
+        assert_eq!(c1_stats.null_count, Precision::Exact(3));
+        assert_eq!(c1_stats.max_value, Precision::Exact(null_utf8.clone()));
+        assert_eq!(c1_stats.min_value, Precision::Exact(null_utf8.clone()));
+        // column c2
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c2_stats.null_count, Precision::Exact(1));
+        assert_eq!(c2_stats.max_value, Precision::Exact(2i64.into()));
+        assert_eq!(c2_stats.min_value, Precision::Exact(1i64.into()));
 
         Ok(())
     }

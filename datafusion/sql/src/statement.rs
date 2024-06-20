@@ -54,15 +54,39 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, ColumnDef, CreateTableOptions, DescribeAlias, Expr as SQLExpr, Expr,
-    FromTable, Ident, ObjectName, ObjectType, Query, SchemaName, SetExpr,
-    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
-    TableWithJoins, TransactionMode, UnaryOperator, Value,
+    Assignment, ColumnDef, CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr,
+    Expr, FromTable, Ident, Insert, ObjectName, ObjectType, OneOrManyWithParens, Query,
+    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
+    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
 fn ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
+}
+
+fn value_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::SingleQuotedString(s) => Some(s.to_string()),
+        Value::DollarQuotedString(s) => Some(s.to_string()),
+        Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
+        Value::DoubleQuotedString(_)
+        | Value::EscapedStringLiteral(_)
+        | Value::NationalStringLiteral(_)
+        | Value::SingleQuotedByteStringLiteral(_)
+        | Value::DoubleQuotedByteStringLiteral(_)
+        | Value::TripleSingleQuotedString(_)
+        | Value::TripleDoubleQuotedString(_)
+        | Value::TripleSingleQuotedByteStringLiteral(_)
+        | Value::TripleDoubleQuotedByteStringLiteral(_)
+        | Value::SingleQuotedRawStringLiteral(_)
+        | Value::DoubleQuotedRawStringLiteral(_)
+        | Value::TripleSingleQuotedRawStringLiteral(_)
+        | Value::TripleDoubleQuotedRawStringLiteral(_)
+        | Value::HexStringLiteral(_)
+        | Value::Null
+        | Value::Placeholder(_) => None,
+    }
 }
 
 fn object_name_to_string(object_name: &ObjectName) -> String {
@@ -212,9 +236,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::SetVariable {
                 local,
                 hivevar,
-                variable,
+                variables,
                 value,
-            } => self.set_variable_to_plan(local, hivevar, &variable, value),
+            } => self.set_variable_to_plan(local, hivevar, &variables, value),
 
             Statement::CreateTable {
                 query,
@@ -405,18 +429,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     ObjectType::Schema => {
                         let name = match name {
-                            TableReference::Bare { table } => Ok(SchemaReference::Bare { schema: table } ) ,
-                            TableReference::Partial { schema, table } => Ok(SchemaReference::Full { schema: table,catalog: schema }),
+                            TableReference::Bare { table } => Ok(SchemaReference::Bare { schema: table }),
+                            TableReference::Partial { schema, table } => Ok(SchemaReference::Full { schema: table, catalog: schema }),
                             TableReference::Full { catalog: _, schema: _, table: _ } => {
                                 Err(ParserError("Invalid schema specifier (has 3 parts)".to_string()))
-                            },
+                            }
                         }?;
                         Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
                             name,
                             if_exists,
                             cascade,
                             schema: DFSchemaRef::new(DFSchema::empty()),
-                        })))},
+                        })))
+                    }
                     _ => not_impl_err!(
                         "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
                     ),
@@ -463,7 +488,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 filter,
             } => self.show_columns_to_plan(extended, full, table_name, filter),
 
-            Statement::Insert {
+            Statement::Insert(Insert {
                 or,
                 into,
                 table_name,
@@ -480,7 +505,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 replace_into,
                 priority,
                 insert_alias,
-            } => {
+            }) => {
                 if or.is_some() {
                     plan_err!("Inserts with or clauses not supported")?;
                 }
@@ -537,7 +562,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.update_to_plan(table, assignments, from, selection)
             }
 
-            Statement::Delete {
+            Statement::Delete(Delete {
                 tables,
                 using,
                 selection,
@@ -545,7 +570,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 from,
                 order_by,
                 limit,
-            } => {
+            }) => {
                 if !tables.is_empty() {
                     plan_err!("DELETE <TABLE> not supported")?;
                 }
@@ -652,7 +677,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name,
                 args,
                 return_type,
-                params,
+                function_body,
+                behavior,
+                language,
+                ..
             } => {
                 let return_type = match return_type {
                     Some(t) => Some(self.convert_data_type(&t)?),
@@ -702,9 +730,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut planner_context = PlannerContext::new()
                     .with_prepare_param_data_types(arg_types.unwrap_or_default());
 
-                let result_expression = match params.return_ {
+                let function_body = match function_body {
                     Some(r) => Some(self.sql_to_expr(
-                        r,
+                        match r {
+                            ast::CreateFunctionBody::AsBeforeOptions(expr) => expr,
+                            ast::CreateFunctionBody::AsAfterOptions(expr) => expr,
+                            ast::CreateFunctionBody::Return(expr) => expr,
+                        },
                         &DFSchema::empty(),
                         &mut planner_context,
                     )?),
@@ -712,14 +744,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
 
                 let params = CreateFunctionBody {
-                    language: params.language,
-                    behavior: params.behavior.map(|b| match b {
+                    language,
+                    behavior: behavior.map(|b| match b {
                         ast::FunctionBehavior::Immutable => Volatility::Immutable,
                         ast::FunctionBehavior::Stable => Volatility::Stable,
                         ast::FunctionBehavior::Volatile => Volatility::Volatile,
                     }),
-                    as_: params.as_.map(|m| m.into()),
-                    return_: result_expression,
+                    function_body,
                 };
 
                 let statement = DdlStatement::CreateFunction(CreateFunction {
@@ -851,22 +882,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut options = HashMap::new();
         for (key, value) in statement.options {
-            let value_string = match value {
-                Value::SingleQuotedString(s) => s.to_string(),
-                Value::DollarQuotedString(s) => s.to_string(),
-                Value::UnQuotedString(s) => s.to_string(),
-                Value::Number(_, _) | Value::Boolean(_) => value.to_string(),
-                Value::DoubleQuotedString(_)
-                | Value::EscapedStringLiteral(_)
-                | Value::NationalStringLiteral(_)
-                | Value::SingleQuotedByteStringLiteral(_)
-                | Value::DoubleQuotedByteStringLiteral(_)
-                | Value::RawStringLiteral(_)
-                | Value::HexStringLiteral(_)
-                | Value::Null
-                | Value::Placeholder(_) => {
+            let value_string = match value_to_string(&value) {
+                None => {
                     return plan_err!("Unsupported Value in COPY statement {}", value);
                 }
+                Some(v) => v,
             };
             if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
@@ -886,9 +906,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let e = || {
                 DataFusionError::Configuration(
-                "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
-                    .to_string(),
-            )
+                    "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
+                        .to_string(),
+                )
             };
             // try to infer file format from file extension
             let extension: &str = &Path::new(&statement.target)
@@ -987,25 +1007,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return plan_err!("Option {key} is specified multiple times");
             }
 
-            let value_string = match value {
-                Value::SingleQuotedString(s) => s.to_string(),
-                Value::DollarQuotedString(s) => s.to_string(),
-                Value::UnQuotedString(s) => s.to_string(),
-                Value::Number(_, _) | Value::Boolean(_) => value.to_string(),
-                Value::DoubleQuotedString(_)
-                | Value::EscapedStringLiteral(_)
-                | Value::NationalStringLiteral(_)
-                | Value::SingleQuotedByteStringLiteral(_)
-                | Value::DoubleQuotedByteStringLiteral(_)
-                | Value::RawStringLiteral(_)
-                | Value::HexStringLiteral(_)
-                | Value::Null
-                | Value::Placeholder(_) => {
-                    return plan_err!(
-                        "Unsupported Value in CREATE EXTERNAL TABLE statement {}",
-                        value
-                    );
-                }
+            let Some(value_string) = value_to_string(&value) else {
+                return plan_err!(
+                    "Unsupported Value in CREATE EXTERNAL TABLE statement {}",
+                    value
+                );
             };
 
             if !(&key.contains('.')) {
@@ -1147,8 +1153,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         local: bool,
         hivevar: bool,
-        variable: &ObjectName,
-        value: Vec<sqlparser::ast::Expr>,
+        variables: &OneOrManyWithParens<ObjectName>,
+        value: Vec<Expr>,
     ) -> Result<LogicalPlan> {
         if local {
             return not_impl_err!("LOCAL is not supported");
@@ -1158,7 +1164,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return not_impl_err!("HIVEVAR is not supported");
         }
 
-        let variable = object_name_to_string(variable);
+        let variable = match variables {
+            OneOrManyWithParens::One(v) => object_name_to_string(v),
+            OneOrManyWithParens::Many(vs) => {
+                return not_impl_err!(
+                    "SET only supports single variable assignment: {vs:?}"
+                );
+            }
+        };
         let mut variable_lower = variable.to_lowercase();
 
         if variable_lower == "timezone" || variable_lower == "time.zone" {
@@ -1169,22 +1182,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // parse value string from Expr
         let value_string = match &value[0] {
             SQLExpr::Identifier(i) => ident_to_string(i),
-            SQLExpr::Value(v) => match v {
-                Value::SingleQuotedString(s) => s.to_string(),
-                Value::DollarQuotedString(s) => s.to_string(),
-                Value::Number(_, _) | Value::Boolean(_) => v.to_string(),
-                Value::DoubleQuotedString(_)
-                | Value::UnQuotedString(_)
-                | Value::EscapedStringLiteral(_)
-                | Value::NationalStringLiteral(_)
-                | Value::SingleQuotedByteStringLiteral(_)
-                | Value::DoubleQuotedByteStringLiteral(_)
-                | Value::RawStringLiteral(_)
-                | Value::HexStringLiteral(_)
-                | Value::Null
-                | Value::Placeholder(_) => {
+            SQLExpr::Value(v) => match value_to_string(v) {
+                None => {
                     return plan_err!("Unsupported Value {}", value[0]);
                 }
+                Some(v) => v,
             },
             // for capture signed number e.g. +8, -8
             SQLExpr::UnaryOp { op, expr } => match op {

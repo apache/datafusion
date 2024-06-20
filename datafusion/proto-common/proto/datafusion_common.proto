@@ -206,6 +206,11 @@ message ScalarDictionaryValue {
   ScalarValue value = 2;
 }
 
+message IntervalDayTimeValue {
+  int32 days = 1;
+  int32 milliseconds = 2;
+}
+
 message IntervalMonthDayNanoValue {
   int32 months = 1;
   int32 days = 2;
@@ -243,6 +248,7 @@ message ScalarValue{
     bool   bool_value = 1;
     string utf8_value = 2;
     string large_utf8_value = 3;
+    string utf8_view_value = 23;
     int32  int8_value = 4;
     int32  int16_value = 5;
     int32  int32_value = 6;
@@ -266,7 +272,6 @@ message ScalarValue{
 
     int64 date_64_value = 21;
     int32 interval_yearmonth_value = 24;
-    int64 interval_daytime_value = 25;
 
     int64 duration_second_value = 35;
     int64 duration_millisecond_value = 36;
@@ -277,7 +282,9 @@ message ScalarValue{
     ScalarDictionaryValue dictionary_value = 27;
     bytes binary_value = 28;
     bytes large_binary_value = 29;
+    bytes binary_view_value = 22;
     ScalarTime64Value time64_value = 30;
+    IntervalDayTimeValue interval_daytime_value = 25;
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
     ScalarFixedSizeBinary fixed_size_binary_value = 34;
     UnionValue union_value = 42;
@@ -313,8 +320,10 @@ message ArrowType{
     EmptyMessage FLOAT32 = 12 ;
     EmptyMessage FLOAT64 = 13 ;
     EmptyMessage UTF8 = 14 ;
+    EmptyMessage UTF8_VIEW = 35;
     EmptyMessage LARGE_UTF8 = 32;
     EmptyMessage BINARY = 15 ;
+    EmptyMessage BINARY_VIEW = 34;
     int32 FIXED_SIZE_BINARY = 16 ;
     EmptyMessage LARGE_BINARY = 31;
     EmptyMessage DATE32 = 17 ;
@@ -392,6 +401,7 @@ message CsvOptions {
   string timestamp_tz_format = 10; // Optional timestamp with timezone format
   string time_format = 11; // Optional time format
   string null_value = 12; // Optional representation of null value
+  bytes comment = 13; // Optional comment character as a byte
 }
 
 // Options controlling CSV format

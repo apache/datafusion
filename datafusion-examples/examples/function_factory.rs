@@ -212,7 +212,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
             name: definition.name,
             expr: definition
                 .params
-                .return_
+                .function_body
                 .expect("Expression has to be defined!"),
             return_type: definition
                 .return_type

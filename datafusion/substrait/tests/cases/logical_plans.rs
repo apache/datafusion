@@ -20,6 +20,7 @@
 #[cfg(test)]
 mod tests {
     use datafusion::common::Result;
+    use datafusion::dataframe::DataFrame;
     use datafusion::prelude::{CsvReadOptions, SessionContext};
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use std::fs::File;
@@ -38,20 +39,41 @@ mod tests {
 
         // File generated with substrait-java's Isthmus:
         // ./isthmus-cli/build/graal/isthmus "select not d from data" -c "create table data (d boolean)"
-        let path = "tests/testdata/select_not_bool.substrait.json";
-        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
-            File::open(path).expect("file not found"),
-        ))
-        .expect("failed to parse json");
+        let proto = read_json("tests/testdata/select_not_bool.substrait.json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
 
         assert_eq!(
             format!("{:?}", plan),
-            "Projection: NOT DATA.a\
+            "Projection: NOT DATA.a AS EXPR$0\
             \n  TableScan: DATA projection=[a, b, c, d, e, f]"
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn non_nullable_lists() -> Result<()> {
+        // DataFusion's Substrait consumer treats all lists as nullable, even if the Substrait plan specifies them as non-nullable.
+        // That's because implementing the non-nullability consistently is non-trivial.
+        // This test confirms that reading a plan with non-nullable lists works as expected.
+        let ctx = create_context().await?;
+        let proto = read_json("tests/testdata/non_nullable_lists.substrait.json");
+
+        let plan = from_substrait_plan(&ctx, &proto).await?;
+
+        assert_eq!(format!("{:?}", &plan), "Values: (List([1, 2]))");
+
+        // Need to trigger execution to ensure that Arrow has validated the plan
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    fn read_json(path: &str) -> Plan {
+        serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json")
     }
 
     async fn create_context() -> datafusion::common::Result<SessionContext> {

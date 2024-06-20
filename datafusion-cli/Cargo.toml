@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
-version = "38.0.0"
+version = "39.0.0"
 authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
 edition = "2021"
 keywords = ["arrow", "datafusion", "query", "sql"]
@@ -26,16 +26,16 @@ license = "Apache-2.0"
 homepage = "https://datafusion.apache.org"
 repository = "https://github.com/apache/datafusion"
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.73"
+rust-version = "1.75"
 readme = "README.md"
 
 [dependencies]
-arrow = "51.0.0"
+arrow = { version = "52.0.0" }
 async-trait = "0.1.41"
 aws-config = "0.55"
 aws-credential-types = "0.55"
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "38.0.0", features = [
+datafusion = { path = "../datafusion/core", version = "39.0.0", features = [
     "avro",
     "crypto_expressions",
     "datetime_expressions",
@@ -49,9 +49,9 @@ dirs = "4.0.0"
 env_logger = "0.9"
 futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
-object_store = { version = "0.9.0", features = ["aws", "gcp", "http"] }
+object_store = { version = "0.10.1", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
-parquet = { version = "51.0.0", default-features = false }
+parquet = { version = "52.0.0", default-features = false }
 regex = "1.8"
 rustyline = "11.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }

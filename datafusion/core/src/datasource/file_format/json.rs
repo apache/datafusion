@@ -470,7 +470,7 @@ mod tests {
         ctx.register_json("json_parallel", table_path, options)
             .await?;
 
-        let query = "SELECT SUM(a) FROM json_parallel;";
+        let query = "SELECT sum(a) FROM json_parallel;";
 
         let result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_num_partitions(&ctx, query).await?;
@@ -478,7 +478,7 @@ mod tests {
         #[rustfmt::skip]
         let expected = [
             "+----------------------+",
-            "| SUM(json_parallel.a) |",
+            "| sum(json_parallel.a) |",
             "+----------------------+",
             "| -7                   |",
             "+----------------------+"

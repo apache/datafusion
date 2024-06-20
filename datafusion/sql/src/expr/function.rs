@@ -30,7 +30,9 @@ use datafusion_expr::{
     BuiltInWindowFunction,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
+    DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
+    FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
+    NullTreatment, ObjectName, OrderByExpr, WindowType,
 };
 use std::str::FromStr;
 use strum::IntoEnumIterator;
@@ -79,6 +81,120 @@ fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
         .expect("No candidates provided.") // Panic if `candidates` argument is empty
 }
 
+/// Arguments to for a function call extracted from the SQL AST
+#[derive(Debug)]
+struct FunctionArgs {
+    /// Function name
+    name: ObjectName,
+    /// Argument expressions
+    args: Vec<FunctionArg>,
+    /// ORDER BY clause, if any
+    order_by: Vec<OrderByExpr>,
+    /// OVER clause, if any
+    over: Option<WindowType>,
+    /// FILTER clause, if any
+    filter: Option<Box<SQLExpr>>,
+    /// NULL treatment clause, if any
+    null_treatment: Option<NullTreatment>,
+    /// DISTINCT
+    distinct: bool,
+}
+
+impl FunctionArgs {
+    fn try_new(function: SQLFunction) -> Result<Self> {
+        let SQLFunction {
+            name,
+            args,
+            over,
+            filter,
+            mut null_treatment,
+            within_group,
+        } = function;
+
+        // Handle no argument form (aka `current_time`  as opposed to `current_time()`)
+        let FunctionArguments::List(args) = args else {
+            return Ok(Self {
+                name,
+                args: vec![],
+                order_by: vec![],
+                over,
+                filter,
+                null_treatment,
+                distinct: false,
+            });
+        };
+
+        let FunctionArgumentList {
+            duplicate_treatment,
+            args,
+            clauses,
+        } = args;
+
+        let distinct = match duplicate_treatment {
+            Some(DuplicateTreatment::Distinct) => true,
+            Some(DuplicateTreatment::All) => false,
+            None => false,
+        };
+
+        // Pull out argument handling
+        let mut order_by = None;
+        for clause in clauses {
+            match clause {
+                FunctionArgumentClause::IgnoreOrRespectNulls(nt) => {
+                    if null_treatment.is_some() {
+                        return not_impl_err!(
+                            "Calling {name}: Duplicated null treatment clause"
+                        );
+                    }
+                    null_treatment = Some(nt);
+                }
+                FunctionArgumentClause::OrderBy(oby) => {
+                    if order_by.is_some() {
+                        return not_impl_err!("Calling {name}: Duplicated ORDER BY clause in function arguments");
+                    }
+                    order_by = Some(oby);
+                }
+                FunctionArgumentClause::Limit(limit) => {
+                    return not_impl_err!(
+                        "Calling {name}: LIMIT not supported in function arguments: {limit}"
+                    )
+                }
+                FunctionArgumentClause::OnOverflow(overflow) => {
+                    return not_impl_err!(
+                        "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"
+                    )
+                }
+                FunctionArgumentClause::Having(having) => {
+                    return not_impl_err!(
+                        "Calling {name}: HAVING not supported in function arguments: {having}"
+                    )
+                }
+                FunctionArgumentClause::Separator(sep) => {
+                    return not_impl_err!(
+                        "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
+                    )
+                }
+            }
+        }
+
+        if !within_group.is_empty() {
+            return not_impl_err!("WITHIN GROUP is not supported yet: {within_group:?}");
+        }
+
+        let order_by = order_by.unwrap_or_default();
+
+        Ok(Self {
+            name,
+            args,
+            order_by,
+            over,
+            filter,
+            null_treatment,
+            distinct,
+        })
+    }
+}
+
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_function_to_expr(
         &self,
@@ -86,16 +202,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let SQLFunction {
+        let function_args = FunctionArgs::try_new(function)?;
+        let FunctionArgs {
             name,
             args,
+            order_by,
             over,
-            distinct,
             filter,
             null_treatment,
-            special: _, // true if not called with trailing parens
-            order_by,
-        } = function;
+            distinct,
+        } = function_args;
 
         // If function is a window function (it has an OVER clause),
         // it shouldn't have ordering requirement as function argument

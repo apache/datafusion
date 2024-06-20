@@ -72,30 +72,30 @@ CREATE TABLE test (c1 BIGINT,c2 BIGINT) as values
 #######
 
 # https://github.com/apache/datafusion/issues/3353
-statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "APPROX_DISTINCT\(aggregate_test_100\.c9\)"
+statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct\(aggregate_test_100\.c9\)"
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Utf8, Int8, Float64\)'. You might need to add explicit type casts.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Utf8, Int8, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Int16, Utf8, Float64\)'\. You might need to add explicit type casts\.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Utf8, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Int16, Int8, Utf8\)'\. You might need to add explicit type casts\.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Int8, Utf8\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
-statement error This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\).
+statement error DataFusion error: External error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Utf8\)'\. You might need to add explicit type casts\.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Float64, Utf8\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Float64\)'\. You might need to add explicit type casts\.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Float64, Float64, Float64\)'\. You might need to add explicit type casts\.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
 
 # array agg can use order by
@@ -194,7 +194,7 @@ select array_sort(c1), array_sort(c2) from (
 statement ok
 drop table array_agg_distinct_list_table;
 
-statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
+statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
 
@@ -231,8 +231,8 @@ explain with A as (
 ) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
 ----
 logical_plan
-01)Projection: array_length(ARRAY_AGG(DISTINCT a.foo)), SUM(DISTINCT Int64(1))
-02)--Aggregate: groupBy=[[a.id]], aggr=[[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]]
+01)Projection: array_length(ARRAY_AGG(DISTINCT a.foo)), sum(DISTINCT Int64(1))
+02)--Aggregate: groupBy=[[a.id]], aggr=[[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))]]
 03)----SubqueryAlias: a
 04)------SubqueryAlias: a
 05)--------Union
@@ -247,11 +247,11 @@ logical_plan
 14)----------Projection: Int64(1) AS id, Int64(2) AS foo
 15)------------EmptyRelation
 physical_plan
-01)ProjectionExec: expr=[array_length(ARRAY_AGG(DISTINCT a.foo)@1) as array_length(ARRAY_AGG(DISTINCT a.foo)), SUM(DISTINCT Int64(1))@2 as SUM(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]
+01)ProjectionExec: expr=[array_length(ARRAY_AGG(DISTINCT a.foo)@1) as array_length(ARRAY_AGG(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))]
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), SUM(DISTINCT Int64(1))]
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))]
 06)----------UnionExec
 07)------------ProjectionExec: expr=[1 as id, 2 as foo]
 08)--------------PlaceholderRowExec
@@ -449,6 +449,15 @@ SELECT var(distinct c2) FROM aggregate_test_100
 statement error DataFusion error: This feature is not implemented: VAR\(DISTINCT\) aggregations are not available
 SELECT var(c2), var(distinct c2) FROM aggregate_test_100
 
+# csv_query_distinct_variance_population
+query R
+SELECT var_pop(distinct c2) FROM aggregate_test_100
+----
+2
+
+statement error DataFusion error: This feature is not implemented: VAR_POP\(DISTINCT\) aggregations are not available
+SELECT var_pop(c2), var_pop(distinct c2) FROM aggregate_test_100
+
 # csv_query_variance_5
 query R
 SELECT var_samp(c2) FROM aggregate_test_100
@@ -508,6 +517,11 @@ query R
 SELECT approx_median(c12) FROM aggregate_test_100
 ----
 0.555006541052
+
+# csv_query_approx_median_4
+# test with string, approx median only supports numeric
+statement error
+SELECT approx_median(c1) FROM aggregate_test_100
 
 # csv_query_median_1
 query I
@@ -627,6 +641,11 @@ query RT
 select median(c), arrow_typeof(median(c)) from t;
 ----
 0.0003 Decimal128(10, 4)
+
+query RT
+select approx_median(c), arrow_typeof(approx_median(c)) from t;
+----
+0.00035 Float64
 
 statement ok
 drop table t;
@@ -4953,6 +4972,22 @@ CREATE TABLE float_table (
 ( 32768.3, arrow_cast('NAN','Float32'), 32768.3, 32768.3 ),
 ( 27.3,    27.3,                        27.3,    arrow_cast('NAN','Float64') );
 
+# Test string_agg with largeutf8
+statement ok
+create table string_agg_large_utf8 (c string) as values 
+  (arrow_cast('a', 'LargeUtf8')),
+  (arrow_cast('b', 'LargeUtf8')),
+  (arrow_cast('c', 'LargeUtf8'))
+;
+
+query T
+SELECT STRING_AGG(c, ',') FROM string_agg_large_utf8;
+----
+a,b,c
+
+statement ok
+drop table string_agg_large_utf8;
+
 query RRRRI
 select min(col_f32), max(col_f32), avg(col_f32), sum(col_f32), count(col_f32) from float_table;
 ----
@@ -5334,3 +5369,34 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 DESC NULLS FIRST]]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c2], output_orderings=[[c1@0 ASC NULLS LAST], [c2@1 DESC]], has_header=true
+
+# test building plan with aggreagte sum
+
+statement ok
+create table employee_csv(id int, first_name string, last_name varchar, state varchar, salary bigint) as values (1, 'jenson', 'huang', 'unemployed', 10);
+
+query TI
+select state, sum(salary) total_salary from employee_csv group by state;
+----
+unemployed 10
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+explain select state, sum(salary) as total_salary from employee_csv group by state;
+----
+logical_plan
+01)Projection: employee_csv.state, sum(employee_csv.salary) AS total_salary
+02)--Aggregate: groupBy=[[employee_csv.state]], aggr=[[sum(employee_csv.salary)]]
+03)----TableScan: employee_csv projection=[state, salary]
+
+# fail if there is duplicate name
+query error DataFusion error: Schema error: Schema contains qualified field name employee_csv\.state and unqualified field name state which would be ambiguous
+select state, sum(salary) as state from employee_csv group by state;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+drop table employee_csv;
