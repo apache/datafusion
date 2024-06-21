@@ -629,6 +629,7 @@ macro_rules! get_data_page_statistics {
                     BooleanArray::from_iter(
                         [<$stat_type_prefix BooleanDataPageStatsIterator>]::new($iterator)
                             .flatten()
+                            // BooleanArray::from_iter required a sized iterator, so collect into Vec first
                             .collect::<Vec<_>>()
                             .into_iter()
                     )
