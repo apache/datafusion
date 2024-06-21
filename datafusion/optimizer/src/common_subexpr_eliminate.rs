@@ -407,6 +407,7 @@ impl CommonSubexprEliminate {
                 config,
             )?;
             let transformed = rewritten_window_exprs.transformed;
+            assert!(transformed);
 
             let (mut new_expr, new_input) = rewritten_window_exprs.data;
 
@@ -617,14 +618,15 @@ impl CommonSubexprEliminate {
             self.to_arrays(&expr, &mut expr_stats, ExprMask::Normal)?;
 
         if found_common {
-            self.rewrite_expr(
+            let rewritten = self.rewrite_expr(
                 vec![expr.clone()],
                 vec![id_arrays],
                 input,
                 &expr_stats,
                 config,
-            )?
-            .map_data(|(mut new_expr, new_input)| {
+            )?;
+            assert!(rewritten.transformed);
+            rewritten.map_data(|(mut new_expr, new_input)| {
                 assert_eq!(new_expr.len(), 1);
                 Ok((new_expr.pop().unwrap(), new_input))
             })
