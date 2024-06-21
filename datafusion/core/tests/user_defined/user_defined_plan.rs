@@ -459,6 +459,10 @@ impl DisplayAs for TopKExec {
 
 #[async_trait]
 impl ExecutionPlan for TopKExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
