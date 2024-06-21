@@ -75,12 +75,15 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     }
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        let inner_table = self.inner.table(name).await?;
-        if inner_table.is_some() {
-            return Ok(inner_table);
+        if let Ok(Some(inner_table)) = self.inner.table(name).await {
+            return Ok(Some(inner_table));
         }
+
         let optimized_url = substitute_tilde(name.to_owned());
-        let table_url = ListingTableUrl::parse(optimized_url.as_str())?;
+        let Ok(table_url) = ListingTableUrl::parse(optimized_url.as_str()) else {
+            return Ok(None);
+        };
+
         let state = &self
             .state_store
             .get_state()
@@ -88,11 +91,15 @@ impl SchemaProvider for DynamicFileSchemaProvider {
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
             .read()
             .clone();
-        let cfg = ListingTableConfig::new(table_url.clone())
+        if let Ok(cfg) = ListingTableConfig::new(table_url.clone())
             .infer(state)
-            .await?;
-
-        Ok(Some(Arc::new(ListingTable::try_new(cfg)?)))
+            .await
+        {
+            ListingTable::try_new(cfg)
+                .map(|table| Some(Arc::new(table) as Arc<dyn TableProvider>))
+        } else {
+            Ok(None)
+        }
     }
 
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {

@@ -307,18 +307,23 @@ impl SessionContext {
     /// Creates a new `SessionContext` using the provided [`SessionState`]
     pub fn new_with_state(state: SessionState) -> Self {
         let state_ref = Arc::new(RwLock::new(state.clone()));
-        state
+
+        if let Ok(provider) = state
             // provide a fake table reference to get the default schema provider.
             .schema_for_ref(TableReference::full(
                 state.config_options().catalog.default_catalog.as_str(),
                 state.config_options().catalog.default_schema.as_str(),
                 UNNAMED_TABLE,
             ))
-            .unwrap()
-            .as_any()
-            .downcast_ref::<DynamicFileSchemaProvider>()
-            .unwrap()
-            .with_state(Arc::downgrade(&state_ref));
+        {
+            if let Some(provider) = provider
+                .as_any()
+                .downcast_ref::<DynamicFileSchemaProvider>()
+            {
+                provider.with_state(Arc::downgrade(&state_ref));
+            }
+        }
+
         Self {
             session_id: state_ref.clone().read().session_id().to_string(),
             session_start_time: Utc::now(),
