@@ -732,50 +732,32 @@ impl OptimizerRule for PushDownFilter {
                     return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                 }
 
-                // Unnest is built above Projection, so we only take Projection into consideration
-                match unwrap_arc(unnest.input) {
-                    LogicalPlan::Projection(projection) => {
-                        let (new_projection, keep_predicate) =
-                            rewrite_projection(non_unnest_predicates, projection)?;
-                        unnest.input = Arc::new(new_projection.data);
+                // Push down non-unnest filter predicate
+                // Unnest
+                //   Unenst Input (Projection)
+                // -> rewritten to
+                // Unnest
+                //   Filter
+                //     Unenst Input (Projection)
 
-                        let unnest_predicate = conjunction(unnest_predicates);
-                        if new_projection.transformed {
-                            match (keep_predicate, unnest_predicate) {
-                                (None, None) => {
-                                    Ok(Transformed::yes(LogicalPlan::Unnest(unnest)))
-                                }
-                                (Some(predicate), None) | (None, Some(predicate)) => {
-                                    Ok(Transformed::yes(LogicalPlan::Filter(
-                                        Filter::try_new(
-                                            predicate,
-                                            Arc::new(LogicalPlan::Unnest(unnest)),
-                                        )?,
-                                    )))
-                                }
-                                (Some(keep_predicate), Some(unnest_predicate)) => {
-                                    let predicate = conjunction(vec![
-                                        keep_predicate,
-                                        unnest_predicate,
-                                    ])
-                                    .unwrap(); // Safe to unwrap since filters is non-empty
-                                    Ok(Transformed::yes(LogicalPlan::Filter(
-                                        Filter::try_new(
-                                            predicate,
-                                            Arc::new(LogicalPlan::Unnest(unnest)),
-                                        )?,
-                                    )))
-                                }
-                            }
-                        } else {
-                            filter.input = Arc::new(LogicalPlan::Unnest(unnest));
-                            Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                        }
-                    }
-                    child => {
-                        filter.input = Arc::new(child);
-                        Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                    }
+                let unnest_input = std::mem::take(&mut unnest.input);
+
+                let filter_with_unnest_input = LogicalPlan::Filter(Filter::try_new(
+                    conjunction(non_unnest_predicates).unwrap(), // Safe to unwrap since non_unnest_predicates is not empty.
+                    unnest_input,
+                )?);
+
+                // try push down recursively
+                let new_plan = self.rewrite(filter_with_unnest_input, _config)?;
+
+                let unnest_plan =
+                    insert_below(LogicalPlan::Unnest(unnest), new_plan.data)?;
+
+                match conjunction(unnest_predicates) {
+                    None => Ok(unnest_plan),
+                    Some(predicate) => Ok(Transformed::yes(LogicalPlan::Filter(
+                        Filter::try_new(predicate, Arc::new(unnest_plan.data))?,
+                    ))),
                 }
             }
             LogicalPlan::Union(ref union) => {
