@@ -234,7 +234,8 @@ c1 VARCHAR,
 c2 VARCHAR
 ) STORED AS CSV
 OPTIONS ('format.delimiter' ',',
-         'format.has_header' 'true')
+         'format.has_header' 'true',
+         'format.double_quote' 'true')
 LOCATION '../core/tests/data/double_quote.csv';
 
 query TT
@@ -249,8 +250,7 @@ id3 "value3"
 query TT
 COPY csv_with_double_quote TO 'test_files/scratch/csv_files/table_with_double_quotes.csv'
 STORED AS csv
-OPTIONS ('format.double_quote' 'false',
-         'format.escape' '*');
+OPTIONS ('format.double_quote' 'true');
 ----
 4
 
@@ -260,11 +260,34 @@ col1 TEXT,
 col2 TEXT
 ) STORED AS CSV
 LOCATION 'test_files/scratch/csv_files/table_with_double_quotes.csv'
-OPTIONS ('format.double_quote' 'false',
-         'format.escape' '*');
+OPTIONS ('format.double_quote' 'true');
 
 query TT
 select * from stored_table_with_double_quotes;
+----
+id0 "value0"
+id1 "value1"
+id2 "value2"
+id3 "value3"
+
+# ensure when double quote option is disabled that quotes are escaped instead
+query TT
+COPY csv_with_double_quote TO 'test_files/scratch/csv_files/table_with_escaped_quotes.csv'
+STORED AS csv
+OPTIONS ('format.double_quote' 'false', 'format.escape' '#');
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_escaped_quotes (
+col1 TEXT,
+col2 TEXT
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/table_with_escaped_quotes.csv'
+OPTIONS ('format.double_quote' 'false', 'format.escape' '#');
+
+query TT
+select * from stored_table_with_escaped_quotes;
 ----
 id0 "value0"
 id1 "value1"
