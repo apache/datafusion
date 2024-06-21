@@ -21,9 +21,9 @@ use arrow_schema::{Field, Schema};
 
 use datafusion::arrow::{array::Float32Array, record_batch::RecordBatch};
 use datafusion::error::Result;
+use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use datafusion::{assert_batches_eq, prelude::*};
-use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion_common::cast::as_float64_array;
 use datafusion_expr::function::{AggregateFunctionSimplification, StateFieldsArgs};
 use datafusion_expr::simplify::SimplifyInfo;
