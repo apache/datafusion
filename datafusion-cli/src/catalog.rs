@@ -19,9 +19,9 @@ use std::any::Any;
 use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
-use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::catalog::dynamic_file_schema::substitute_tilde;
 use datafusion::catalog::schema::SchemaProvider;
+use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::TableProvider;
@@ -29,7 +29,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
 use parking_lot::RwLock;
 
-use crate::object_storage::{AwsOptions, GcpOptions, get_object_store};
+use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
 
 /// Wraps another catalog, automatically creating table providers
 /// for local files if needed

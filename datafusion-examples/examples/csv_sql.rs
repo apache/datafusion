@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
     let testdata = datafusion::test_util::arrow_test_data();
     let path = &format!("{testdata}/csv/aggregate_test_100.csv");
     // register csv file with the execution context
-    ctx.register_csv("aggregate_test_100", &path, CsvReadOptions::new())
+    ctx.register_csv("aggregate_test_100", path, CsvReadOptions::new())
         .await?;
 
     // execute the query
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
         FROM '{}'
         WHERE c11 > 0.1 AND c11 < 0.9
         GROUP BY c1"#,
-                &path
+                path
             )
             .as_str(),
         )
