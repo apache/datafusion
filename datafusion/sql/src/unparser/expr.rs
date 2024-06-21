@@ -649,6 +649,15 @@ impl Unparser<'_> {
         }
     }
 
+    fn timestamp_string_to_sql(&self, ts: String) -> Result<ast::Expr> {
+        Ok(ast::Expr::Cast {
+            kind: ast::CastKind::Cast,
+            expr: Box::new(ast::Expr::Value(SingleQuotedString(ts))),
+            data_type: ast::DataType::Timestamp(None, TimezoneInfo::None),
+            format: None,
+        })
+    }
+
     /// DataFusion ScalarValues sometimes require a ast::Expr to construct.
     /// For example ScalarValue::Date32(d) corresponds to the ast::Expr CAST('datestr' as DATE)
     fn scalar_to_sql(&self, v: &ScalarValue) -> Result<ast::Expr> {
@@ -834,12 +843,7 @@ impl Unparser<'_> {
                             "Unable to convert TimestampMillisecond to NaiveDateTime"
                         ))?.to_string()
                 };
-                Ok(ast::Expr::Cast {
-                    kind: ast::CastKind::Cast,
-                    expr: Box::new(ast::Expr::Value(SingleQuotedString(result))),
-                    data_type: ast::DataType::Timestamp(None, TimezoneInfo::None),
-                    format: None,
-                })
+                self.timestamp_string_to_sql(result)
             }
             ScalarValue::TimestampMillisecond(None, _) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
@@ -874,12 +878,7 @@ impl Unparser<'_> {
                             "Unable to convert TimestampNanosecond to NaiveDateTime"
                         ))?.to_string()
                 };
-                Ok(ast::Expr::Cast {
-                    kind: ast::CastKind::Cast,
-                    expr: Box::new(ast::Expr::Value(SingleQuotedString(result))),
-                    data_type: ast::DataType::Timestamp(None, TimezoneInfo::None),
-                    format: None,
-                })
+                self.timestamp_string_to_sql(result)
             }
             ScalarValue::TimestampNanosecond(None, _) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
