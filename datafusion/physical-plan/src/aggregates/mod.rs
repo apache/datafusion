@@ -1886,7 +1886,7 @@ mod tests {
     async fn test_drop_cancel_without_groups() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
 
         let groups = PhysicalGroupBy::default();
 
@@ -1927,8 +1927,8 @@ mod tests {
     async fn test_drop_cancel_with_groups() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Float32, true),
-            Field::new("b", DataType::Float32, true),
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Float64, true),
         ]));
 
         let groups =
