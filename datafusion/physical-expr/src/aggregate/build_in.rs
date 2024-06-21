@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{exec_err, internal_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::aggregate::average::Avg;
@@ -71,7 +71,9 @@ pub fn create_aggregate_expr(
             let nullable = expr.nullable(input_schema)?;
 
             if ordering_req.is_empty() {
-                Arc::new(expressions::ArrayAgg::new(expr, name, data_type, nullable))
+                return internal_err!(
+                    "ArrayAgg without ordering should be handled as UDAF"
+                );
             } else {
                 Arc::new(expressions::OrderSensitiveArrayAgg::new(
                     expr,
@@ -155,7 +157,7 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_expr::{type_coercion, Signature};
 
-    use crate::expressions::{try_cast, ArrayAgg, Avg, DistinctArrayAgg, Max, Min};
+    use crate::expressions::{try_cast, Avg, DistinctArrayAgg, Max, Min};
 
     use super::*;
     #[test]
@@ -176,25 +178,6 @@ mod tests {
                 let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
                     expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
                 )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::ArrayAgg {
-                    assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new_list(
-                            "c1",
-                            Field::new("item", data_type.clone(), true),
-                            true,
-                        ),
-                        result_agg_phy_exprs.field().unwrap()
-                    );
-                }
 
                 let result_distinct = create_physical_agg_expr_for_test(
                     &fun,
@@ -212,7 +195,7 @@ mod tests {
                             Field::new("item", data_type.clone(), true),
                             true,
                         ),
-                        result_agg_phy_exprs.field().unwrap()
+                        result_distinct.field().unwrap()
                     );
                 }
             }

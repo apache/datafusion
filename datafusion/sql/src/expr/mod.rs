@@ -596,10 +596,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// TODO: this should likely be done in ArrayAgg::simplify when it is moved to a UDAF
     fn simplify_array_index_expr(expr: &Expr, index: &Expr) -> Option<Expr> {
         fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
-            agg_func.func_def
-                == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(
+            match agg_func.func_def {
+                datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(
                     AggregateFunction::ArrayAgg,
-                )
+                ) => true,
+                datafusion_expr::expr::AggregateFunctionDefinition::UDF(ref udf) => {
+                    udf.name() == "ARRAY_AGG"
+                }
+                _ => false,
+            }
         }
         match expr {
             Expr::AggregateFunction(agg_func) if is_array_agg(agg_func) => {
