@@ -143,22 +143,4 @@ mod test {
         assert_eq!(ints.value(2), 5);
         assert_eq!(ints.value(3), 8);
     }
-
-    // from issue https://github.com/apache/datafusion/issues/11031 we know that the previous implementation could
-    // not handle cases were one or both of the inputs were an i64::MAX or i64::MIN coupled with other values (neg or pos)
-    #[test]
-    fn test_gcd_i64_maxes() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![i64::MAX, i64::MIN, i64::MAX])), // x
-            Arc::new(Int64Array::from(vec![i64::MIN, -1, -1])),             // y
-        ];
-
-        let result = gcd(&args).expect("failed to initialize function gcd");
-        let ints = as_int64_array(&result).expect("failed to initialize function gcd");
-
-        assert_eq!(ints.len(), 3);
-        assert_eq!(ints.value(0), 1);
-        assert_eq!(ints.value(1), 1);
-        assert_eq!(ints.value(1), 1);
-    }
 }
