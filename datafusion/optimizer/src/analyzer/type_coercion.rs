@@ -430,6 +430,13 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                             &fun.signature(),
                         )?
                     }
+                    expr::WindowFunctionDefinition::AggregateUDF(udf) => {
+                        coerce_arguments_for_signature_with_aggregate_udf(
+                            args,
+                            self.schema,
+                            udf,
+                        )?
+                    }
                     _ => args,
                 };
 
@@ -985,13 +992,10 @@ mod test {
             None,
             None,
         ));
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
-        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, "")
-            .err()
-            .unwrap();
-        assert_eq!(
-            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
-            err.strip_backtrace()
+
+        let err = Projection::try_new(vec![udaf], empty).err().unwrap();
+        assert!(
+            err.strip_backtrace().starts_with("Error during planning: Error during planning: Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
         );
         Ok(())
     }
@@ -1078,13 +1082,13 @@ mod test {
 
     #[test]
     fn binary_op_date32_op_interval() -> Result<()> {
-        //CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("386547056640")
+        // CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("...")
         let expr = cast(lit("1998-03-18"), DataType::Date32)
-            + lit(ScalarValue::IntervalDayTime(Some(386547056640)));
+            + lit(ScalarValue::new_interval_dt(123, 456));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected =
-            "Projection: CAST(Utf8(\"1998-03-18\") AS Date32) + IntervalDayTime(\"386547056640\")\n  EmptyRelation";
+            "Projection: CAST(Utf8(\"1998-03-18\") AS Date32) + IntervalDayTime(\"IntervalDayTime { days: 123, milliseconds: 456 }\")\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }

@@ -63,7 +63,7 @@ SELECT
 NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
 
 # test_array_cast_invalid_timezone_will_panic
-statement error Parser error: Invalid timezone "Foo": 'Foo' is not a valid timezone
+statement error Parser error: Invalid timezone "Foo": failed to parse timezone
 SELECT arrow_cast('2021-01-02T03:04:00', 'Timestamp(Nanosecond, Some("Foo"))')
 
 # test_array_index
@@ -542,6 +542,11 @@ SELECT repeat('Pg', 4)
 PgPgPgPg
 
 query T
+SELECT repeat('Pg', -1)
+----
+(empty)
+
+query T
 SELECT repeat('Pg', CAST(NULL AS INT))
 ----
 NULL
@@ -620,6 +625,19 @@ query T
 SELECT split_part('abc~@~def~@~ghi', '~@~', CAST(NULL AS INT))
 ----
 NULL
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', -1)
+----
+ghi
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', -100)
+----
+(empty)
+
+statement error DataFusion error: Execution error: field position must not be zero
+SELECT split_part('abc~@~def~@~ghi', '~@~', 0)
 
 query B
 SELECT starts_with('alphabet', 'alph')

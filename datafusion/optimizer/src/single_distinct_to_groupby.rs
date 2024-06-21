@@ -259,7 +259,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         }
                         Expr::AggregateFunction(AggregateFunction {
                             func_def: AggregateFunctionDefinition::UDF(udf),
-                            args,
+                            mut args,
                             distinct,
                             ..
                         }) => {
@@ -267,7 +267,6 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 if args.len() != 1 {
                                     return internal_err!("DISTINCT aggregate should have exactly one argument");
                                 }
-                                let mut args = args;
                                 let arg = args.swap_remove(0);
 
                                 if group_fields_set.insert(arg.display_name()?) {
@@ -298,7 +297,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     .alias(&alias_str),
                                 );
                                 Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                    udf.clone(),
+                                    udf,
                                     vec![col(&alias_str)],
                                     false,
                                     None,
@@ -361,12 +360,13 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test::function_stub::sum;
     use crate::test::*;
     use datafusion_expr::expr;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{
         count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max, min,
-        sum, AggregateFunction,
+        AggregateFunction,
     };
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {

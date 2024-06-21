@@ -275,6 +275,14 @@ pub struct ScalarDictionaryValue {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IntervalDayTimeValue {
+    #[prost(int32, tag = "1")]
+    pub days: i32,
+    #[prost(int32, tag = "2")]
+    pub milliseconds: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IntervalMonthDayNanoValue {
     #[prost(int32, tag = "1")]
     pub months: i32,
@@ -318,7 +326,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34, 42"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 35, 36, 37, 38, 26, 27, 28, 29, 30, 25, 31, 34, 42"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -378,8 +386,6 @@ pub mod scalar_value {
         Date64Value(i64),
         #[prost(int32, tag = "24")]
         IntervalYearmonthValue(i32),
-        #[prost(int64, tag = "25")]
-        IntervalDaytimeValue(i64),
         #[prost(int64, tag = "35")]
         DurationSecondValue(i64),
         #[prost(int64, tag = "36")]
@@ -398,6 +404,8 @@ pub mod scalar_value {
         LargeBinaryValue(::prost::alloc::vec::Vec<u8>),
         #[prost(message, tag = "30")]
         Time64Value(super::ScalarTime64Value),
+        #[prost(message, tag = "25")]
+        IntervalDaytimeValue(super::IntervalDayTimeValue),
         #[prost(message, tag = "31")]
         IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
         #[prost(message, tag = "34")]

@@ -130,13 +130,15 @@ impl Unparser<'_> {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
-                    args,
+                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                        duplicate_treatment: None,
+                        args,
+                        clauses: vec![],
+                    }),
                     filter: None,
                     null_treatment: None,
                     over: None,
-                    distinct: false,
-                    special: false,
-                    order_by: vec![],
+                    within_group: vec![],
                 }))
             }
             Expr::Between(Between {
@@ -201,6 +203,7 @@ impl Unparser<'_> {
             Expr::Cast(Cast { expr, data_type }) => {
                 let inner_expr = self.expr_to_sql(expr)?;
                 Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
                     format: None,
@@ -236,8 +239,8 @@ impl Unparser<'_> {
                     .map(|expr| expr_to_unparsed(expr)?.into_order_by_expr())
                     .collect::<Result<Vec<_>>>()?;
 
-                let start_bound = self.convert_bound(&window_frame.start_bound);
-                let end_bound = self.convert_bound(&window_frame.end_bound);
+                let start_bound = self.convert_bound(&window_frame.start_bound)?;
+                let end_bound = self.convert_bound(&window_frame.end_bound)?;
                 let over = Some(ast::WindowType::WindowSpec(ast::WindowSpec {
                     window_name: None,
                     partition_by: partition_by
@@ -257,13 +260,15 @@ impl Unparser<'_> {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
-                    args,
+                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                        duplicate_treatment: None,
+                        args,
+                        clauses: vec![],
+                    }),
                     filter: None,
                     null_treatment: None,
                     over,
-                    distinct: false,
-                    special: false,
-                    order_by: vec![],
+                    within_group: vec![],
                 }))
             }
             Expr::SimilarTo(Like {
@@ -283,7 +288,7 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql(expr)?),
                 pattern: Box::new(self.expr_to_sql(pattern)?),
-                escape_char: *escape_char,
+                escape_char: escape_char.map(|c| c.to_string()),
             }),
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func_def.name();
@@ -298,13 +303,17 @@ impl Unparser<'_> {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
-                    args,
+                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                        duplicate_treatment: agg
+                            .distinct
+                            .then_some(ast::DuplicateTreatment::Distinct),
+                        args,
+                        clauses: vec![],
+                    }),
                     filter,
                     null_treatment: None,
                     over: None,
-                    distinct: agg.distinct,
-                    special: false,
-                    order_by: vec![],
+                    within_group: vec![],
                 }))
             }
             Expr::ScalarSubquery(subq) => {
@@ -414,7 +423,8 @@ impl Unparser<'_> {
             }
             Expr::TryCast(TryCast { expr, data_type }) => {
                 let inner_expr = self.expr_to_sql(expr)?;
-                Ok(ast::Expr::TryCast {
+                Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::TryCast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
                     format: None,
@@ -513,20 +523,30 @@ impl Unparser<'_> {
     fn convert_bound(
         &self,
         bound: &datafusion_expr::window_frame::WindowFrameBound,
-    ) -> ast::WindowFrameBound {
+    ) -> Result<ast::WindowFrameBound> {
         match bound {
             datafusion_expr::window_frame::WindowFrameBound::Preceding(val) => {
-                ast::WindowFrameBound::Preceding(
-                    self.scalar_to_sql(val).map(Box::new).ok(),
-                )
+                Ok(ast::WindowFrameBound::Preceding({
+                    let val = self.scalar_to_sql(val)?;
+                    if let ast::Expr::Value(ast::Value::Null) = &val {
+                        None
+                    } else {
+                        Some(Box::new(val))
+                    }
+                }))
             }
             datafusion_expr::window_frame::WindowFrameBound::Following(val) => {
-                ast::WindowFrameBound::Following(
-                    self.scalar_to_sql(val).map(Box::new).ok(),
-                )
+                Ok(ast::WindowFrameBound::Following({
+                    let val = self.scalar_to_sql(val)?;
+                    if let ast::Expr::Value(ast::Value::Null) = &val {
+                        None
+                    } else {
+                        Some(Box::new(val))
+                    }
+                }))
             }
             datafusion_expr::window_frame::WindowFrameBound::CurrentRow => {
-                ast::WindowFrameBound::CurrentRow
+                Ok(ast::WindowFrameBound::CurrentRow)
             }
         }
     }
@@ -633,6 +653,10 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Boolean(b.to_owned())))
             }
             ScalarValue::Boolean(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Float16(Some(f)) => {
+                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
+            }
+            ScalarValue::Float16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Float32(Some(f)) => {
                 Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
             }
@@ -715,6 +739,7 @@ impl Unparser<'_> {
                     ))?;
 
                 Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
                     expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
                         date.to_string(),
                     ))),
@@ -737,6 +762,7 @@ impl Unparser<'_> {
                     ))?;
 
                 Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
                     expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
                         datetime.to_string(),
                     ))),
@@ -1148,7 +1174,7 @@ mod tests {
                     window_frame: WindowFrame::new(None),
                     null_treatment: None,
                 }),
-                r#"ROW_NUMBER(col) OVER (ROWS BETWEEN NULL PRECEDING AND NULL FOLLOWING)"#,
+                r#"ROW_NUMBER(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
             (
                 Expr::WindowFunction(WindowFunction {

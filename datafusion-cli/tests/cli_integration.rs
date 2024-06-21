@@ -28,6 +28,8 @@ fn init() {
     let _ = env_logger::try_init();
 }
 
+// Disabled due to https://github.com/apache/datafusion/issues/10793
+#[cfg(not(target_family = "windows"))]
 #[rstest]
 #[case::exec_from_commands(
     ["--command", "select 1", "--format", "json", "-q"],

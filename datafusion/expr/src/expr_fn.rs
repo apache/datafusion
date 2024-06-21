@@ -168,18 +168,6 @@ pub fn max(expr: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the sum() aggregate function
-pub fn sum(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Sum,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Create an expression to represent the array_agg() aggregate function
 pub fn array_agg(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(

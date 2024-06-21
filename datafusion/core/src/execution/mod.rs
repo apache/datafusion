@@ -18,6 +18,8 @@
 //! Shared state for query planning and execution.
 
 pub mod context;
+pub mod session_state;
+
 // backwards compatibility
 pub use crate::datasource::file_format::options;
 

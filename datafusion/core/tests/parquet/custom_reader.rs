@@ -192,7 +192,7 @@ async fn store_parquet_in_memory(
     let mut objects = Vec::with_capacity(parquet_batches.len());
     for (meta, bytes) in parquet_batches {
         in_memory
-            .put(&meta.location, bytes)
+            .put(&meta.location, bytes.into())
             .await
             .expect("put parquet file into in memory object store");
         objects.push(meta);
