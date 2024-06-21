@@ -574,49 +574,52 @@ execution. The plan is evaluated (executed) when an action method is invoked, su
 <tr class="row-odd"><td><p>distinct</p></td>
 <td><p>Filter out duplicate rows.</p></td>
 </tr>
-<tr class="row-even"><td><p>drop_columns</p></td>
+<tr class="row-even"><td><p>distinct_on</p></td>
+<td><p>Filter out duplicate rows based on provided expressions.</p></td>
+</tr>
+<tr class="row-odd"><td><p>drop_columns</p></td>
 <td><p>Create a projection with all but the provided column names.</p></td>
 </tr>
-<tr class="row-odd"><td><p>except</p></td>
+<tr class="row-even"><td><p>except</p></td>
 <td><p>Calculate the exception of two DataFrames. The two DataFrames must have exactly the same schema</p></td>
 </tr>
-<tr class="row-even"><td><p>filter</p></td>
+<tr class="row-odd"><td><p>filter</p></td>
 <td><p>Filter a DataFrame to only include rows that match the specified filter expression.</p></td>
 </tr>
-<tr class="row-odd"><td><p>intersect</p></td>
+<tr class="row-even"><td><p>intersect</p></td>
 <td><p>Calculate the intersection of two DataFrames. The two DataFrames must have exactly the same schema</p></td>
 </tr>
-<tr class="row-even"><td><p>join</p></td>
+<tr class="row-odd"><td><p>join</p></td>
 <td><p>Join this DataFrame with another DataFrame using the specified columns as join keys.</p></td>
 </tr>
-<tr class="row-odd"><td><p>join_on</p></td>
+<tr class="row-even"><td><p>join_on</p></td>
 <td><p>Join this DataFrame with another DataFrame using arbitrary expressions.</p></td>
 </tr>
-<tr class="row-even"><td><p>limit</p></td>
+<tr class="row-odd"><td><p>limit</p></td>
 <td><p>Limit the number of rows returned from this DataFrame.</p></td>
 </tr>
-<tr class="row-odd"><td><p>repartition</p></td>
+<tr class="row-even"><td><p>repartition</p></td>
 <td><p>Repartition a DataFrame based on a logical partitioning scheme.</p></td>
 </tr>
-<tr class="row-even"><td><p>sort</p></td>
+<tr class="row-odd"><td><p>sort</p></td>
 <td><p>Sort the DataFrame by the specified sorting expressions. Any expression can be turned into a sort expression by calling its <code class="docutils literal notranslate"><span class="pre">sort</span></code> method.</p></td>
 </tr>
-<tr class="row-odd"><td><p>select</p></td>
+<tr class="row-even"><td><p>select</p></td>
 <td><p>Create a projection based on arbitrary expressions. Example: <code class="docutils literal notranslate"><span class="pre">df.select(vec![col(&quot;c1&quot;),</span> <span class="pre">abs(col(&quot;c2&quot;))])?</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>select_columns</p></td>
+<tr class="row-odd"><td><p>select_columns</p></td>
 <td><p>Create a projection based on column names. Example: <code class="docutils literal notranslate"><span class="pre">df.select_columns(&amp;[&quot;id&quot;,</span> <span class="pre">&quot;name&quot;])?</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>union</p></td>
+<tr class="row-even"><td><p>union</p></td>
 <td><p>Calculate the union of two DataFrames, preserving duplicate rows. The two DataFrames must have exactly the same schema.</p></td>
 </tr>
-<tr class="row-even"><td><p>union_distinct</p></td>
+<tr class="row-odd"><td><p>union_distinct</p></td>
 <td><p>Calculate the distinct union of two DataFrames. The two DataFrames must have exactly the same schema.</p></td>
 </tr>
-<tr class="row-odd"><td><p>with_column</p></td>
+<tr class="row-even"><td><p>with_column</p></td>
 <td><p>Add an additional column to the DataFrame.</p></td>
 </tr>
-<tr class="row-even"><td><p>with_column_renamed</p></td>
+<tr class="row-odd"><td><p>with_column_renamed</p></td>
 <td><p>Rename one column by applying a new projection.</p></td>
 </tr>
 </tbody>
