@@ -96,16 +96,36 @@ impl OptimizerRule for PropagateEmptyRelation {
 
             LogicalPlan::Join(ref join) => {
                 // TODO: For Join, more join type need to be careful:
-                // For LeftAnti Join, if the right side is empty, the Join result is left side(should exclude null ??).
-                // For RightAnti Join, if the left side is empty, the Join result is right side(should exclude null ??).
-                // For Full Join, only both sides are empty, the Join result is empty.
-                // For LeftOut/Full Join, if the right side is empty, the Join can be eliminated with a Projection with left side
-                // columns + right side columns replaced with null values.
-                // For RightOut/Full Join, if the left side is empty, the Join can be eliminated with a Projection with right side
-                // columns + left side columns replaced with null values.
                 let (left_empty, right_empty) = binary_plan_children_is_empty(&plan)?;
 
                 match join.join_type {
+                    // For Full Join, only both sides are empty, the Join result is empty.
+                    JoinType::Full if left_empty && right_empty => Ok(Transformed::yes(
+                        LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: join.schema.clone(),
+                        }),
+                    )),
+                    // For LeftOut/Full Join, if the right side is empty, the Join can be eliminated with a Projection with left side
+                    // columns + right side columns replaced with null values.
+                    JoinType::Full | JoinType::Left if right_empty => {
+                        Ok(Transformed::yes(LogicalPlan::Projection(
+                            Projection::new_from_schema(
+                                join.left.clone(),
+                                join.schema.clone(),
+                            ),
+                        )))
+                    }
+                    // For RightOut/Full Join, if the left side is empty, the Join can be eliminated with a Projection with right side
+                    // columns + left side columns replaced with null values.
+                    JoinType::Full | JoinType::Right if left_empty => {
+                        Ok(Transformed::yes(LogicalPlan::Projection(
+                            Projection::new_from_schema(
+                                join.right.clone(),
+                                join.schema.clone(),
+                            ),
+                        )))
+                    }
                     JoinType::Inner if left_empty || right_empty => Ok(Transformed::yes(
                         LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
@@ -142,6 +162,14 @@ impl OptimizerRule for PropagateEmptyRelation {
                             schema: join.schema.clone(),
                         }),
                     )),
+                    // For LeftAnti Join, if the right side is empty, the Join result is left side(should exclude null ??).
+                    JoinType::LeftAnti if right_empty => {
+                        Ok(Transformed::yes((*join.left).clone()))
+                    }
+                    // For RightAnti Join, if the left side is empty, the Join result is right side(should exclude null ??).
+                    JoinType::RightAnti if left_empty => {
+                        Ok(Transformed::yes((*join.right).clone()))
+                    }
                     JoinType::RightAnti if right_empty => Ok(Transformed::yes(
                         LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
@@ -475,6 +503,34 @@ mod tests {
         assert_together_optimized_plan(plan, expected, eq)
     }
 
+    // TODO: fix this long name
+    fn assert_anti_join_empty_join_table_is_base_table(
+        anti_left_join: bool,
+    ) -> Result<()> {
+        // if we have an anti join with an empty join table, than the result is the base_table
+        let (left, right, join_type, expected) = if anti_left_join {
+            let left = test_table_scan()?;
+            let right = LogicalPlanBuilder::from(test_table_scan()?)
+                .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+                .build()?;
+            let expected = left.display_indent().to_string();
+            (left, right, JoinType::LeftAnti, expected)
+        } else {
+            let right = test_table_scan()?;
+            let left = LogicalPlanBuilder::from(test_table_scan()?)
+                .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+                .build()?;
+            let expected = right.display_indent().to_string();
+            (left, right, JoinType::RightAnti, expected)
+        };
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(right, join_type, vec![Column::from_name("a".to_string())])?
+            .build()?;
+
+        assert_together_optimized_plan(plan, &expected, true)
+    }
+
     #[test]
     fn test_join_empty_propagation_rules() -> Result<()> {
         // test left join with empty left
@@ -499,7 +555,13 @@ mod tests {
         assert_empty_left_empty_right_lp(true, false, JoinType::LeftAnti, true)?;
 
         // test right anti join empty right
-        assert_empty_left_empty_right_lp(false, true, JoinType::RightAnti, true)
+        assert_empty_left_empty_right_lp(false, true, JoinType::RightAnti, true)?;
+
+        // test left anti join empty right
+        assert_anti_join_empty_join_table_is_base_table(true)?;
+
+        // test right anti join empty left
+        assert_anti_join_empty_join_table_is_base_table(false)
     }
 
     #[test]
