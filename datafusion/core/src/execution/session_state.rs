@@ -556,17 +556,11 @@ impl SessionState {
     }
 
     fn get_parser_options(&self) -> ParserOptions {
+        let sql_parser_options = &self.config.options().sql_parser;
+
         ParserOptions {
-            parse_float_as_decimal: self
-                .config
-                .options()
-                .sql_parser
-                .parse_float_as_decimal,
-            enable_ident_normalization: self
-                .config
-                .options()
-                .sql_parser
-                .enable_ident_normalization,
+            parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
+            enable_ident_normalization: sql_parser_options.enable_ident_normalization,
         }
     }
 
@@ -592,7 +586,7 @@ impl SessionState {
         Ok(plan)
     }
 
-    /// Creates a datafusion style ast [`Expr`] from a SQL string..
+    /// Creates a datafusion style AST [`Expr`] from a SQL string..
     pub fn create_logical_expr(
         &self,
         sql: &str,

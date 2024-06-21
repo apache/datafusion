@@ -29,6 +29,22 @@ use datafusion_common::DFSchema;
 use datafusion_expr::{col, lit};
 use datafusion_sql::unparser::Unparser;
 
+/// This example demonstrates the programmatic parsing of SQL expressions using
+/// the DataFusion [`SessionContext::parse_sql_expr`] API or the [`DataFrame::parse_sql_expr`] API.
+///
+///
+/// The code in this example shows how to:
+///
+/// 1. [`simple_session_context_parse_sql_expr_demo`]: Parse a simple SQL text into a logical
+/// expression using a schema at [`SessionContext`].
+///
+/// 2. [`simple_dataframe_parse_sql_expr_demo`]: Parse a simple SQL text into a logical expression
+/// using a schema at [`DataFrame`].
+///
+/// 3. [`query_parquet_demo`]: Query a parquet file using the parsed_sql_expr from a DataFrame.
+///
+/// 4. [`round_trip_parse_sql_expr_demo`]: Parse a SQL text and convert it back to SQL using [`Unparser`].
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // See how to evaluate expressions
@@ -39,7 +55,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// DataFusion can parse a SQL text to an logical expression agianst a schema at [`SessionContext`].
+/// DataFusion can parse a SQL text to a logical expression against a schema at [`SessionContext`].
 fn simple_session_context_parse_sql_expr_demo() -> Result<()> {
     let sql = "a < 5 OR a = 8";
     let expr = col("a").lt(lit(5_i64)).or(col("a").eq(lit(8_i64)));
@@ -100,6 +116,7 @@ async fn query_parquet_demo() -> Result<()> {
             vec![df.parse_sql_expr("double_col")?],
             vec![df.parse_sql_expr("SUM(int_col) as sum_int_col")?],
         )?
+        // Directly parse the SQL text into a sort expression is not supported
         .sort(vec![col("double_col").sort(false, false)])?
         .limit(0, Some(1))?;
 
