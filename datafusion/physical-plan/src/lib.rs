@@ -116,7 +116,7 @@ pub mod udaf {
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'ParquetExec'.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// Short name for the ExecutionPlan, such as 'ParquetExec'.
     /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
