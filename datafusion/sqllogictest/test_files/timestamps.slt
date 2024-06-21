@@ -2774,6 +2774,26 @@ SELECT '2000-12-01 04:04:12' AT TIME ZONE 'America/New_York';
 ----
 2000-12-01T04:04:12-05:00
 
+query P
+SELECT '2024-03-30 00:00:20' AT TIME ZONE 'Europe/Brussels';
+----
+2024-03-30T00:00:20+01:00
+
+query P
+SELECT '2024-03-30 00:00:20'::timestamp AT TIME ZONE 'Europe/Brussels';
+----
+2024-03-30T00:00:20+01:00
+
+query P
+SELECT '2024-03-30 00:00:20Z' AT TIME ZONE 'Europe/Brussels';
+----
+2024-03-30T01:00:20+01:00
+
+query P
+SELECT '2024-03-30 00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels';
+----
+2024-03-30T00:00:20+01:00
+
 ## date-time strings that already have a explicit timezone can be used with AT TIME ZONE
 
 # same time zone as provided date-time
