@@ -58,11 +58,30 @@ select * from unnest(unnest(
 5
 6
 
+query I
+select * from unnest(unnest([[1,2,3],[4,5,6]]));
+----
+1
+2
+3
+4
+5
+6
 
-#query TT
-#explain analyze select unnest(column2['c0']) from nested_unnest_table
-#----
-#a
-#b
 
-
+query TT
+explain select unnest(unnest(column1)['c0']) from temp;
+----
+logical_plan
+01)Unnest: lists[unnest(unnest(temp.column1)[c0])] structs[]
+02)--Projection: get_field(unnest(temp.column1), Utf8("c0")) AS unnest(unnest(temp.column1)[c0])
+03)----Unnest: lists[unnest(temp.column1)] structs[]
+04)------Projection: temp.column1 AS unnest(temp.column1)
+05)--------TableScan: temp projection=[column1]
+physical_plan
+01)UnnestExec
+02)--ProjectionExec: expr=[get_field(unnest(temp.column1)@0, c0) as unnest(unnest(temp.column1)[c0])]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------UnnestExec
+05)--------ProjectionExec: expr=[column1@0 as unnest(temp.column1)]
+06)----------MemoryExec: partitions=1, partition_sizes=[1]

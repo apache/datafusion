@@ -342,11 +342,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .unnest_columns_with_options(columns, unnest_options)?
                     .build()?;
                 current_input = plan;
-                println!("outer_projection_exprs: {:?}", outer_projection_exprs);
                 current_select_exprs = outer_projection_exprs;
             }
         }
-        println!("current select exprs: {:?}", current_select_exprs);
         LogicalPlanBuilder::from(current_input)
             .project(current_select_exprs)?
             .build()

@@ -319,7 +319,6 @@ pub(crate) fn recursive_transform_unnest(
         } = original_expr.clone().transform_up(|expr: Expr| {
             let is_root_expr = &expr == original_expr;
 
-            println!("transforming expr: {:?}", expr);
             if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
                 // TODO: why UDF is not transforming its input argument
                 let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
