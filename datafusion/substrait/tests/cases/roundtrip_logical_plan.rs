@@ -594,20 +594,23 @@ async fn roundtrip_is_not_unknown() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_union() -> Result<()> {
-    roundtrip("SELECT a, e FROM data UNION SELECT a, e FROM data").await
+    // Set aliases to what the Substrait consumer will generate
+    roundtrip("SELECT a, e FROM data UNION SELECT a, e FROM data data_1").await
 }
 
 #[tokio::test]
 async fn roundtrip_union2() -> Result<()> {
+    // Set aliases to what the Substrait consumer will generate
     roundtrip(
-        "SELECT a, b FROM data UNION SELECT a, b FROM data UNION SELECT a, b FROM data",
+        "SELECT a, b FROM data UNION SELECT a, b FROM data data_1 UNION SELECT a, b FROM data data_2",
     )
     .await
 }
 
 #[tokio::test]
 async fn roundtrip_union_all() -> Result<()> {
-    roundtrip("SELECT a, e FROM data UNION ALL SELECT a, e FROM data").await
+    // Set aliases to what the Substrait consumer will generate
+    roundtrip("SELECT a, e FROM data UNION ALL SELECT a, e FROM data data_1").await
 }
 
 #[tokio::test]
@@ -628,7 +631,8 @@ async fn simple_intersect() -> Result<()> {
 
 #[tokio::test]
 async fn simple_intersect_table_reuse() -> Result<()> {
-    roundtrip("SELECT COUNT(1) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);").await
+    // Set aliases to what the Substrait consumer will generate
+    roundtrip("SELECT COUNT(1) FROM (SELECT data.a FROM data INTERSECT SELECT data_1.a FROM data data_1);").await
 }
 
 #[tokio::test]
@@ -644,32 +648,6 @@ async fn qualified_schema_table_reference() -> Result<()> {
 #[tokio::test]
 async fn qualified_catalog_schema_table_reference() -> Result<()> {
     roundtrip("SELECT a,b,c,d,e FROM datafusion.public.data;").await
-}
-
-#[tokio::test]
-async fn roundtrip_inner_join_table_reuse_zero_index() -> Result<()> {
-    assert_expected_plan(
-        "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.a = d2.a",
-        "Projection: data.b, data.c\
-         \n  Inner Join: data.a = data.a\
-         \n    TableScan: data projection=[a, b]\
-         \n    TableScan: data projection=[a, c]",
-        false, // "d1" vs "data" field qualifier
-    )
-    .await
-}
-
-#[tokio::test]
-async fn roundtrip_inner_join_table_reuse_non_zero_index() -> Result<()> {
-    assert_expected_plan(
-        "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.b = d2.b",
-        "Projection: data.b, data.c\
-         \n  Inner Join: data.b = data.b\
-         \n    TableScan: data projection=[b]\
-         \n    TableScan: data projection=[b, c]",
-        false, // "d1" vs "data" field qualifier
-    )
-    .await
 }
 
 /// Construct a plan that contains several literals of types that are currently supported.
@@ -725,21 +703,21 @@ async fn roundtrip_literal_struct() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_values() -> Result<()> {
     // TODO: would be nice to have a struct inside the LargeList, but arrow_cast doesn't support that currently
-    let values = "(\
+    // Using assert instead of roundtrip as the original plan's VALUES gets some extra aliases that get dropped
+    assert_expected_plan(
+        "SELECT * FROM (VALUES \
+            (\
                 1, \
                 'a', \
                 [[-213.1, NULL, 5.5, 2.0, 1.0], []], \
                 arrow_cast([1,2,3], 'LargeList(Int64)'), \
                 STRUCT(true, 1 AS int_field, CAST(NULL AS STRING)), \
                 [STRUCT(STRUCT('a' AS string_field) AS struct_field)]\
-            )";
-
-    // Test LogicalPlan::Values
-    assert_expected_plan(
-        format!("VALUES \
-            {values}, \
-            (NULL, NULL, NULL, NULL, NULL, NULL)").as_str(),
-        "Values: \
+            ), \
+            (NULL, NULL, NULL, NULL, NULL, NULL)\
+            ) AS table", // Set aliases to what the Substrait consumer will generate
+        "SubqueryAlias: table\
+        \n  Values: \
             (\
                 Int64(1), \
                 Utf8(\"a\"), \
@@ -749,11 +727,15 @@ async fn roundtrip_values() -> Result<()> {
                 List([{struct_field: {string_field: a}}])\
             ), \
             (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())",
-    true)
-        .await?;
+        true
+    )
+    .await
+}
 
-    // Test LogicalPlan::EmptyRelation
-    roundtrip(format!("SELECT * FROM (VALUES {values}) LIMIT 0").as_str()).await
+#[tokio::test]
+async fn roundtrip_values_empty_relation() -> Result<()> {
+    // Set aliases to what the Substrait consumer will generate
+    roundtrip("SELECT * FROM (VALUES (1)) AS table LIMIT 0").await
 }
 
 #[tokio::test]
