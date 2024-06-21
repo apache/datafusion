@@ -627,10 +627,10 @@ macro_rules! get_data_page_statistics {
             match $data_type {
                 Some(DataType::Boolean) => Ok(Arc::new(
                     BooleanArray::from_iter(
-                        [<$stat_type_prefix BooleanDataPageStatsIterator>]::new(
-                            $iterator.collect::<Vec<_>>().into_iter()
-                        )
-                        .flatten().collect::<Vec<_>>().into_iter()
+                        [<$stat_type_prefix BooleanDataPageStatsIterator>]::new($iterator)
+                            .flatten()
+                            .collect::<Vec<_>>()
+                            .into_iter()
                     )
                 )),
                 Some(DataType::UInt8) => Ok(Arc::new(
