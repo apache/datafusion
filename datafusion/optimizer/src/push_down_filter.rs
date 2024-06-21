@@ -747,11 +747,11 @@ impl OptimizerRule for PushDownFilter {
                     unnest_input,
                 )?);
 
-                // try push down recursively
-                let new_plan = self.rewrite(filter_with_unnest_input, _config)?;
-
+                // Directly assign new filter plan as the new unnest's input.
+                // The new filter plan will go through another rewrite pass since the rule itself
+                // is applied recursively to all the child from top to down
                 let unnest_plan =
-                    insert_below(LogicalPlan::Unnest(unnest), new_plan.data)?;
+                    insert_below(LogicalPlan::Unnest(unnest), filter_with_unnest_input)?;
 
                 match conjunction(unnest_predicates) {
                     None => Ok(unnest_plan),
