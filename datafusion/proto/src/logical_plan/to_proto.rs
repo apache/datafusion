@@ -617,8 +617,10 @@ pub fn serialize_expr(
             }
         }
         Expr::Wildcard { qualifier } => protobuf::LogicalExprNode {
+            #[allow(deprecated)]
             expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
-                qualifier: qualifier.clone().unwrap_or("".to_string()),
+                qualifier: "".to_string(),
+                relation: qualifier.to_owned().map(|r| r.into()),
             })),
         },
         Expr::ScalarSubquery(_)

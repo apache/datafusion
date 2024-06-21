@@ -318,7 +318,7 @@ fn get_excluded_columns(
     opt_exclude: Option<&ExcludeSelectItem>,
     opt_except: Option<&ExceptSelectItem>,
     schema: &DFSchema,
-    qualifier: &Option<TableReference>,
+    qualifier: Option<&TableReference>,
 ) -> Result<Vec<Column>> {
     let mut idents = vec![];
     if let Some(excepts) = opt_except {
@@ -343,8 +343,7 @@ fn get_excluded_columns(
     let mut result = vec![];
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
-        let (qualifier, field) =
-            schema.qualified_field_with_name(qualifier.as_ref(), col_name)?;
+        let (qualifier, field) = schema.qualified_field_with_name(qualifier, col_name)?;
         result.push(Column::from((qualifier, field)));
     }
     Ok(result)
@@ -406,7 +405,7 @@ pub fn expand_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude.as_ref(), opt_except.as_ref(), schema, &None)?
+        get_excluded_columns(opt_exclude.as_ref(), opt_except.as_ref(), schema, None)?
     } else {
         vec![]
     };
@@ -417,12 +416,11 @@ pub fn expand_wildcard(
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
 pub fn expand_qualified_wildcard(
-    qualifier: &str,
+    qualifier: &TableReference,
     schema: &DFSchema,
     wildcard_options: Option<&WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
-    let qualifier = TableReference::from(qualifier);
-    let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
+    let qualified_indices = schema.fields_indices_with_qualified(qualifier);
     let projected_func_dependencies = schema
         .functional_dependencies()
         .project_functional_dependencies(&qualified_indices, qualified_indices.len());
@@ -445,7 +443,7 @@ pub fn expand_qualified_wildcard(
             opt_exclude.as_ref(),
             opt_except.as_ref(),
             schema,
-            &Some(qualifier),
+            Some(qualifier),
         )?
     } else {
         vec![]

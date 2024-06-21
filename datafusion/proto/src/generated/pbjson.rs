@@ -19970,9 +19970,15 @@ impl serde::Serialize for Wildcard {
         if !self.qualifier.is_empty() {
             len += 1;
         }
+        if self.relation.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.Wildcard", len)?;
         if !self.qualifier.is_empty() {
             struct_ser.serialize_field("qualifier", &self.qualifier)?;
+        }
+        if let Some(v) = self.relation.as_ref() {
+            struct_ser.serialize_field("relation", v)?;
         }
         struct_ser.end()
     }
@@ -19985,11 +19991,13 @@ impl<'de> serde::Deserialize<'de> for Wildcard {
     {
         const FIELDS: &[&str] = &[
             "qualifier",
+            "relation",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Qualifier,
+            Relation,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -20012,6 +20020,7 @@ impl<'de> serde::Deserialize<'de> for Wildcard {
                     {
                         match value {
                             "qualifier" => Ok(GeneratedField::Qualifier),
+                            "relation" => Ok(GeneratedField::Relation),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -20032,6 +20041,7 @@ impl<'de> serde::Deserialize<'de> for Wildcard {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut qualifier__ = None;
+                let mut relation__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Qualifier => {
@@ -20040,10 +20050,17 @@ impl<'de> serde::Deserialize<'de> for Wildcard {
                             }
                             qualifier__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Relation => {
+                            if relation__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("relation"));
+                            }
+                            relation__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(Wildcard {
                     qualifier: qualifier__.unwrap_or_default(),
+                    relation: relation__,
                 })
             }
         }

@@ -592,8 +592,11 @@ pub mod logical_expr_node {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Wildcard {
+    #[deprecated]
     #[prost(string, tag = "1")]
     pub qualifier: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub relation: ::core::option::Option<TableReference>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -369,7 +369,8 @@ message LogicalExprNode {
 }
 
 message Wildcard {
-  string qualifier = 1;
+  string qualifier = 1 [deprecated = true];
+  TableReference relation = 2;
 }
 
 message PlaceholderNode {
