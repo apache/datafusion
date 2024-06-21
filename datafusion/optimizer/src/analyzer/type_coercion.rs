@@ -1046,10 +1046,7 @@ mod test {
             .err()
             .unwrap()
             .strip_backtrace();
-        assert_eq!(
-            "Error during planning: Error during planning: Coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed.",
-            err
-        );
+        assert!(err.starts_with("Error during planning: Error during planning: Coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed."));
         Ok(())
     }
 

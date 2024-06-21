@@ -21,7 +21,13 @@
 
 use std::any::Any;
 
-use crate::type_coercion::aggregates::NUMERICS;
+use arrow::datatypes::{
+    DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+};
+
+use datafusion_common::{exec_err, not_impl_err, Result};
+
+use crate::type_coercion::aggregates::{avg_return_type, coerce_avg_type, NUMERICS};
 use crate::Volatility::Immutable;
 use crate::{
     expr::AggregateFunction,
@@ -30,10 +36,6 @@ use crate::{
     Accumulator, AggregateUDFImpl, Expr, GroupsAccumulator, ReversedUDAF, Signature,
     Volatility,
 };
-use arrow::datatypes::{
-    DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
-};
-use datafusion_common::{exec_err, not_impl_err, Result};
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
@@ -324,8 +326,8 @@ impl AggregateUDFImpl for Avg {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Float64)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        avg_return_type(self.name(), &arg_types[0])
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -337,5 +339,12 @@ impl AggregateUDFImpl for Avg {
     }
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return exec_err!("{} expects exactly one argument.", self.name());
+        }
+        coerce_avg_type(self.name(), arg_types)
     }
 }

@@ -28,7 +28,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
+use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
@@ -230,18 +230,7 @@ impl AggregateUDFImpl for Avg {
         if arg_types.len() != 1 {
             return exec_err!("{} expects exactly one argument.", self.name());
         }
-        // Supported types smallint, int, bigint, real, double precision, decimal, or interval
-        // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
-        fn coerced_type(func_name: &str, data_type: &DataType) -> Result<DataType> {
-            return match &data_type {
-                DataType::Decimal128(p, s) => Ok(DataType::Decimal128(*p, *s)),
-                DataType::Decimal256(p, s) => Ok(DataType::Decimal256(*p, *s)),
-                d if d.is_numeric() => Ok(DataType::Float64),
-                DataType::Dictionary(_, v) => return coerced_type(func_name, v.as_ref()),
-                _ => exec_err!("{} not supported for {}", func_name, data_type),
-            };
-        }
-        Ok(vec![coerced_type(self.name(), &arg_types[0])?])
+        coerce_avg_type(self.name(), arg_types)
     }
 }
 
@@ -568,62 +557,5 @@ where
     fn size(&self) -> usize {
         self.counts.capacity() * std::mem::size_of::<u64>()
             + self.sums.capacity() * std::mem::size_of::<T>()
-    }
-}
-
-/// function return type of AVG
-pub fn avg_return_type(func_name: &str, arg_type: &DataType) -> Result<DataType> {
-    match arg_type {
-        DataType::Decimal128(precision, scale) => {
-            // in the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
-            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
-            let new_precision =
-                arrow_schema::DECIMAL128_MAX_PRECISION.min(*precision + 4);
-            let new_scale = arrow_schema::DECIMAL128_MAX_SCALE.min(*scale + 4);
-            Ok(DataType::Decimal128(new_precision, new_scale))
-        }
-        DataType::Decimal256(precision, scale) => {
-            // in the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
-            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
-            let new_precision =
-                arrow_schema::DECIMAL256_MAX_PRECISION.min(*precision + 4);
-            let new_scale = arrow_schema::DECIMAL256_MAX_SCALE.min(*scale + 4);
-            Ok(DataType::Decimal256(new_precision, new_scale))
-        }
-        arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
-        DataType::Dictionary(_, dict_value_type) => {
-            avg_return_type(func_name, dict_value_type.as_ref())
-        }
-        other => exec_err!("{func_name} does not support {other:?}"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_avg_return_type() -> Result<()> {
-        let observed = Avg::default().return_type(&[DataType::Float32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = Avg::default().return_type(&[DataType::Float64])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = Avg::default().return_type(&[DataType::Int32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = Avg::default().return_type(&[DataType::Decimal128(10, 6)])?;
-        assert_eq!(DataType::Decimal128(14, 10), observed);
-
-        let observed = Avg::default().return_type(&[DataType::Decimal128(36, 6)])?;
-        assert_eq!(DataType::Decimal128(38, 10), observed);
-        Ok(())
-    }
-
-    #[test]
-    fn test_avg_no_utf8() {
-        let observed = Avg::default().return_type(&[DataType::Utf8]);
-        assert!(observed.is_err());
     }
 }

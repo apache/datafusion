@@ -20,9 +20,9 @@ use std::any::Any;
 use arrow_schema::DataType;
 
 use datafusion::execution::context::SessionContext;
+use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::{error::Result, execution::options::CsvReadOptions};
 use datafusion_expr::function::WindowFunctionSimplification;
-use datafusion_expr::test::function_stub::avg_udaf;
 use datafusion_expr::{
     expr::WindowFunction, simplify::SimplifyInfo, Expr, PartitionEvaluator, Signature,
     Volatility, WindowUDF, WindowUDFImpl,
