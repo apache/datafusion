@@ -305,7 +305,7 @@ impl OptimizerRule for TopKOptimizerRule {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
@@ -327,7 +327,7 @@ impl OptimizerRule for TopKOptimizerRule {
                     return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                         node: Arc::new(TopKPlanNode {
                             k: *fetch,
-                            input: self.rewrite(input.as_ref().clone(), config)?.data,
+                            input: input.as_ref().clone(),
                             expr: expr[0].clone(),
                         }),
                     })));
