@@ -84,7 +84,7 @@ impl AggregateUDFImpl for Avg {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        avg_return_type(&arg_types[0])
+        avg_return_type(self.name(), &arg_types[0])
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -228,20 +228,20 @@ impl AggregateUDFImpl for Avg {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 1 {
-            return exec_err!("avg expects exactly one argument.");
+            return exec_err!("{} expects exactly one argument.", self.name());
         }
+        // Supported types smallint, int, bigint, real, double precision, decimal, or interval
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
-        // smallint, int, bigint, real, double precision, decimal, or interval
-        fn coerced_type(data_type: &DataType) -> Result<DataType> {
+        fn coerced_type(func_name: &str, data_type: &DataType) -> Result<DataType> {
             return match &data_type {
                 DataType::Decimal128(p, s) => Ok(DataType::Decimal128(*p, *s)),
                 DataType::Decimal256(p, s) => Ok(DataType::Decimal256(*p, *s)),
                 d if d.is_numeric() => Ok(DataType::Float64),
-                DataType::Dictionary(_, v) => return coerced_type(v.as_ref()),
-                _ => exec_err!("AVG not supported for {}", data_type),
+                DataType::Dictionary(_, v) => return coerced_type(func_name, v.as_ref()),
+                _ => exec_err!("{} not supported for {}", func_name, data_type),
             };
         }
-        Ok(vec![coerced_type(&arg_types[0])?])
+        Ok(vec![coerced_type(self.name(), &arg_types[0])?])
     }
 }
 
@@ -572,7 +572,7 @@ where
 }
 
 /// function return type of AVG
-pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
+pub fn avg_return_type(func_name: &str, arg_type: &DataType) -> Result<DataType> {
     match arg_type {
         DataType::Decimal128(precision, scale) => {
             // in the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
@@ -592,9 +592,9 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
         }
         arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
         DataType::Dictionary(_, dict_value_type) => {
-            avg_return_type(dict_value_type.as_ref())
+            avg_return_type(func_name, dict_value_type.as_ref())
         }
-        other => exec_err!("AVG does not support {other:?}"),
+        other => exec_err!("{func_name} does not support {other:?}"),
     }
 }
 
