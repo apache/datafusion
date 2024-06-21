@@ -613,6 +613,48 @@ macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
         paste! {
             match $data_type {
+                Some(DataType::UInt8) => Ok(Arc::new(
+                    UInt8Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u8::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::UInt16) => Ok(Arc::new(
+                    UInt16Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u16::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::UInt32) => Ok(Arc::new(
+                    UInt32Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u32::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                ))),
+                Some(DataType::UInt64) => Ok(Arc::new(
+                    UInt64Array::from_iter(
+                        [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u64::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                ))),
                 Some(DataType::Int8) => Ok(Arc::new(
                     Int8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
