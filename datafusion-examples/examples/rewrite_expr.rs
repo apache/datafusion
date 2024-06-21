@@ -23,8 +23,8 @@ use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_optimizer::analyzer::{Analyzer, AnalyzerRule};
-use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{utils, OptimizerConfig, OptimizerContext, OptimizerRule};
+use datafusion_optimizer::optimizer::{ApplyOrder, Optimizer};
+use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_sql::sqlparser::parser::Parser;
@@ -139,6 +139,10 @@ impl OptimizerRule for MyOptimizerRule {
         unreachable!()
     }
 
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
+    }
+
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -146,20 +150,18 @@ impl OptimizerRule for MyOptimizerRule {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        // recurse down and optimize children first
-        let optimized_plan = utils::optimize_children(self, plan, config)?;
-        optimized_plan.map_data(|plan| match plan {
+        match plan {
             LogicalPlan::Filter(filter) => {
                 let predicate = my_rewrite(filter.predicate.clone())?;
-                Ok(LogicalPlan::Filter(Filter::try_new(
+                Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
                     predicate,
                     filter.input.clone(),
-                )?))
+                )?)))
             }
-            _ => Ok(plan),
-        })
+            _ => Ok(Transformed::no(plan)),
+        }
     }
 }
 

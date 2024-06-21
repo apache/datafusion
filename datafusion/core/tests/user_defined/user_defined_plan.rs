@@ -80,7 +80,7 @@ use datafusion::{
         Expr, Extension, Limit, LogicalPlan, Sort, UserDefinedLogicalNode,
         UserDefinedLogicalNodeCore,
     },
-    optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
+    optimizer::{OptimizerConfig, OptimizerRule},
     physical_expr::EquivalenceProperties,
     physical_plan::{
         DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
@@ -93,6 +93,7 @@ use datafusion::{
 
 use async_trait::async_trait;
 use datafusion_common::tree_node::Transformed;
+use datafusion_optimizer::optimizer::ApplyOrder;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -293,6 +294,10 @@ impl OptimizerRule for TopKOptimizerRule {
         "topk"
     }
 
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -330,9 +335,7 @@ impl OptimizerRule for TopKOptimizerRule {
             }
         }
 
-        // If we didn't find the Limit/Sort combination, recurse as
-        // normal and build the result.
-        optimize_children(self, plan, config)
+        Ok(Transformed::no(plan))
     }
 }
 

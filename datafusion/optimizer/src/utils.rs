@@ -26,7 +26,6 @@ use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::utils as expr_utils;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr, Operator};
 
-use datafusion_common::tree_node::Transformed;
 use log::{debug, trace};
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -34,11 +33,17 @@ use log::{debug, trace};
 /// type. Useful for optimizer rules which want to leave the type
 /// of plan unchanged but still apply to the children.
 /// This also handles the case when the `plan` is a [`LogicalPlan::Explain`].
+///
+/// Returning `Ok(None)` indicates that the plan can't be optimized by the `optimizer`.
+#[deprecated(
+    since = "40.0.0",
+    note = "please use OptimizerRule::apply_order with ApplyOrder::BottomUp instead"
+)]
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
-    plan: LogicalPlan,
+    plan: &LogicalPlan,
     config: &dyn OptimizerConfig,
-) -> Result<Transformed<LogicalPlan>> {
+) -> Result<Option<LogicalPlan>> {
     let mut new_inputs = Vec::with_capacity(plan.inputs().len());
     let mut plan_is_changed = false;
     for input in plan.inputs() {
@@ -55,9 +60,9 @@ pub fn optimize_children(
     }
     if plan_is_changed {
         let exprs = plan.expressions();
-        Ok(Transformed::yes(plan.with_new_exprs(exprs, new_inputs)?))
+        plan.with_new_exprs(exprs, new_inputs).map(Some)
     } else {
-        Ok(Transformed::no(plan))
+        Ok(None)
     }
 }
 
