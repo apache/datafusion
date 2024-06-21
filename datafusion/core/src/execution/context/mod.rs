@@ -308,7 +308,12 @@ impl SessionContext {
     pub fn new_with_state(state: SessionState) -> Self {
         let state_ref = Arc::new(RwLock::new(state.clone()));
         state
-            .schema_for_ref("datafusion.public.xx")
+            // provide a fake table reference to get the default schema provider.
+            .schema_for_ref(TableReference::full(
+                state.config_options().catalog.default_catalog.as_str(),
+                state.config_options().catalog.default_schema.as_str(),
+                UNNAMED_TABLE,
+            ))
             .unwrap()
             .as_any()
             .downcast_ref::<DynamicFileSchemaProvider>()
@@ -1642,6 +1647,39 @@ mod tests {
         let result =
             plan_and_collect(&ctx, "select c_name from default.customer limit 3;")
                 .await?;
+
+        let actual = arrow::util::pretty::pretty_format_batches(&result)
+            .unwrap()
+            .to_string();
+        let expected = r#"+--------------------+
+| c_name             |
++--------------------+
+| Customer#000000002 |
+| Customer#000000003 |
+| Customer#000000004 |
++--------------------+"#;
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dynamic_file_query() -> Result<()> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = path.join("tests/tpch-csv/customer.csv");
+        let url = format!("file://{}", path.display());
+
+        let rt_cfg = RuntimeConfig::new();
+        let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
+        let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+        let session_state = SessionState::new_with_config_rt(cfg, runtime);
+        let ctx = SessionContext::new_with_state(session_state);
+
+        let result = plan_and_collect(
+            &ctx,
+            format!("select c_name from '{}' limit 3;", &url).as_str(),
+        )
+        .await?;
 
         let actual = arrow::util::pretty::pretty_format_batches(&result)
             .unwrap()
