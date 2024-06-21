@@ -59,7 +59,7 @@ arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
-datafusion = { workspace = true, default-features = true, features = ["avro"] }
+datafusion = { workspace = true, default-features = true, features = ["avro", "backtrace"] }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 datafusion-optimizer = { workspace = true, default-features = true }
@@ -76,11 +76,11 @@ prost-derive = { version = "0.12", default-features = false }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-test-utils = { path = "../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = "0.11"
 url = { workspace = true }
 uuid = "1.7"
+csv = "1.3"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.28.0", features = ["fs"] }
