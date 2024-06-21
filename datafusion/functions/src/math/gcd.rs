@@ -88,16 +88,15 @@ fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Computes greatest common divisor using Binary GCD algorithm.
 pub fn compute_gcd(x: i64, y: i64) -> i64 {
-    // because the input values are i64, casting these u64's back to i64 causes no overflow
+    if x == 0 {
+        return y;
+    }
+    if y == 0 {
+        return x;
+    }
+
     let mut a = x.unsigned_abs();
     let mut b = y.unsigned_abs();
-
-    if a == 0 {
-        return b as i64;
-    }
-    if b == 0 {
-        return a as i64;
-    }
 
     let shift = (a | b).trailing_zeros();
     a >>= shift;
@@ -113,6 +112,7 @@ pub fn compute_gcd(x: i64, y: i64) -> i64 {
         b -= a;
 
         if b == 0 {
+            // because the input values are i64, casting this back to i64 is safe
             return (a << shift) as i64;
         }
     }
