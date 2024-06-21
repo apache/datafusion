@@ -68,7 +68,7 @@ use crate::utils::log_plan;
 /// `OptimizerRule`s.
 ///
 /// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
-/// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_optimizer_rule
+/// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_optimizer_rule
 
 pub trait OptimizerRule {
     /// Try and rewrite `plan` to an optimized form, returning None if the plan
@@ -77,6 +77,10 @@ pub trait OptimizerRule {
     /// Note this API will be deprecated in the future as it requires `clone`ing
     /// the input plan, which can be expensive. OptimizerRules should implement
     /// [`Self::rewrite`] instead.
+    #[deprecated(
+        since = "40.0.0",
+        note = "please implement supports_rewrite and rewrite instead"
+    )]
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -332,6 +336,7 @@ fn optimize_plan_node(
         return rule.rewrite(plan, config);
     }
 
+    #[allow(deprecated)]
     rule.try_optimize(&plan, config).map(|maybe_plan| {
         match maybe_plan {
             Some(new_plan) => {
@@ -483,7 +488,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use datafusion_common::tree_node::Transformed;
-    use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
+    use datafusion_common::{plan_err, DFSchema, DFSchemaRef, DataFusionError, Result};
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
 
@@ -667,11 +672,23 @@ mod tests {
             _: &LogicalPlan,
             _: &dyn OptimizerConfig,
         ) -> Result<Option<LogicalPlan>> {
-            plan_err!("rule failed")
+            unreachable!()
         }
 
         fn name(&self) -> &str {
             "bad rule"
+        }
+
+        fn supports_rewrite(&self) -> bool {
+            true
+        }
+
+        fn rewrite(
+            &self,
+            _plan: LogicalPlan,
+            _config: &dyn OptimizerConfig,
+        ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
+            plan_err!("rule failed")
         }
     }
 

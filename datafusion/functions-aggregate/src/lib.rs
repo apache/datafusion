@@ -70,7 +70,8 @@ pub mod approx_median;
 pub mod approx_percentile_cont;
 pub mod approx_percentile_cont_with_weight;
 pub mod bit_and_or_xor;
-
+pub mod bool_and_or;
+pub mod string_agg;
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;
 use datafusion_common::Result;
@@ -88,6 +89,8 @@ pub mod expr_fn {
     pub use super::bit_and_or_xor::bit_and;
     pub use super::bit_and_or_xor::bit_or;
     pub use super::bit_and_or_xor::bit_xor;
+    pub use super::bool_and_or::bool_and;
+    pub use super::bool_and_or::bool_or;
     pub use super::count::count;
     pub use super::count::count_distinct;
     pub use super::covariance::covar_pop;
@@ -138,9 +141,12 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         approx_distinct::approx_distinct_udaf(),
         approx_percentile_cont_udaf(),
         approx_percentile_cont_with_weight_udaf(),
+        string_agg::string_agg_udaf(),
         bit_and_or_xor::bit_and_udaf(),
         bit_and_or_xor::bit_or_udaf(),
         bit_and_or_xor::bit_xor_udaf(),
+        bool_and_or::bool_and_udaf(),
+        bool_and_or::bool_or_udaf(),
     ]
 }
 
