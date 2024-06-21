@@ -317,16 +317,27 @@ fn rename_expressions(
         .into_iter()
         .zip(new_schema.fields())
         .map(|(old_expr, new_field)| {
-            if &old_expr.get_type(input_schema)? == new_field.data_type() {
-                // Alias column if needed
-                old_expr.alias_if_changed(new_field.name().into())
-            } else {
-                // Use Cast to rename inner struct fields + alias column if needed
+            // Check if type (i.e. nested struct field names) match, use Cast to rename if needed
+            let new_expr = if &old_expr.get_type(input_schema)? != new_field.data_type() {
                 Expr::Cast(Cast::new(
                     Box::new(old_expr),
                     new_field.data_type().to_owned(),
                 ))
-                .alias_if_changed(new_field.name().into())
+            } else {
+                old_expr
+            };
+            // Alias column if needed
+            let new_name = new_field.name();
+            match &new_expr {
+                Expr::Column(c) => {
+                    // If expr is a column reference, alias_if_changed would cause an aliasing if the old expr has a qualifier
+                    if &c.name == new_name {
+                        Ok(new_expr)
+                    } else {
+                        Ok(new_expr.alias(new_name))
+                    }
+                }
+                _ => new_expr.alias_if_changed(new_name.to_owned()),
             }
         })
         .collect()
@@ -594,6 +605,8 @@ pub async fn from_substrait_rel(
             let right = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, join.right.as_ref().unwrap(), extensions).await?,
             );
+            let (left, right) = requalify_sides_if_needed(left, right)?;
+
             let join_type = from_substrait_jointype(join.r#type)?;
             // The join condition expression needs full input schema and not the output schema from join since we lose columns from
             // certain join types such as semi and anti joins
@@ -627,13 +640,15 @@ pub async fn from_substrait_rel(
             }
         }
         Some(RelType::Cross(cross)) => {
-            let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
+            let left = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, cross.left.as_ref().unwrap(), extensions).await?,
             );
-            let right =
+            let right = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, cross.right.as_ref().unwrap(), extensions)
-                    .await?;
-            left.cross_join(right)?.build()
+                    .await?,
+            );
+            let (left, right) = requalify_sides_if_needed(left, right)?;
+            left.cross_join(right.build()?)?.build()
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
@@ -843,6 +858,24 @@ pub async fn from_substrait_rel(
             }))
         }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
+    }
+}
+
+fn requalify_sides_if_needed(
+    left: LogicalPlanBuilder,
+    right: LogicalPlanBuilder,
+) -> Result<(LogicalPlanBuilder, LogicalPlanBuilder)> {
+    // If there are conflicting column names, alias the columns
+    // This may differ from the original plan, but is necessary as Substrait doesn't have a way to specify aliases
+    let left_cols = left.schema().columns();
+    let right_cols = right.schema().columns();
+    if left_cols.iter().any(|l| right_cols.contains(l)) {
+        Ok((
+            left.alias(TableReference::bare("left"))?,
+            right.alias(TableReference::bare("right"))?,
+        ))
+    } else {
+        Ok((left, right))
     }
 }
 
