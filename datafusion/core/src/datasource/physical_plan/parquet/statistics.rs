@@ -698,10 +698,37 @@ macro_rules! get_data_page_statistics {
     }
 }
 
+/// Looks up the parquet column by arrow schema index
+pub(crate) fn parquet_column_by_arrow_schema_index<'a>(
+    parquet_schema: &SchemaDescriptor,
+    arrow_schema: &'a Schema,
+    root_index: usize,
+) -> Option<(usize, &'a FieldRef)> {
+    // This get could be done in constant time
+    let field = arrow_schema.fields().get(root_index)?;
+
+    if field.data_type().is_nested() {
+        // Nested fields are not supported and require non-trivial logic
+        // to correctly walk the parquet schema accounting for the
+        // logical type rules - <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
+        //
+        // For example a ListArray could correspond to anything from 1 to 3 levels
+        // in the parquet schema
+        return None;
+    }
+
+    // This could be made more efficient (#TBD)
+    let parquet_idx = (0..parquet_schema.columns().len())
+        .find(|x| parquet_schema.get_column_root_idx(*x) == root_index)?;
+    Some((parquet_idx, field))
+}
+
 /// Lookups up the parquet column by name
 ///
 /// Returns the parquet column index and the corresponding arrow field
-pub(crate) fn parquet_column<'a>(
+/// It is less efficient to reuse function [`parquet_column_by_arrow_schema_index`]
+/// as the root_idx could be found at once.
+pub(crate) fn parquet_column_by_name<'a>(
     parquet_schema: &SchemaDescriptor,
     arrow_schema: &'a Schema,
     name: &str,
@@ -867,13 +894,61 @@ impl<'a> StatisticsConverter<'a> {
     where
         I: IntoIterator<Item = &'a RowGroupMetaData>,
     {
+        let mut builder = UInt64Array::builder(10);
+        for metadata in metadatas.into_iter() {
+            let row_count = metadata.num_rows();
+            let row_count: u64 = row_count.try_into().map_err(|e| {
+                internal_datafusion_err!(
+                    "Parquet row count {row_count} too large to convert to u64: {e}"
+                )
+            })?;
+            builder.append_value(row_count);
+        }
+        Ok(Some(builder.finish()))
+    }
+
+    /// Returns a [`UInt64Array`] with total byte sizes for each row group
+    ///
+    /// # Return Value
+    ///
+    /// The returned array has no nulls, and has one value for each row group.
+    /// Each value is the total byte size of the row group.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use arrow::datatypes::Schema;
+    /// # use arrow_array::ArrayRef;
+    /// # use parquet::file::metadata::ParquetMetaData;
+    /// # use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
+    /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
+    /// # fn get_arrow_schema() -> Schema { unimplemented!() }
+    /// // Given the metadata for a parquet file and the arrow schema
+    /// let metadata: ParquetMetaData = get_parquet_metadata();
+    /// let arrow_schema: Schema = get_arrow_schema();
+    /// let parquet_schema = metadata.file_metadata().schema_descr();
+    /// // create a converter
+    /// let converter = StatisticsConverter::try_new("foo", &arrow_schema, parquet_schema)
+    ///   .unwrap();
+    /// // get the row counts for each row group
+    /// let row_counts = converter.row_group_row_total_bytes(metadata
+    ///   .row_groups()
+    ///   .iter()
+    /// );
+    /// ```
+    pub fn row_group_row_total_bytes<I>(
+        &self,
+        metadatas: I,
+    ) -> Result<Option<UInt64Array>>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
         let Some(_) = self.parquet_index else {
             return Ok(None);
         };
 
         let mut builder = UInt64Array::builder(10);
         for metadata in metadatas.into_iter() {
-            let row_count = metadata.num_rows();
+            let row_count = metadata.total_byte_size();
             let row_count: u64 = row_count.try_into().map_err(|e| {
                 internal_datafusion_err!(
                     "Parquet row count {row_count} too large to convert to u64: {e}"
@@ -909,10 +984,48 @@ impl<'a> StatisticsConverter<'a> {
         };
 
         // find the column in the parquet schema, if not, return a null array
-        let parquet_index = match parquet_column(
+        let parquet_index = match parquet_column_by_name(
             parquet_schema,
             arrow_schema,
             column_name,
+        ) {
+            Some((parquet_idx, matched_field)) => {
+                // sanity check that matching field matches the arrow field
+                if matched_field.as_ref() != arrow_field {
+                    return internal_err!(
+                        "Matched column '{:?}' does not match original matched column '{:?}'",
+                        matched_field,
+                        arrow_field
+                    );
+                }
+                Some(parquet_idx)
+            }
+            None => None,
+        };
+
+        Ok(Self {
+            parquet_index,
+            arrow_field,
+        })
+    }
+
+    /// Create a new `StatisticsConverter` to extract statistics for a column from the index
+    /// of the column in the arrow schema
+    ///
+    /// This is a more efficient version of [`Self::try_new`] that avoids looking up the column
+    /// by name in the arrow schema and useful when the column index is already known or when
+    /// iterating over the columns in the arrow schema.
+    pub fn try_new_from_arrow_schema_index(
+        arrow_schema_index: usize,
+        arrow_field: &'a Field,
+        arrow_schema: &'a Schema,
+        parquet_schema: &'a SchemaDescriptor,
+    ) -> Result<Self> {
+        // find the column in the parquet schema, if not, return a null array
+        let parquet_index = match parquet_column_by_arrow_schema_index(
+            parquet_schema,
+            arrow_schema,
+            arrow_schema_index,
         ) {
             Some((parquet_idx, matched_field)) => {
                 // sanity check that matching field matches the arrow field
@@ -1878,7 +1991,8 @@ mod test {
         let parquet_schema = metadata.file_metadata().schema_descr();
 
         // read the int_col statistics
-        let (idx, _) = parquet_column(parquet_schema, &schema, "int_col").unwrap();
+        let (idx, _) =
+            parquet_column_by_name(parquet_schema, &schema, "int_col").unwrap();
         assert_eq!(idx, 2);
 
         let row_groups = metadata.row_groups();
@@ -2076,7 +2190,8 @@ mod test {
 
             for field in schema.fields() {
                 if field.data_type().is_nested() {
-                    let lookup = parquet_column(parquet_schema, &schema, field.name());
+                    let lookup =
+                        parquet_column_by_name(parquet_schema, &schema, field.name());
                     assert_eq!(lookup, None);
                     continue;
                 }

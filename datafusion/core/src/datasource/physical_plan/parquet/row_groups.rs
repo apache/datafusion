@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::datasource::listing::FileRange;
-use crate::datasource::physical_plan::parquet::statistics::parquet_column;
+use crate::datasource::physical_plan::parquet::statistics::parquet_column_by_name;
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use super::{ParquetAccessPlan, ParquetFileMetrics, StatisticsConverter};
@@ -169,9 +169,11 @@ impl RowGroupAccessPlanFilter {
             let mut column_sbbf = HashMap::with_capacity(literal_columns.len());
 
             for column_name in literal_columns {
-                let Some((column_idx, _field)) =
-                    parquet_column(builder.parquet_schema(), arrow_schema, &column_name)
-                else {
+                let Some((column_idx, _field)) = parquet_column_by_name(
+                    builder.parquet_schema(),
+                    arrow_schema,
+                    &column_name,
+                ) else {
                     continue;
                 };
 

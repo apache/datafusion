@@ -54,7 +54,7 @@ mod page_filter;
 mod reader;
 mod row_filter;
 mod row_groups;
-mod statistics;
+pub mod statistics;
 mod writer;
 
 use crate::datasource::schema_adapter::{

@@ -41,13 +41,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::datasource::physical_plan::parquet::parquet_to_arrow_decimal_type;
-use crate::datasource::physical_plan::parquet::statistics::{
-    from_bytes_to_i128, parquet_column,
-};
+use crate::datasource::physical_plan::parquet::statistics::from_bytes_to_i128;
 use crate::datasource::physical_plan::parquet::ParquetAccessPlan;
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use super::metrics::ParquetFileMetrics;
+use super::statistics::parquet_column_by_name;
 
 /// A [`PagePruningPredicate`] provides the ability to construct a [`RowSelection`]
 /// based on parquet page level statistics, if any
@@ -309,7 +308,7 @@ fn find_column_index(
         return None;
     };
 
-    parquet_column(parquet_schema, arrow_schema, column.name()).map(|x| x.0)
+    parquet_column_by_name(parquet_schema, arrow_schema, column.name()).map(|x| x.0)
 }
 
 /// Returns a `RowSelection` for the pages in this RowGroup if any
