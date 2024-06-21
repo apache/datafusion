@@ -1861,6 +1861,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             null_treatment,
         }) => {
             write_function_name(w, &fun.to_string(), false, args)?;
+
             if let Some(nt) = null_treatment {
                 w.write_str(" ")?;
                 write!(w, "{}", nt)?;
@@ -1885,7 +1886,6 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             null_treatment,
         }) => {
             write_function_name(w, func_def.name(), *distinct, args)?;
-
             if let Some(fe) = filter {
                 write!(w, " FILTER (WHERE {fe})")?;
             };
@@ -2136,18 +2136,6 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_count_return_type() -> Result<()> {
-        let fun = find_df_window_func("count").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8])?;
-        assert_eq!(DataType::Int64, observed);
-
-        let observed = fun.return_type(&[DataType::UInt64])?;
-        assert_eq!(DataType::Int64, observed);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_first_value_return_type() -> Result<()> {
         let fun = find_df_window_func("first_value").unwrap();
         let observed = fun.return_type(&[DataType::Utf8])?;
@@ -2250,7 +2238,6 @@ mod test {
             "nth_value",
             "min",
             "max",
-            "count",
             "avg",
         ];
         for name in names {

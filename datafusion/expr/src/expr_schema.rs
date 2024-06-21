@@ -141,7 +141,7 @@ impl ExprSchemable for Expr {
                         // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
                         data_types_with_scalar_udf(&arg_data_types, func).map_err(|err| {
                             plan_datafusion_err!(
-                                "{} and {}",
+                                "{} {}",
                                 err,
                                 utils::generate_signature_error_msg(
                                     func.name(),
@@ -164,7 +164,7 @@ impl ExprSchemable for Expr {
                     WindowFunctionDefinition::AggregateUDF(udf) => {
                         let new_types = data_types_with_aggregate_udf(&data_types, udf).map_err(|err| {
                             plan_datafusion_err!(
-                                "{} and {}",
+                                "{} {}",
                                 err,
                                 utils::generate_signature_error_msg(
                                     fun.name(),
@@ -192,7 +192,7 @@ impl ExprSchemable for Expr {
                     AggregateFunctionDefinition::UDF(fun) => {
                         let new_types = data_types_with_aggregate_udf(&data_types, fun).map_err(|err| {
                             plan_datafusion_err!(
-                                "{} and {}",
+                                "{} {}",
                                 err,
                                 utils::generate_signature_error_msg(
                                     fun.name(),
