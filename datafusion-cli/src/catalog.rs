@@ -243,7 +243,7 @@ mod tests {
         let (ctx, schema) = setup_context();
 
         // That's a non registered table so expecting None here
-        let table = schema.table(&location).await.ok();
+        let table = schema.table(&location).await?;
         assert!(table.is_none());
 
         // It should still create an object store for the location in the SessionState
@@ -267,7 +267,7 @@ mod tests {
 
         let (ctx, schema) = setup_context();
 
-        let table = schema.table(&location).await.ok();
+        let table = schema.table(&location).await?;
         assert!(table.is_none());
 
         let store = ctx
@@ -289,7 +289,7 @@ mod tests {
 
         let (ctx, schema) = setup_context();
 
-        let table = schema.table(&location).await.ok();
+        let table = schema.table(&location).await?;
         assert!(table.is_none());
 
         let store = ctx
