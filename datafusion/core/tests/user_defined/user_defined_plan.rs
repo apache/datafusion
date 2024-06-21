@@ -80,7 +80,7 @@ use datafusion::{
         Expr, Extension, Limit, LogicalPlan, Sort, UserDefinedLogicalNode,
         UserDefinedLogicalNodeCore,
     },
-    optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
+    optimizer::{OptimizerConfig, OptimizerRule},
     physical_expr::EquivalenceProperties,
     physical_plan::{
         DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
@@ -92,6 +92,8 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
+use datafusion_common::tree_node::Transformed;
+use datafusion_optimizer::optimizer::ApplyOrder;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -282,9 +284,29 @@ impl OptimizerRule for TopKOptimizerRule {
     // Example rewrite pass to insert a user defined LogicalPlanNode
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _plan: &LogicalPlan,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        unreachable!()
+    }
+
+    fn name(&self) -> &str {
+        "topk"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
@@ -292,7 +314,7 @@ impl OptimizerRule for TopKOptimizerRule {
             fetch: Some(fetch),
             input,
             ..
-        }) = plan
+        }) = &plan
         {
             if let LogicalPlan::Sort(Sort {
                 ref expr,
@@ -302,12 +324,10 @@ impl OptimizerRule for TopKOptimizerRule {
             {
                 if expr.len() == 1 {
                     // we found a sort with a single sort expr, replace with a a TopK
-                    return Ok(Some(LogicalPlan::Extension(Extension {
+                    return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                         node: Arc::new(TopKPlanNode {
                             k: *fetch,
-                            input: self
-                                .try_optimize(input.as_ref(), config)?
-                                .unwrap_or_else(|| input.as_ref().clone()),
+                            input: input.as_ref().clone(),
                             expr: expr[0].clone(),
                         }),
                     })));
@@ -315,13 +335,7 @@ impl OptimizerRule for TopKOptimizerRule {
             }
         }
 
-        // If we didn't find the Limit/Sort combination, recurse as
-        // normal and build the result.
-        optimize_children(self, plan, config)
-    }
-
-    fn name(&self) -> &str {
-        "topk"
+        Ok(Transformed::no(plan))
     }
 }
 
