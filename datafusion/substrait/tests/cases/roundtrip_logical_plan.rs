@@ -713,20 +713,17 @@ async fn roundtrip_literal_struct() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_values() -> Result<()> {
     // TODO: would be nice to have a struct inside the LargeList, but arrow_cast doesn't support that currently
-    let values = "(\
+    assert_expected_plan(
+        "VALUES \
+            (\
                 1, \
                 'a', \
                 [[-213.1, NULL, 5.5, 2.0, 1.0], []], \
                 arrow_cast([1,2,3], 'LargeList(Int64)'), \
                 STRUCT(true, 1 AS int_field, CAST(NULL AS STRING)), \
                 [STRUCT(STRUCT('a' AS string_field) AS struct_field)]\
-            )";
-
-    // Test LogicalPlan::Values
-    assert_expected_plan(
-        format!("VALUES \
-            {values}, \
-            (NULL, NULL, NULL, NULL, NULL, NULL)").as_str(),
+            ), \
+            (NULL, NULL, NULL, NULL, NULL, NULL)",
         "Values: \
             (\
                 Int64(1), \
@@ -737,18 +734,19 @@ async fn roundtrip_values() -> Result<()> {
                 List([{struct_field: {string_field: a}}])\
             ), \
             (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())",
-    true)
-        .await?;
+    true).await
+}
 
-    // Test LogicalPlan::EmptyRelation
-    roundtrip(format!("SELECT * FROM (VALUES {values}) LIMIT 0").as_str()).await
+#[tokio::test]
+async fn roundtrip_values_empty_relation() -> Result<()> {
+    roundtrip("SELECT * FROM (VALUES ('a')) LIMIT 0").await
 }
 
 #[tokio::test]
 async fn roundtrip_values_duplicate_column_join() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
-    // In this case the aliasing happens at a different point in the plan, so we cannot use roundtrip.
+    // This roundtrip works because we set aliases to what the Substrait consumer will generate.
     roundtrip(
         "SELECT left.column1 as c1, right.column1 as c2 \
     FROM \
