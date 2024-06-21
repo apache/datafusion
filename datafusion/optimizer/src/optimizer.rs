@@ -68,7 +68,7 @@ use crate::utils::log_plan;
 /// `OptimizerRule`s.
 ///
 /// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
-/// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_optimizer_rule
+/// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_optimizer_rule
 
 pub trait OptimizerRule {
     /// Try and rewrite `plan` to an optimized form, returning None if the plan
