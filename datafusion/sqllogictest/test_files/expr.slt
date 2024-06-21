@@ -2473,7 +2473,7 @@ host2 202
 host3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
-query error
+query TR
 select 
     t2.server['c3'] as host, 
     sum((
@@ -2488,6 +2488,10 @@ select
     ) t2 
     where t2.server['c3'] IS NOT NULL 
     group by t2.server['c3'] order by host;
+----
+host1 101
+host2 202
+host3 303
 
 # can have 2 projections with aggr(short_circuited), with different short-circuited expr
 query TRR
@@ -2559,7 +2563,7 @@ host2 2.2 202
 host3 3.3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
-query error
+query TRR
 select 
     t2.server['c3'] as host, 
     sum((
@@ -2579,6 +2583,10 @@ select
     ) t2 
     where t2.server['c3'] IS NOT NULL 
     group by t2.server['c3'] order by host;
+----
+host1 1.1 101
+host2 2.2 202
+host3 3.3 303
 
 # can have 2 projections with aggr(short_circuited), with the same short-circuited expr (e.g. coalesce)
 query TRR
@@ -2587,3 +2595,28 @@ select t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] as host, sum(coalesc
 host1 1.1 101
 host2 2.2 202
 host3 3.3 303
+
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+statement ok
+create table t (a float) as values (1), (2), (3);
+
+query TT
+explain select min(a) filter (where a > 1) as x from t;
+----
+logical_plan
+01)Projection: MIN(t.a) FILTER (WHERE t.a > Int64(1)) AS x
+02)--Aggregate: groupBy=[[]], aggr=[[MIN(t.a) FILTER (WHERE t.a > Float32(1)) AS MIN(t.a) FILTER (WHERE t.a > Int64(1))]]
+03)----TableScan: t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[MIN(t.a) FILTER (WHERE t.a > Int64(1))@0 as x]
+02)--AggregateExec: mode=Single, gby=[], aggr=[MIN(t.a) FILTER (WHERE t.a > Int64(1))]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+
+
+statement ok
+drop table t;
+
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
