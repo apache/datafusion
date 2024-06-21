@@ -492,6 +492,24 @@ async fn roundtrip_outer_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_self_join() -> Result<()> {
+    // Substrait does currently NOT maintain the alias of the tables.
+    // Instead, when we consume Substrait, we generate unique aliases for each table in order to
+    // provide unique qualified names for each column.
+    // This test works because we set aliases to what the Substrait consumer will generate
+    roundtrip("SELECT data.a as data_a, data_1.a as data_1_a FROM data JOIN data AS data_1 ON data.a = data_1.a").await?;
+    roundtrip("SELECT data.a as data_a, data_1.a as data_1_a FROM data JOIN data AS data_1 ON data.b = data_1.b").await
+}
+
+#[tokio::test]
+async fn roundtrip_self_implicit_cross_join() -> Result<()> {
+    // Substrait does currently NOT maintain the alias of the tables.
+    // Instead, when we consume Substrait, we generate unique aliases for each table.
+    // This test works because we set aliases to what the Substrait consumer will generate
+    roundtrip("SELECT data.a p1_a, data_1.a p2_a FROM data, data data_1").await
+}
+
+#[tokio::test]
 async fn roundtrip_arithmetic_ops() -> Result<()> {
     roundtrip("SELECT a - a FROM data").await?;
     roundtrip("SELECT a + a FROM data").await?;
@@ -736,6 +754,20 @@ async fn roundtrip_values() -> Result<()> {
 
     // Test LogicalPlan::EmptyRelation
     roundtrip(format!("SELECT * FROM (VALUES {values}) LIMIT 0").as_str()).await
+}
+
+#[tokio::test]
+async fn roundtrip_values_duplicate_column_join() -> Result<()> {
+    // Set aliases to what the Substrait consumer will generate
+    roundtrip(
+        "SELECT table.column1 as c1, table_1.column1 as c2 \
+    FROM \
+        (VALUES (1)) AS table \
+    JOIN \
+        (VALUES (2)) AS table_1 \
+    ON table.column1 == table_1.column1",
+    )
+    .await
 }
 
 /// Construct a plan that cast columns. Only those SQL types are supported for now.
