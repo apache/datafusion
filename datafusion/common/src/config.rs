@@ -1632,13 +1632,6 @@ impl CsvOptions {
         self
     }
 
-    /// Returns true if the CSV quotes should be doubled. If format options does not
-    /// specify whether quotes should be doubled, returns `None` (indicating that the
-    /// configuration should be consulted).
-    pub fn has_header(&self) -> Option<bool> {
-        self.double_quote
-    }
-
     /// Set a `CompressionTypeVariant` of CSV
     /// - defaults to `CompressionTypeVariant::UNCOMPRESSED`
     pub fn with_file_compression_type(
