@@ -67,7 +67,6 @@ select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where 
 5 2
 
 # Could push the filter (column1 = 2) down below unnest
-# https://github.com/apache/datafusion/issues/11016
 query TT
 explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 AND column1 = 2;
 ----
