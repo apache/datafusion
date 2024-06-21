@@ -83,7 +83,7 @@ use url::Url;
 /// 1. Use [`ParquetFileReaderFactory`] to avoid re-reading parquet metadata on each query
 /// 2. Use [`PruningPredicate`] for predicate analysis
 /// 3. Pass a row group selection to [`ParuetExec`]
-/// 4. Pass a row selection (within a row group) to [`ParuetExec`]
+/// 4. Pass a row selection (within a row group) to [`ParquetExec`]
 ///
 /// Note this is a *VERY* low level example for people who want to build their
 /// own custom indexes (e.g. for low latency queries). Most users should use
@@ -125,13 +125,14 @@ use url::Url;
 ///
 /// Within a Row Group, Column Chunks store data in DataPages. This example also
 /// shows how to configure the ParquetExec to read a `RowSelection` (row ranges)
-/// which will skip unneeded data pages:
+/// which will skip unneeded data pages. This requires that the Parquet file has
+/// a [Page Index].
 ///
 /// ```text
 ///         ┌───────────────────────┐   If the RowSelection does not include any
 ///         │          ...          │   rows from a particular Data Page, that
-///         │                       │   Data Page is not fetched or decoded
-///         │ ┌───────────────────┐ │
+///         │                       │   Data Page is not fetched or decoded.
+///         │ ┌───────────────────┐ │   Note this requires a PageIndex
 ///         │ │     ┌──────────┐  │ │
 /// Row     │ │     │DataPage 0│  │ │                 ┌────────────────────┐
 /// Groups  │ │     └──────────┘  │ │                 │                    │
@@ -153,6 +154,7 @@ use url::Url;
 /// ```
 ///
 /// [`ListingTable`]: datafusion::datasource::listing::ListingTable
+/// [Page Index](https://github.com/apache/parquet-format/blob/master/PageIndex.md)
 #[tokio::main]
 async fn main() -> Result<()> {
     // the object store is used to read the parquet files (in this case, it is
