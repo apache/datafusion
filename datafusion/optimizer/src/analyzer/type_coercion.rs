@@ -160,18 +160,47 @@ impl<'a> TypeCoercionRewriter<'a> {
         op: Operator,
         right: Expr,
     ) -> Result<(Expr, Expr)> {
-        // always cast the scalar function to the column type
-        let (left_type, right_type) = match (&left, &right) {
-            (Expr::Column(_), Expr::ScalarFunction(_)) => {
-                (left.get_type(self.schema)?, left.get_type(self.schema)?)
-            }
-            (Expr::ScalarFunction(_), Expr::Column(_)) => {
-                (right.get_type(self.schema)?, right.get_type(self.schema)?)
-            }
-            _ => (left.get_type(self.schema)?, right.get_type(self.schema)?),
-        };
+        // try to coerce the scalar to the column type
+        fn coerce_scalar_to_col(
+            schema: &DFSchema,
+            left: Expr,
+            op: Operator,
+            right: Expr,
+        ) -> Result<(Expr, Expr)> {
+            let (left_type, right_type) = match (&left, &right) {
+                (Expr::Column(_), Expr::ScalarFunction(_)) => {
+                    (left.get_type(schema)?, left.get_type(schema)?)
+                }
+                (Expr::ScalarFunction(_), Expr::Column(_)) => {
+                    (right.get_type(schema)?, right.get_type(schema)?)
+                }
+                _ => {
+                    return Err(DataFusionError::Internal(
+                        "Not column type and scalar type. Try normal coercion"
+                            .to_string(),
+                    ))
+                }
+            };
 
-        let (left_type, right_type) = get_input_types(&left_type, &op, &right_type)?;
+            let (left_type, right_type) = get_input_types(&left_type, &op, &right_type)?;
+            Ok((
+                left.cast_to(&left_type, schema)?,
+                right.cast_to(&right_type, schema)?,
+            ))
+        }
+
+        if let Ok((left_expr, right_expr)) =
+            coerce_scalar_to_col(self.schema, left.clone(), op, right.clone())
+        {
+            return Ok((left_expr, right_expr));
+        }
+
+        // try to coerce normal binary expressions
+        let (left_type, right_type) = get_input_types(
+            &left.get_type(self.schema)?,
+            &op,
+            &right.get_type(self.schema)?,
+        )?;
 
         Ok((
             left.cast_to(&left_type, self.schema)?,
