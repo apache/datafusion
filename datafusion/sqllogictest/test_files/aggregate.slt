@@ -2770,6 +2770,19 @@ select array_agg(c1) from t;
 statement ok
 drop table t;
 
+# array_agg_str
+
+statement ok
+create table t (c1 string) as values ('a'), ('b'), ('c'), ('d'), ('e');
+
+query ?
+select array_agg(c1) from t;
+----
+[a, b, c, d, e]
+
+statement ok
+drop table t;
+
 # array_agg_nested
 statement ok
 create table t as values (make_array([1, 2, 3], [4, 5])), (make_array([6], [7, 8])), (make_array([9]));
