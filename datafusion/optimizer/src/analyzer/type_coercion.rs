@@ -160,11 +160,19 @@ impl<'a> TypeCoercionRewriter<'a> {
         op: Operator,
         right: Expr,
     ) -> Result<(Expr, Expr)> {
-        let (left_type, right_type) = get_input_types(
-            &left.get_type(self.schema)?,
-            &op,
-            &right.get_type(self.schema)?,
-        )?;
+        // always cast the scalar function to the column type
+        let (left_type, right_type) = match (&left, &right) {
+            (Expr::Column(_), Expr::ScalarFunction(_)) => {
+                (left.get_type(self.schema)?, left.get_type(self.schema)?)
+            }
+            (Expr::ScalarFunction(_), Expr::Column(_)) => {
+                (right.get_type(self.schema)?, right.get_type(self.schema)?)
+            }
+            _ => (left.get_type(self.schema)?, right.get_type(self.schema)?),
+        };
+
+        let (left_type, right_type) = get_input_types(&left_type, &op, &right_type)?;
+
         Ok((
             left.cast_to(&left_type, self.schema)?,
             right.cast_to(&right_type, self.schema)?,

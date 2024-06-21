@@ -231,7 +231,7 @@ query TT
 explain SELECT column1_utf8 from test where column1_utf8 = arrow_cast('Andrew', 'Utf8View');
 ----
 logical_plan
-01)Filter: CAST(test.column1_utf8 AS Utf8View) = Utf8View("Andrew")
+01)Filter: test.column1_utf8 = Utf8("Andrew")
 02)--TableScan: test projection=[column1_utf8]
 
 query TT
