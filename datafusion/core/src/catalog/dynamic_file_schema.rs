@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! dynamic_file_schema contains a SchemaProvider that creates tables from file paths
+
 use std::any::Any;
 use std::sync::{Arc, Weak};
 
@@ -30,13 +32,17 @@ use crate::datasource::TableProvider;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 
-/// Wraps another schema provider
+/// Implements the [DynamicFileSchemaProvider] that can create tables provider from the file path.
+///
+/// The provider will try to create a table provider from the file path if the table provider
+/// isn't exist in the inner schema provider. The required object store must be registered in the session context.
 pub struct DynamicFileSchemaProvider {
     inner: Arc<dyn SchemaProvider>,
     state_store: StateStore,
 }
 
 impl DynamicFileSchemaProvider {
+    /// Create a new [DynamicFileSchemaProvider] with the given inner schema provider.
     pub fn new(inner: Arc<dyn SchemaProvider>) -> Self {
         Self {
             inner,
@@ -44,6 +50,7 @@ impl DynamicFileSchemaProvider {
         }
     }
 
+    /// register the state store to the schema provider.
     pub fn with_state(&self, state: Weak<RwLock<SessionState>>) {
         self.state_store.with_state(state);
     }
@@ -107,6 +114,7 @@ fn substitute_tilde(cur: String) -> String {
     cur
 }
 
+/// The state store that stores the reference of the runtime session state.
 pub(crate) struct StateStore {
     state: Arc<Mutex<Option<Weak<RwLock<SessionState>>>>>,
 }
@@ -131,5 +139,49 @@ impl StateStore {
 impl Default for StateStore {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dirs::home_dir;
+    use crate::catalog::dynamic_file_schema::substitute_tilde;
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_substitute_tilde() {
+        use std::env;
+        use std::path::MAIN_SEPARATOR;
+        let original_home = home_dir();
+        let test_home_path = if cfg!(windows) {
+            "C:\\Users\\user"
+        } else {
+            "/home/user"
+        };
+        env::set_var(
+            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+            test_home_path,
+        );
+        let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
+        let expected = format!(
+            "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
+            test_home_path,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR
+        );
+        let actual = substitute_tilde(input.to_string());
+        assert_eq!(actual, expected);
+        match original_home {
+            Some(home_path) => env::set_var(
+                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                home_path.to_str().unwrap(),
+            ),
+            None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
+        }
     }
 }
