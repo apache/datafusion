@@ -103,7 +103,9 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         self.inner.table_exist(name)
     }
 }
-fn substitute_tilde(cur: String) -> String {
+
+/// Substitute the tilde character in the file path with the user home directory.
+pub fn substitute_tilde(cur: String) -> String {
     if let Some(usr_dir_path) = home_dir() {
         if let Some(usr_dir) = usr_dir_path.to_str() {
             if cur.starts_with('~') && !usr_dir.is_empty() {

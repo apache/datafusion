@@ -20,13 +20,13 @@ use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
+use datafusion::catalog::dynamic_file_schema::substitute_tilde;
 use datafusion::catalog::schema::SchemaProvider;
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
-use dirs::home_dir;
 use parking_lot::RwLock;
 
 use crate::object_storage::{AwsOptions, GcpOptions, get_object_store};
@@ -205,16 +205,6 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     fn table_exist(&self, name: &str) -> bool {
         self.inner.table_exist(name)
     }
-}
-fn substitute_tilde(cur: String) -> String {
-    if let Some(usr_dir_path) = home_dir() {
-        if let Some(usr_dir) = usr_dir_path.to_str() {
-            if cur.starts_with('~') && !usr_dir.is_empty() {
-                return cur.replacen('~', usr_dir, 1);
-            }
-        }
-    }
-    cur
 }
 
 #[cfg(test)]
