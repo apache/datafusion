@@ -46,17 +46,8 @@ const CSE_PREFIX: &str = "__common_expr";
 
 /// Identifier that represents a subexpression tree.
 ///
-/// Note that the current implementation contains:
-/// - the `Display` of an expression (a `String`) and
-/// - the identifiers of the childrens of the expression
-/// concatenated.
-///
 /// An identifier should (ideally) be able to "hash", "accumulate", "equal" and "have no
 /// collision (as low as possible)"
-///
-/// Since an identifier is likely to be copied many times, it is better that an identifier
-/// is small or "copy". otherwise some kinds of reference count is needed. String
-/// description here is not such a good choose.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Identifier<'n> {
     hash: u64,
@@ -576,7 +567,7 @@ impl CommonSubexprEliminate {
                 .map(Transformed::yes)
         } else {
             // TODO: How exactly can the name or the schema change in this case?
-            //  In theory `new_aggr_expr` and `new_group_expr` are the original expressions or were crafted via `rewrite_expr()` that keeps the expression names.
+            //  In theory `new_aggr_expr` and `new_group_expr` are either the original expressions or they were crafted via `rewrite_expr()`, that keeps the original expression names.
             //  If this is really needed can we have UT for it?
             // Alias aggregation expressions if they have changed
             let new_aggr_expr = new_aggr_expr
