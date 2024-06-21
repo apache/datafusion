@@ -2947,7 +2947,7 @@ mod tests {
         assert_eq!(
             get_filtered_join_mask(
                 LeftSemi,
-                UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
+                &UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
                 &BooleanArray::from(vec![true, false, false, false, false, true]),
                 &HashSet::from_iter(vec![1]),
                 &0,
