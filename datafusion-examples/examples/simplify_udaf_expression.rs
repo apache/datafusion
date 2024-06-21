@@ -23,10 +23,10 @@ use datafusion::arrow::{array::Float32Array, record_batch::RecordBatch};
 use datafusion::error::Result;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use datafusion::{assert_batches_eq, prelude::*};
+use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion_common::cast::as_float64_array;
 use datafusion_expr::function::{AggregateFunctionSimplification, StateFieldsArgs};
 use datafusion_expr::simplify::SimplifyInfo;
-use datafusion_expr::test::function_stub::avg_udaf;
 use datafusion_expr::{
     expr::AggregateFunction, function::AccumulatorArgs, Accumulator, AggregateUDF,
     AggregateUDFImpl, GroupsAccumulator, Signature,

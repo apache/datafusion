@@ -1047,7 +1047,7 @@ mod test {
             .unwrap()
             .strip_backtrace();
         assert_eq!(
-            "Error during planning: Error during planning: Coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'avg(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tavg(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)",
+            "Error during planning: Error during planning: Coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed.",
             err
         );
         Ok(())
