@@ -171,6 +171,7 @@ pub fn max(expr: Expr) -> Expr {
     ))
 }
 
+// TODO: remove
 /// Create an expression to represent the array_agg() aggregate function
 pub fn array_agg(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
