@@ -271,7 +271,7 @@ impl JoinFuzzTestCase {
         join_filter_builder: Option<JoinFilterBuilder>,
     ) -> Self {
         Self {
-            batch_sizes: &[2],
+            batch_sizes: &[1, 2, 7, 49, 50, 51, 100],
             input1,
             input2,
             join_type,
