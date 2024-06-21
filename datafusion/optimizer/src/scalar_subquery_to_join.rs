@@ -69,14 +69,6 @@ impl ScalarSubqueryToJoin {
 }
 
 impl OptimizerRule for ScalarSubqueryToJoin {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called ScalarSubqueryToJoin::rewrite")
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }

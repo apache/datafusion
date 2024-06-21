@@ -70,14 +70,6 @@ impl OptimizeProjections {
 }
 
 impl OptimizerRule for OptimizeProjections {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called OptimizeProjections::rewrite")
-    }
-
     fn name(&self) -> &str {
         "optimize_projections"
     }
