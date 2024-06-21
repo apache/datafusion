@@ -273,10 +273,6 @@ impl TreeNode for Expr {
             }) => transform_box(expr, &mut f)?
                 .update_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                println!("transforming scalar functions {}", func.name());
-                for item in args.iter() {
-                    dbg!(&item);
-                }
                 transform_vec(args, &mut f)?.map_data(|new_args| {
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
                         func, new_args,

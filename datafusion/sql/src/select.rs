@@ -296,48 +296,60 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
-        let mut unnest_columns = vec![];
-        // from which column used for projection, before the unnest happen
-        // including non unnest column and unnest column
-        let mut inner_projection_exprs = vec![];
+        let mut current_input = input;
+        let mut current_select_exprs = select_exprs;
+        // only stop if there is no transformatoin possible
+        for i in 0.. {
+            let mut unnest_columns = vec![];
+            // from which column used for projection, before the unnest happen
+            // including non unnest column and unnest column
+            let mut inner_projection_exprs = vec![];
 
-        // expr returned here maybe different from the originals in inner_projection_exprs
-        // for example:
-        // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
-        // - unnest(array_col) will be transformed into unnest(array_col).element
-        // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
-        let outer_projection_exprs: Vec<Expr> = select_exprs
-            .into_iter()
-            .map(|expr| {
-                recursive_transform_unnest(
-                    &input,
-                    &mut unnest_columns,
-                    &mut inner_projection_exprs,
-                    expr,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect();
+            // expr returned here maybe different from the originals in inner_projection_exprs
+            // for example:
+            // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
+            // - unnest(array_col) will be transformed into unnest(array_col).element
+            // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
+            let outer_projection_exprs: Vec<Expr> = current_select_exprs
+                .iter()
+                .map(|expr| {
+                    recursive_transform_unnest(
+                        &current_input,
+                        &mut unnest_columns,
+                        &mut inner_projection_exprs,
+                        expr,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect();
 
-        // Do the final projection
-        if unnest_columns.is_empty() {
-            LogicalPlanBuilder::from(input)
-                .project(inner_projection_exprs)?
-                .build()
-        } else {
-            let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
-            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
-            let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-            let plan = LogicalPlanBuilder::from(input)
-                .project(inner_projection_exprs)?
-                .unnest_columns_with_options(columns, unnest_options)?
-                .project(outer_projection_exprs)?
-                .build()?;
-            println!("plan after unnesting {}", plan.display_indent());
-            Ok(plan)
+            // Do the final projection
+            if unnest_columns.is_empty() {
+                if i == 0 {
+                    return LogicalPlanBuilder::from(current_input)
+                        .project(inner_projection_exprs)?
+                        .build();
+                }
+                break;
+            } else {
+                let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
+                // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
+                let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+                let plan = LogicalPlanBuilder::from(current_input)
+                    .project(inner_projection_exprs)?
+                    .unnest_columns_with_options(columns, unnest_options)?
+                    .build()?;
+                current_input = plan;
+                println!("outer_projection_exprs: {:?}", outer_projection_exprs);
+                current_select_exprs = outer_projection_exprs;
+            }
         }
+        println!("current select exprs: {:?}", current_select_exprs);
+        LogicalPlanBuilder::from(current_input)
+            .project(current_select_exprs)?
+            .build()
     }
 
     fn plan_selection(

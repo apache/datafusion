@@ -22,7 +22,9 @@ use std::collections::HashMap;
 use arrow_schema::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     exec_err, internal_err, plan_err, Column, DataFusionError, Result, ScalarValue,
 };
@@ -271,7 +273,7 @@ pub(crate) fn recursive_transform_unnest(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<String>,
     inner_projection_exprs: &mut Vec<Expr>,
-    original_expr: Expr,
+    original_expr: &Expr,
 ) -> Result<Vec<Expr>> {
     let mut transform =
         |unnest_expr: &Expr, expr_in_unnest: &Expr| -> Result<Vec<Expr>> {
@@ -315,15 +317,15 @@ pub(crate) fn recursive_transform_unnest(
             transformed,
             tnr: _,
         } = original_expr.clone().transform_up(|expr: Expr| {
-            let is_root_expr = expr == original_expr;
+            let is_root_expr = &expr == original_expr;
 
             println!("transforming expr: {:?}", expr);
             if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
                 // TODO: why UDF is not transforming its input argument
                 let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
                 if is_root_expr{
-                    root_expr.extend(transform(&original_expr, arg)?);
-                    return Ok(Transformed::yes(expr));
+                    root_expr.extend(transform(original_expr, arg)?);
+                    return Ok(Transformed::new(expr,true,TreeNodeRecursion::Stop));
                 }
                 if !is_root_expr {
                     if let DataType::Struct(_) = data_type {
@@ -332,7 +334,8 @@ pub(crate) fn recursive_transform_unnest(
                 }
 
                 let transformed_exprs = transform(&expr, arg)?;
-                Ok(Transformed::yes(transformed_exprs[0].clone()))
+                // root_expr.push(transformed_exprs[0].clone());
+                Ok(Transformed::new(transformed_exprs[0].clone(),true,TreeNodeRecursion::Stop))
             } else {
                 Ok(Transformed::no(expr))
             }
@@ -350,7 +353,10 @@ pub(crate) fn recursive_transform_unnest(
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
     } else {
-        Ok(root_expr)
+        if !root_expr.is_empty() {
+            return Ok(root_expr);
+        }
+        Ok(vec![transformed_expr])
     }
 }
 
@@ -363,8 +369,69 @@ mod tests {
     use arrow_schema::Fields;
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{col, count, lit, unnest, EmptyRelation, LogicalPlan};
+    use datafusion_functions::core::expr_ext::FieldAccessor;
 
     use crate::utils::{recursive_transform_unnest, resolve_positions_to_exprs};
+    #[test]
+    fn test_nested_transform_unnest() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new(
+                "struct_col", // {array_col: [1,2,3]}
+                ArrowDataType::Struct(Fields::from(vec![Field::new(
+                    "matrix",
+                    ArrowDataType::List(Arc::new(Field::new(
+                        "matrix_row",
+                        ArrowDataType::List(Arc::new(Field::new(
+                            "item",
+                            ArrowDataType::Int64,
+                            true,
+                        ))),
+                        true,
+                    ))),
+                    true,
+                )])),
+                false,
+            ),
+            Field::new("int_col", ArrowDataType::Int32, false),
+        ]);
+
+        let dfschema = DFSchema::try_from(schema)?;
+
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(dfschema),
+        });
+
+        let mut unnest_placeholder_columns = vec![];
+        let mut inner_projection_exprs = vec![];
+
+        // unnest(struct_col)
+        let original_expr = unnest(unnest(col("struct_col").field("matrix")));
+        let transformed_exprs = recursive_transform_unnest(
+            &input,
+            &mut unnest_placeholder_columns,
+            &mut inner_projection_exprs,
+            &original_expr,
+        )?;
+        assert_eq!(
+            transformed_exprs,
+            vec![unnest(col("unnest(struct_col[matrix])"))]
+        );
+        assert_eq!(
+            unnest_placeholder_columns,
+            vec!["unnest(struct_col[matrix])"]
+        );
+        // still reference struct_col in original schema but with alias,
+        // to avoid colliding with the projection on the column itself if any
+        assert_eq!(
+            inner_projection_exprs,
+            vec![col("struct_col")
+                .field("matrix")
+                .alias("unnest(struct_col[matrix])"),]
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_recursive_transform_unnest() -> Result<()> {
@@ -405,7 +472,7 @@ mod tests {
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            original_expr,
+            &original_expr,
         )?;
         assert_eq!(
             transformed_exprs,
@@ -428,7 +495,7 @@ mod tests {
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            original_expr,
+            &original_expr,
         )?;
         assert_eq!(
             unnest_placeholder_columns,
