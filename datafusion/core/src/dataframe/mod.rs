@@ -522,6 +522,38 @@ impl DataFrame {
         })
     }
 
+    /// Return a new `DataFrame` with duplicated rows removed as per the specified expression list
+    /// according to the provided sorting expressions grouped by the `DISTINCT ON` clause
+    /// expressions.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
+    ///   // Return a single row (a, b) for each distinct value of a  
+    ///   .distinct_on(vec![col("a")], vec![col("a"), col("b")], None)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn distinct_on(
+        self,
+        on_expr: Vec<Expr>,
+        select_expr: Vec<Expr>,
+        sort_expr: Option<Vec<Expr>>,
+    ) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .distinct_on(on_expr, select_expr, sort_expr)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
+    }
+
     /// Return a new `DataFrame` that has statistics for a DataFrame.
     ///
     /// Only summarizes numeric datatypes at the moment and returns nulls for
@@ -2350,6 +2382,91 @@ mod tests {
             .select(vec![col("c1")])
             .unwrap()
             .distinct()
+            .unwrap()
+            // try to sort on some value not present in input to distinct
+            .sort(vec![col("c2").sort(true, true)])
+            .unwrap_err();
+        assert_eq!(err.strip_backtrace(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_distinct_on() -> Result<()> {
+        let t = test_table().await?;
+        let plan = t
+            .distinct_on(vec![col("c1")], vec![col("aggregate_test_100.c1")], None)
+            .unwrap();
+
+        let sql_plan =
+            create_plan("select distinct on (c1) c1 from aggregate_test_100").await?;
+
+        assert_same_plan(&plan.plan.clone(), &sql_plan);
+
+        let df_results = plan.clone().collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            ["+----+",
+                "| c1 |",
+                "+----+",
+                "| a  |",
+                "| b  |",
+                "| c  |",
+                "| d  |",
+                "| e  |",
+                "+----+"],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_distinct_on_sort_by() -> Result<()> {
+        let t = test_table().await?;
+        let plan = t
+            .select(vec![col("c1")])
+            .unwrap()
+            .distinct_on(
+                vec![col("c1")],
+                vec![col("c1")],
+                Some(vec![col("c1").sort(true, true)]),
+            )
+            .unwrap()
+            .sort(vec![col("c1").sort(true, true)])
+            .unwrap();
+
+        let df_results = plan.clone().collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            ["+----+",
+                "| c1 |",
+                "+----+",
+                "| a  |",
+                "| b  |",
+                "| c  |",
+                "| d  |",
+                "| e  |",
+                "+----+"],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_distinct_on_sort_by_unprojected() -> Result<()> {
+        let t = test_table().await?;
+        let err = t
+            .select(vec![col("c1")])
+            .unwrap()
+            .distinct_on(
+                vec![col("c1")],
+                vec![col("c1")],
+                Some(vec![col("c1").sort(true, true)]),
+            )
             .unwrap()
             // try to sort on some value not present in input to distinct
             .sort(vec![col("c2").sort(true, true)])
