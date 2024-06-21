@@ -90,6 +90,7 @@ pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
+    logical_args: &[Expr],
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
@@ -144,6 +145,7 @@ pub fn create_window_expr(
             let aggregate = udaf::create_aggregate_expr(
                 fun.as_ref(),
                 args,
+                logical_args,
                 &sort_exprs,
                 order_by,
                 input_schema,
@@ -597,7 +599,6 @@ pub fn get_window_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregates::AggregateFunction;
     use crate::collect;
     use crate::expressions::col;
     use crate::streaming::StreamingTableExec;
@@ -607,6 +608,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use datafusion_execution::TaskContext;
 
+    use datafusion_functions_aggregate::count::count_udaf;
     use futures::FutureExt;
 
     use InputOrderMode::{Linear, PartiallySorted, Sorted};
@@ -749,9 +751,10 @@ mod tests {
         let refs = blocking_exec.refs();
         let window_agg_exec = Arc::new(WindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+                &WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 "count".to_owned(),
                 &[col("a", &schema)?],
+                &[],
                 &[],
                 &[],
                 Arc::new(WindowFrame::new(None)),

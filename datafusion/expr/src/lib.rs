@@ -51,6 +51,7 @@ pub mod logical_plan;
 pub mod registry;
 pub mod simplify;
 pub mod sort_properties;
+pub mod test;
 pub mod tree_node;
 pub mod type_coercion;
 pub mod utils;
@@ -81,7 +82,7 @@ pub use signature::{
     ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
 };
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use udaf::{AggregateUDF, AggregateUDFImpl, ReversedUDAF};
+pub use udaf::{AggregateExt, AggregateUDF, AggregateUDFImpl, ReversedUDAF};
 pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::{WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

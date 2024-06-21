@@ -32,10 +32,12 @@ use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
 };
-use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
+use datafusion_expr::utils::{
+    conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
+};
 use datafusion_expr::{
     and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    TableProviderFilterPushDown,
+    Projection, TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -80,8 +82,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 /// satisfies `filter(op(data)) = op(filter(data))`.
 ///
 /// The filter-commutative property is plan and column-specific. A filter on `a`
-/// can be pushed through a `Aggregate(group_by = [a], agg=[SUM(b))`. However, a
-/// filter on  `SUM(b)` can not be pushed through the same aggregate.
+/// can be pushed through a `Aggregate(group_by = [a], agg=[sum(b))`. However, a
+/// filter on  `sum(b)` can not be pushed through the same aggregate.
 ///
 /// # Handling Conjunctions
 ///
@@ -91,16 +93,16 @@ use crate::{OptimizerConfig, OptimizerRule};
 /// For example, given the following plan:
 ///
 /// ```text
-/// Filter(a > 10 AND SUM(b) < 5)
-///   Aggregate(group_by = [a], agg = [SUM(b))
+/// Filter(a > 10 AND sum(b) < 5)
+///   Aggregate(group_by = [a], agg = [sum(b))
 /// ```
 ///
-/// The `a > 10` is commutative with the `Aggregate` but  `SUM(b) < 5` is not.
+/// The `a > 10` is commutative with the `Aggregate` but  `sum(b) < 5` is not.
 /// Therefore it is possible to only push part of the expression, resulting in:
 ///
 /// ```text
-/// Filter(SUM(b) < 5)
-///   Aggregate(group_by = [a], agg = [SUM(b))
+/// Filter(sum(b) < 5)
+///   Aggregate(group_by = [a], agg = [sum(b))
 ///     Filter(a > 10)
 /// ```
 ///
@@ -691,60 +693,71 @@ impl OptimizerRule for PushDownFilter {
                 insert_below(LogicalPlan::SubqueryAlias(subquery_alias), new_filter)
             }
             LogicalPlan::Projection(projection) => {
-                // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
-                // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
-                // collect projection.
-                let (volatile_map, non_volatile_map): (HashMap<_, _>, HashMap<_, _>) =
-                    projection
-                        .schema
-                        .iter()
-                        .zip(projection.expr.iter())
-                        .map(|((qualifier, field), expr)| {
-                            // strip alias, as they should not be part of filters
-                            let expr = expr.clone().unalias();
+                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let (new_projection, keep_predicate) =
+                    rewrite_projection(predicates, projection)?;
+                if new_projection.transformed {
+                    match keep_predicate {
+                        None => Ok(new_projection),
+                        Some(keep_predicate) => new_projection.map_data(|child_plan| {
+                            Filter::try_new(keep_predicate, Arc::new(child_plan))
+                                .map(LogicalPlan::Filter)
+                        }),
+                    }
+                } else {
+                    filter.input = Arc::new(new_projection.data);
+                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                }
+            }
+            LogicalPlan::Unnest(mut unnest) => {
+                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let mut non_unnest_predicates = vec![];
+                let mut unnest_predicates = vec![];
+                for predicate in predicates {
+                    // collect all the Expr::Column in predicate recursively
+                    let mut accum: HashSet<Column> = HashSet::new();
+                    expr_to_columns(&predicate, &mut accum)?;
 
-                            (qualified_name(qualifier, field.name()), expr)
-                        })
-                        .partition(|(_, value)| value.is_volatile().unwrap_or(true));
-
-                let mut push_predicates = vec![];
-                let mut keep_predicates = vec![];
-                for expr in split_conjunction_owned(filter.predicate.clone()) {
-                    if contain(&expr, &volatile_map) {
-                        keep_predicates.push(expr);
+                    if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                        unnest_predicates.push(predicate);
                     } else {
-                        push_predicates.push(expr);
+                        non_unnest_predicates.push(predicate);
                     }
                 }
 
-                match conjunction(push_predicates) {
-                    Some(expr) => {
-                        // re-write all filters based on this projection
-                        // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
-                        let new_filter = LogicalPlan::Filter(Filter::try_new(
-                            replace_cols_by_name(expr, &non_volatile_map)?,
-                            Arc::clone(&projection.input),
-                        )?);
+                // Unnest predicates should not be pushed down.
+                // If no non-unnest predicates exist, early return
+                if non_unnest_predicates.is_empty() {
+                    filter.input = Arc::new(LogicalPlan::Unnest(unnest));
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                }
 
-                        match conjunction(keep_predicates) {
-                            None => insert_below(
-                                LogicalPlan::Projection(projection),
-                                new_filter,
-                            ),
-                            Some(keep_predicate) => insert_below(
-                                LogicalPlan::Projection(projection),
-                                new_filter,
-                            )?
-                            .map_data(|child_plan| {
-                                Filter::try_new(keep_predicate, Arc::new(child_plan))
-                                    .map(LogicalPlan::Filter)
-                            }),
-                        }
-                    }
-                    None => {
-                        filter.input = Arc::new(LogicalPlan::Projection(projection));
-                        Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                    }
+                // Push down non-unnest filter predicate
+                // Unnest
+                //   Unenst Input (Projection)
+                // -> rewritten to
+                // Unnest
+                //   Filter
+                //     Unenst Input (Projection)
+
+                let unnest_input = std::mem::take(&mut unnest.input);
+
+                let filter_with_unnest_input = LogicalPlan::Filter(Filter::try_new(
+                    conjunction(non_unnest_predicates).unwrap(), // Safe to unwrap since non_unnest_predicates is not empty.
+                    unnest_input,
+                )?);
+
+                // Directly assign new filter plan as the new unnest's input.
+                // The new filter plan will go through another rewrite pass since the rule itself
+                // is applied recursively to all the child from top to down
+                let unnest_plan =
+                    insert_below(LogicalPlan::Unnest(unnest), filter_with_unnest_input)?;
+
+                match conjunction(unnest_predicates) {
+                    None => Ok(unnest_plan),
+                    Some(predicate) => Ok(Transformed::yes(LogicalPlan::Filter(
+                        Filter::try_new(predicate, Arc::new(unnest_plan.data))?,
+                    ))),
                 }
             }
             LogicalPlan::Union(ref union) => {
@@ -951,6 +964,80 @@ impl OptimizerRule for PushDownFilter {
     }
 }
 
+/// Attempts to push `predicate` into a `FilterExec` below `projection
+///
+/// # Returns
+/// (plan, remaining_predicate)
+///
+/// `plan` is a LogicalPlan for `projection` with possibly a new FilterExec below it.
+/// `remaining_predicate` is any part of the predicate that could not be pushed down
+///
+/// # Args
+/// - predicates: Split predicates like `[foo=5, bar=6]`
+/// - projection: The target projection plan to push down the predicates
+///
+/// # Example
+///
+/// Pushing a predicate like `foo=5 AND bar=6` with an input plan like this:
+///
+/// ```text
+/// Projection(foo, c+d as bar)
+/// ```
+///
+/// Might result in returning `remaining_predicate` of `bar=6` and a plan like
+///
+/// ```text
+/// Projection(foo, c+d as bar)
+///  Filter(foo=5)
+///   ...
+/// ```
+fn rewrite_projection(
+    predicates: Vec<Expr>,
+    projection: Projection,
+) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
+    // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
+    // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
+    // collect projection.
+    let (volatile_map, non_volatile_map): (HashMap<_, _>, HashMap<_, _>) = projection
+        .schema
+        .iter()
+        .zip(projection.expr.iter())
+        .map(|((qualifier, field), expr)| {
+            // strip alias, as they should not be part of filters
+            let expr = expr.clone().unalias();
+
+            (qualified_name(qualifier, field.name()), expr)
+        })
+        .partition(|(_, value)| value.is_volatile().unwrap_or(true));
+
+    let mut push_predicates = vec![];
+    let mut keep_predicates = vec![];
+    for expr in predicates {
+        if contain(&expr, &volatile_map) {
+            keep_predicates.push(expr);
+        } else {
+            push_predicates.push(expr);
+        }
+    }
+
+    match conjunction(push_predicates) {
+        Some(expr) => {
+            // re-write all filters based on this projection
+            // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
+            let new_filter = LogicalPlan::Filter(Filter::try_new(
+                replace_cols_by_name(expr, &non_volatile_map)?,
+                Arc::clone(&projection.input),
+            )?);
+
+            Ok((
+                insert_below(LogicalPlan::Projection(projection), new_filter)?,
+                conjunction(keep_predicates),
+            ))
+        }
+        None => Ok((Transformed::no(LogicalPlan::Projection(projection)), None)),
+    }
+}
+
 /// Creates a new LogicalPlan::Filter node.
 pub fn make_filter(predicate: Expr, input: Arc<LogicalPlan>) -> Result<LogicalPlan> {
     Filter::try_new(predicate, input).map(LogicalPlan::Filter)
@@ -1097,9 +1184,9 @@ mod tests {
 
     use crate::optimizer::Optimizer;
     use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
-    use crate::test::function_stub::sum;
     use crate::test::*;
     use crate::OptimizerContext;
+    use datafusion_expr::test::function_stub::sum;
 
     use super::*;
 
@@ -1195,7 +1282,7 @@ mod tests {
             .build()?;
         // filter of key aggregation is commutative
         let expected = "\
-            Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS total_salary]]\
+            Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b) AS total_salary]]\
             \n  TableScan: test, full_filters=[test.a > Int64(10)]";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -1208,7 +1295,7 @@ mod tests {
             .filter(col("b").gt(lit(10i64)))?
             .build()?;
         let expected = "Filter: test.b > Int64(10)\
-        \n  Aggregate: groupBy=[[test.b + test.a]], aggr=[[SUM(test.a), test.b]]\
+        \n  Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]\
         \n    TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -1220,7 +1307,7 @@ mod tests {
             .filter(col("test.b + test.a").gt(lit(10i64)))?
             .build()?;
         let expected =
-            "Aggregate: groupBy=[[test.b + test.a]], aggr=[[SUM(test.a), test.b]]\
+            "Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]\
         \n  TableScan: test, full_filters=[test.b + test.a > Int64(10)]";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -1235,7 +1322,7 @@ mod tests {
         // filter of aggregate is after aggregation since they are non-commutative
         let expected = "\
             Filter: b > Int64(10)\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS b]]\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b) AS b]]\
             \n    TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -1454,30 +1541,30 @@ mod tests {
     /// and the other not.
     #[test]
     fn multi_filter() -> Result<()> {
-        // the aggregation allows one filter to pass (b), and the other one to not pass (SUM(c))
+        // the aggregation allows one filter to pass (b), and the other one to not pass (sum(c))
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a").alias("b"), col("c")])?
             .aggregate(vec![col("b")], vec![sum(col("c"))])?
             .filter(col("b").gt(lit(10i64)))?
-            .filter(col("SUM(test.c)").gt(lit(10i64)))?
+            .filter(col("sum(test.c)").gt(lit(10i64)))?
             .build()?;
 
         // not part of the test, just good to know:
         assert_eq!(
             format!("{plan:?}"),
             "\
-            Filter: SUM(test.c) > Int64(10)\
+            Filter: sum(test.c) > Int64(10)\
             \n  Filter: b > Int64(10)\
-            \n    Aggregate: groupBy=[[b]], aggr=[[SUM(test.c)]]\
+            \n    Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
             \n      Projection: test.a AS b, test.c\
             \n        TableScan: test"
         );
 
         // filter is before the projections
         let expected = "\
-        Filter: SUM(test.c) > Int64(10)\
-        \n  Aggregate: groupBy=[[b]], aggr=[[SUM(test.c)]]\
+        Filter: sum(test.c) > Int64(10)\
+        \n  Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
         \n    Projection: test.a AS b, test.c\
         \n      TableScan: test, full_filters=[test.a > Int64(10)]";
         assert_optimized_plan_eq(plan, expected)
@@ -1487,14 +1574,14 @@ mod tests {
     /// and the other not.
     #[test]
     fn split_filter() -> Result<()> {
-        // the aggregation allows one filter to pass (b), and the other one to not pass (SUM(c))
+        // the aggregation allows one filter to pass (b), and the other one to not pass (sum(c))
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a").alias("b"), col("c")])?
             .aggregate(vec![col("b")], vec![sum(col("c"))])?
             .filter(and(
-                col("SUM(test.c)").gt(lit(10i64)),
-                and(col("b").gt(lit(10i64)), col("SUM(test.c)").lt(lit(20i64))),
+                col("sum(test.c)").gt(lit(10i64)),
+                and(col("b").gt(lit(10i64)), col("sum(test.c)").lt(lit(20i64))),
             ))?
             .build()?;
 
@@ -1502,16 +1589,16 @@ mod tests {
         assert_eq!(
             format!("{plan:?}"),
             "\
-            Filter: SUM(test.c) > Int64(10) AND b > Int64(10) AND SUM(test.c) < Int64(20)\
-            \n  Aggregate: groupBy=[[b]], aggr=[[SUM(test.c)]]\
+            Filter: sum(test.c) > Int64(10) AND b > Int64(10) AND sum(test.c) < Int64(20)\
+            \n  Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
             \n    Projection: test.a AS b, test.c\
             \n      TableScan: test"
         );
 
         // filter is before the projections
         let expected = "\
-        Filter: SUM(test.c) > Int64(10) AND SUM(test.c) < Int64(20)\
-        \n  Aggregate: groupBy=[[b]], aggr=[[SUM(test.c)]]\
+        Filter: sum(test.c) > Int64(10) AND sum(test.c) < Int64(20)\
+        \n  Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
         \n    Projection: test.a AS b, test.c\
         \n      TableScan: test, full_filters=[test.a > Int64(10)]";
         assert_optimized_plan_eq(plan, expected)
@@ -2937,7 +3024,7 @@ Projection: a, b
 
     #[test]
     fn test_push_down_volatile_function_in_aggregate() -> Result<()> {
-        // SELECT t.a, t.r FROM (SELECT a, SUM(b),  TestScalarUDF()+1 AS r FROM test1 GROUP BY a) AS t WHERE t.a > 5 AND t.r > 0.5;
+        // SELECT t.a, t.r FROM (SELECT a, sum(b),  TestScalarUDF()+1 AS r FROM test1 GROUP BY a) AS t WHERE t.a > 5 AND t.r > 0.5;
         let table_scan = test_table_scan_with_name("test1")?;
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
             signature: Signature::exact(vec![], Volatility::Volatile),
@@ -2955,16 +3042,16 @@ Projection: a, b
         let expected_before = "Projection: t.a, t.r\
         \n  Filter: t.a > Int32(5) AND t.r > Float64(0.5)\
         \n    SubqueryAlias: t\
-        \n      Projection: test1.a, SUM(test1.b), TestScalarUDF() + Int32(1) AS r\
-        \n        Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
+        \n      Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r\
+        \n        Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]\
         \n          TableScan: test1";
         assert_eq!(format!("{plan:?}"), expected_before);
 
         let expected_after = "Projection: t.a, t.r\
         \n  SubqueryAlias: t\
         \n    Filter: r > Float64(0.5)\
-        \n      Projection: test1.a, SUM(test1.b), TestScalarUDF() + Int32(1) AS r\
-        \n        Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
+        \n      Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r\
+        \n        Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]\
         \n          TableScan: test1, full_filters=[test1.a > Int32(5)]";
         assert_optimized_plan_eq(plan, expected_after)
     }

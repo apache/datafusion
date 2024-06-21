@@ -772,11 +772,17 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
         stat_type: StatisticsType,
-        suffix: &str,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let (idx, need_to_insert) = match self.find_stat_column(column, stat_type) {
             Some(idx) => (idx, false),
             None => (self.columns.len(), true),
+        };
+
+        let suffix = match stat_type {
+            StatisticsType::Min => "min",
+            StatisticsType::Max => "max",
+            StatisticsType::NullCount => "null_count",
+            StatisticsType::RowCount => "row_count",
         };
 
         let stat_column =
@@ -800,7 +806,7 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(column, column_expr, field, StatisticsType::Min, "min")
+        self.stat_column_expr(column, column_expr, field, StatisticsType::Min)
     }
 
     /// rewrite col --> col_max
@@ -810,7 +816,7 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(column, column_expr, field, StatisticsType::Max, "max")
+        self.stat_column_expr(column, column_expr, field, StatisticsType::Max)
     }
 
     /// rewrite col --> col_null_count
@@ -820,13 +826,7 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(
-            column,
-            column_expr,
-            field,
-            StatisticsType::NullCount,
-            "null_count",
-        )
+        self.stat_column_expr(column, column_expr, field, StatisticsType::NullCount)
     }
 
     /// rewrite col --> col_row_count
@@ -836,13 +836,7 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(
-            column,
-            column_expr,
-            field,
-            StatisticsType::RowCount,
-            "row_count",
-        )
+        self.stat_column_expr(column, column_expr, field, StatisticsType::RowCount)
     }
 }
 

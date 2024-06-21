@@ -32,8 +32,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-macro_rules! make_udaf_expr_and_func {
-    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+macro_rules! make_udaf_expr {
+    ($EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
         pub fn $EXPR_FN(
@@ -48,24 +48,12 @@ macro_rules! make_udaf_expr_and_func {
                 None,
             ))
         }
-        create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
-    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $distinct:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
-        // "fluent expr_fn" style function
-        #[doc = $DOC]
-        pub fn $EXPR_FN(
-            $($arg: datafusion_expr::Expr,)*
-            distinct: bool,
-        ) -> datafusion_expr::Expr {
-            datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
-                $AGGREGATE_UDF_FN(),
-                vec![$($arg),*],
-                distinct,
-                None,
-                None,
-                None
-            ))
-        }
+}
+
+macro_rules! make_udaf_expr_and_func {
+    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+        make_udaf_expr!($EXPR_FN, $($arg)*, $DOC, $AGGREGATE_UDF_FN);
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
     ($UDAF:ty, $EXPR_FN:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
@@ -73,26 +61,26 @@ macro_rules! make_udaf_expr_and_func {
         #[doc = $DOC]
         pub fn $EXPR_FN(
             args: Vec<datafusion_expr::Expr>,
-            distinct: bool,
-            filter: Option<Box<datafusion_expr::Expr>>,
-            order_by: Option<Vec<datafusion_expr::Expr>>,
-            null_treatment: Option<sqlparser::ast::NullTreatment>
         ) -> datafusion_expr::Expr {
             datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                 $AGGREGATE_UDF_FN(),
                 args,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
+                false,
+                None,
+                None,
+                None,
             ))
         }
+
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
 }
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
+        create_func!($UDAF, $AGGREGATE_UDF_FN, <$UDAF>::default());
+    };
+    ($UDAF:ty, $AGGREGATE_UDF_FN:ident, $CREATE:expr) => {
         paste::paste! {
             /// Singleton instance of [$UDAF], ensures the UDAF is only created once
             /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
@@ -106,7 +94,7 @@ macro_rules! create_func {
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<datafusion_expr::AggregateUDF> {
                 [< STATIC_ $UDAF >]
                     .get_or_init(|| {
-                        std::sync::Arc::new(datafusion_expr::AggregateUDF::from(<$UDAF>::default()))
+                        std::sync::Arc::new(datafusion_expr::AggregateUDF::from($CREATE))
                     })
                     .clone()
             }

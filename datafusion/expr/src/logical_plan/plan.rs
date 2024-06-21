@@ -281,6 +281,15 @@ pub enum LogicalPlan {
     RecursiveQuery(RecursiveQuery),
 }
 
+impl Default for LogicalPlan {
+    fn default() -> Self {
+        LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        })
+    }
+}
+
 impl LogicalPlan {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
@@ -870,37 +879,7 @@ impl LogicalPlan {
             LogicalPlan::Filter { .. } => {
                 assert_eq!(1, expr.len());
                 let predicate = expr.pop().unwrap();
-
-                // filter predicates should not contain aliased expressions so we remove any aliases
-                // before this logic was added we would have aliases within filters such as for
-                // benchmark q6:
-                //
-                // lineitem.l_shipdate >= Date32(\"8766\")
-                // AND lineitem.l_shipdate < Date32(\"9131\")
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
-                // Decimal128(Some(49999999999999),30,15)
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
-                // Decimal128(Some(69999999999999),30,15)
-                // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
-
-                let predicate = predicate
-                    .transform_down(|expr| {
-                        match expr {
-                            Expr::Exists { .. }
-                            | Expr::ScalarSubquery(_)
-                            | Expr::InSubquery(_) => {
-                                // subqueries could contain aliases so we don't recurse into those
-                                Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
-                            }
-                            Expr::Alias(_) => Ok(Transformed::new(
-                                expr.unalias(),
-                                true,
-                                TreeNodeRecursion::Jump,
-                            )),
-                            _ => Ok(Transformed::no(expr)),
-                        }
-                    })
-                    .data()?;
+                let predicate = Filter::remove_aliases(predicate)?.data;
 
                 Filter::try_new(predicate, Arc::new(inputs.swap_remove(0)))
                     .map(LogicalPlan::Filter)
@@ -2230,6 +2209,38 @@ impl Filter {
         }
         false
     }
+
+    /// Remove aliases from a predicate for use in a `Filter`
+    ///
+    /// filter predicates should not contain aliased expressions so we remove
+    /// any aliases.
+    ///
+    /// before this logic was added we would have aliases within filters such as
+    /// for benchmark q6:
+    ///
+    /// ```sql
+    /// lineitem.l_shipdate >= Date32(\"8766\")
+    /// AND lineitem.l_shipdate < Date32(\"9131\")
+    /// AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
+    /// Decimal128(Some(49999999999999),30,15)
+    /// AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
+    /// Decimal128(Some(69999999999999),30,15)
+    /// AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
+    /// ```
+    pub fn remove_aliases(predicate: Expr) -> Result<Transformed<Expr>> {
+        predicate.transform_down(|expr| {
+            match expr {
+                Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_) => {
+                    // subqueries could contain aliases so we don't recurse into those
+                    Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
+                }
+                Expr::Alias(Alias { expr, .. }) => {
+                    Ok(Transformed::new(*expr, true, TreeNodeRecursion::Jump))
+                }
+                _ => Ok(Transformed::no(expr)),
+            }
+        })
+    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
@@ -2302,13 +2313,33 @@ impl Window {
             window_func_dependencies.extend(new_deps);
         }
 
-        Ok(Window {
-            input,
+        Self::try_new_with_schema(
             window_expr,
-            schema: Arc::new(
+            input,
+            Arc::new(
                 DFSchema::new_with_metadata(window_fields, metadata)?
                     .with_functional_dependencies(window_func_dependencies)?,
             ),
+        )
+    }
+
+    pub fn try_new_with_schema(
+        window_expr: Vec<Expr>,
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+    ) -> Result<Self> {
+        if window_expr.len() != schema.fields().len() - input.schema().fields().len() {
+            return plan_err!(
+                "Window has mismatch between number of expressions ({}) and number of fields in schema ({})",
+                window_expr.len(),
+                schema.fields().len() - input.schema().fields().len()
+            );
+        }
+
+        Ok(Window {
+            input,
+            window_expr,
+            schema,
         })
     }
 }
@@ -2945,10 +2976,12 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
-    use crate::{col, count, exists, in_subquery, lit, placeholder, GroupingSet};
+    use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
 
     use datafusion_common::tree_node::TreeNodeVisitor;
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
+
+    use crate::test::function_stub::count;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![

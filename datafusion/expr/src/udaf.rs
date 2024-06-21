@@ -17,6 +17,7 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
+use crate::expr::AggregateFunction;
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
@@ -26,7 +27,8 @@ use crate::utils::AggregateOrderSensitivity;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, plan_err, Result};
+use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -139,8 +141,7 @@ impl AggregateUDF {
     /// This utility allows using the UDAF without requiring access to
     /// the registry, such as with the DataFrame API.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
-        // TODO: Support dictinct, filter, order by and null_treatment
-        Expr::AggregateFunction(crate::expr::AggregateFunction::new_udf(
+        Expr::AggregateFunction(AggregateFunction::new_udf(
             Arc::new(self.clone()),
             args,
             false,
@@ -604,5 +605,179 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(acc_args)
+    }
+}
+
+/// Extensions for configuring [`Expr::AggregateFunction`]
+///
+/// Adds methods to [`Expr`] that make it easy to set optional aggregate options
+/// such as `ORDER BY`, `FILTER` and `DISTINCT`
+///
+/// # Example
+/// ```no_run
+/// # use datafusion_common::Result;
+/// # use datafusion_expr::{AggregateUDF, col, Expr, lit};
+/// # use sqlparser::ast::NullTreatment;
+/// # fn count(arg: Expr) -> Expr { todo!{} }
+/// # fn first_value(arg: Expr) -> Expr { todo!{} }
+/// # fn main() -> Result<()> {
+/// use datafusion_expr::AggregateExt;
+///
+/// // Create COUNT(x FILTER y > 5)
+/// let agg = count(col("x"))
+///    .filter(col("y").gt(lit(5)))
+///    .build()?;
+///  // Create FIRST_VALUE(x ORDER BY y IGNORE NULLS)
+/// let sort_expr = col("y").sort(true, true);
+/// let agg = first_value(col("x"))
+///   .order_by(vec![sort_expr])
+///   .null_treatment(NullTreatment::IgnoreNulls)
+///   .build()?;
+/// # Ok(())
+/// # }
+/// ```
+pub trait AggregateExt {
+    /// Add `ORDER BY <order_by>`
+    ///
+    /// Note: `order_by` must be [`Expr::Sort`]
+    fn order_by(self, order_by: Vec<Expr>) -> AggregateBuilder;
+    /// Add `FILTER <filter>`
+    fn filter(self, filter: Expr) -> AggregateBuilder;
+    /// Add `DISTINCT`
+    fn distinct(self) -> AggregateBuilder;
+    /// Add `RESPECT NULLS` or `IGNORE NULLS`
+    fn null_treatment(self, null_treatment: NullTreatment) -> AggregateBuilder;
+}
+
+/// Implementation of [`AggregateExt`].
+///
+/// See [`AggregateExt`] for usage and examples
+#[derive(Debug, Clone)]
+pub struct AggregateBuilder {
+    udaf: Option<AggregateFunction>,
+    order_by: Option<Vec<Expr>>,
+    filter: Option<Expr>,
+    distinct: bool,
+    null_treatment: Option<NullTreatment>,
+}
+
+impl AggregateBuilder {
+    /// Create a new `AggregateBuilder`, see [`AggregateExt`]
+
+    fn new(udaf: Option<AggregateFunction>) -> Self {
+        Self {
+            udaf,
+            order_by: None,
+            filter: None,
+            distinct: false,
+            null_treatment: None,
+        }
+    }
+
+    /// Updates and returns the in progress [`Expr::AggregateFunction`]
+    ///
+    /// # Errors:
+    ///
+    /// Returns an error of this builder  [`AggregateExt`] was used with an
+    /// `Expr` variant other than [`Expr::AggregateFunction`]
+    pub fn build(self) -> Result<Expr> {
+        let Self {
+            udaf,
+            order_by,
+            filter,
+            distinct,
+            null_treatment,
+        } = self;
+
+        let Some(mut udaf) = udaf else {
+            return plan_err!(
+                "AggregateExt can only be used with Expr::AggregateFunction"
+            );
+        };
+
+        if let Some(order_by) = &order_by {
+            for expr in order_by.iter() {
+                if !matches!(expr, Expr::Sort(_)) {
+                    return plan_err!(
+                        "ORDER BY expressions must be Expr::Sort, found {expr:?}"
+                    );
+                }
+            }
+        }
+
+        udaf.order_by = order_by;
+        udaf.filter = filter.map(Box::new);
+        udaf.distinct = distinct;
+        udaf.null_treatment = null_treatment;
+        Ok(Expr::AggregateFunction(udaf))
+    }
+
+    /// Add `ORDER BY <order_by>`
+    ///
+    /// Note: `order_by` must be [`Expr::Sort`]
+    pub fn order_by(mut self, order_by: Vec<Expr>) -> AggregateBuilder {
+        self.order_by = Some(order_by);
+        self
+    }
+
+    /// Add `FILTER <filter>`
+    pub fn filter(mut self, filter: Expr) -> AggregateBuilder {
+        self.filter = Some(filter);
+        self
+    }
+
+    /// Add `DISTINCT`
+    pub fn distinct(mut self) -> AggregateBuilder {
+        self.distinct = true;
+        self
+    }
+
+    /// Add `RESPECT NULLS` or `IGNORE NULLS`
+    pub fn null_treatment(mut self, null_treatment: NullTreatment) -> AggregateBuilder {
+        self.null_treatment = Some(null_treatment);
+        self
+    }
+}
+
+impl AggregateExt for Expr {
+    fn order_by(self, order_by: Vec<Expr>) -> AggregateBuilder {
+        match self {
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.order_by = Some(order_by);
+                builder
+            }
+            _ => AggregateBuilder::new(None),
+        }
+    }
+    fn filter(self, filter: Expr) -> AggregateBuilder {
+        match self {
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.filter = Some(filter);
+                builder
+            }
+            _ => AggregateBuilder::new(None),
+        }
+    }
+    fn distinct(self) -> AggregateBuilder {
+        match self {
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.distinct = true;
+                builder
+            }
+            _ => AggregateBuilder::new(None),
+        }
+    }
+    fn null_treatment(self, null_treatment: NullTreatment) -> AggregateBuilder {
+        match self {
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.null_treatment = Some(null_treatment);
+                builder
+            }
+            _ => AggregateBuilder::new(None),
+        }
     }
 }

@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`VarianceSample`]: covariance sample aggregations.
+//! [`VarianceSample`]: variance sample aggregations.
+//! [`VariancePopulation`]: variance population aggregations.
 
 use std::fmt::Debug;
 
@@ -41,6 +42,14 @@ make_udaf_expr_and_func!(
     expression,
     "Computes the sample variance.",
     var_samp_udaf
+);
+
+make_udaf_expr_and_func!(
+    VariancePopulation,
+    var_pop,
+    expression,
+    "Computes the population variance.",
+    var_pop_udaf
 );
 
 pub struct VarianceSample {
@@ -115,8 +124,82 @@ impl AggregateUDFImpl for VarianceSample {
     }
 }
 
+pub struct VariancePopulation {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl Debug for VariancePopulation {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("VariancePopulation")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+impl Default for VariancePopulation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl VariancePopulation {
+    pub fn new() -> Self {
+        Self {
+            aliases: vec![String::from("var_population")],
+            signature: Signature::numeric(1, Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for VariancePopulation {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "var_pop"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if !arg_types[0].is_numeric() {
+            return plan_err!("Variance requires numeric input types");
+        }
+
+        Ok(DataType::Float64)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        let name = args.name;
+        Ok(vec![
+            Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+            Field::new(format_state_name(name, "mean"), DataType::Float64, true),
+            Field::new(format_state_name(name, "m2"), DataType::Float64, true),
+        ])
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("VAR_POP(DISTINCT) aggregations are not available");
+        }
+
+        Ok(Box::new(VarianceAccumulator::try_new(
+            StatsType::Population,
+        )?))
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
 /// An accumulator to compute variance
-/// The algrithm used is an online implementation and numerically stable. It is based on this paper:
+/// The algorithm used is an online implementation and numerically stable. It is based on this paper:
 /// Welford, B. P. (1962). "Note on a method for calculating corrected sums of squares and products".
 /// Technometrics. 4 (3): 419–420. doi:10.2307/1266577. JSTOR 1266577.
 ///

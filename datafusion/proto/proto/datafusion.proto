@@ -474,38 +474,38 @@ message InListNode {
 enum AggregateFunction {
   MIN = 0;
   MAX = 1;
-  SUM = 2;
+  // SUM = 2;
   AVG = 3;
-  COUNT = 4;
-  APPROX_DISTINCT = 5;
+  // COUNT = 4;
+  // APPROX_DISTINCT = 5;
   ARRAY_AGG = 6;
   // VARIANCE = 7;
-  VARIANCE_POP = 8;
+  // VARIANCE_POP = 8;
   // COVARIANCE = 9;
   // COVARIANCE_POP = 10;
-  STDDEV = 11;
-  STDDEV_POP = 12;
+  // STDDEV = 11;
+  // STDDEV_POP = 12;
   CORRELATION = 13;
-  APPROX_PERCENTILE_CONT = 14;
-  APPROX_MEDIAN = 15;
-  APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
+  // APPROX_PERCENTILE_CONT = 14;
+  // APPROX_MEDIAN = 15;
+  // APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
   GROUPING = 17;
   // MEDIAN = 18;
-  BIT_AND = 19;
-  BIT_OR = 20;
-  BIT_XOR = 21;
-  BOOL_AND = 22;
-  BOOL_OR = 23;
-  REGR_SLOPE = 26;
-  REGR_INTERCEPT = 27;
-  REGR_COUNT = 28;
-  REGR_R2 = 29;
-  REGR_AVGX = 30;
-  REGR_AVGY = 31;
-  REGR_SXX = 32;
-  REGR_SYY = 33;
-  REGR_SXY = 34;
-  STRING_AGG = 35;
+  // BIT_AND = 19;
+  // BIT_OR = 20;
+  // BIT_XOR = 21;
+//  BOOL_AND = 22;
+//  BOOL_OR = 23;
+  // REGR_SLOPE = 26;
+  // REGR_INTERCEPT = 27;
+  // REGR_COUNT = 28;
+  // REGR_R2 = 29;
+  // REGR_AVGX = 30;
+  // REGR_AVGY = 31;
+  // REGR_SXX = 32;
+  // REGR_SYY = 33;
+  // REGR_SXY = 34;
+  // STRING_AGG = 35;
   NTH_VALUE_AGG = 36;
 }
 
@@ -520,6 +520,7 @@ message AggregateExprNode {
 message AggregateUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
+  bool distinct = 5;
   LogicalExprNode filter = 3;
   repeated LogicalExprNode order_by = 4;
 }
@@ -993,6 +994,9 @@ message CsvScanExecNode {
   string quote = 4;
   oneof optional_escape {
     string escape = 5;
+  }
+  oneof optional_comment {
+    string comment = 6;
   }
 }
 

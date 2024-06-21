@@ -26,7 +26,6 @@ mod in_list;
 mod is_not_null;
 mod is_null;
 mod like;
-mod literal;
 mod negative;
 mod no_op;
 mod not;
@@ -36,31 +35,17 @@ mod try_cast;
 pub mod helpers {
     pub use crate::aggregate::min_max::{max, min};
 }
-
-pub use crate::aggregate::approx_distinct::ApproxDistinct;
-pub use crate::aggregate::approx_median::ApproxMedian;
-pub use crate::aggregate::approx_percentile_cont::ApproxPercentileCont;
-pub use crate::aggregate::approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
 pub use crate::aggregate::array_agg::ArrayAgg;
 pub use crate::aggregate::array_agg_distinct::DistinctArrayAgg;
 pub use crate::aggregate::array_agg_ordered::OrderSensitiveArrayAgg;
-pub use crate::aggregate::average::{Avg, AvgAccumulator};
-pub use crate::aggregate::bit_and_or_xor::{BitAnd, BitOr, BitXor, DistinctBitXor};
-pub use crate::aggregate::bool_and_or::{BoolAnd, BoolOr};
+pub use crate::aggregate::average::Avg;
+pub use crate::aggregate::average::AvgAccumulator;
 pub use crate::aggregate::build_in::create_aggregate_expr;
 pub use crate::aggregate::correlation::Correlation;
-pub use crate::aggregate::count::Count;
-pub use crate::aggregate::count_distinct::DistinctCount;
 pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::min_max::{Max, MaxAccumulator, Min, MinAccumulator};
 pub use crate::aggregate::nth_value::NthValueAgg;
-pub use crate::aggregate::regr::{Regr, RegrType};
 pub use crate::aggregate::stats::StatsType;
-pub use crate::aggregate::stddev::{Stddev, StddevPop};
-pub use crate::aggregate::string_agg::StringAgg;
-pub use crate::aggregate::sum::Sum;
-pub use crate::aggregate::sum_distinct::DistinctSum;
-pub use crate::aggregate::variance::VariancePop;
 pub use crate::window::cume_dist::{cume_dist, CumeDist};
 pub use crate::window::lead_lag::{lag, lead, WindowShift};
 pub use crate::window::nth_value::NthValue;
@@ -72,20 +57,19 @@ pub use crate::PhysicalSortExpr;
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use column::UnKnownColumn;
+pub use datafusion_expr::utils::format_state_name;
+pub use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
+pub use datafusion_physical_expr_common::expressions::column::{col, Column};
+pub use datafusion_physical_expr_common::expressions::literal::{lit, Literal};
+pub use datafusion_physical_expr_common::expressions::{cast, CastExpr};
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
 pub use like::{like, LikeExpr};
-pub use literal::{lit, Literal};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
 pub use not::{not, NotExpr};
 pub use try_cast::{try_cast, TryCastExpr};
-
-pub use datafusion_expr::utils::format_state_name;
-pub use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
-pub use datafusion_physical_expr_common::expressions::column::{col, Column};
-pub use datafusion_physical_expr_common::expressions::{cast, CastExpr};
 
 #[cfg(test)]
 pub(crate) mod tests {

@@ -31,8 +31,9 @@ use crate::{
     Signature, Volatility,
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
+use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, Result, ScalarValue};
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Not;
@@ -192,18 +193,6 @@ pub fn avg(expr: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the count() aggregate function
-pub fn count(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Count,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Return a new expression with bitwise AND
 pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(
@@ -249,79 +238,9 @@ pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the count(distinct) aggregate function
-pub fn count_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Count,
-        vec![expr],
-        true,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Create an in_list expression
 pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
     Expr::InList(InList::new(Box::new(expr), list, negated))
-}
-
-/// Returns the approximate number of distinct input values.
-/// This function provides an approximation of count(DISTINCT x).
-/// Zero is returned if all input values are null.
-/// This function should produce a standard error of 0.81%,
-/// which is the standard deviation of the (approximately normal)
-/// error distribution over all possible sets.
-/// It does not guarantee an upper bound on the error for any specific input set.
-pub fn approx_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxDistinct,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
-/// Calculate an approximation of the median for `expr`.
-pub fn approx_median(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxMedian,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
-/// Calculate an approximation of the specified `percentile` for `expr`.
-pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxPercentileCont,
-        vec![expr, percentile],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
-/// Calculate an approximation of the specified `percentile` for `expr` and `weight_expr`.
-pub fn approx_percentile_cont_with_weight(
-    expr: Expr,
-    weight_expr: Expr,
-    percentile: Expr,
-) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxPercentileContWithWeight,
-        vec![expr, weight_expr, percentile],
-        false,
-        None,
-        None,
-        None,
-    ))
 }
 
 /// Create an EXISTS subquery expression
@@ -381,18 +300,6 @@ pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
         subquery,
         outer_ref_columns,
     })
-}
-
-/// Create an expression to represent the stddev() aggregate function
-pub fn stddev(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Stddev,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
 }
 
 /// Create a grouping set
@@ -762,6 +669,11 @@ impl WindowUDFImpl for SimpleWindowUDF {
     fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
         (self.partition_evaluator_factory)()
     }
+}
+
+pub fn interval_month_day_nano_lit(value: &str) -> Expr {
+    let interval = parse_interval_month_day_nano(value).ok();
+    Expr::Literal(ScalarValue::IntervalMonthDayNano(interval))
 }
 
 #[cfg(test)]

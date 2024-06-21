@@ -29,11 +29,11 @@ use crate::physical_plan::metrics::{
 pub struct ParquetFileMetrics {
     /// Number of times the predicate could not be evaluated
     pub predicate_evaluation_errors: Count,
-    /// Number of row groups whose bloom filters were checked and matched
+    /// Number of row groups whose bloom filters were checked and matched (not pruned)
     pub row_groups_matched_bloom_filter: Count,
     /// Number of row groups pruned by bloom filters
     pub row_groups_pruned_bloom_filter: Count,
-    /// Number of row groups whose statistics were checked and matched
+    /// Number of row groups whose statistics were checked and matched (not pruned)
     pub row_groups_matched_statistics: Count,
     /// Number of row groups pruned by statistics
     pub row_groups_pruned_statistics: Count,

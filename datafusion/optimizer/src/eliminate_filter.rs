@@ -95,8 +95,8 @@ mod tests {
     };
 
     use crate::eliminate_filter::EliminateFilter;
-    use crate::test::function_stub::sum;
     use crate::test::*;
+    use datafusion_expr::test::function_stub::sum;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(EliminateFilter::new()), plan, expected)
@@ -149,7 +149,7 @@ mod tests {
         // Left side is removed
         let expected = "Union\
             \n  EmptyRelation\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
             \n    TableScan: test";
         assert_optimized_plan_equal(plan, expected)
     }
@@ -164,7 +164,7 @@ mod tests {
             .filter(filter_expr)?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
         \n  TableScan: test";
         assert_optimized_plan_equal(plan, expected)
     }
@@ -185,9 +185,9 @@ mod tests {
 
         // Filter is removed
         let expected = "Union\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
             \n    TableScan: test\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
             \n    TableScan: test";
         assert_optimized_plan_equal(plan, expected)
     }

@@ -25,7 +25,7 @@ use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
-    parquet::{RequestedStatistics, StatisticsConverter},
+    parquet::StatisticsConverter,
     {FileScanConfig, ParquetExec},
 };
 use datafusion::datasource::TableProvider;
@@ -518,21 +518,21 @@ impl ParquetMetadataIndexBuilder {
 
         // extract the parquet statistics from the file's footer
         let metadata = reader.metadata();
+        let row_groups = metadata.row_groups();
 
         // Extract the min/max values for each row group from the statistics
-        let row_counts = StatisticsConverter::row_counts(reader.metadata())?;
-        let value_column_mins = StatisticsConverter::try_new(
+        let converter = StatisticsConverter::try_new(
             "value",
-            RequestedStatistics::Min,
             reader.schema(),
-        )?
-        .extract(reader.metadata())?;
-        let value_column_maxes = StatisticsConverter::try_new(
-            "value",
-            RequestedStatistics::Max,
-            reader.schema(),
-        )?
-        .extract(reader.metadata())?;
+            reader.parquet_schema(),
+        )?;
+        let row_counts = converter
+            .row_group_row_counts(row_groups.iter())?
+            .ok_or_else(|| {
+                internal_datafusion_err!("Row group row counts are missing")
+            })?;
+        let value_column_mins = converter.row_group_mins(row_groups.iter())?;
+        let value_column_maxes = converter.row_group_maxes(row_groups.iter())?;
 
         // In a real system you would have to handle nulls, which represent
         // unknown statistics. All statistics are known in this example

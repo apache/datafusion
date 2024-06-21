@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`min_statistics`] and [`max_statistics`] convert statistics in parquet format to arrow [`ArrayRef`].
+//! [`StatisticsConverter`] to convert statistics in parquet format to arrow [`ArrayRef`].
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
@@ -33,7 +33,9 @@ use arrow_array::{
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 use half::f16;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::data_type::FixedLenByteArray;
+use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
+use parquet::file::page_index::index::{Index, PageIndex};
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use paste::paste;
@@ -302,24 +304,12 @@ macro_rules! get_statistics {
             ))),
             DataType::Int8 => Ok(Arc::new(Int8Array::from_iter(
                 [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
-                    x.and_then(|x| {
-                        if let Ok(v) = i8::try_from(*x) {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })
+                    x.and_then(|x| i8::try_from(*x).ok())
                 }),
             ))),
             DataType::Int16 => Ok(Arc::new(Int16Array::from_iter(
                 [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
-                    x.and_then(|x| {
-                        if let Ok(v) = i16::try_from(*x) {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })
+                    x.and_then(|x| i16::try_from(*x).ok())
                 }),
             ))),
             DataType::Int32 => Ok(Arc::new(Int32Array::from_iter(
@@ -330,24 +320,12 @@ macro_rules! get_statistics {
             ))),
             DataType::UInt8 => Ok(Arc::new(UInt8Array::from_iter(
                 [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
-                    x.and_then(|x| {
-                        if let Ok(v) = u8::try_from(*x) {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })
+                    x.and_then(|x| u8::try_from(*x).ok())
                 }),
             ))),
             DataType::UInt16 => Ok(Arc::new(UInt16Array::from_iter(
                 [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
-                    x.and_then(|x| {
-                        if let Ok(v) = u16::try_from(*x) {
-                            Some(v)
-                        } else {
-                            None
-                        }
-                    })
+                    x.and_then(|x| u16::try_from(*x).ok())
                 }),
             ))),
             DataType::UInt32 => Ok(Arc::new(UInt32Array::from_iter(
@@ -517,6 +495,209 @@ macro_rules! get_statistics {
         }}}
 }
 
+macro_rules! make_data_page_stats_iterator {
+    ($iterator_type: ident, $func: expr, $index_type: path, $stat_value_type: ty) => {
+        struct $iterator_type<'a, I>
+        where
+            I: Iterator<Item = (usize, &'a Index)>,
+        {
+            iter: I,
+        }
+
+        impl<'a, I> $iterator_type<'a, I>
+        where
+            I: Iterator<Item = (usize, &'a Index)>,
+        {
+            fn new(iter: I) -> Self {
+                Self { iter }
+            }
+        }
+
+        impl<'a, I> Iterator for $iterator_type<'a, I>
+        where
+            I: Iterator<Item = (usize, &'a Index)>,
+        {
+            type Item = Vec<Option<$stat_value_type>>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                let next = self.iter.next();
+                match next {
+                    Some((len, index)) => match index {
+                        $index_type(native_index) => Some(
+                            native_index
+                                .indexes
+                                .iter()
+                                .map(|x| $func(x))
+                                .collect::<Vec<_>>(),
+                        ),
+                        // No matching `Index` found;
+                        // thus no statistics that can be extracted.
+                        // We return vec![None; len] to effectively
+                        // create an arrow null-array with the length
+                        // corresponding to the number of entries in
+                        // `ParquetOffsetIndex` per row group per column.
+                        _ => Some(vec![None; len]),
+                    },
+                    _ => None,
+                }
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                self.iter.size_hint()
+            }
+        }
+    };
+}
+
+make_data_page_stats_iterator!(
+    MinInt32DataPageStatsIterator,
+    |x: &PageIndex<i32>| { x.min },
+    Index::INT32,
+    i32
+);
+make_data_page_stats_iterator!(
+    MaxInt32DataPageStatsIterator,
+    |x: &PageIndex<i32>| { x.max },
+    Index::INT32,
+    i32
+);
+make_data_page_stats_iterator!(
+    MinInt64DataPageStatsIterator,
+    |x: &PageIndex<i64>| { x.min },
+    Index::INT64,
+    i64
+);
+make_data_page_stats_iterator!(
+    MaxInt64DataPageStatsIterator,
+    |x: &PageIndex<i64>| { x.max },
+    Index::INT64,
+    i64
+);
+make_data_page_stats_iterator!(
+    MinFloat16DataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
+make_data_page_stats_iterator!(
+    MaxFloat16DataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
+make_data_page_stats_iterator!(
+    MinFloat32DataPageStatsIterator,
+    |x: &PageIndex<f32>| { x.min },
+    Index::FLOAT,
+    f32
+);
+make_data_page_stats_iterator!(
+    MaxFloat32DataPageStatsIterator,
+    |x: &PageIndex<f32>| { x.max },
+    Index::FLOAT,
+    f32
+);
+make_data_page_stats_iterator!(
+    MinFloat64DataPageStatsIterator,
+    |x: &PageIndex<f64>| { x.min },
+    Index::DOUBLE,
+    f64
+);
+make_data_page_stats_iterator!(
+    MaxFloat64DataPageStatsIterator,
+    |x: &PageIndex<f64>| { x.max },
+    Index::DOUBLE,
+    f64
+);
+macro_rules! get_data_page_statistics {
+    ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
+        paste! {
+            match $data_type {
+                Some(DataType::UInt8) => Ok(Arc::new(
+                    UInt8Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u8::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::UInt16) => Ok(Arc::new(
+                    UInt16Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u16::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::UInt32) => Ok(Arc::new(
+                    UInt32Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u32::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                ))),
+                Some(DataType::UInt64) => Ok(Arc::new(
+                    UInt64Array::from_iter(
+                        [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u64::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                ))),
+                Some(DataType::Int8) => Ok(Arc::new(
+                    Int8Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| i8::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::Int16) => Ok(Arc::new(
+                    Int16Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| i16::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::Int32) => Ok(Arc::new(Int32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Float16) => Ok(Arc::new(
+                    Float16Array::from_iter(
+                        [<$stat_type_prefix Float16DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| Some(from_bytes_to_f16(x.data())))
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::Float32) => Ok(Arc::new(Float32Array::from_iter([<$stat_type_prefix Float32DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter([<$stat_type_prefix Float64DataPageStatsIterator>]::new($iterator).flatten()))),
+                _ => unimplemented!()
+            }
+        }
+    }
+}
+
 /// Lookups up the parquet column by name
 ///
 /// Returns the parquet column index and the corresponding arrow field
@@ -542,8 +723,11 @@ pub(crate) fn parquet_column<'a>(
     Some((parquet_idx, field))
 }
 
-/// Extracts the min statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
-pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
+/// Extracts the min statistics from an iterator of [`ParquetStatistics`] to an
+/// [`ArrayRef`]
+///
+/// This is an internal helper -- see [`StatisticsConverter`] for public API
+fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
     data_type: &DataType,
     iterator: I,
 ) -> Result<ArrayRef> {
@@ -551,22 +735,78 @@ pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics
 }
 
 /// Extracts the max statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
-pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
+///
+/// This is an internal helper -- see [`StatisticsConverter`] for public API
+fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
     data_type: &DataType,
     iterator: I,
 ) -> Result<ArrayRef> {
     get_statistics!(Max, data_type, iterator)
 }
 
-/// What type of statistics should be extracted?
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RequestedStatistics {
-    /// Minimum Value
-    Min,
-    /// Maximum Value
-    Max,
-    /// Null Count, returned as a [`UInt64Array`])
-    NullCount,
+/// Extracts the min statistics from an iterator
+/// of parquet page [`Index`]'es to an [`ArrayRef`]
+pub(crate) fn min_page_statistics<'a, I>(
+    data_type: Option<&DataType>,
+    iterator: I,
+) -> Result<ArrayRef>
+where
+    I: Iterator<Item = (usize, &'a Index)>,
+{
+    get_data_page_statistics!(Min, data_type, iterator)
+}
+
+/// Extracts the max statistics from an iterator
+/// of parquet page [`Index`]'es to an [`ArrayRef`]
+pub(crate) fn max_page_statistics<'a, I>(
+    data_type: Option<&DataType>,
+    iterator: I,
+) -> Result<ArrayRef>
+where
+    I: Iterator<Item = (usize, &'a Index)>,
+{
+    get_data_page_statistics!(Max, data_type, iterator)
+}
+
+/// Extracts the null count statistics from an iterator
+/// of parquet page [`Index`]'es to an [`ArrayRef`]
+///
+/// The returned Array is an [`UInt64Array`]
+pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<UInt64Array>
+where
+    I: Iterator<Item = (usize, &'a Index)>,
+{
+    let iter = iterator.flat_map(|(len, index)| match index {
+        Index::NONE => vec![None; len],
+        Index::INT32(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::INT64(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::FLOAT(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::DOUBLE(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::FIXED_LEN_BYTE_ARRAY(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        _ => unimplemented!(),
+    });
+
+    Ok(UInt64Array::from_iter(iter))
 }
 
 /// Extracts Parquet statistics as Arrow arrays
@@ -582,40 +822,58 @@ pub enum RequestedStatistics {
 /// corresponding Arrow  value. For example, Decimals are stored as binary in
 /// parquet files.
 ///
-/// The parquet_schema and arrow _schema do not have to be identical (for
+/// The parquet_schema and arrow_schema do not have to be identical (for
 /// example, the columns may be in different orders and one or the other schemas
 /// may have additional columns). The function [`parquet_column`] is used to
 /// match the column in the parquet file to the column in the arrow schema.
-///
-/// # Multiple parquet files
-///
-/// This API is designed to support efficiently extracting statistics from
-/// multiple parquet files (hence why the parquet schema is passed in as an
-/// argument). This is useful when building an index for a directory of parquet
-/// files.
-///
 #[derive(Debug)]
 pub struct StatisticsConverter<'a> {
-    /// The name of the column to extract statistics for
-    column_name: &'a str,
-    /// The type of statistics to extract
-    statistics_type: RequestedStatistics,
-    /// The arrow schema of the query
-    arrow_schema: &'a Schema,
+    /// the index of the matched column in the parquet schema
+    parquet_index: Option<usize>,
     /// The field (with data type) of the column in the arrow schema
     arrow_field: &'a Field,
 }
 
 impl<'a> StatisticsConverter<'a> {
-    /// Returns a [`UInt64Array`] with counts for each row group
+    /// Returns a [`UInt64Array`] with row counts for each row group
+    ///
+    /// # Return Value
     ///
     /// The returned array has no nulls, and has one value for each row group.
     /// Each value is the number of rows in the row group.
-    pub fn row_counts(metadata: &ParquetMetaData) -> Result<UInt64Array> {
-        let row_groups = metadata.row_groups();
-        let mut builder = UInt64Array::builder(row_groups.len());
-        for row_group in row_groups {
-            let row_count = row_group.num_rows();
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use arrow::datatypes::Schema;
+    /// # use arrow_array::ArrayRef;
+    /// # use parquet::file::metadata::ParquetMetaData;
+    /// # use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
+    /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
+    /// # fn get_arrow_schema() -> Schema { unimplemented!() }
+    /// // Given the metadata for a parquet file and the arrow schema
+    /// let metadata: ParquetMetaData = get_parquet_metadata();
+    /// let arrow_schema: Schema = get_arrow_schema();
+    /// let parquet_schema = metadata.file_metadata().schema_descr();
+    /// // create a converter
+    /// let converter = StatisticsConverter::try_new("foo", &arrow_schema, parquet_schema)
+    ///   .unwrap();
+    /// // get the row counts for each row group
+    /// let row_counts = converter.row_group_row_counts(metadata
+    ///   .row_groups()
+    ///   .iter()
+    /// );
+    /// ```
+    pub fn row_group_row_counts<I>(&self, metadatas: I) -> Result<Option<UInt64Array>>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let Some(_) = self.parquet_index else {
+            return Ok(None);
+        };
+
+        let mut builder = UInt64Array::builder(10);
+        for metadata in metadatas.into_iter() {
+            let row_count = metadata.num_rows();
             let row_count: u64 = row_count.try_into().map_err(|e| {
                 internal_datafusion_err!(
                     "Parquet row count {row_count} too large to convert to u64: {e}"
@@ -623,14 +881,24 @@ impl<'a> StatisticsConverter<'a> {
             })?;
             builder.append_value(row_count);
         }
-        Ok(builder.finish())
+        Ok(Some(builder.finish()))
     }
 
-    /// create an new statistics converter
-    pub fn try_new(
-        column_name: &'a str,
-        statistics_type: RequestedStatistics,
+    /// Create a new `StatisticsConverter` to extract statistics for a column
+    ///
+    /// Note if there is no corresponding column in the parquet file, the returned
+    /// arrays will be null. This can happen if the column is in the arrow
+    /// schema but not in the parquet schema due to schema evolution.
+    ///
+    /// See example on [`Self::row_group_mins`] for usage
+    ///
+    /// # Errors
+    ///
+    /// * If the column is not found in the arrow schema
+    pub fn try_new<'b>(
+        column_name: &'b str,
         arrow_schema: &'a Schema,
+        parquet_schema: &'a SchemaDescriptor,
     ) -> Result<Self> {
         // ensure the requested column is in the arrow schema
         let Some((_idx, arrow_field)) = arrow_schema.column_with_name(column_name) else {
@@ -639,67 +907,330 @@ impl<'a> StatisticsConverter<'a> {
                 column_name
             );
         };
-        Ok(Self {
-            column_name,
-            statistics_type,
+
+        // find the column in the parquet schema, if not, return a null array
+        let parquet_index = match parquet_column(
+            parquet_schema,
             arrow_schema,
+            column_name,
+        ) {
+            Some((parquet_idx, matched_field)) => {
+                // sanity check that matching field matches the arrow field
+                if matched_field.as_ref() != arrow_field {
+                    return internal_err!(
+                        "Matched column '{:?}' does not match original matched column '{:?}'",
+                        matched_field,
+                        arrow_field
+                    );
+                }
+                Some(parquet_idx)
+            }
+            None => None,
+        };
+
+        Ok(Self {
+            parquet_index,
             arrow_field,
         })
     }
 
-    /// extract the statistics from a parquet file, given the parquet file's metadata
+    /// Extract the minimum values from row group statistics in [`RowGroupMetaData`]
     ///
-    /// The returned array contains 1 value for each row group in the parquet
-    /// file in order
+    /// # Return Value
+    ///
+    /// The returned array contains 1 value for each row group, in the same order as `metadatas`
     ///
     /// Each value is either
-    /// * the requested statistics type for the column
+    /// * the minimum value for the column
     /// * a null value, if the statistics can not be extracted
     ///
-    /// Note that a null value does NOT mean the min or max value was actually
+    /// Note that a null value does NOT mean the min value was actually
     /// `null` it means it the requested statistic is unknown
+    ///
+    /// # Errors
     ///
     /// Reasons for not being able to extract the statistics include:
     /// * the column is not present in the parquet file
     /// * statistics for the column are not present in the row group
     /// * the stored statistic value can not be converted to the requested type
-    pub fn extract(&self, metadata: &ParquetMetaData) -> Result<ArrayRef> {
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use arrow::datatypes::Schema;
+    /// # use arrow_array::ArrayRef;
+    /// # use parquet::file::metadata::ParquetMetaData;
+    /// # use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
+    /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
+    /// # fn get_arrow_schema() -> Schema { unimplemented!() }
+    /// // Given the metadata for a parquet file and the arrow schema
+    /// let metadata: ParquetMetaData = get_parquet_metadata();
+    /// let arrow_schema: Schema = get_arrow_schema();
+    /// let parquet_schema = metadata.file_metadata().schema_descr();
+    /// // create a converter
+    /// let converter = StatisticsConverter::try_new("foo", &arrow_schema, parquet_schema)
+    ///   .unwrap();
+    /// // get the minimum value for the column "foo" in the parquet file
+    /// let min_values: ArrayRef = converter
+    ///   .row_group_mins(metadata.row_groups().iter())
+    ///  .unwrap();
+    /// ```
+    pub fn row_group_mins<I>(&self, metadatas: I) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
         let data_type = self.arrow_field.data_type();
-        let num_row_groups = metadata.row_groups().len();
 
-        let parquet_schema = metadata.file_metadata().schema_descr();
-        let row_groups = metadata.row_groups();
-
-        // find the column in the parquet schema, if not, return a null array
-        let Some((parquet_idx, matched_field)) =
-            parquet_column(parquet_schema, self.arrow_schema, self.column_name)
-        else {
-            // column was in the arrow schema but not in the parquet schema, so return a null array
-            return Ok(new_null_array(data_type, num_row_groups));
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, metadatas));
         };
 
-        // sanity check that matching field matches the arrow field
-        if matched_field.as_ref() != self.arrow_field {
-            return internal_err!(
-                "Matched column '{:?}' does not match original matched column '{:?}'",
-                matched_field,
-                self.arrow_field
-            );
+        let iter = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics());
+        min_statistics(data_type, iter)
+    }
+
+    /// Extract the maximum values from row group statistics in [`RowGroupMetaData`]
+    ///
+    /// See docs on [`Self::row_group_mins`] for details
+    pub fn row_group_maxes<I>(&self, metadatas: I) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let data_type = self.arrow_field.data_type();
+
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, metadatas));
+        };
+
+        let iter = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics());
+        max_statistics(data_type, iter)
+    }
+
+    /// Extract the null counts from row group statistics in [`RowGroupMetaData`]
+    ///
+    /// See docs on [`Self::row_group_mins`] for details
+    pub fn row_group_null_counts<I>(&self, metadatas: I) -> Result<UInt64Array>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let Some(parquet_index) = self.parquet_index else {
+            let num_row_groups = metadatas.into_iter().count();
+            return Ok(UInt64Array::from_iter(
+                std::iter::repeat(None).take(num_row_groups),
+            ));
+        };
+
+        let null_counts = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics())
+            .map(|s| s.map(|s| s.null_count()));
+        Ok(UInt64Array::from_iter(null_counts))
+    }
+
+    /// Extract the minimum values from Data Page statistics.
+    ///
+    /// In Parquet files, in addition to the Column Chunk level statistics
+    /// (stored for each column for each row group) there are also
+    /// optional statistics stored for each data page, as part of
+    /// the [`ParquetColumnIndex`].
+    ///
+    /// Since a single Column Chunk is stored as one or more pages,
+    /// page level statistics can prune at a finer granularity.
+    ///
+    /// However since they are stored in a separate metadata
+    /// structure ([`Index`]) there is different code to extract them as
+    /// compared to arrow statistics.
+    ///
+    /// # Parameters:
+    ///
+    /// * `column_page_index`: The parquet column page indices, read from
+    /// `ParquetMetaData` column_index
+    ///
+    /// * `column_offset_index`: The parquet column offset indices, read from
+    /// `ParquetMetaData` offset_index
+    ///
+    /// * `row_group_indices`: The indices of the row groups, that are used to
+    /// extract the column page index and offset index on a per row group
+    /// per column basis.
+    ///
+    /// # Return Value
+    ///
+    /// The returned array contains 1 value for each `NativeIndex`
+    /// in the underlying `Index`es, in the same order as they appear
+    /// in `metadatas`.
+    ///
+    /// For example, if there are two `Index`es in `metadatas`:
+    /// 1. the first having `3` `PageIndex` entries
+    /// 2. the second having `2` `PageIndex` entries
+    ///
+    /// The returned array would have 5 rows.
+    ///
+    /// Each value is either:
+    /// * the minimum value for the page
+    /// * a null value, if the statistics can not be extracted
+    ///
+    /// Note that a null value does NOT mean the min value was actually
+    /// `null` it means it the requested statistic is unknown
+    ///
+    /// # Errors
+    ///
+    /// Reasons for not being able to extract the statistics include:
+    /// * the column is not present in the parquet file
+    /// * statistics for the pages are not present in the row group
+    /// * the stored statistic value can not be converted to the requested type
+    pub fn data_page_mins<I>(
+        &self,
+        column_page_index: &ParquetColumnIndex,
+        column_offset_index: &ParquetOffsetIndex,
+        row_group_indices: I,
+    ) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let data_type = self.arrow_field.data_type();
+
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, row_group_indices));
+        };
+
+        let iter = row_group_indices.into_iter().map(|rg_index| {
+            let column_page_index_per_row_group_per_column =
+                &column_page_index[*rg_index][parquet_index];
+            let num_data_pages = &column_offset_index[*rg_index][parquet_index].len();
+
+            (*num_data_pages, column_page_index_per_row_group_per_column)
+        });
+
+        min_page_statistics(Some(data_type), iter)
+    }
+
+    /// Extract the maximum values from Data Page statistics.
+    ///
+    /// See docs on [`Self::data_page_mins`] for details.
+    pub fn data_page_maxes<I>(
+        &self,
+        column_page_index: &ParquetColumnIndex,
+        column_offset_index: &ParquetOffsetIndex,
+        row_group_indices: I,
+    ) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let data_type = self.arrow_field.data_type();
+
+        let Some(parquet_index) = self.parquet_index else {
+            return Ok(self.make_null_array(data_type, row_group_indices));
+        };
+
+        let iter = row_group_indices.into_iter().map(|rg_index| {
+            let column_page_index_per_row_group_per_column =
+                &column_page_index[*rg_index][parquet_index];
+            let num_data_pages = &column_offset_index[*rg_index][parquet_index].len();
+
+            (*num_data_pages, column_page_index_per_row_group_per_column)
+        });
+
+        max_page_statistics(Some(data_type), iter)
+    }
+
+    /// Extract the null counts from Data Page statistics.
+    ///
+    /// The returned Array is an [`UInt64Array`]
+    ///
+    /// See docs on [`Self::data_page_mins`] for details.
+    pub fn data_page_null_counts<I>(
+        &self,
+        column_page_index: &ParquetColumnIndex,
+        column_offset_index: &ParquetOffsetIndex,
+        row_group_indices: I,
+    ) -> Result<UInt64Array>
+    where
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let Some(parquet_index) = self.parquet_index else {
+            let num_row_groups = row_group_indices.into_iter().count();
+            return Ok(UInt64Array::from_iter(
+                std::iter::repeat(None).take(num_row_groups),
+            ));
+        };
+
+        let iter = row_group_indices.into_iter().map(|rg_index| {
+            let column_page_index_per_row_group_per_column =
+                &column_page_index[*rg_index][parquet_index];
+            let num_data_pages = &column_offset_index[*rg_index][parquet_index].len();
+
+            (*num_data_pages, column_page_index_per_row_group_per_column)
+        });
+        null_counts_page_statistics(iter)
+    }
+
+    /// Returns an [`ArrayRef`] with row counts for each row group.
+    ///
+    /// This function iterates over the given row group indexes and computes
+    /// the row count for each page in the specified column.
+    ///
+    /// # Parameters:
+    ///
+    /// * `column_offset_index`: The parquet column offset indices, read from
+    /// `ParquetMetaData` offset_index
+    ///
+    /// * `row_group_metadatas`: The metadata slice of the row groups, read
+    /// from `ParquetMetaData` row_groups
+    ///
+    /// * `row_group_indices`: The indices of the row groups, that are used to
+    /// extract the column offset index on a per row group per column basis.
+    ///
+    /// See docs on [`Self::data_page_mins`] for details.
+    pub fn data_page_row_counts<I>(
+        &self,
+        column_offset_index: &ParquetOffsetIndex,
+        row_group_metadatas: &'a [RowGroupMetaData],
+        row_group_indices: I,
+    ) -> Result<Option<UInt64Array>>
+    where
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let Some(parquet_index) = self.parquet_index else {
+            // no matching column found in parquet_index;
+            // thus we cannot extract page_locations in order to determine
+            // the row count on a per DataPage basis.
+            return Ok(None);
+        };
+
+        let mut row_count_total = Vec::new();
+        for rg_idx in row_group_indices {
+            let page_locations = &column_offset_index[*rg_idx][parquet_index];
+
+            let row_count_per_page = page_locations.windows(2).map(|loc| {
+                Some(loc[1].first_row_index as u64 - loc[0].first_row_index as u64)
+            });
+
+            // append the last page row count
+            let num_rows_in_row_group = &row_group_metadatas[*rg_idx].num_rows();
+            let row_count_per_page = row_count_per_page
+                .chain(std::iter::once(Some(
+                    *num_rows_in_row_group as u64
+                        - page_locations.last().unwrap().first_row_index as u64,
+                )))
+                .collect::<Vec<_>>();
+
+            row_count_total.extend(row_count_per_page);
         }
 
-        // Get an iterator over the column statistics
-        let iter = row_groups
-            .iter()
-            .map(|x| x.column(parquet_idx).statistics());
+        Ok(Some(UInt64Array::from_iter(row_count_total)))
+    }
 
-        match self.statistics_type {
-            RequestedStatistics::Min => min_statistics(data_type, iter),
-            RequestedStatistics::Max => max_statistics(data_type, iter),
-            RequestedStatistics::NullCount => {
-                let null_counts = iter.map(|stats| stats.map(|s| s.null_count()));
-                Ok(Arc::new(UInt64Array::from_iter(null_counts)))
-            }
-        }
+    /// Returns a null array of data_type with one element per row group
+    fn make_null_array<I, A>(&self, data_type: &DataType, metadatas: I) -> ArrayRef
+    where
+        I: IntoIterator<Item = A>,
+    {
+        // column was in the arrow schema but not in the parquet schema, so return a null array
+        let num_row_groups = metadatas.into_iter().count();
+        new_null_array(data_type, num_row_groups)
     }
 }
 
@@ -1351,9 +1882,10 @@ mod test {
         assert_eq!(idx, 2);
 
         let row_groups = metadata.row_groups();
-        let iter = row_groups.iter().map(|x| x.column(idx).statistics());
+        let converter =
+            StatisticsConverter::try_new("int_col", &schema, parquet_schema).unwrap();
 
-        let min = min_statistics(&DataType::Int32, iter.clone()).unwrap();
+        let min = converter.row_group_mins(row_groups.iter()).unwrap();
         assert_eq!(
             &min,
             &expected_min,
@@ -1361,7 +1893,7 @@ mod test {
             DisplayStats(row_groups)
         );
 
-        let max = max_statistics(&DataType::Int32, iter).unwrap();
+        let max = converter.row_group_maxes(row_groups.iter()).unwrap();
         assert_eq!(
             &max,
             &expected_max,
@@ -1549,22 +2081,23 @@ mod test {
                     continue;
                 }
 
-                let (idx, f) =
-                    parquet_column(parquet_schema, &schema, field.name()).unwrap();
-                assert_eq!(f, field);
+                let converter =
+                    StatisticsConverter::try_new(field.name(), &schema, parquet_schema)
+                        .unwrap();
 
-                let iter = row_groups.iter().map(|x| x.column(idx).statistics());
-                let min = min_statistics(f.data_type(), iter.clone()).unwrap();
+                assert_eq!(converter.arrow_field, field.as_ref());
+
+                let mins = converter.row_group_mins(row_groups.iter()).unwrap();
                 assert_eq!(
-                    &min,
+                    &mins,
                     &expected_min,
                     "Min. Statistics\n\n{}\n\n",
                     DisplayStats(row_groups)
                 );
 
-                let max = max_statistics(f.data_type(), iter).unwrap();
+                let maxes = converter.row_group_maxes(row_groups.iter()).unwrap();
                 assert_eq!(
-                    &max,
+                    &maxes,
                     &expected_max,
                     "Max. Statistics\n\n{}\n\n",
                     DisplayStats(row_groups)
@@ -1631,7 +2164,7 @@ mod test {
             self
         }
 
-        /// Reads the specified parquet file and validates that the exepcted min/max
+        /// Reads the specified parquet file and validates that the expected min/max
         /// values for the specified columns are as expected.
         fn run(self) {
             let path = PathBuf::from(parquet_test_data()).join(self.file_name);
@@ -1649,14 +2182,13 @@ mod test {
                     expected_max,
                 } = expected_column;
 
-                let (idx, field) =
-                    parquet_column(parquet_schema, arrow_schema, name).unwrap();
-
-                let iter = row_groups.iter().map(|x| x.column(idx).statistics());
-                let actual_min = min_statistics(field.data_type(), iter.clone()).unwrap();
+                let converter =
+                    StatisticsConverter::try_new(name, arrow_schema, parquet_schema)
+                        .unwrap();
+                let actual_min = converter.row_group_mins(row_groups.iter()).unwrap();
                 assert_eq!(&expected_min, &actual_min, "column {name}");
 
-                let actual_max = max_statistics(field.data_type(), iter).unwrap();
+                let actual_max = converter.row_group_maxes(row_groups.iter()).unwrap();
                 assert_eq!(&expected_max, &actual_max, "column {name}");
             }
         }

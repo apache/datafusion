@@ -46,7 +46,7 @@ make_udaf_expr_and_func!(
     Sum,
     sum,
     expression,
-    "Returns the first value in a group of values.",
+    "Returns the sum of a group of values.",
     sum_udaf
 );
 
@@ -74,14 +74,12 @@ macro_rules! downcast_sum {
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Sum {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec!["sum".to_string()],
         }
     }
 }
@@ -98,7 +96,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn name(&self) -> &str {
-        "SUM"
+        "sum"
     }
 
     fn signature(&self) -> &Signature {
@@ -189,7 +187,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {

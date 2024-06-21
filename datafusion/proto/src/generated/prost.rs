@@ -767,6 +767,8 @@ pub struct AggregateUdfExprNode {
     pub fun_name: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
     pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(bool, tag = "5")]
+    pub distinct: bool,
     #[prost(message, optional, boxed, tag = "3")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, repeated, tag = "4")]
@@ -1530,6 +1532,8 @@ pub struct CsvScanExecNode {
     pub quote: ::prost::alloc::string::String,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
+    #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
+    pub optional_comment: ::core::option::Option<csv_scan_exec_node::OptionalComment>,
 }
 /// Nested message and enum types in `CsvScanExecNode`.
 pub mod csv_scan_exec_node {
@@ -1538,6 +1542,12 @@ pub mod csv_scan_exec_node {
     pub enum OptionalEscape {
         #[prost(string, tag = "5")]
         Escape(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalComment {
+        #[prost(string, tag = "6")]
+        Comment(::prost::alloc::string::String),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1918,38 +1928,38 @@ pub struct PartitionStats {
 pub enum AggregateFunction {
     Min = 0,
     Max = 1,
-    Sum = 2,
+    /// SUM = 2;
     Avg = 3,
-    Count = 4,
-    ApproxDistinct = 5,
+    /// COUNT = 4;
+    /// APPROX_DISTINCT = 5;
     ArrayAgg = 6,
     /// VARIANCE = 7;
-    VariancePop = 8,
+    /// VARIANCE_POP = 8;
     /// COVARIANCE = 9;
     /// COVARIANCE_POP = 10;
-    Stddev = 11,
-    StddevPop = 12,
+    /// STDDEV = 11;
+    /// STDDEV_POP = 12;
     Correlation = 13,
-    ApproxPercentileCont = 14,
-    ApproxMedian = 15,
-    ApproxPercentileContWithWeight = 16,
+    /// APPROX_PERCENTILE_CONT = 14;
+    /// APPROX_MEDIAN = 15;
+    /// APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
     Grouping = 17,
     /// MEDIAN = 18;
-    BitAnd = 19,
-    BitOr = 20,
-    BitXor = 21,
-    BoolAnd = 22,
-    BoolOr = 23,
-    RegrSlope = 26,
-    RegrIntercept = 27,
-    RegrCount = 28,
-    RegrR2 = 29,
-    RegrAvgx = 30,
-    RegrAvgy = 31,
-    RegrSxx = 32,
-    RegrSyy = 33,
-    RegrSxy = 34,
-    StringAgg = 35,
+    /// BIT_AND = 19;
+    /// BIT_OR = 20;
+    /// BIT_XOR = 21;
+    ///   BOOL_AND = 22;
+    ///   BOOL_OR = 23;
+    /// REGR_SLOPE = 26;
+    /// REGR_INTERCEPT = 27;
+    /// REGR_COUNT = 28;
+    /// REGR_R2 = 29;
+    /// REGR_AVGX = 30;
+    /// REGR_AVGY = 31;
+    /// REGR_SXX = 32;
+    /// REGR_SYY = 33;
+    /// REGR_SXY = 34;
+    /// STRING_AGG = 35;
     NthValueAgg = 36,
 }
 impl AggregateFunction {
@@ -1961,36 +1971,10 @@ impl AggregateFunction {
         match self {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
-            AggregateFunction::Sum => "SUM",
             AggregateFunction::Avg => "AVG",
-            AggregateFunction::Count => "COUNT",
-            AggregateFunction::ApproxDistinct => "APPROX_DISTINCT",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
-            AggregateFunction::VariancePop => "VARIANCE_POP",
-            AggregateFunction::Stddev => "STDDEV",
-            AggregateFunction::StddevPop => "STDDEV_POP",
             AggregateFunction::Correlation => "CORRELATION",
-            AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
-            AggregateFunction::ApproxMedian => "APPROX_MEDIAN",
-            AggregateFunction::ApproxPercentileContWithWeight => {
-                "APPROX_PERCENTILE_CONT_WITH_WEIGHT"
-            }
             AggregateFunction::Grouping => "GROUPING",
-            AggregateFunction::BitAnd => "BIT_AND",
-            AggregateFunction::BitOr => "BIT_OR",
-            AggregateFunction::BitXor => "BIT_XOR",
-            AggregateFunction::BoolAnd => "BOOL_AND",
-            AggregateFunction::BoolOr => "BOOL_OR",
-            AggregateFunction::RegrSlope => "REGR_SLOPE",
-            AggregateFunction::RegrIntercept => "REGR_INTERCEPT",
-            AggregateFunction::RegrCount => "REGR_COUNT",
-            AggregateFunction::RegrR2 => "REGR_R2",
-            AggregateFunction::RegrAvgx => "REGR_AVGX",
-            AggregateFunction::RegrAvgy => "REGR_AVGY",
-            AggregateFunction::RegrSxx => "REGR_SXX",
-            AggregateFunction::RegrSyy => "REGR_SYY",
-            AggregateFunction::RegrSxy => "REGR_SXY",
-            AggregateFunction::StringAgg => "STRING_AGG",
             AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
     }
@@ -1999,36 +1983,10 @@ impl AggregateFunction {
         match value {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
-            "SUM" => Some(Self::Sum),
             "AVG" => Some(Self::Avg),
-            "COUNT" => Some(Self::Count),
-            "APPROX_DISTINCT" => Some(Self::ApproxDistinct),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
-            "VARIANCE_POP" => Some(Self::VariancePop),
-            "STDDEV" => Some(Self::Stddev),
-            "STDDEV_POP" => Some(Self::StddevPop),
             "CORRELATION" => Some(Self::Correlation),
-            "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),
-            "APPROX_MEDIAN" => Some(Self::ApproxMedian),
-            "APPROX_PERCENTILE_CONT_WITH_WEIGHT" => {
-                Some(Self::ApproxPercentileContWithWeight)
-            }
             "GROUPING" => Some(Self::Grouping),
-            "BIT_AND" => Some(Self::BitAnd),
-            "BIT_OR" => Some(Self::BitOr),
-            "BIT_XOR" => Some(Self::BitXor),
-            "BOOL_AND" => Some(Self::BoolAnd),
-            "BOOL_OR" => Some(Self::BoolOr),
-            "REGR_SLOPE" => Some(Self::RegrSlope),
-            "REGR_INTERCEPT" => Some(Self::RegrIntercept),
-            "REGR_COUNT" => Some(Self::RegrCount),
-            "REGR_R2" => Some(Self::RegrR2),
-            "REGR_AVGX" => Some(Self::RegrAvgx),
-            "REGR_AVGY" => Some(Self::RegrAvgy),
-            "REGR_SXX" => Some(Self::RegrSxx),
-            "REGR_SYY" => Some(Self::RegrSyy),
-            "REGR_SXY" => Some(Self::RegrSxy),
-            "STRING_AGG" => Some(Self::StringAgg),
             "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
         }

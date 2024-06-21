@@ -15,23 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Aggregate function stubs to test SQL optimizers.
+//! Aggregate function stubs for test in expr / optimizer.
 //!
 //! These are used to avoid a dependence on `datafusion-functions-aggregate` which live in a different crate
 
 use std::any::Any;
 
-use arrow::datatypes::{
-    DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
-};
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::{
+use crate::{
     expr::AggregateFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::AggregateOrderSensitivity,
     Accumulator, AggregateUDFImpl, Expr, GroupsAccumulator, ReversedUDAF, Signature,
     Volatility,
 };
+use arrow::datatypes::{
+    DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+};
+use datafusion_common::{exec_err, not_impl_err, Result};
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
@@ -39,16 +39,16 @@ macro_rules! create_func {
             /// Singleton instance of [$UDAF], ensures the UDAF is only created once
             /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
             #[allow(non_upper_case_globals)]
-            static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::AggregateUDF>> =
+            static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<crate::AggregateUDF>> =
             std::sync::OnceLock::new();
 
             /// AggregateFunction that returns a [AggregateUDF] for [$UDAF]
             ///
-            /// [AggregateUDF]: datafusion_expr::AggregateUDF
-            pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<datafusion_expr::AggregateUDF> {
+            /// [AggregateUDF]: crate::AggregateUDF
+            pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<crate::AggregateUDF> {
                 [< STATIC_ $UDAF >]
                     .get_or_init(|| {
-                        std::sync::Arc::new(datafusion_expr::AggregateUDF::from(<$UDAF>::default()))
+                        std::sync::Arc::new(crate::AggregateUDF::from(<$UDAF>::default()))
                     })
                     .clone()
             }
@@ -58,9 +58,22 @@ macro_rules! create_func {
 
 create_func!(Sum, sum_udaf);
 
-pub(crate) fn sum(expr: Expr) -> Expr {
+pub fn sum(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new_udf(
         sum_udaf(),
+        vec![expr],
+        false,
+        None,
+        None,
+        None,
+    ))
+}
+
+create_func!(Count, count_udaf);
+
+pub fn count(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        count_udaf(),
         vec![expr],
         false,
         None,
@@ -73,14 +86,12 @@ pub(crate) fn sum(expr: Expr) -> Expr {
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Sum {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec!["sum".to_string()],
         }
     }
 }
@@ -97,7 +108,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn name(&self) -> &str {
-        "SUM"
+        "sum"
     }
 
     fn signature(&self) -> &Signature {
@@ -162,7 +173,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -189,5 +200,76 @@ impl AggregateUDFImpl for Sum {
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
+    }
+}
+
+/// Testing stub implementation of COUNT aggregate
+pub struct Count {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl std::fmt::Debug for Count {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Count")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+impl Default for Count {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Count {
+    pub fn new() -> Self {
+        Self {
+            aliases: vec!["count".to_string()],
+            signature: Signature::variadic_any(Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for Count {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "COUNT"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::Identical
     }
 }

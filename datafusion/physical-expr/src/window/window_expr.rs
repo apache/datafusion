@@ -559,7 +559,6 @@ pub enum NthValueKind {
 
 #[derive(Debug, Clone)]
 pub struct NthValueState {
-    pub range: Range<usize>,
     // In certain cases, we can finalize the result early. Consider this usage:
     // ```
     //  FIRST_VALUE(increasing_col) OVER window AS my_first_value
