@@ -471,8 +471,10 @@ pub struct PruningPredicate {
     /// Original physical predicate from which this predicate expr is derived
     /// (required for serialization)
     orig_expr: Arc<dyn PhysicalExpr>,
-    /// [`LiteralGuarantee`]s that are used to try and prove a predicate can not
-    /// possibly evaluate to `true`.
+    /// [`LiteralGuarantee`]s used to try and prove a predicate can not possibly
+    /// evaluate to `true`.
+    ///
+    /// See [`PruningPredicate::literal_guarantees`] for more details.
     literal_guarantees: Vec<LiteralGuarantee>,
 }
 
@@ -595,6 +597,10 @@ impl PruningPredicate {
     }
 
     /// Returns a reference to the literal guarantees
+    ///
+    /// Note that **All** `LiteralGuarantee`s must be satisfied for the
+    /// expression to possibly be `true`. If any is not satisfied, the
+    /// expression is guaranteed to be `null` or `false`.
     pub fn literal_guarantees(&self) -> &[LiteralGuarantee] {
         &self.literal_guarantees
     }
