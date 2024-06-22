@@ -43,16 +43,17 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError,
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, ScalarValue::Utf8,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::{MinAccumulator,MaxAccumulator};
+use datafusion_physical_expr::expressions::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
+use log::debug;
 use object_store::buffered::BufWriter;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
@@ -398,100 +399,119 @@ pub async fn statistics_from_parquet_meta(
         file_metadata.key_value_metadata(),
     )?;
 
+    let mut statistics = Statistics::new_unknown(&table_schema);
+    let (mut max_accs, mut min_accs) = create_max_min_accs(&table_schema);
+    let mut null_counts_array = vec![Precision::Exact(0); table_schema.fields().len()];
+    let row_groups_metadata = metadata.row_groups();
+
+    let Some(num_rows) = row_groups_metadata.first().map(|rg| rg.num_rows() as usize)
+    else {
+        return Ok(statistics);
+    };
+    statistics.num_rows = Precision::Exact(num_rows);
+
     let mut fields_iter = table_schema.fields().iter();
     let Some(first_field) = fields_iter.next() else {
-        return Ok(Statistics::new_unknown(&table_schema));
+        return Ok(statistics);
     };
 
-    let stats_converter = StatisticsConverter::try_new_from_arrow_schema_index(
-        0,
-        first_field,
+    let option_stats_converter;
+    match StatisticsConverter::try_new(
+        first_field.name(),
         &file_schema,
         file_metadata.schema_descr(),
-    )?;
-
-    let row_groups_metadata = metadata.row_groups();
-    let Some(num_rows_array) =
-        stats_converter.row_group_row_counts(row_groups_metadata)?
-    else {
-        return Ok(Statistics::new_unknown(&table_schema));
+    ) {
+        Ok(sc) => {
+            option_stats_converter = Some(sc);
+        }
+        Err(e) => {
+            debug!("Failed to create statistics converter: {}", e);
+            option_stats_converter = None;
+            null_counts_array[0] = Precision::Exact(num_rows);
+        }
     };
 
-    let Some(total_byte_size_array) =
-        stats_converter.row_group_row_total_bytes(row_groups_metadata)?
-    else {
-        return Ok(Statistics::new_unknown(&table_schema));
-    };
+    if option_stats_converter.is_some() {
+        let stats_converter = option_stats_converter.unwrap();
+        let Some(total_byte_size_array) =
+            stats_converter.row_group_row_total_bytes(row_groups_metadata)?
+        else {
+            return Ok(statistics);
+        };
+        let total_byte_size = sum(&total_byte_size_array).unwrap_or_default() as usize;
+        statistics.total_byte_size = Precision::Exact(total_byte_size);
 
-    let (mut max_accs, mut min_accs) = create_max_min_accs(&table_schema);
-    let mut null_counts_array =
-        vec![Precision::Exact(0); table_schema.fields().len()];
         summarize_min_max_null_counts(
             &mut min_accs,
             &mut max_accs,
             &mut null_counts_array,
             0,
+            num_rows,
             &stats_converter,
             row_groups_metadata,
         )?;
+    }
 
     fields_iter.enumerate().for_each(|(idx, field)| {
-        let _ = StatisticsConverter::try_new_from_arrow_schema_index(
-            idx,
-            field,
+        match StatisticsConverter::try_new(
+            field.name(),
             &file_schema,
             file_metadata.schema_descr(),
-        )
-        .and_then(|stats_converter| {
-            summarize_min_max_null_counts(
-                &mut min_accs,
-                &mut max_accs,
-                &mut null_counts_array,
-                idx,
-                &stats_converter,
-                row_groups_metadata,
-            )
-        });
+        ) {
+            Ok(stats_converter) => {
+                summarize_min_max_null_counts(
+                    &mut min_accs,
+                    &mut max_accs,
+                    &mut null_counts_array,
+                    idx + 1,
+                    num_rows,
+                    &stats_converter,
+                    row_groups_metadata,
+                )
+                .ok();
+            }
+            Err(e) => {
+                debug!("Failed to create statistics converter: {}", e);
+                null_counts_array[idx + 1] = Precision::Exact(num_rows);
+            }
+        }
     });
 
-    Ok(Statistics {
-        num_rows: Precision::Exact(sum(&num_rows_array).unwrap_or_default() as usize),
-        total_byte_size: Precision::Exact(
-            sum(&total_byte_size_array).unwrap_or_default() as usize,
-        ),
-        column_statistics: get_col_stats(
-            &table_schema,
-            null_counts_array,
-            &mut max_accs,
-            &mut min_accs,
-        ),
-    })
+    statistics.column_statistics = get_col_stats(
+        &table_schema,
+        null_counts_array,
+        &mut max_accs,
+        &mut min_accs,
+    );
+
+    Ok(statistics)
 }
 
 fn summarize_min_max_null_counts(
-    min_accs: & mut [Option<MinAccumulator>],
-    max_accs: & mut [Option<MaxAccumulator>],
-    null_counts_array: & mut [Precision<usize>],
+    min_accs: &mut [Option<MinAccumulator>],
+    max_accs: &mut [Option<MaxAccumulator>],
+    null_counts_array: &mut [Precision<usize>],
     arrow_schema_index: usize,
+    num_rows: usize,
     stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
 ) -> Result<()> {
     let max_values = stats_converter.row_group_maxes(row_groups_metadata)?;
     let min_values = stats_converter.row_group_mins(row_groups_metadata)?;
-    let null_counts =
-        stats_converter.row_group_null_counts(row_groups_metadata)?;
+    let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
 
-    if let Some(max_acc) = & mut max_accs[arrow_schema_index] {
+    if let Some(max_acc) = &mut max_accs[arrow_schema_index] {
         max_acc.update_batch(&[max_values])?;
     }
 
-    if let Some(min_acc) = & mut min_accs[arrow_schema_index] {
+    if let Some(min_acc) = &mut min_accs[arrow_schema_index] {
         min_acc.update_batch(&[min_values])?;
     }
 
-    null_counts_array[arrow_schema_index] = Precision::Exact(
-        sum(&null_counts).unwrap_or_default() as usize,
-    );
+    null_counts_array[arrow_schema_index] = Precision::Exact(match sum(&null_counts) {
+        Some(null_count) => null_count as usize,
+        None => num_rows,
+    });
 
     Ok(())
 }
@@ -1397,8 +1417,8 @@ mod tests {
         // column c1
         let c1_stats = &stats.column_statistics[0];
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
-        assert_eq!(c1_stats.max_value, Precision::Absent);
-        assert_eq!(c1_stats.min_value, Precision::Absent);
+        assert_eq!(c1_stats.max_value, Precision::Exact(Utf8(Some("bar".to_string()))));
+        assert_eq!(c1_stats.min_value, Precision::Exact(Utf8(Some("Foo".to_string()))));
         // column c2: missing from the file so the table treats all 3 rows as null
         let c2_stats = &stats.column_statistics[1];
         assert_eq!(c2_stats.null_count, Precision::Exact(3));

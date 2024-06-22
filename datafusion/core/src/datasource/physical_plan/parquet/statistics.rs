@@ -67,7 +67,7 @@ pub(crate) fn from_bytes_to_f16(b: &[u8]) -> Option<f16> {
 // Copy from arrow-rs
 // https://github.com/apache/arrow-rs/blob/198af7a3f4aa20f9bd003209d9f04b0f37bb120e/parquet/src/arrow/buffer/bit_util.rs#L54
 // Convert the byte slice to fixed length byte array with the length of N.
-pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
+fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     assert!(b.len() <= N, "Array too large, expected less than {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
     let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
@@ -698,31 +698,6 @@ macro_rules! get_data_page_statistics {
     }
 }
 
-/// Looks up the parquet column by arrow schema index
-pub(crate) fn parquet_column_by_arrow_schema_index<'a>(
-    parquet_schema: &SchemaDescriptor,
-    arrow_schema: &'a Schema,
-    root_index: usize,
-) -> Option<(usize, &'a FieldRef)> {
-    // This get could be done in constant time
-    let field = arrow_schema.fields().get(root_index)?;
-
-    if field.data_type().is_nested() {
-        // Nested fields are not supported and require non-trivial logic
-        // to correctly walk the parquet schema accounting for the
-        // logical type rules - <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
-        //
-        // For example a ListArray could correspond to anything from 1 to 3 levels
-        // in the parquet schema
-        return None;
-    }
-
-    // This could be made more efficient (#TBD)
-    let parquet_idx = (0..parquet_schema.columns().len())
-        .find(|x| parquet_schema.get_column_root_idx(*x) == root_index)?;
-    Some((parquet_idx, field))
-}
-
 /// Lookups up the parquet column by name
 ///
 /// Returns the parquet column index and the corresponding arrow field
@@ -988,44 +963,6 @@ impl<'a> StatisticsConverter<'a> {
             parquet_schema,
             arrow_schema,
             column_name,
-        ) {
-            Some((parquet_idx, matched_field)) => {
-                // sanity check that matching field matches the arrow field
-                if matched_field.as_ref() != arrow_field {
-                    return internal_err!(
-                        "Matched column '{:?}' does not match original matched column '{:?}'",
-                        matched_field,
-                        arrow_field
-                    );
-                }
-                Some(parquet_idx)
-            }
-            None => None,
-        };
-
-        Ok(Self {
-            parquet_index,
-            arrow_field,
-        })
-    }
-
-    /// Create a new `StatisticsConverter` to extract statistics for a column from the index
-    /// of the column in the arrow schema
-    ///
-    /// This is a more efficient version of [`Self::try_new`] that avoids looking up the column
-    /// by name in the arrow schema and useful when the column index is already known or when
-    /// iterating over the columns in the arrow schema.
-    pub fn try_new_from_arrow_schema_index(
-        arrow_schema_index: usize,
-        arrow_field: &'a Field,
-        arrow_schema: &'a Schema,
-        parquet_schema: &'a SchemaDescriptor,
-    ) -> Result<Self> {
-        // find the column in the parquet schema, if not, return a null array
-        let parquet_index = match parquet_column_by_arrow_schema_index(
-            parquet_schema,
-            arrow_schema,
-            arrow_schema_index,
         ) {
             Some((parquet_idx, matched_field)) => {
                 // sanity check that matching field matches the arrow field
