@@ -288,7 +288,11 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        Ok(Field::new(
+            &self.name,
+            self.data_type.clone(),
+            self.input_nullable,
+        ))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
