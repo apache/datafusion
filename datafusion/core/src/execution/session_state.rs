@@ -492,6 +492,8 @@ impl SessionState {
     }
 
     /// parse a sql string into a sqlparser-rs AST [`SQLExpr`].
+    ///
+    /// See [`Self::parse_sql_expr`] for parsing sql to [`Expr`].
     pub fn sql_to_expr(
         &self,
         sql: &str,
@@ -586,7 +588,9 @@ impl SessionState {
         Ok(plan)
     }
 
-    /// Creates a datafusion style AST [`Expr`] from a SQL string..
+    /// Creates a datafusion style AST [`Expr`] from a SQL string.
+    ///
+    /// See example on [`SessionContext::parse_sql_expr`]
     pub fn create_logical_expr(
         &self,
         sql: &str,

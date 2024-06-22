@@ -15,13 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use arrow::{
-    array::{Float64Array, Int64Array, RecordBatch},
-    datatypes::{DataType, Field, Schema},
-};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::{
+    assert_batches_eq,
     error::Result,
     prelude::{ParquetReadOptions, SessionContext},
 };
@@ -116,27 +112,23 @@ async fn query_parquet_demo() -> Result<()> {
             vec![df.parse_sql_expr("double_col")?],
             vec![df.parse_sql_expr("SUM(int_col) as sum_int_col")?],
         )?
-        // Directly parse the SQL text into a sort expression is not supported
+        // Directly parsing the SQL text into a sort expression is not supported yet, so
+        // construct it programatically
         .sort(vec![col("double_col").sort(false, false)])?
         .limit(0, Some(1))?;
 
     let result = df.collect().await?;
 
-    assert_eq!(result.len(), 1);
-    let expected = format!(
-        "{:?}",
-        RecordBatch::try_new(
-            Arc::new(Schema::new(vec![
-                Field::new("double_col", DataType::Float64, true),
-                Field::new("sum(?table?.int_col)", DataType::Int64, true),
-            ])),
-            vec![
-                Arc::new(Float64Array::from(vec![10.1])),
-                Arc::new(Int64Array::from(vec![4])),
-            ],
-        )?
+    assert_batches_eq!(
+        &[
+            "+------------+----------------------+",
+            "| double_col | sum(?table?.int_col) |",
+            "+------------+----------------------+",
+            "| 10.1       | 4                    |",
+            "+------------+----------------------+",
+        ],
+        &result
     );
-    assert_eq!(format!("{:?}", result[0]), expected);
 
     Ok(())
 }
