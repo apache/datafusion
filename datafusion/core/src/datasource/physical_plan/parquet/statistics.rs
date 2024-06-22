@@ -701,8 +701,6 @@ macro_rules! get_data_page_statistics {
 /// Lookups up the parquet column by name
 ///
 /// Returns the parquet column index and the corresponding arrow field
-/// It is less efficient to reuse function [`parquet_column_by_arrow_schema_index`]
-/// as the root_idx could be found at once.
 pub(crate) fn parquet_column<'a>(
     parquet_schema: &SchemaDescriptor,
     arrow_schema: &'a Schema,

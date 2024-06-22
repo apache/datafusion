@@ -43,7 +43,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, ScalarValue::Utf8,
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -1419,11 +1419,11 @@ mod tests {
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
         assert_eq!(
             c1_stats.max_value,
-            Precision::Exact(Utf8(Some("bar".to_string())))
+            Precision::Exact(ScalarValue::Utf8(Some("bar".to_string())))
         );
         assert_eq!(
             c1_stats.min_value,
-            Precision::Exact(Utf8(Some("Foo".to_string())))
+            Precision::Exact(ScalarValue::Utf8(Some("Foo".to_string())))
         );
         // column c2: missing from the file so the table treats all 3 rows as null
         let c2_stats = &stats.column_statistics[1];
