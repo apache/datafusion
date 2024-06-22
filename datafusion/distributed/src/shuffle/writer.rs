@@ -48,13 +48,14 @@ use datafusion_physical_plan::metrics::{
 use crate::{write_stream_to_disk, PartitionStats, ShuffleWritePartition};
 use arrow::error::ArrowError;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::repartition::BatchPartitioner;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
     Statistics,
 };
+use datafusion_physical_plan::{ExecutionMode, PlanProperties};
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, info};
 
@@ -77,6 +78,8 @@ pub struct ShuffleWriterExec {
     shuffle_output_partitioning: Option<Partitioning>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Plan properties
+    properties: PlanProperties,
 }
 
 pub struct WriteTracker {
@@ -123,6 +126,11 @@ impl ShuffleWriterExec {
         work_dir: String,
         shuffle_output_partitioning: Option<Partitioning>,
     ) -> Result<Self> {
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(plan.schema().clone()),
+            shuffle_output_partitioning.clone().unwrap(), // TODO when is partitioning ever None?
+            ExecutionMode::Bounded,
+        );
         Ok(Self {
             job_id,
             stage_id,
@@ -130,6 +138,7 @@ impl ShuffleWriterExec {
             work_dir,
             shuffle_output_partitioning,
             metrics: ExecutionPlanMetricsSet::new(),
+            properties,
         })
     }
 
@@ -145,8 +154,7 @@ impl ShuffleWriterExec {
 
     /// Get the input partition count
     pub fn input_partition_count(&self) -> usize {
-        //self.plan.output_partitioning().partition_count()
-        todo!()
+        self.plan.properties().partitioning.partition_count()
     }
 
     /// Get the true output partitioning

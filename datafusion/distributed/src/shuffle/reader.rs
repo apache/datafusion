@@ -35,12 +35,13 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::{
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use datafusion_physical_plan::{ExecutionMode, PlanProperties};
 use futures::{Stream, StreamExt};
 use log::{error, info};
 use tokio::sync::{mpsc, Semaphore};
@@ -58,6 +59,8 @@ pub struct ShuffleReaderExec {
     pub partition: Vec<Vec<PartitionLocation>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Plan properties
+    properties: PlanProperties,
 }
 
 impl ShuffleReaderExec {
@@ -67,11 +70,19 @@ impl ShuffleReaderExec {
         partition: Vec<Vec<PartitionLocation>>,
         schema: SchemaRef,
     ) -> Result<Self> {
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(schema.clone()),
+            // TODO partitioning may be known and could be populated here
+            // see https://github.com/apache/datafusion/issues/758
+            Partitioning::UnknownPartitioning(partition.len()),
+            ExecutionMode::Bounded,
+        );
         Ok(Self {
             stage_id,
             schema,
             partition,
             metrics: ExecutionPlanMetricsSet::new(),
+            properties,
         })
     }
 }
@@ -100,18 +111,8 @@ impl ExecutionPlan for ShuffleReaderExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        todo!()
+        &self.properties
     }
-
-    // fn output_partitioning(&self) -> Partitioning {
-    //     // TODO partitioning may be known and could be populated here
-    //     // see https://github.com/apache/arrow-datafusion/issues/758
-    //     Partitioning::UnknownPartitioning(self.partition.len())
-    // }
-    //
-    // fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-    //     None
-    // }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]

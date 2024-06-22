@@ -33,7 +33,7 @@ workspace = true
 
 [lib]
 name = "datafusion_distributed"
-path = "src/lib.rs"
+path = "src/shuffle/lib.rs"
 
 [dependencies]
 arrow = { workspace = true, default-features = true }
