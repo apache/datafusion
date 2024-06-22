@@ -593,14 +593,6 @@ fn infer_join_predicates(
 }
 
 impl OptimizerRule for PushDownFilter {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called PushDownFilter::rewrite")
-    }
-
     fn name(&self) -> &str {
         "push_down_filter"
     }
