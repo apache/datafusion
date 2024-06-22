@@ -87,7 +87,7 @@ pub fn create_aggregate_expr(
         ordering_fields,
         is_distinct,
         input_type: input_exprs_types[0].clone(),
-        input_nullable: input_phy_exprs[0].nullable(&schema)?,
+        input_nullable: input_phy_exprs[0].nullable(schema)?,
     }))
 }
 
@@ -303,7 +303,6 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            input_nullable: self.input_nullable,
             input_exprs: &self.logical_args,
             name: &self.name,
         };
@@ -319,7 +318,6 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            input_nullable: self.input_nullable,
             input_exprs: &self.logical_args,
             name: &self.name,
         };
@@ -390,7 +388,6 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            input_nullable: self.input_nullable,
             input_exprs: &self.logical_args,
             name: &self.name,
         };
@@ -405,7 +402,6 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            input_nullable: self.input_nullable,
             input_exprs: &self.logical_args,
             name: &self.name,
         };

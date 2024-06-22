@@ -83,9 +83,6 @@ pub struct AccumulatorArgs<'a> {
     /// The input type of the aggregate function.
     pub input_type: &'a DataType,
 
-    /// If the input type is nullable.
-    pub input_nullable: bool,
-
     /// The logical expression of arguments the aggregate function takes.
     pub input_exprs: &'a [Expr],
 }
