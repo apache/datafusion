@@ -131,7 +131,7 @@ async fn main() {
     let df = DataFrame::new(ctx.state(), logical_plan);
     let windowed_df = df
         .clone()
-        .franz_window(
+        .streaming_window(
             vec![],
             vec![
                 max(col("imu_measurement").field("gps").field("speed")),

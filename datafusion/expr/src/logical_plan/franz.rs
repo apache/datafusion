@@ -30,7 +30,7 @@ use crate::logical_plan::LogicalPlan;
 
 impl LogicalPlanBuilder {
     /// Apply franz window functions to extend the schema
-    pub fn franz_window(
+    pub fn streaming_window(
         self,
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
