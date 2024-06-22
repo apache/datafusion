@@ -28,7 +28,7 @@ use crate::{
     catalog::{CatalogProvider, CatalogProviderList, MemoryCatalogProvider},
     dataframe::DataFrame,
     datasource::{
-        function::TableFunctionImpl,
+        function::{TableFunction, TableFunctionImpl},
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
         provider::TableProviderFactory,
     },
@@ -72,7 +72,6 @@ use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 
-use crate::datasource::function::TableFunction;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -903,6 +902,7 @@ impl SessionContext {
         dropped |= self.state.write().deregister_udf(&stmt.name)?.is_some();
         dropped |= self.state.write().deregister_udaf(&stmt.name)?.is_some();
         dropped |= self.state.write().deregister_udwf(&stmt.name)?.is_some();
+        dropped |= self.state.write().deregister_udtf(&stmt.name)?.is_some();
 
         // DROP FUNCTION IF EXISTS drops the specified function only if that
         // function exists and in this way, it avoids error. While the DROP FUNCTION
@@ -981,6 +981,11 @@ impl SessionContext {
     /// Deregisters a UDWF within this context.
     pub fn deregister_udwf(&self, name: &str) {
         self.state.write().deregister_udwf(name).ok();
+    }
+
+    /// Deregisters a UDTF within this context.
+    pub fn deregister_udtf(&self, name: &str) {
+        self.state.write().deregister_udtf(name).ok();
     }
 
     /// Creates a [`DataFrame`] for reading a data source.
@@ -1241,7 +1246,7 @@ impl SessionContext {
         Ok(DataFrame::new(self.state(), plan))
     }
 
-    /// Retrieves a [`Arc<TableFunction>`] instance by name.
+    /// Retrieves a [`TableFunction`] reference by name.
     ///
     /// Returns an error if no table function has been registered with the provided name.
     ///
@@ -1252,7 +1257,7 @@ impl SessionContext {
             .table_functions()
             .get(name)
             .cloned()
-            .ok_or_else(|| plan_datafusion_err!("table function '{name}' not found"))
+            .ok_or_else(|| plan_datafusion_err!("Table function '{name}' not found"))
     }
 
     /// Return a [`TableProvider`] for the specified table.

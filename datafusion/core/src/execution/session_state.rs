@@ -813,6 +813,15 @@ impl SessionState {
             Arc::new(TableFunction::new(name.to_owned(), fun)),
         );
     }
+
+    /// Deregsiter a user defined table function
+    pub fn deregister_udtf(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
+        let udtf = self.table_functions.remove(name);
+        Ok(udtf.map(|x| x.function().clone()))
+    }
 }
 
 struct SessionContextProvider<'a> {
