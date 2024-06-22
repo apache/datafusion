@@ -1417,8 +1417,14 @@ mod tests {
         // column c1
         let c1_stats = &stats.column_statistics[0];
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
-        assert_eq!(c1_stats.max_value, Precision::Exact(Utf8(Some("bar".to_string()))));
-        assert_eq!(c1_stats.min_value, Precision::Exact(Utf8(Some("Foo".to_string()))));
+        assert_eq!(
+            c1_stats.max_value,
+            Precision::Exact(Utf8(Some("bar".to_string())))
+        );
+        assert_eq!(
+            c1_stats.min_value,
+            Precision::Exact(Utf8(Some("Foo".to_string())))
+        );
         // column c2: missing from the file so the table treats all 3 rows as null
         let c2_stats = &stats.column_statistics[1];
         assert_eq!(c2_stats.null_count, Precision::Exact(3));

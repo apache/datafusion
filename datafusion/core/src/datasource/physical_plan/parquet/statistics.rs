@@ -703,7 +703,7 @@ macro_rules! get_data_page_statistics {
 /// Returns the parquet column index and the corresponding arrow field
 /// It is less efficient to reuse function [`parquet_column_by_arrow_schema_index`]
 /// as the root_idx could be found at once.
-pub(crate) fn parquet_column_by_name<'a>(
+pub(crate) fn parquet_column<'a>(
     parquet_schema: &SchemaDescriptor,
     arrow_schema: &'a Schema,
     name: &str,
@@ -959,7 +959,7 @@ impl<'a> StatisticsConverter<'a> {
         };
 
         // find the column in the parquet schema, if not, return a null array
-        let parquet_index = match parquet_column_by_name(
+        let parquet_index = match parquet_column(
             parquet_schema,
             arrow_schema,
             column_name,
@@ -1928,8 +1928,7 @@ mod test {
         let parquet_schema = metadata.file_metadata().schema_descr();
 
         // read the int_col statistics
-        let (idx, _) =
-            parquet_column_by_name(parquet_schema, &schema, "int_col").unwrap();
+        let (idx, _) = parquet_column(parquet_schema, &schema, "int_col").unwrap();
         assert_eq!(idx, 2);
 
         let row_groups = metadata.row_groups();
@@ -2127,8 +2126,7 @@ mod test {
 
             for field in schema.fields() {
                 if field.data_type().is_nested() {
-                    let lookup =
-                        parquet_column_by_name(parquet_schema, &schema, field.name());
+                    let lookup = parquet_column(parquet_schema, &schema, field.name());
                     assert_eq!(lookup, None);
                     continue;
                 }
