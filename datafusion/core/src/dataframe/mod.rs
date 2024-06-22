@@ -195,8 +195,7 @@ impl DataFrame {
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let expr = df.parse_sql_expr(sql)?;
     /// assert_eq!(expected, expr);
-    ///
-    /// #    Ok(())
+    /// # Ok(())
     /// # }
     /// ```
     pub fn parse_sql_expr(&self, sql: &str) -> Result<Expr> {
