@@ -45,7 +45,7 @@ impl DataFrame {
         Ok(DataFrame::new(*self.session_state, plan))
     }
 
-    /// TODO
+    /// Iterate over a continuous DataFrame and write the results to a sink
     pub async fn sink(self, mut sink: Box<dyn FranzSink>) -> Result<DataFusionError> {
         // todo: replace with execute_stream_partitioned()
         let mut stream: SendableRecordBatchStream = self.execute_stream().await.unwrap();

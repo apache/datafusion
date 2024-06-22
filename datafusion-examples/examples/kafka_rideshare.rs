@@ -19,48 +19,22 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
-use std::{any::Any, sync::Arc, time::Duration};
-
-use arrow::{
-    array::{ArrayRef, AsArray, Float64Array},
-    datatypes::Float64Type,
-};
-//use arrow::infer_arrow_schema_from_json_value;
-use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions, TimeUnit};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use datafusion::{
     config::ConfigOptions,
     dataframe::DataFrame,
-    datasource::{continuous::KafkaSource, provider_as_source, TableProvider},
-    execution::{
-        context::{SessionContext, SessionState},
-        RecordBatchStream,
-    },
+    datasource::{continuous::KafkaSource, provider_as_source},
+    execution::context::SessionContext,
     physical_plan::{
-        display::DisplayableExecutionPlan,
-        kafka_source::{KafkaStreamConfig, KafkaStreamRead, StreamEncoding},
-        streaming::StreamingTableExec,
+        kafka_source::{KafkaStreamConfig, StreamEncoding},
         time::TimestampUnit,
-        ExecutionPlan,
     },
 };
+use datafusion_common::franz_arrow::infer_arrow_schema_from_json_value;
+use datafusion_expr::{col, max, min, LogicalPlanBuilder};
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_common::{
-    franz_arrow::infer_arrow_schema_from_json_value, plan_err, ScalarValue,
-};
-use datafusion_expr::{
-    col, create_udwf, ident, max, min, Expr, LogicalPlanBuilder,
-    PartitionEvaluator, TableType, Volatility, WindowFrame,
-};
 use datafusion_functions_aggregate::count::count;
-
-use datafusion::execution::SendableRecordBatchStream;
-
-use datafusion::{dataframe::DataFrameWriteOptions, prelude::*};
-use datafusion_common::config::CsvOptions;
-use datafusion_common::Result;
-use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
-
-use futures::StreamExt;
+use std::{sync::Arc, time::Duration};
 use tracing_subscriber::{fmt::format::FmtSpan, FmtSubscriber};
 
 #[tokio::main(flavor = "multi_thread")]
@@ -107,7 +81,7 @@ async fn main() {
     let inferred_schema = infer_arrow_schema_from_json_value(&sample_value).unwrap();
     let mut fields = inferred_schema.fields().to_vec();
 
-    // Add a new column to the dataset that should mirror the occured_at_ms field
+    // Add a new column to the dataset that should mirror the occurred_at_ms field
     fields.insert(
         fields.len(),
         Arc::new(Field::new(
@@ -169,8 +143,6 @@ async fn main() {
         )
         .unwrap();
 
-    // print_stream(&windowed_df).await;
-
     use datafusion::franz_sinks::{
         FileSink, FranzSink, KafkaSink, KafkaSinkSettings, PrettyPrinter, StdoutSink,
     };
@@ -217,23 +189,4 @@ async fn main() {
     stream_monitor.start_server().await;
     let sink = Box::new(stream_monitor) as Box<dyn FranzSink>;
     let _ = windowed_df.sink(sink).await;
-}
-
-async fn print_stream(windowed_df: &DataFrame) {
-    let mut stream: std::pin::Pin<Box<dyn RecordBatchStream + Send>> =
-        windowed_df.clone().execute_stream().await.unwrap();
-
-    // for _ in 1..100 {
-    loop {
-        let rb = stream.next().await.transpose();
-        // println!("{:?}", rb);
-        if let Ok(Some(batch)) = rb {
-            if batch.num_rows() > 0 {
-                println!(
-                    "{}",
-                    arrow::util::pretty::pretty_format_batches(&[batch]).unwrap()
-                );
-            }
-        }
-    }
 }

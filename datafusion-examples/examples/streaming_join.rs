@@ -25,8 +25,8 @@ use arrow::{
     array::{ArrayRef, AsArray, Float64Array},
     datatypes::Float64Type,
 };
-//use arrow::infer_arrow_schema_from_json_value;
 use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions, TimeUnit};
+use datafusion::execution::SendableRecordBatchStream;
 use datafusion::{
     config::ConfigOptions,
     dataframe::DataFrame,
@@ -35,7 +35,7 @@ use datafusion::{
         context::{SessionContext, SessionState},
         RecordBatchStream,
     },
-    franz_sinks::{FranzSink, PrettyPrinter},
+    franz_sinks::{FileSink, FranzSink, PrettyPrinter},
     physical_plan::{
         display::DisplayableExecutionPlan,
         kafka_source::{KafkaStreamConfig, KafkaStreamRead, StreamEncoding},
@@ -44,19 +44,16 @@ use datafusion::{
         ExecutionPlan,
     },
 };
+use datafusion::{dataframe::DataFrameWriteOptions, prelude::*};
 use datafusion_common::{
-    franz_arrow::infer_arrow_schema_from_json_value, plan_err, ScalarValue,
+    franz_arrow::infer_arrow_schema_from_json_value, plan_err, JoinType, ScalarValue,
 };
 use datafusion_expr::{
-    col, count, create_udwf, ident, max, min, Expr, LogicalPlanBuilder,
-    PartitionEvaluator, TableType, Volatility, WindowFrame,
+    col, lit, create_udwf, ident, max, min, Expr, LogicalPlanBuilder, PartitionEvaluator,
+    TableType, Volatility, WindowFrame,
 };
-
-use datafusion::execution::SendableRecordBatchStream;
-
-use datafusion::{dataframe::DataFrameWriteOptions, prelude::*};
-use datafusion_common::config::CsvOptions;
-use datafusion_common::Result;
+use datafusion_functions::core::expr_ext::FieldAccessor;
+use datafusion_functions_aggregate::count::count;
 use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 
 use futures::StreamExt;
@@ -73,19 +70,142 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber)
         .expect("setting default subscriber failed");
 
-    let sample_event = r#"
-    {
-        "trip_id": 1,
-        "action": "trip_started",
-        "timestamp": 1718655296
-    }"#;
+    let bootstrap_servers =
+        String::from("localhost:19092,localhost:29092,localhost:39092");
 
+    let imu_stream = create_kafka_source(
+        &r#"{
+            "driver_id": "690c119e-63c9-479b-b822-872ee7d89165",
+            "occurred_at_ms": 1715201766763,
+            "imu_measurement": {
+                "timestamp": "2024-05-08T20:56:06.763260Z",
+                "accelerometer": {
+                    "x": 1.4187794,
+                    "y": -0.13967037,
+                    "z": 0.5483732
+                },
+                "gyroscope": {
+                    "x": 0.005840948,
+                    "y": 0.0035944171,
+                    "z": 0.0041645765
+                },
+                "gps": {
+                    "latitude": 72.3492587464122,
+                    "longitude": 144.85596244550095,
+                    "altitude": 2.9088259,
+                    "speed": 57.96137
+                }
+            },
+            "meta": {
+                "nonsense": "MMMMMMMMMM"
+            }
+        }"#
+        .to_string(),
+        bootstrap_servers.clone(),
+        "driver-imu-data".to_string(),
+        "kafka_rideshare".to_string(),
+    );
+
+    let trip_stream = create_kafka_source(
+        &r#"{
+            "event_name": "TRIP_START",
+            "trip_id": "b005922a-4ba5-4678-b0e6-bcb5ca2abe3e",
+            "driver_id": "788fb395-96d0-4bc8-8ed9-bcf4e11e7543",
+            "occurred_at_ms": 1718752555452,
+            "meta": {
+                "nonsense": "MMMMMMMMMM"
+            }
+        }"#
+        .to_string(),
+        bootstrap_servers.clone(),
+        "trips".to_string(),
+        "kafka_rideshare".to_string(),
+    );
+
+    let mut config = ConfigOptions::default();
+    let _ = config.set("datafusion.execution.batch_size", "32");
+
+    // Create the context object with a source from kafka
+    let ctx = SessionContext::new_with_config(config.into());
+    // let _ = ctx.register_table("imu_data", Arc::new(imu_stream));
+    // let _ = ctx.register_table("trips", Arc::new(trip_stream));
+
+    // let df = ctx.sql("
+    //     SELECT imu_data.driver_id, imu_data.occurred_at_ms, trips.trip_id, trips.event_name
+    //     FROM imu_data
+    //     JOIN trips ON trips.driver_id = imu_data.driver_id
+    // ").await.unwrap();
+
+    // let df = ctx.sql("SELECT * FROM imu_data").await.unwrap();
+
+    let imu_stream_plan = LogicalPlanBuilder::scan_with_filters(
+        "imu_data",
+        provider_as_source(Arc::new(imu_stream)),
+        None,
+        vec![],
+    )
+    .unwrap()
+    .build()
+    .unwrap();
+
+    let logical_plan = LogicalPlanBuilder::scan_with_filters(
+        "trips",
+        provider_as_source(Arc::new(trip_stream)),
+        None,
+        vec![],
+    )
+    .unwrap()
+    .join_on(
+        imu_stream_plan,
+        JoinType::Inner,
+        vec![
+            col("trips.driver_id").eq(col("imu_data.driver_id")),
+        ],
+    )
+    .unwrap()
+    .build()
+    .unwrap();
+
+    let df = DataFrame::new(ctx.state(), logical_plan);
+    let windowed_df = df
+        .clone()
+        .franz_window(
+            vec![],
+            vec![
+                max(col("imu_data.imu_measurement").field("gps").field("speed")),
+                min(col("imu_data.imu_measurement").field("gps").field("altitude")),
+                count(col("imu_data.imu_measurement")).alias("count"),
+            ],
+            Duration::from_millis(4_000),
+            Some(Duration::from_millis(10_000)),
+        )
+        .unwrap()
+        .filter(col("count").gt(lit(0)))
+        .unwrap();
+
+    let writer = PrettyPrinter::new().unwrap();
+    let sink = Box::new(writer) as Box<dyn FranzSink>;
+    let _ = windowed_df.sink(sink).await;
+
+    // let fname = "/tmp/out.jsonl";
+    // println!("Writing results to file {}", fname);
+    // let writer = FileSink::new(fname).unwrap();
+    // let file_writer = Box::new(writer) as Box<dyn FranzSink>;
+    // let _ = windowed_df.sink(file_writer).await;
+}
+
+fn create_kafka_source(
+    sample_event: &String,
+    bootstrap_servers: String,
+    topic: String,
+    consumer_group_id: String,
+) -> KafkaSource {
     // register the window function with DataFusion so we can call it
     let sample_value: serde_json::Value = serde_json::from_str(sample_event).unwrap();
     let inferred_schema = infer_arrow_schema_from_json_value(&sample_value).unwrap();
     let mut fields = inferred_schema.fields().to_vec();
 
-    // Add a new column to the dataset that should mirror the occured_at_ms field
+    // Add a new column to the dataset that should mirror the occurred_at_ms field
     fields.insert(
         fields.len(),
         Arc::new(Field::new(
@@ -95,58 +215,22 @@ async fn main() {
         )),
     );
 
-    let bootstrap_servers =
-        String::from("localhost:19092,localhost:29092,localhost:39092");
     let canonical_schema = Arc::new(Schema::new(fields));
     let _config = KafkaStreamConfig {
-        bootstrap_servers: bootstrap_servers.clone(),
-        topic: String::from("trip_actions"),
-        consumer_group_id: String::from("trip_actions_reader"),
+        bootstrap_servers,
+        topic,
+        consumer_group_id,
         original_schema: Arc::new(inferred_schema.clone()),
         schema: canonical_schema.clone(),
         batch_size: 10,
         encoding: StreamEncoding::Json,
         order: vec![],
         partitions: 1_i32,
-        timestamp_column: String::from("timestamp"),
-        timestamp_unit: TimestampUnit::Int64Seconds,
+        timestamp_column: String::from("occurred_at_ms"),
+        timestamp_unit: TimestampUnit::Int64Millis,
         offset_reset: String::from("earliest"),
     };
 
     // Create a new streaming table
-    let trip_stream: KafkaSource = KafkaSource(Arc::new(_config));
-
-    let _config = KafkaStreamConfig {
-        bootstrap_servers: bootstrap_servers.clone(),
-        topic: String::from("driver_actions"),
-        consumer_group_id: String::from("driver_actions_reader"),
-        original_schema: Arc::new(inferred_schema),
-        schema: canonical_schema,
-        batch_size: 10,
-        encoding: StreamEncoding::Json,
-        order: vec![],
-        partitions: 1_i32,
-        timestamp_column: String::from("timestamp"),
-        timestamp_unit: TimestampUnit::Int64Seconds,
-        offset_reset: String::from("earliest"),
-    };
-
-    // Create a new streaming table
-    let driver_stream: KafkaSource = KafkaSource(Arc::new(_config));
-    let mut config = ConfigOptions::default();
-    let _ = config.set("datafusion.execution.batch_size", "32");
-
-    // Create the context object with a source from kafka
-    let ctx = SessionContext::new_with_config(config.into());
-    let _ = ctx.register_table("trip_actions", Arc::new(trip_stream));
-    let _ = ctx.register_table("driver_actions", Arc::new(driver_stream));
-
-    let df = ctx.sql("SELECT *
-                FROM trip_actions 
-                JOIN driver_actions ON trip_actions.trip_id = driver_actions.trip_id 
-                WHERE trip_actions.franz_canonical_timestamp >= driver_actions.franz_canonical_timestamp - INTERVAL '5 SECONDS' 
-                AND trip_actions.franz_canonical_timestamp <= driver_actions.franz_canonical_timestamp + INTERVAL '5 SECONDS'",).await.unwrap();
-    let writer = PrettyPrinter::new().unwrap();
-    let sink = Box::new(writer) as Box<dyn FranzSink>;
-    let _ = df.sink(sink).await;
+    KafkaSource(Arc::new(_config))
 }
