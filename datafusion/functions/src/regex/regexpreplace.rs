@@ -28,10 +28,10 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
+use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use datafusion_physical_expr::functions::Hint;
 use regex::Regex;
 use std::any::Any;
 use std::collections::HashMap;

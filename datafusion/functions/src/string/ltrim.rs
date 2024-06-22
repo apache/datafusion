@@ -21,10 +21,10 @@ use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
 use datafusion_common::{exec_err, Result};
+use datafusion_expr::function::Hint;
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-use datafusion_physical_expr::functions::Hint;
 
 use crate::string::common::*;
 use crate::utils::{make_scalar_function, utf8_to_str_type};

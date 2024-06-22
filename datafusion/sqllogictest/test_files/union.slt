@@ -420,16 +420,16 @@ SELECT count(*) FROM (
 ) GROUP BY name
 ----
 logical_plan
-01)Projection: COUNT(*)
-02)--Aggregate: groupBy=[[t1.name]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+01)Projection: count(*)
+02)--Aggregate: groupBy=[[t1.name]], aggr=[[count(Int64(1)) AS count(*)]]
 03)----Union
 04)------Aggregate: groupBy=[[t1.name]], aggr=[[]]
 05)--------TableScan: t1 projection=[name]
 06)------Aggregate: groupBy=[[t2.name]], aggr=[[]]
 07)--------TableScan: t2 projection=[name]
 physical_plan
-01)ProjectionExec: expr=[COUNT(*)@1 as COUNT(*)]
-02)--AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[COUNT(*)]
+01)ProjectionExec: expr=[count(*)@1 as count(*)]
+02)--AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[count(*)]
 03)----InterleaveExec
 04)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 05)--------CoalesceBatchesExec: target_batch_size=2
@@ -565,8 +565,8 @@ select x, y from (select 1 as x , max(10) as y) b
 ----
 logical_plan
 01)Union
-02)--Projection: COUNT(*) AS count, a.n
-03)----Aggregate: groupBy=[[a.n]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+02)--Projection: count(*) AS count, a.n
+03)----Aggregate: groupBy=[[a.n]], aggr=[[count(Int64(1)) AS count(*)]]
 04)------SubqueryAlias: a
 05)--------Projection: Int64(5) AS n
 06)----------EmptyRelation
@@ -577,11 +577,11 @@ logical_plan
 11)----------EmptyRelation
 physical_plan
 01)UnionExec
-02)--ProjectionExec: expr=[COUNT(*)@1 as count, n@0 as n]
-03)----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[COUNT(*)], ordering_mode=Sorted
+02)--ProjectionExec: expr=[count(*)@1 as count, n@0 as n]
+03)----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[count(*)], ordering_mode=Sorted
 04)------CoalesceBatchesExec: target_batch_size=2
 05)--------RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[COUNT(*)], ordering_mode=Sorted
+06)----------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[count(*)], ordering_mode=Sorted
 07)------------ProjectionExec: expr=[5 as n]
 08)--------------PlaceholderRowExec
 09)--ProjectionExec: expr=[1 as count, MAX(Int64(10))@0 as n]

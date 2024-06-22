@@ -1393,6 +1393,13 @@ pub struct TableParquetOptions {
     pub key_value_metadata: HashMap<String, Option<String>>,
 }
 
+impl TableParquetOptions {
+    /// Return new default TableParquetOptions
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 impl ConfigField for TableParquetOptions {
     fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, description: &'static str) {
         self.global.visit(v, key_prefix, description);

@@ -384,9 +384,9 @@ impl SessionState {
     /// Add `analyzer_rule` to the end of the list of
     /// [`AnalyzerRule`]s used to rewrite queries.
     pub fn add_analyzer_rule(
-        mut self,
+        &mut self,
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    ) -> Self {
+    ) -> &Self {
         self.analyzer.rules.push(analyzer_rule);
         self
     }

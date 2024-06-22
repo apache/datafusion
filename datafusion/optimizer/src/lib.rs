@@ -61,6 +61,7 @@ pub mod test;
 
 pub use analyzer::{Analyzer, AnalyzerRule};
 pub use optimizer::{Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule};
+#[allow(deprecated)]
 pub use utils::optimize_children;
 
 pub(crate) mod join_key_set;
