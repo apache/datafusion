@@ -27,7 +27,7 @@ repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.73"
+rust-version = "1.75"
 
 # Exclude proto files so crates.io consumers don't need protoc
 exclude = ["*.proto"]
@@ -59,6 +59,7 @@ serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 datafusion-functions = { workspace = true, default-features = true }
+datafusion-functions-aggregate = { workspace = true }
 doc-comment = { workspace = true }
 strum = { version = "0.26.1", features = ["derive"] }
 tokio = { workspace = true, features = ["rt-multi-thread"] }

@@ -46,7 +46,8 @@ impl MockContextProvider {
     }
 
     pub(crate) fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
-        self.udafs.insert(udaf.name().to_string(), udaf);
+        // TODO: change to to_string() if all the function name is converted to lowercase
+        self.udafs.insert(udaf.name().to_lowercase(), udaf);
         self
     }
 }

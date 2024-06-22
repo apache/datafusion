@@ -18,13 +18,13 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_optimizer::analyzer::{Analyzer, AnalyzerRule};
-use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{utils, OptimizerConfig, OptimizerContext, OptimizerRule};
+use datafusion_optimizer::optimizer::{ApplyOrder, Optimizer};
+use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_sql::sqlparser::parser::Parser;
@@ -133,30 +133,34 @@ impl OptimizerRule for MyOptimizerRule {
 
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _plan: &LogicalPlan,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        // recurse down and optimize children first
-        let optimized_plan = utils::optimize_children(self, plan, config)?;
-        match optimized_plan {
-            Some(LogicalPlan::Filter(filter)) => {
+        unreachable!()
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
+        match plan {
+            LogicalPlan::Filter(filter) => {
                 let predicate = my_rewrite(filter.predicate.clone())?;
-                Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
                     predicate,
-                    filter.input,
+                    filter.input.clone(),
                 )?)))
             }
-            Some(optimized_plan) => Ok(Some(optimized_plan)),
-            None => match plan {
-                LogicalPlan::Filter(filter) => {
-                    let predicate = my_rewrite(filter.predicate.clone())?;
-                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        filter.input.clone(),
-                    )?)))
-                }
-                _ => Ok(None),
-            },
+            _ => Ok(Transformed::no(plan)),
         }
     }
 }

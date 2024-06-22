@@ -28,6 +28,7 @@ pub mod chr;
 pub mod common;
 pub mod concat;
 pub mod concat_ws;
+pub mod contains;
 pub mod ends_with;
 pub mod initcap;
 pub mod levenshtein;
@@ -43,7 +44,6 @@ pub mod starts_with;
 pub mod to_hex;
 pub mod upper;
 pub mod uuid;
-
 // create UDFs
 make_udf_function!(ascii::AsciiFunc, ASCII, ascii);
 make_udf_function!(bit_length::BitLengthFunc, BIT_LENGTH, bit_length);
@@ -66,7 +66,7 @@ make_udf_function!(split_part::SplitPartFunc, SPLIT_PART, split_part);
 make_udf_function!(to_hex::ToHexFunc, TO_HEX, to_hex);
 make_udf_function!(upper::UpperFunc, UPPER, upper);
 make_udf_function!(uuid::UuidFunc, UUID, uuid);
-
+make_udf_function!(contains::ContainsFunc, CONTAINS, contains);
 pub mod expr_fn {
     use datafusion_expr::Expr;
 
@@ -149,6 +149,9 @@ pub mod expr_fn {
     ),(
         uuid,
         "returns uuid v4 as a string value",
+    ), (
+        contains,
+        "Return true if search_string is found within string. treated it like a reglike",
     ));
 
     #[doc = "Removes all characters, spaces by default, from both sides of a string"]
@@ -188,5 +191,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         to_hex(),
         upper(),
         uuid(),
+        contains(),
     ]
 }

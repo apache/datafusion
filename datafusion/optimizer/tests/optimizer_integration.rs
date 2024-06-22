@@ -25,6 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
+use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
@@ -186,7 +187,7 @@ fn between_date32_plus_interval() -> Result<()> {
     WHERE col_date32 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n  Projection: \
         \n    Filter: test.col_date32 >= Date32(\"1998-03-18\") AND test.col_date32 <= Date32(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date32]";
@@ -200,7 +201,7 @@ fn between_date64_plus_interval() -> Result<()> {
     WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n  Projection: \
         \n    Filter: test.col_date64 >= Date64(\"1998-03-18\") AND test.col_date64 <= Date64(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date64]";
@@ -256,8 +257,8 @@ fn join_keys_in_subquery_alias_1() {
 fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
-    let expected = "Projection: test.col_int32 + test.col_uint32 AS c, COUNT(*)\
-    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]\
+    let expected = "Projection: test.col_int32 + test.col_uint32 AS c, count(*)\
+    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(Int64(1)) AS count(*)]]\
     \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
@@ -323,7 +324,9 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
     let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
     let statement = &ast[0];
-    let context_provider = MyContextProvider::default().with_udaf(sum_udaf());
+    let context_provider = MyContextProvider::default()
+        .with_udaf(sum_udaf())
+        .with_udaf(count_udaf());
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
@@ -345,7 +348,8 @@ struct MyContextProvider {
 
 impl MyContextProvider {
     fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
-        self.udafs.insert(udaf.name().to_string(), udaf);
+        // TODO: change to to_string() if all the function name is converted to lowercase
+        self.udafs.insert(udaf.name().to_lowercase(), udaf);
         self
     }
 }

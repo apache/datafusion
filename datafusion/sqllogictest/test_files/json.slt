@@ -49,12 +49,12 @@ query TT
 EXPLAIN SELECT count(*) from json_test
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
 02)--TableScan: json_test projection=[]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+01)AggregateExec: mode=Final, gby=[], aggr=[count(*)]
 02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[count(*)]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------JsonExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/2.json]]}
 

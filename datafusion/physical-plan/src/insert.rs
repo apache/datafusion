@@ -175,11 +175,6 @@ impl DataSinkExec {
         &self.sort_order
     }
 
-    /// Returns the metrics of the underlying [DataSink]
-    pub fn metrics(&self) -> Option<MetricsSet> {
-        self.sink.metrics()
-    }
-
     fn create_schema(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
@@ -288,6 +283,11 @@ impl ExecutionPlan for DataSinkExec {
             count_schema,
             stream,
         )))
+    }
+
+    /// Returns the metrics of the underlying [DataSink]
+    fn metrics(&self) -> Option<MetricsSet> {
+        self.sink.metrics()
     }
 }
 

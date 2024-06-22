@@ -38,6 +38,7 @@ use datafusion_expr::{
     AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
     WindowFrameUnits, WindowFunctionDefinition,
 };
+use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -165,7 +166,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
             // its name
             "COUNT",
             // window function argument
@@ -251,6 +252,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
 
     let partitionby_exprs = vec![];
     let orderby_exprs = vec![];
+    let logical_exprs = vec![];
     // Window frame starts with "UNBOUNDED PRECEDING":
     let start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
 
@@ -282,6 +284,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     &window_fn,
                     fn_name.to_string(),
                     &args,
+                    &logical_exprs,
                     &partitionby_exprs,
                     &orderby_exprs,
                     Arc::new(window_frame),
@@ -350,7 +353,7 @@ fn get_random_function(
     window_fn_map.insert(
         "count",
         (
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![arg.clone()],
         ),
     );
@@ -698,6 +701,7 @@ async fn run_window_test(
             &window_fn,
             fn_name.clone(),
             &args,
+            &[],
             &partitionby_exprs,
             &orderby_exprs,
             Arc::new(window_frame.clone()),
@@ -716,6 +720,7 @@ async fn run_window_test(
             &window_fn,
             fn_name,
             &args,
+            &[],
             &partitionby_exprs,
             &orderby_exprs,
             Arc::new(window_frame.clone()),

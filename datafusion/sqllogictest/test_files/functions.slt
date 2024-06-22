@@ -487,7 +487,7 @@ statement error Did you mean 'to_timestamp_seconds'?
 SELECT to_TIMESTAMPS_second(v2) from test;
 
 # Aggregate function
-statement error Did you mean 'COUNT'?
+query error DataFusion error: Error during planning: Invalid function 'counter'
 SELECT counter(*) from test;
 
 # Aggregate function
@@ -1158,3 +1158,21 @@ drop table uuid_table
 
 statement ok
 drop table t
+
+
+# test for contains
+
+query B
+select contains('alphabet', 'pha');
+----
+true
+
+query B
+select contains('alphabet', 'dddd');
+----
+false
+
+query B
+select contains('', '');
+----
+true
