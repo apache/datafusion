@@ -59,6 +59,7 @@ use datafusion_expr::{
     TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
+use datafusion_functions_aggregate::correlation::corr;
 use datafusion_functions_aggregate::expr_fn::{
     bit_and, bit_or, bit_xor, bool_and, bool_or,
 };
@@ -660,6 +661,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
+        corr(lit(1.5), lit(2.2)),
         sum(lit(1)),
         median(lit(2)),
         var_sample(lit(2.2)),

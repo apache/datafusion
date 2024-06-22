@@ -56,6 +56,7 @@
 pub mod macros;
 
 pub mod approx_distinct;
+pub mod correlation;
 pub mod count;
 pub mod covariance;
 pub mod first_last;
@@ -72,6 +73,7 @@ pub mod approx_percentile_cont_with_weight;
 pub mod bit_and_or_xor;
 pub mod bool_and_or;
 pub mod string_agg;
+
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;
 use datafusion_common::Result;
@@ -120,8 +122,9 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         first_last::first_value_udaf(),
         first_last::last_value_udaf(),
         covariance::covar_samp_udaf(),
-        sum::sum_udaf(),
         covariance::covar_pop_udaf(),
+        correlation::corr_udaf(),
+        sum::sum_udaf(),
         median::median_udaf(),
         count::count_udaf(),
         regr::regr_slope_udaf(),
