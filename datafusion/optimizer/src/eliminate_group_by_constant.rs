@@ -20,7 +20,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::Result;
 use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
@@ -80,14 +80,6 @@ impl OptimizerRule for EliminateGroupByConstant {
             }
             _ => Ok(Transformed::no(plan)),
         }
-    }
-
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called EliminateGroupByConstant::rewrite")
     }
 
     fn name(&self) -> &str {
