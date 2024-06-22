@@ -33,7 +33,9 @@ use crate::{
 use crate::{window_frame, Volatility};
 
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
@@ -1333,6 +1335,46 @@ impl Expr {
         Ok(using_columns)
     }
 
+    /// Return all references to columns in this expression.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::collections::HashSet;
+    /// # use datafusion_common::Column;
+    /// # use datafusion_expr::col;
+    /// // For an expression `a + (b * a)`
+    /// let expr = col("a") + (col("b") * col("a"));
+    /// let refs = expr.column_refs();
+    /// // refs contains "a" and "b"
+    /// assert_eq!(refs.len(), 2);
+    /// assert!(refs.contains(&Column::new_unqualified("a")));
+    ///  assert!(refs.contains(&Column::new_unqualified("b")));
+    /// ```
+    pub fn column_refs(&self) -> HashSet<&Column> {
+        let mut using_columns = HashSet::new();
+        self.add_column_refs(&mut using_columns);
+        using_columns
+    }
+
+    /// Adds references to all columns in this expression to the set
+    ///
+    /// See [`Self::column_refs`] for details
+    pub fn add_column_refs<'a>(&'a self, set: &mut HashSet<&'a Column>) {
+        self.apply(|expr| {
+            if let Expr::Column(col) = expr {
+                set.insert(col);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("traversal is infallable");
+    }
+
+    /// Returns true if there are any column references in this Expr
+    pub fn any_column_refs(&self) -> bool {
+        self.exists(|expr| Ok(matches!(expr, Expr::Column(_))))
+            .unwrap()
+    }
+
     /// Return true when the expression contains out reference(correlated) expressions.
     pub fn contains_outer(&self) -> bool {
         self.exists(|expr| Ok(matches!(expr, Expr::OuterReferenceColumn { .. })))
@@ -2038,7 +2080,7 @@ mod test {
         // single column
         {
             let expr = &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64));
-            let columns = expr.to_columns()?;
+            let columns = expr.column_refs();
             assert_eq!(1, columns.len());
             assert!(columns.contains(&Column::from_name("a")));
         }
@@ -2046,7 +2088,7 @@ mod test {
         // multiple columns
         {
             let expr = col("a") + col("b") + lit(1);
-            let columns = expr.to_columns()?;
+            let columns = expr.column_refs();
             assert_eq!(2, columns.len());
             assert!(columns.contains(&Column::from_name("a")));
             assert!(columns.contains(&Column::from_name("b")));
