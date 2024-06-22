@@ -92,8 +92,12 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
-use datafusion_common::tree_node::Transformed;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::ScalarValue;
+use datafusion_expr::Projection;
 use datafusion_optimizer::optimizer::ApplyOrder;
+use datafusion_optimizer::AnalyzerRule;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -132,10 +136,12 @@ async fn setup_table_without_schemas(mut ctx: SessionContext) -> Result<SessionC
     Ok(ctx)
 }
 
-const QUERY1: &str = "SELECT * FROM sales limit 3";
-
 const QUERY: &str =
     "SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3";
+
+const QUERY1: &str = "SELECT * FROM sales limit 3";
+
+const QUERY2: &str = "SELECT 42, arrow_typeof(42)";
 
 // Run the query using the specified execution context and compare it
 // to the known result
@@ -151,6 +157,34 @@ async fn run_and_compare_query(mut ctx: SessionContext, description: &str) -> Re
     ];
 
     let s = exec_sql(&mut ctx, QUERY).await?;
+    let actual = s.lines().collect::<Vec<_>>();
+
+    assert_eq!(
+        expected,
+        actual,
+        "output mismatch for {}. Expectedn\n{}Actual:\n{}",
+        description,
+        expected.join("\n"),
+        s
+    );
+    Ok(())
+}
+
+// Run the query using the specified execution context and compare it
+// to the known result
+async fn run_and_compare_query_with_analyzer_rule(
+    mut ctx: SessionContext,
+    description: &str,
+) -> Result<()> {
+    let expected = vec![
+        "+------------+--------------------------+",
+        "| UInt64(42) | arrow_typeof(UInt64(42)) |",
+        "+------------+--------------------------+",
+        "| 42         | UInt64                   |",
+        "+------------+--------------------------+",
+    ];
+
+    let s = exec_sql(&mut ctx, QUERY2).await?;
     let actual = s.lines().collect::<Vec<_>>();
 
     assert_eq!(
@@ -209,6 +243,13 @@ async fn normal_query() -> Result<()> {
 }
 
 #[tokio::test]
+// Run the query using default planners, optimizer and custom analyzer rule
+async fn normal_query_with_analyzer() -> Result<()> {
+    let ctx = SessionContext::new().add_analyzer_rule(Arc::new(MyAnalyzerRule {}));
+    run_and_compare_query_with_analyzer_rule(ctx, "MyAnalyzerRule").await
+}
+
+#[tokio::test]
 // Run the query using topk optimization
 async fn topk_query() -> Result<()> {
     // Note the only difference is that the top
@@ -248,9 +289,10 @@ async fn topk_plan() -> Result<()> {
 fn make_topk_context() -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(48);
     let runtime = Arc::new(RuntimeEnv::default());
-    let state = SessionState::new_with_config_rt(config, runtime)
+    let mut state = SessionState::new_with_config_rt(config, runtime)
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
         .add_optimizer_rule(Arc::new(TopKOptimizerRule {}));
+    state.add_analyzer_rule(Arc::new(MyAnalyzerRule {}));
     SessionContext::new_with_state(state)
 }
 
@@ -631,5 +673,54 @@ impl Stream for TopKReader {
 impl RecordBatchStream for TopKReader {
     fn schema(&self) -> SchemaRef {
         self.input.schema()
+    }
+}
+
+struct MyAnalyzerRule {}
+
+impl AnalyzerRule for MyAnalyzerRule {
+    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
+        Self::analyze_plan(plan)
+    }
+
+    fn name(&self) -> &str {
+        "my_analyzer_rule"
+    }
+}
+
+impl MyAnalyzerRule {
+    fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
+        plan.transform(|plan| {
+            Ok(match plan {
+                LogicalPlan::Projection(projection) => {
+                    let expr = Self::analyze_expr(projection.expr.clone())?;
+                    Transformed::yes(LogicalPlan::Projection(Projection::try_new(
+                        expr,
+                        projection.input,
+                    )?))
+                }
+                _ => Transformed::no(plan),
+            })
+        })
+        .data()
+    }
+
+    fn analyze_expr(expr: Vec<Expr>) -> Result<Vec<Expr>> {
+        expr.into_iter()
+            .map(|e| {
+                e.transform(|e| {
+                    Ok(match e {
+                        Expr::Literal(ScalarValue::Int64(i)) => {
+                            // transform to UInt64
+                            Transformed::yes(Expr::Literal(ScalarValue::UInt64(
+                                i.map(|i| i as u64),
+                            )))
+                        }
+                        _ => Transformed::no(e),
+                    })
+                })
+                .data()
+            })
+            .collect()
     }
 }
