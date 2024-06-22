@@ -69,12 +69,12 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
 #[tokio::test]
 async fn count_partitioned() -> Result<()> {
     let results =
-        execute_with_partition("SELECT COUNT(c1), COUNT(c2) FROM test", 4).await?;
+        execute_with_partition("SELECT count(c1), count(c2) FROM test", 4).await?;
     assert_eq!(results.len(), 1);
 
     let expected = [
         "+----------------+----------------+",
-        "| COUNT(test.c1) | COUNT(test.c2) |",
+        "| count(test.c1) | count(test.c2) |",
         "+----------------+----------------+",
         "| 40             | 40             |",
         "+----------------+----------------+",
@@ -86,11 +86,11 @@ async fn count_partitioned() -> Result<()> {
 #[tokio::test]
 async fn count_aggregated() -> Result<()> {
     let results =
-        execute_with_partition("SELECT c1, COUNT(c2) FROM test GROUP BY c1", 4).await?;
+        execute_with_partition("SELECT c1, count(c2) FROM test GROUP BY c1", 4).await?;
 
     let expected = [
         "+----+----------------+",
-        "| c1 | COUNT(test.c2) |",
+        "| c1 | count(test.c2) |",
         "+----+----------------+",
         "| 0  | 10             |",
         "| 1  | 10             |",
@@ -105,14 +105,14 @@ async fn count_aggregated() -> Result<()> {
 #[tokio::test]
 async fn count_aggregated_cube() -> Result<()> {
     let results = execute_with_partition(
-        "SELECT c1, c2, COUNT(c3) FROM test GROUP BY CUBE (c1, c2) ORDER BY c1, c2",
+        "SELECT c1, c2, count(c3) FROM test GROUP BY CUBE (c1, c2) ORDER BY c1, c2",
         4,
     )
     .await?;
 
     let expected = vec![
         "+----+----+----------------+",
-        "| c1 | c2 | COUNT(test.c3) |",
+        "| c1 | c2 | count(test.c3) |",
         "+----+----+----------------+",
         "|    |    | 40             |",
         "|    | 1  | 4              |",
@@ -222,15 +222,15 @@ async fn run_count_distinct_integers_aggregated_scenario(
         "
           SELECT
             c_group,
-            COUNT(c_uint64),
-            COUNT(DISTINCT c_int8),
-            COUNT(DISTINCT c_int16),
-            COUNT(DISTINCT c_int32),
-            COUNT(DISTINCT c_int64),
-            COUNT(DISTINCT c_uint8),
-            COUNT(DISTINCT c_uint16),
-            COUNT(DISTINCT c_uint32),
-            COUNT(DISTINCT c_uint64)
+            count(c_uint64),
+            count(DISTINCT c_int8),
+            count(DISTINCT c_int16),
+            count(DISTINCT c_int32),
+            count(DISTINCT c_int64),
+            count(DISTINCT c_uint8),
+            count(DISTINCT c_uint16),
+            count(DISTINCT c_uint32),
+            count(DISTINCT c_uint64)
           FROM test
           GROUP BY c_group
         ",
@@ -260,7 +260,7 @@ async fn count_distinct_integers_aggregated_single_partition() -> Result<()> {
     let results = run_count_distinct_integers_aggregated_scenario(partitions).await?;
 
     let expected = ["+---------+----------------------+-----------------------------+------------------------------+------------------------------+------------------------------+------------------------------+-------------------------------+-------------------------------+-------------------------------+",
-        "| c_group | COUNT(test.c_uint64) | COUNT(DISTINCT test.c_int8) | COUNT(DISTINCT test.c_int16) | COUNT(DISTINCT test.c_int32) | COUNT(DISTINCT test.c_int64) | COUNT(DISTINCT test.c_uint8) | COUNT(DISTINCT test.c_uint16) | COUNT(DISTINCT test.c_uint32) | COUNT(DISTINCT test.c_uint64) |",
+        "| c_group | count(test.c_uint64) | count(DISTINCT test.c_int8) | count(DISTINCT test.c_int16) | count(DISTINCT test.c_int32) | count(DISTINCT test.c_int64) | count(DISTINCT test.c_uint8) | count(DISTINCT test.c_uint16) | count(DISTINCT test.c_uint32) | count(DISTINCT test.c_uint64) |",
         "+---------+----------------------+-----------------------------+------------------------------+------------------------------+------------------------------+------------------------------+-------------------------------+-------------------------------+-------------------------------+",
         "| a       | 3                    | 2                           | 2                            | 2                            | 2                            | 2                            | 2                             | 2                             | 2                             |",
         "| b       | 1                    | 1                           | 1                            | 1                            | 1                            | 1                            | 1                             | 1                             | 1                             |",
@@ -284,7 +284,7 @@ async fn count_distinct_integers_aggregated_multiple_partitions() -> Result<()> 
     let results = run_count_distinct_integers_aggregated_scenario(partitions).await?;
 
     let expected = ["+---------+----------------------+-----------------------------+------------------------------+------------------------------+------------------------------+------------------------------+-------------------------------+-------------------------------+-------------------------------+",
-        "| c_group | COUNT(test.c_uint64) | COUNT(DISTINCT test.c_int8) | COUNT(DISTINCT test.c_int16) | COUNT(DISTINCT test.c_int32) | COUNT(DISTINCT test.c_int64) | COUNT(DISTINCT test.c_uint8) | COUNT(DISTINCT test.c_uint16) | COUNT(DISTINCT test.c_uint32) | COUNT(DISTINCT test.c_uint64) |",
+        "| c_group | count(test.c_uint64) | count(DISTINCT test.c_int8) | count(DISTINCT test.c_int16) | count(DISTINCT test.c_int32) | count(DISTINCT test.c_int64) | count(DISTINCT test.c_uint8) | count(DISTINCT test.c_uint16) | count(DISTINCT test.c_uint32) | count(DISTINCT test.c_uint64) |",
         "+---------+----------------------+-----------------------------+------------------------------+------------------------------+------------------------------+------------------------------+-------------------------------+-------------------------------+-------------------------------+",
         "| a       | 5                    | 3                           | 3                            | 3                            | 3                            | 3                            | 3                             | 3                             | 3                             |",
         "| b       | 5                    | 4                           | 4                            | 4                            | 4                            | 4                            | 4                             | 4                             | 4                             |",
@@ -301,7 +301,7 @@ async fn test_accumulator_row_accumulator() -> Result<()> {
     let ctx = SessionContext::new_with_config(config);
     register_aggregate_csv(&ctx).await?;
 
-    let sql = "SELECT c1, c2, MIN(c13) as min1, MIN(c9) as min2, MAX(c13) as max1, MAX(c9) as max2, AVG(c9) as avg1, MIN(c13) as min3, COUNT(C9) as cnt1, 0.5*SUM(c9-c8) as sum1
+    let sql = "SELECT c1, c2, MIN(c13) as min1, MIN(c9) as min2, MAX(c13) as max1, MAX(c9) as max2, AVG(c9) as avg1, MIN(c13) as min3, count(C9) as cnt1, 0.5*SUM(c9-c8) as sum1
     FROM aggregate_test_100
     GROUP BY c1, c2
     ORDER BY c1, c2

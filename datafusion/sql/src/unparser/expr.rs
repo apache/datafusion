@@ -1198,7 +1198,7 @@ mod tests {
                     .distinct()
                     .build()
                     .unwrap(),
-                "COUNT(DISTINCT *)",
+                "count(DISTINCT *)",
             ),
             (
                 count_udaf()
@@ -1206,7 +1206,7 @@ mod tests {
                     .filter(lit(true))
                     .build()
                     .unwrap(),
-                "COUNT(*) FILTER (WHERE true)",
+                "count(*) FILTER (WHERE true)",
             ),
             (
                 Expr::WindowFunction(WindowFunction {
@@ -1242,7 +1242,7 @@ mod tests {
                     ),
                     null_treatment: None,
                 }),
-                r#"COUNT(*) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
+                r#"count(*) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
             (col("a").is_not_null(), r#"a IS NOT NULL"#),
             (col("a").is_null(), r#"a IS NULL"#),

@@ -983,7 +983,7 @@ pub async fn from_substrait_agg_func(
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
         // deal with situation that count(*) got no arguments
-        if fun.name() == "COUNT" && args.is_empty() {
+        if fun.name() == "count" && args.is_empty() {
             args.push(Expr::Literal(ScalarValue::Int64(Some(1))));
         }
 

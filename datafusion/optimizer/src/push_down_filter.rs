@@ -693,8 +693,9 @@ impl OptimizerRule for PushDownFilter {
                 insert_below(LogicalPlan::SubqueryAlias(subquery_alias), new_filter)
             }
             LogicalPlan::Projection(projection) => {
+                let predicates = split_conjunction_owned(filter.predicate.clone());
                 let (new_projection, keep_predicate) =
-                    rewrite_projection(filter.predicate.clone(), projection)?;
+                    rewrite_projection(predicates, projection)?;
                 if new_projection.transformed {
                     match keep_predicate {
                         None => Ok(new_projection),
@@ -709,41 +710,54 @@ impl OptimizerRule for PushDownFilter {
                 }
             }
             LogicalPlan::Unnest(mut unnest) => {
-                // collect all the Expr::Column in predicate recursively
-                let mut accum: HashSet<Column> = HashSet::new();
-                expr_to_columns(&filter.predicate, &mut accum)?;
+                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let mut non_unnest_predicates = vec![];
+                let mut unnest_predicates = vec![];
+                for predicate in predicates {
+                    // collect all the Expr::Column in predicate recursively
+                    let mut accum: HashSet<Column> = HashSet::new();
+                    expr_to_columns(&predicate, &mut accum)?;
 
-                if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                    if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                        unnest_predicates.push(predicate);
+                    } else {
+                        non_unnest_predicates.push(predicate);
+                    }
+                }
+
+                // Unnest predicates should not be pushed down.
+                // If no non-unnest predicates exist, early return
+                if non_unnest_predicates.is_empty() {
                     filter.input = Arc::new(LogicalPlan::Unnest(unnest));
                     return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                 }
 
-                // Unnest is built above Projection, so we only take Projection into consideration
-                match unwrap_arc(unnest.input) {
-                    LogicalPlan::Projection(projection) => {
-                        let (new_projection, keep_predicate) =
-                            rewrite_projection(filter.predicate.clone(), projection)?;
-                        unnest.input = Arc::new(new_projection.data);
+                // Push down non-unnest filter predicate
+                // Unnest
+                //   Unenst Input (Projection)
+                // -> rewritten to
+                // Unnest
+                //   Filter
+                //     Unenst Input (Projection)
 
-                        if new_projection.transformed {
-                            match keep_predicate {
-                                None => Ok(Transformed::yes(LogicalPlan::Unnest(unnest))),
-                                Some(keep_predicate) => Ok(Transformed::yes(
-                                    LogicalPlan::Filter(Filter::try_new(
-                                        keep_predicate,
-                                        Arc::new(LogicalPlan::Unnest(unnest)),
-                                    )?),
-                                )),
-                            }
-                        } else {
-                            filter.input = Arc::new(LogicalPlan::Unnest(unnest));
-                            Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                        }
-                    }
-                    child => {
-                        filter.input = Arc::new(child);
-                        Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                    }
+                let unnest_input = std::mem::take(&mut unnest.input);
+
+                let filter_with_unnest_input = LogicalPlan::Filter(Filter::try_new(
+                    conjunction(non_unnest_predicates).unwrap(), // Safe to unwrap since non_unnest_predicates is not empty.
+                    unnest_input,
+                )?);
+
+                // Directly assign new filter plan as the new unnest's input.
+                // The new filter plan will go through another rewrite pass since the rule itself
+                // is applied recursively to all the child from top to down
+                let unnest_plan =
+                    insert_below(LogicalPlan::Unnest(unnest), filter_with_unnest_input)?;
+
+                match conjunction(unnest_predicates) {
+                    None => Ok(unnest_plan),
+                    Some(predicate) => Ok(Transformed::yes(LogicalPlan::Filter(
+                        Filter::try_new(predicate, Arc::new(unnest_plan.data))?,
+                    ))),
                 }
             }
             LogicalPlan::Union(ref union) => {
@@ -958,6 +972,10 @@ impl OptimizerRule for PushDownFilter {
 /// `plan` is a LogicalPlan for `projection` with possibly a new FilterExec below it.
 /// `remaining_predicate` is any part of the predicate that could not be pushed down
 ///
+/// # Args
+/// - predicates: Split predicates like `[foo=5, bar=6]`
+/// - projection: The target projection plan to push down the predicates
+///
 /// # Example
 ///
 /// Pushing a predicate like `foo=5 AND bar=6` with an input plan like this:
@@ -974,7 +992,7 @@ impl OptimizerRule for PushDownFilter {
 ///   ...
 /// ```
 fn rewrite_projection(
-    predicate: Expr,
+    predicates: Vec<Expr>,
     projection: Projection,
 ) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
     // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
@@ -994,7 +1012,7 @@ fn rewrite_projection(
 
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
-    for expr in split_conjunction_owned(predicate) {
+    for expr in predicates {
         if contain(&expr, &volatile_map) {
             keep_predicates.push(expr);
         } else {

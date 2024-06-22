@@ -474,6 +474,16 @@ select gcd(null, null);
 ----
 NULL
 
+# scalar maxes and/or negative 1
+query III rowsort
+select 
+  gcd(9223372036854775807, -9223372036854775808), -- i64::MIN, i64::MAX
+  -- wait till fix, cause it fails gcd(-9223372036854775808, -9223372036854775808), -- -i64::MIN, i64::MIN
+  gcd(9223372036854775807, -1), -- i64::MAX, -1
+  gcd(-9223372036854775808, -1); -- i64::MIN, -1
+----
+1 1 1
+
 # gcd with columns
 query III rowsort
 select gcd(a, b), gcd(c, d), gcd(e, f) from signed_integers;

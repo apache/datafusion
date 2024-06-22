@@ -41,8 +41,8 @@ order by
 ----
 logical_plan
 01)Sort: orders.o_orderpriority ASC NULLS LAST
-02)--Projection: orders.o_orderpriority, COUNT(*) AS order_count
-03)----Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+02)--Projection: orders.o_orderpriority, count(*) AS order_count
+03)----Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[count(Int64(1)) AS count(*)]]
 04)------Projection: orders.o_orderpriority
 05)--------LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
 06)----------Projection: orders.o_orderkey, orders.o_orderpriority
@@ -55,11 +55,11 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [o_orderpriority@0 ASC NULLS LAST]
 02)--SortExec: expr=[o_orderpriority@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[o_orderpriority@0 as o_orderpriority, COUNT(*)@1 as order_count]
-04)------AggregateExec: mode=FinalPartitioned, gby=[o_orderpriority@0 as o_orderpriority], aggr=[COUNT(*)]
+03)----ProjectionExec: expr=[o_orderpriority@0 as o_orderpriority, count(*)@1 as order_count]
+04)------AggregateExec: mode=FinalPartitioned, gby=[o_orderpriority@0 as o_orderpriority], aggr=[count(*)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([o_orderpriority@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[o_orderpriority@0 as o_orderpriority], aggr=[COUNT(*)]
+07)------------AggregateExec: mode=Partial, gby=[o_orderpriority@0 as o_orderpriority], aggr=[count(*)]
 08)--------------CoalesceBatchesExec: target_batch_size=8192
 09)----------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(o_orderkey@0, l_orderkey@0)], projection=[o_orderpriority@1]
 10)------------------CoalesceBatchesExec: target_batch_size=8192
