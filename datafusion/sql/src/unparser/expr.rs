@@ -854,21 +854,13 @@ impl Unparser<'_> {
             ScalarValue::TimestampNanosecond(None, _) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
-            ScalarValue::IntervalYearMonth(Some(_i)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::IntervalYearMonth(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::IntervalDayTime(Some(_i)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::IntervalDayTime(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::IntervalMonthDayNano(Some(_i)) => {
+            ScalarValue::IntervalYearMonth(Some(_))
+            | ScalarValue::IntervalDayTime(Some(_))
+            | ScalarValue::IntervalMonthDayNano(Some(_)) => {
                 let wrap_array = v.to_array()?;
                 let Some(result) = array_value_to_string(&wrap_array, 0).ok() else {
                     return internal_err!(
-                        "Unable to convert IntervalMonthDayNano to string"
+                        "Unable to convert interval scalar value to string"
                     );
                 };
                 let interval = Interval {
@@ -882,6 +874,10 @@ impl Unparser<'_> {
                 };
                 Ok(ast::Expr::Interval(interval))
             }
+            ScalarValue::IntervalYearMonth(None) => {
+                Ok(ast::Expr::Value(ast::Value::Null))
+            }
+            ScalarValue::IntervalDayTime(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::IntervalMonthDayNano(None) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
@@ -1015,10 +1011,10 @@ mod tests {
     use arrow_schema::DataType::Int8;
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        case, col, cube, exists, grouping_set, lit, not, not_exists, out_ref_col,
-        placeholder, rollup, table_scan, try_cast, when, wildcard, ColumnarValue,
-        ScalarUDF, ScalarUDFImpl, Signature, Volatility, WindowFrame,
-        WindowFunctionDefinition,
+        case, col, cube, exists, grouping_set, interval_datetime_lit,
+        interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
+        table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
+        Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, AggregateExt};
     use datafusion_functions_aggregate::count::count_udaf;
@@ -1344,6 +1340,22 @@ mod tests {
                 interval_month_day_nano_lit("1 MONTH")
                     .sub(interval_month_day_nano_lit("1 DAY")),
                 r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
+            ),
+            (
+                interval_datetime_lit("10 DAY 1 HOUR 10 MINUTE 20 SECOND"),
+                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 10 MINS 20.000 SECS'"#,
+            ),
+            (
+                interval_datetime_lit("10 DAY 1.5 HOUR 10 MINUTE 20 SECOND"),
+                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 40 MINS 20.000 SECS'"#,
+            ),
+            (
+                interval_year_month_lit("1 YEAR 1 MONTH"),
+                r#"INTERVAL '1 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
+            ),
+            (
+                interval_year_month_lit("1.5 YEAR 1 MONTH"),
+                r#"INTERVAL '1 YEARS 7 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
             ),
         ];
 
