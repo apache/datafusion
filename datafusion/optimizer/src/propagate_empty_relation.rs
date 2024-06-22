@@ -82,7 +82,8 @@ impl OptimizerRule for PropagateEmptyRelation {
                 Ok(Transformed::no(plan))
             }
             LogicalPlan::CrossJoin(ref join) => {
-                let (left_empty, right_empty) = binary_plan_children_is_empty(&plan)?;
+                let (left_empty, right_empty) =
+                    binary_plan_children_is_empty(&join.left, &join.right);
                 if left_empty || right_empty {
                     return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
                         EmptyRelation {
@@ -91,7 +92,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                         },
                     )));
                 }
-                Ok(Transformed::no(LogicalPlan::CrossJoin(join.clone())))
+                Ok(Transformed::no(plan))
             }
 
             LogicalPlan::Join(ref join) => {
@@ -100,11 +101,12 @@ impl OptimizerRule for PropagateEmptyRelation {
                 // columns + right side columns replaced with null values.
                 // For RightOut/Full Join, if the left side is empty, the Join can be eliminated with a Projection with right side
                 // columns + left side columns replaced with null values.
-                let (left_empty, right_empty) = binary_plan_children_is_empty(&plan)?;
+                let (left_empty, right_empty) =
+                    binary_plan_children_is_empty(&join.left, &join.right);
 
                 match join.join_type {
-                    // For Full Join, only both sides are empty, the Join result is empty.
-                    JoinType::Full if left_empty && right_empty => Ok(Transformed::yes(
+                    // if both sides are empty, the result is also empty
+                    _ if left_empty && right_empty => Ok(Transformed::yes(
                         LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
                             schema: join.schema.clone(),
@@ -234,21 +236,19 @@ impl OptimizerRule for PropagateEmptyRelation {
     }
 }
 
-fn binary_plan_children_is_empty(plan: &LogicalPlan) -> Result<(bool, bool)> {
-    match plan.inputs()[..] {
-        [left, right] => {
-            let left_empty = match left {
-                LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
-                _ => false,
-            };
-            let right_empty = match right {
-                LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
-                _ => false,
-            };
-            Ok((left_empty, right_empty))
-        }
-        _ => plan_err!("plan just can have two child"),
-    }
+fn binary_plan_children_is_empty(
+    left: &LogicalPlan,
+    right: &LogicalPlan,
+) -> (bool, bool) {
+    let left_empty = match left {
+        LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
+        _ => false,
+    };
+    let right_empty = match right {
+        LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
+        _ => false,
+    };
+    (left_empty, right_empty)
 }
 
 fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
