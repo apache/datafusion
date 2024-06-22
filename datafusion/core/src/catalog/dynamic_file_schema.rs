@@ -154,6 +154,7 @@ impl Default for StateStore {
 #[cfg(test)]
 mod tests {
     use crate::catalog::dynamic_file_schema::substitute_tilde;
+    #[cfg(not(target_os = "windows"))]
     use dirs::home_dir;
 
     #[cfg(not(target_os = "windows"))]
