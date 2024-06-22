@@ -342,9 +342,6 @@ impl AggregateUDFImpl for Avg {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!("{} expects exactly one argument.", self.name());
-        }
         coerce_avg_type(self.name(), arg_types)
     }
 }

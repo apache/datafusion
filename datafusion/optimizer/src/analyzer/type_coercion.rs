@@ -1006,14 +1006,14 @@ mod test {
         let empty = empty();
         let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             avg_udaf(),
-            vec![cast(lit(12i64), DataType::Float64)],
+            vec![lit(12f64)],
             false,
             None,
             None,
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
-        let expected = "Projection: avg(CAST(Int64(12) AS Float64))\n  EmptyRelation";
+        let expected = "Projection: avg(Float64(12))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let empty = empty_with_type(DataType::Int32);

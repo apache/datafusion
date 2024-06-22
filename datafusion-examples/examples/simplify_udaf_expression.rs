@@ -94,6 +94,8 @@ impl AggregateUDFImpl for BetterAvgUdaf {
                         _: &dyn SimplifyInfo| {
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                 avg_udaf(),
+                // yes it is the same Avg, `BetterAvgUdaf` was just a
+                // marketing pitch :)
                 aggregate_function.args,
                 aggregate_function.distinct,
                 aggregate_function.filter,

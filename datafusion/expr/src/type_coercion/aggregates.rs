@@ -392,17 +392,6 @@ mod tests {
             }
         }
     }
-    #[test]
-    fn test_avg_return_data_type() -> Result<()> {
-        let data_type = DataType::Decimal128(10, 5);
-        let result_type = avg_return_type("avg", &data_type)?;
-        assert_eq!(DataType::Decimal128(14, 9), result_type);
-
-        let data_type = DataType::Decimal128(36, 10);
-        let result_type = avg_return_type("avg", &data_type)?;
-        assert_eq!(DataType::Decimal128(38, 14), result_type);
-        Ok(())
-    }
 
     #[test]
     fn test_variance_return_data_type() -> Result<()> {
