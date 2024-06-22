@@ -110,6 +110,26 @@ impl OptimizerRule for PropagateEmptyRelation {
                             schema: join.schema.clone(),
                         }),
                     )),
+                    // For LeftOut/Full Join, if the right side is empty, the Join can be eliminated with a Projection with left side
+                    // columns + right side columns replaced with null values.
+                    JoinType::Full | JoinType::Left if right_empty => {
+                        Ok(Transformed::yes(LogicalPlan::Projection(dbg!(
+                            Projection::new_from_schema(
+                                join.left.clone(),
+                                dbg!(join.schema.clone()),
+                            )
+                        ))))
+                    }
+                    // For RightOut/Full Join, if the left side is empty, the Join can be eliminated with a Projection with right side
+                    // columns + left side columns replaced with null values.
+                    JoinType::Full | JoinType::Right if left_empty => {
+                        Ok(Transformed::yes(LogicalPlan::Projection(
+                            Projection::new_from_schema(
+                                join.right.clone(),
+                                join.schema.clone(),
+                            ),
+                        )))
+                    }
                     JoinType::Inner if left_empty || right_empty => Ok(Transformed::yes(
                         LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
