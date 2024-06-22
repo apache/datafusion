@@ -52,7 +52,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    exec_err, not_impl_err, plan_err,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, SchemaReference, TableReference,
 };
@@ -72,6 +72,7 @@ use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 
+use crate::datasource::function::TableFunction;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -1238,6 +1239,20 @@ impl SessionContext {
         )?
         .build()?;
         Ok(DataFrame::new(self.state(), plan))
+    }
+
+    /// Retrieves a [`Arc<TableFunction>`] instance by name.
+    ///
+    /// Returns an error if no table function has been registered with the provided name.
+    ///
+    /// [`register_udtf`]: SessionContext::register_udtf
+    pub fn table_function(&self, name: &str) -> Result<Arc<TableFunction>> {
+        self.state
+            .read()
+            .table_functions()
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("table function '{name}' not found"))
     }
 
     /// Return a [`TableProvider`] for the specified table.

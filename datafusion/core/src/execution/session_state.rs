@@ -791,6 +791,11 @@ impl SessionState {
         &self.window_functions
     }
 
+    /// Return reference to table_functions
+    pub fn table_functions(&self) -> &HashMap<String, Arc<TableFunction>> {
+        &self.table_functions
+    }
+
     /// Return [SerializerRegistry] for extensions
     pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
         self.serializer_registry.clone()
