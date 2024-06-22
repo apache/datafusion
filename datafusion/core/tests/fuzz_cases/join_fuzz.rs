@@ -215,10 +215,6 @@ async fn test_semi_join_1k() {
     .await
 }
 
-// The test is flaky
-// https://github.com/apache/datafusion/issues/10886
-// SMJ produces 1 more row in the output
-#[ignore]
 #[tokio::test]
 async fn test_semi_join_1k_filtered() {
     JoinFuzzTestCase::new(
@@ -442,18 +438,45 @@ impl JoinFuzzTestCase {
 
             if debug {
                 println!("The debug is ON. Input data will be saved");
-                let out_dir_name = &format!("fuzz_test_debug_batch_size_{batch_size}");
-                Self::save_as_parquet(&self.input1, out_dir_name, "input1");
-                Self::save_as_parquet(&self.input2, out_dir_name, "input2");
+                let fuzz_debug = "fuzz_test_debug";
+                std::fs::remove_dir_all(fuzz_debug).unwrap_or(());
+                std::fs::create_dir_all(fuzz_debug).unwrap();
+                let out_dir_name = &format!("{fuzz_debug}/batch_size_{batch_size}");
+                Self::save_partitioned_batches_as_parquet(
+                    &self.input1,
+                    out_dir_name,
+                    "input1",
+                );
+                Self::save_partitioned_batches_as_parquet(
+                    &self.input2,
+                    out_dir_name,
+                    "input2",
+                );
 
                 if join_tests.contains(&JoinTestType::NljHj) {
-                    Self::save_as_parquet(&nlj_collected, out_dir_name, "nlj");
-                    Self::save_as_parquet(&hj_collected, out_dir_name, "hj");
+                    Self::save_partitioned_batches_as_parquet(
+                        &nlj_collected,
+                        out_dir_name,
+                        "nlj",
+                    );
+                    Self::save_partitioned_batches_as_parquet(
+                        &hj_collected,
+                        out_dir_name,
+                        "hj",
+                    );
                 }
 
                 if join_tests.contains(&JoinTestType::HjSmj) {
-                    Self::save_as_parquet(&hj_collected, out_dir_name, "hj");
-                    Self::save_as_parquet(&smj_collected, out_dir_name, "smj");
+                    Self::save_partitioned_batches_as_parquet(
+                        &hj_collected,
+                        out_dir_name,
+                        "hj",
+                    );
+                    Self::save_partitioned_batches_as_parquet(
+                        &smj_collected,
+                        out_dir_name,
+                        "smj",
+                    );
                 }
             }
 
@@ -527,11 +550,26 @@ impl JoinFuzzTestCase {
     /// as a parquet files preserving partitioning.
     /// Once the data is saved it is possible to run a custom test on top of the saved data and debug
     ///
+    /// #[tokio::test]
+    /// async fn test1() {
+    ///     let left: Vec<RecordBatch> = JoinFuzzTestCase::load_partitioned_batches_from_parquet("fuzz_test_debug/batch_size_2/input1").await.unwrap();
+    ///     let right: Vec<RecordBatch> = JoinFuzzTestCase::load_partitioned_batches_from_parquet("fuzz_test_debug/batch_size_2/input2").await.unwrap();
+    ///
+    ///     JoinFuzzTestCase::new(
+    ///         left,
+    ///         right,
+    ///         JoinType::LeftSemi,
+    ///         Some(Box::new(col_lt_col_filter)),
+    ///     )
+    ///     .run_test(&[JoinTestType::HjSmj], false)
+    ///     .await
+    /// }
+    ///
     ///     let ctx: SessionContext = SessionContext::new();
     ///     let df = ctx
     ///         .read_parquet(
     ///             "/tmp/input1/*.parquet",
-    ///             ParquetReadOptions::default(),
+    ///             datafusion::prelude::ParquetReadOptions::default(),
     ///         )
     ///         .await
     ///         .unwrap();
@@ -540,7 +578,7 @@ impl JoinFuzzTestCase {
     ///     let df = ctx
     ///         .read_parquet(
     ///             "/tmp/input2/*.parquet",
-    ///             ParquetReadOptions::default(),
+    ///             datafusion::prelude::ParquetReadOptions::default(),
     ///         )
     ///         .await
     ///         .unwrap();
@@ -554,8 +592,11 @@ impl JoinFuzzTestCase {
     ///         )
     ///         .run_test()
     ///         .await
-    /// }
-    fn save_as_parquet(input: &[RecordBatch], output_dir: &str, out_name: &str) {
+    fn save_partitioned_batches_as_parquet(
+        input: &[RecordBatch],
+        output_dir: &str,
+        out_name: &str,
+    ) {
         let out_path = &format!("{output_dir}/{out_name}");
         std::fs::remove_dir_all(out_path).unwrap_or(());
         std::fs::create_dir_all(out_path).unwrap();
@@ -575,6 +616,39 @@ impl JoinFuzzTestCase {
         });
 
         println!("The data {out_name} saved as parquet into {out_path}");
+    }
+
+    /// Read parquet files preserving partitions, i.e. 1 file -> 1 partition
+    /// Files can be of different sizes
+    /// The method can be useful to read partitions have been saved by `save_partitioned_batches_as_parquet`
+    /// for test debugging purposes
+    #[allow(dead_code)]
+    async fn load_partitioned_batches_from_parquet(
+        dir: &str,
+    ) -> std::io::Result<Vec<RecordBatch>> {
+        let ctx: SessionContext = SessionContext::new();
+        let mut batches: Vec<RecordBatch> = vec![];
+
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() {
+                let mut batch = ctx
+                    .read_parquet(
+                        path.to_str().unwrap(),
+                        datafusion::prelude::ParquetReadOptions::default(),
+                    )
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await
+                    .unwrap();
+
+                batches.append(&mut batch);
+            }
+        }
+        Ok(batches)
     }
 }
 
