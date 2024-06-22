@@ -553,7 +553,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "MAX",
             "AVG",
             "ARRAY_AGG",
-            "CORRELATION",
             "GROUPING",
             "NTH_VALUE_AGG",
         ];
