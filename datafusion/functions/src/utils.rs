@@ -18,8 +18,8 @@
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
-use datafusion_physical_expr::functions::Hint;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given

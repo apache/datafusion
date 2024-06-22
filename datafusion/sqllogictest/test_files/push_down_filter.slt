@@ -67,17 +67,34 @@ select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where 
 5 2
 
 # Could push the filter (column1 = 2) down below unnest
-# https://github.com/apache/datafusion/issues/11016
 query TT
 explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 AND column1 = 2;
 ----
 logical_plan
 01)Projection: unnest(v.column2) AS uc2, v.column1
-02)--Filter: unnest(v.column2) > Int64(3) AND v.column1 = Int64(2)
+02)--Filter: unnest(v.column2) > Int64(3)
+03)----Unnest: lists[unnest(v.column2)] structs[]
+04)------Projection: v.column2 AS unnest(v.column2), v.column1
+05)--------Filter: v.column1 = Int64(2)
+06)----------TableScan: v projection=[column1, column2]
+
+query II
+select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 OR column1 = 2;
+----
+3 2
+4 2
+5 2
+
+# only non-unnest filter in AND clause could be pushed down
+query TT
+explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 OR column1 = 2;
+----
+logical_plan
+01)Projection: unnest(v.column2) AS uc2, v.column1
+02)--Filter: unnest(v.column2) > Int64(3) OR v.column1 = Int64(2)
 03)----Unnest: lists[unnest(v.column2)] structs[]
 04)------Projection: v.column2 AS unnest(v.column2), v.column1
 05)--------TableScan: v projection=[column1, column2]
-
 
 statement ok
 drop table v;

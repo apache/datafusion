@@ -594,10 +594,10 @@ async fn roundtrip_union_all() -> Result<()> {
 
 #[tokio::test]
 async fn simple_intersect() -> Result<()> {
-    // Substrait treats both COUNT(*) and COUNT(1) the same
+    // Substrait treats both count(*) and count(1) the same
     assert_expected_plan(
-        "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
-        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]\
+        "SELECT count(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
          \n  Projection: \
          \n    LeftSemi Join: data.a = data2.a\
          \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
@@ -610,7 +610,7 @@ async fn simple_intersect() -> Result<()> {
 
 #[tokio::test]
 async fn simple_intersect_table_reuse() -> Result<()> {
-    roundtrip("SELECT COUNT(1) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);").await
+    roundtrip("SELECT count(1) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);").await
 }
 
 #[tokio::test]

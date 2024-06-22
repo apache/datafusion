@@ -38,14 +38,8 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 
 pub use crate::scalar_function::create_physical_expr;
-
-#[derive(Debug, Clone, Copy)]
-pub enum Hint {
-    /// Indicates the argument needs to be padded if it is scalar
-    Pad,
-    /// Indicates the argument can be converted to an array of length 1
-    AcceptsSingular,
-}
+// For backward compatibility
+pub use datafusion_expr::function::Hint;
 
 #[deprecated(since = "36.0.0", note = "Use ColumarValue::values_to_arrays instead")]
 pub fn columnar_values_to_array(args: &[ColumnarValue]) -> Result<Vec<ArrayRef>> {

@@ -370,11 +370,14 @@ impl PullUpCorrelatedExpr {
             }
         }
         if let Some(pull_up_having) = &self.pull_up_having_expr {
-            let filter_apply_columns = pull_up_having.to_columns()?;
+            let filter_apply_columns = pull_up_having.column_refs();
             for col in filter_apply_columns {
-                let col_expr = Expr::Column(col);
-                if !missing_exprs.contains(&col_expr) {
-                    missing_exprs.push(col_expr)
+                // add to missing_exprs if not already there
+                let contains = missing_exprs
+                    .iter()
+                    .any(|expr| matches!(expr, Expr::Column(c) if c == col));
+                if !contains {
+                    missing_exprs.push(Expr::Column(col.clone()))
                 }
             }
         }
@@ -436,7 +439,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                             Transformed::yes(Expr::Literal(ScalarValue::Null))
                         }
                         AggregateFunctionDefinition::UDF(fun) => {
-                            if fun.name() == "COUNT" {
+                            if fun.name() == "count" {
                                 Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(
                                     0,
                                 ))))

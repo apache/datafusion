@@ -77,7 +77,6 @@ pub fn count_distinct(expr: Expr) -> datafusion_expr::Expr {
 
 pub struct Count {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Debug for Count {
@@ -98,7 +97,6 @@ impl Default for Count {
 impl Count {
     pub fn new() -> Self {
         Self {
-            aliases: vec!["count".to_string()],
             signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
@@ -110,7 +108,7 @@ impl AggregateUDFImpl for Count {
     }
 
     fn name(&self) -> &str {
-        "COUNT"
+        "count"
     }
 
     fn signature(&self) -> &Signature {
@@ -249,7 +247,7 @@ impl AggregateUDFImpl for Count {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {

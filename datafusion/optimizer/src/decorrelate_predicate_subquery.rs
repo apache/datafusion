@@ -123,14 +123,6 @@ impl DecorrelatePredicateSubquery {
 }
 
 impl OptimizerRule for DecorrelatePredicateSubquery {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called DecorrelatePredicateSubquery::rewrite")
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }

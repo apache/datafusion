@@ -896,6 +896,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             delimiter: vec![opts.delimiter],
             quote: vec![opts.quote],
             escape: opts.escape.map_or_else(Vec::new, |e| vec![e]),
+            double_quote: opts.double_quote.map_or_else(Vec::new, |h| vec![h as u8]),
             compression: compression.into(),
             schema_infer_max_rec: opts.schema_infer_max_rec as u64,
             date_format: opts.date_format.clone().unwrap_or_default(),
@@ -1022,5 +1023,8 @@ pub(crate) fn csv_writer_options_to_proto(
         timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
         time_format: csv_options.time_format().unwrap_or("").to_owned(),
         null_value: csv_options.null().to_owned(),
+        quote: (csv_options.quote() as char).to_string(),
+        escape: (csv_options.escape() as char).to_string(),
+        double_quote: csv_options.double_quote(),
     }
 }

@@ -550,6 +550,18 @@ macro_rules! make_data_page_stats_iterator {
 }
 
 make_data_page_stats_iterator!(
+    MinBooleanDataPageStatsIterator,
+    |x: &PageIndex<bool>| { x.min },
+    Index::BOOLEAN,
+    bool
+);
+make_data_page_stats_iterator!(
+    MaxBooleanDataPageStatsIterator,
+    |x: &PageIndex<bool>| { x.max },
+    Index::BOOLEAN,
+    bool
+);
+make_data_page_stats_iterator!(
     MinInt32DataPageStatsIterator,
     |x: &PageIndex<i32>| { x.min },
     Index::INT32,
@@ -613,6 +625,15 @@ macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
         paste! {
             match $data_type {
+                Some(DataType::Boolean) => Ok(Arc::new(
+                    BooleanArray::from_iter(
+                        [<$stat_type_prefix BooleanDataPageStatsIterator>]::new($iterator)
+                            .flatten()
+                            // BooleanArray::from_iter required a sized iterator, so collect into Vec first
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                    )
+                )),
                 Some(DataType::UInt8) => Ok(Arc::new(
                     UInt8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
@@ -778,6 +799,11 @@ where
 {
     let iter = iterator.flat_map(|(len, index)| match index {
         Index::NONE => vec![None; len],
+        Index::BOOLEAN(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
         Index::INT32(native_index) => native_index
             .indexes
             .iter()
