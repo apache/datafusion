@@ -779,6 +779,103 @@ mod tests {
     }
 
     #[test]
+    fn test_tz() {
+        let udfs: Vec<Box<dyn ScalarUDFImpl>> = vec![
+            Box::new(ToTimestampFunc::new()),
+            Box::new(ToTimestampSecondsFunc::new()),
+            Box::new(ToTimestampMillisFunc::new()),
+            Box::new(ToTimestampNanosFunc::new()),
+            Box::new(ToTimestampSecondsFunc::new()),
+        ];
+
+        let mut nanos_builder = TimestampNanosecondArray::builder(2);
+        let mut millis_builder = TimestampMillisecondArray::builder(2);
+        let mut micros_builder = TimestampMicrosecondArray::builder(2);
+        let mut sec_builder = TimestampSecondArray::builder(2);
+
+        nanos_builder.append_value(1599572549190850000);
+        millis_builder.append_value(1599572549190);
+        micros_builder.append_value(1599572549190850);
+        sec_builder.append_value(1599572549);
+
+        let nanos_timestamps =
+            Arc::new(nanos_builder.finish().with_timezone("UTC")) as ArrayRef;
+        let millis_timestamps =
+            Arc::new(millis_builder.finish().with_timezone("UTC")) as ArrayRef;
+        let micros_timestamps =
+            Arc::new(micros_builder.finish().with_timezone("UTC")) as ArrayRef;
+        let sec_timestamps =
+            Arc::new(sec_builder.finish().with_timezone("UTC")) as ArrayRef;
+
+        let arrays = &[
+            ColumnarValue::Array(nanos_timestamps.clone()),
+            ColumnarValue::Array(millis_timestamps.clone()),
+            ColumnarValue::Array(micros_timestamps.clone()),
+            ColumnarValue::Array(sec_timestamps.clone()),
+        ];
+
+        for udf in &udfs {
+            for array in arrays {
+                let rt = udf.return_type(&[array.data_type()]).unwrap();
+                assert!(matches!(rt, DataType::Timestamp(_, Some(_))));
+
+                let res = udf
+                    .invoke(&[array.clone()])
+                    .expect("that to_timestamp parsed values without error");
+                let array = match res {
+                    ColumnarValue::Array(res) => res,
+                    _ => panic!("Expected a columnar array"),
+                };
+                let ty = array.data_type();
+                assert!(matches!(ty, DataType::Timestamp(_, Some(_))));
+            }
+        }
+
+        let mut nanos_builder = TimestampNanosecondArray::builder(2);
+        let mut millis_builder = TimestampMillisecondArray::builder(2);
+        let mut micros_builder = TimestampMicrosecondArray::builder(2);
+        let mut sec_builder = TimestampSecondArray::builder(2);
+        let mut i64_builder = Int64Array::builder(2);
+
+        nanos_builder.append_value(1599572549190850000);
+        millis_builder.append_value(1599572549190);
+        micros_builder.append_value(1599572549190850);
+        sec_builder.append_value(1599572549);
+        i64_builder.append_value(1599572549);
+
+        let nanos_timestamps = Arc::new(nanos_builder.finish()) as ArrayRef;
+        let millis_timestamps = Arc::new(millis_builder.finish()) as ArrayRef;
+        let micros_timestamps = Arc::new(micros_builder.finish()) as ArrayRef;
+        let sec_timestamps = Arc::new(sec_builder.finish()) as ArrayRef;
+        let i64_timestamps = Arc::new(i64_builder.finish()) as ArrayRef;
+
+        let arrays = &[
+            ColumnarValue::Array(nanos_timestamps.clone()),
+            ColumnarValue::Array(millis_timestamps.clone()),
+            ColumnarValue::Array(micros_timestamps.clone()),
+            ColumnarValue::Array(sec_timestamps.clone()),
+            ColumnarValue::Array(i64_timestamps.clone()),
+        ];
+
+        for udf in &udfs {
+            for array in arrays {
+                let rt = udf.return_type(&[array.data_type()]).unwrap();
+                assert!(matches!(rt, DataType::Timestamp(_, None)));
+
+                let res = udf
+                    .invoke(&[array.clone()])
+                    .expect("that to_timestamp parsed values without error");
+                let array = match res {
+                    ColumnarValue::Array(res) => res,
+                    _ => panic!("Expected a columnar array"),
+                };
+                let ty = array.data_type();
+                assert!(matches!(ty, DataType::Timestamp(_, None)));
+            }
+        }
+    }
+
+    #[test]
     fn test_to_timestamp_arg_validation() {
         let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
         date_string_builder.append_value("2020-09-08T13:42:29.19085Z");
@@ -849,6 +946,11 @@ mod tests {
                 .expect("that to_timestamp with format args parsed values without error");
             if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
                 assert_eq!(parsed_array.len(), 1);
+                assert!(matches!(
+                    parsed_array.data_type(),
+                    DataType::Timestamp(_, None)
+                ));
+
                 match time_unit {
                     Nanosecond => {
                         assert_eq!(nanos_expected_timestamps, parsed_array.as_ref())
