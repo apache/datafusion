@@ -179,7 +179,7 @@ mod tests {
         let mut names = HashSet::new();
         for func in all_default_aggregate_functions() {
             // TODO: remove this
-            // These functions are in intermidiate migration state, skip them
+            // These functions are in intermediate migration state, skip them
             if func.name().to_lowercase() == "count" {
                 continue;
             }

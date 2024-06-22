@@ -48,7 +48,6 @@ make_udaf_expr_and_func!(
 #[derive(Debug)]
 pub struct Correlation {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for Correlation {
@@ -61,7 +60,6 @@ impl Correlation {
     /// Create a new COVAR_POP aggregate function
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("covar")],
             signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
         }
     }
@@ -107,10 +105,6 @@ impl AggregateUDFImpl for Correlation {
                 true,
             ),
         ])
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
     }
 }
 
