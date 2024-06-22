@@ -29,6 +29,7 @@ use crate::datasource::file_format::arrow::ArrowFormatFactory;
 use crate::datasource::file_format::avro::AvroFormatFactory;
 use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::json::JsonFormatFactory;
+#[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormatFactory;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use crate::datasource::function::{TableFunction, TableFunctionImpl};
@@ -206,8 +207,6 @@ impl SessionState {
         table_factories.insert("AVRO".into(), Arc::new(DefaultTableFactory::new()));
         table_factories.insert("ARROW".into(), Arc::new(DefaultTableFactory::new()));
 
-
-
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
 
@@ -253,31 +252,32 @@ impl SessionState {
         };
 
         #[cfg(feature = "parquet")]
-        match new_self.register_file_format(Arc::new(ParquetFormatFactory::new()), false){
+        match new_self.register_file_format(Arc::new(ParquetFormatFactory::new()), false)
+        {
             Ok(_) => (),
-            Err(e) => println!("Unable to register default ParquetFormat: {e}")
+            Err(e) => log::info!("Unable to register default ParquetFormat: {e}"),
         };
 
-        match new_self.register_file_format(Arc::new(JsonFormatFactory::new()), false){
+        match new_self.register_file_format(Arc::new(JsonFormatFactory::new()), false) {
             Ok(_) => (),
-            Err(e) => log::info!("Unable to register default JsonFormat: {e}")
+            Err(e) => log::info!("Unable to register default JsonFormat: {e}"),
         };
 
-        match new_self.register_file_format(Arc::new(CsvFormatFactory::new()), false){
+        match new_self.register_file_format(Arc::new(CsvFormatFactory::new()), false) {
             Ok(_) => (),
-            Err(e) => log::info!("Unable to register default CsvFormat: {e}")
+            Err(e) => log::info!("Unable to register default CsvFormat: {e}"),
         };
 
-        match new_self.register_file_format(Arc::new(AvroFormatFactory::new()), false){
+        match new_self.register_file_format(Arc::new(AvroFormatFactory::new()), false) {
             Ok(_) => (),
-            Err(e) => log::info!("Unable to register default AvroFormat: {e}")
+            Err(e) => log::info!("Unable to register default AvroFormat: {e}"),
         };
 
-        match new_self.register_file_format(Arc::new(ArrowFormatFactory::new()), false){
+        match new_self.register_file_format(Arc::new(ArrowFormatFactory::new()), false) {
             Ok(_) => (),
-            Err(e) => log::info!("Unable to register default ArrowFormat: {e}")
+            Err(e) => log::info!("Unable to register default ArrowFormat: {e}"),
         };
-        
+
         // register built in functions
         functions::register_all(&mut new_self)
             .expect("can not register built in functions");
@@ -868,14 +868,14 @@ impl SessionState {
         self.table_options.extensions.insert(extension)
     }
 
-    /// Adds or updates a [FileType] which can be used with COPY TO or CREATE EXTERNAL TABLE statements for reading
+    /// Adds or updates a [FileFormatFactory] which can be used with COPY TO or CREATE EXTERNAL TABLE statements for reading
     /// and writing files of custom formats.
     pub fn register_file_format(
         &mut self,
         file_format: Arc<dyn FileFormatFactory>,
         overwrite: bool,
     ) -> Result<(), DataFusionError> {
-        let ext = file_format.get_ext();
+        let ext = file_format.get_ext().to_lowercase();
         match (self.file_formats.entry(ext.clone()), overwrite){
             (Entry::Vacant(e), _) => {e.insert(file_format);},
             (Entry::Occupied(mut e), true)  => {e.insert(file_format);},
@@ -885,12 +885,12 @@ impl SessionState {
     }
 
     /// Retrieves a [FileFormatFactory] based on file extension which has been registered
-    /// via SessionContext::register_file_format
+    /// via SessionContext::register_file_format. Extensions are not case sensitive.
     pub fn get_file_format_factory(
         &self,
         ext: &str,
     ) -> Option<Arc<dyn FileFormatFactory>> {
-        self.file_formats.get(ext).cloned()
+        self.file_formats.get(&ext.to_lowercase()).cloned()
     }
 
     /// Get a new TaskContext to run in this session
@@ -1036,13 +1036,10 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         self.state.window_functions().keys().cloned().collect()
     }
 
-    fn get_file_type(
-        &self,
-        ext: &str,
-    ) -> datafusion_common::Result<Arc<dyn FileType>> {
+    fn get_file_type(&self, ext: &str) -> datafusion_common::Result<Arc<dyn FileType>> {
         self.state
             .file_formats
-            .get(ext)
+            .get(&ext.to_lowercase())
             .ok_or(plan_datafusion_err!(
                 "There is no registered file format with ext {ext}"
             ))

@@ -26,9 +26,14 @@ use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
+use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::format_as_file_type;
+use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
 use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_proto::logical_plan::file_formats::{
+    ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, ParquetLogicalExtensionCodec,
+};
 use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
@@ -333,8 +338,10 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
         options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = CsvLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     Ok(())
@@ -359,7 +366,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     parquet_format.global.dictionary_page_size_limit = 444;
     parquet_format.global.max_row_group_size = 555;
 
-    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
+    let file_type = format_as_file_type(Arc::new(ParquetFormatFactory::new()));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
@@ -369,8 +376,10 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = ParquetLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {
@@ -390,7 +399,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
 
     let input = create_csv_scan(&ctx).await?;
 
-    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
+    let file_type = format_as_file_type(Arc::new(ArrowFormatFactory::new()));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
@@ -400,8 +409,10 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = ArrowLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {
@@ -443,8 +454,10 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = CsvLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {

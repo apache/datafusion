@@ -43,7 +43,9 @@ use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{root_as_message, CompressionType};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION};
+use datafusion_common::{
+    not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
+};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
@@ -64,29 +66,33 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 /// If the buffered Arrow data exceeds this size, it is flushed to object store
 const BUFFER_FLUSH_BYTES: usize = 1024000;
 
+#[derive(Default)]
 /// Factory struct used to create [ArrowFormat]
 pub struct ArrowFormatFactory;
 
-impl ArrowFormatFactory{
+impl ArrowFormatFactory {
     /// Creates an instance of [ArrowFormatFactory]
-    pub fn new() -> Self{
-        Self{}
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
-
-impl FileFormatFactory for ArrowFormatFactory{
-    fn create(&self, _state: &SessionState, _format_options: &HashMap<String, String>) -> Result<Arc<dyn FileFormat>>{
-        Ok(Arc::new(ArrowFormat::default()))
+impl FileFormatFactory for ArrowFormatFactory {
+    fn create(
+        &self,
+        _state: &SessionState,
+        _format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        Ok(Arc::new(ArrowFormat))
     }
 
-    fn default(&self) -> Arc<dyn FileFormat>{
-        Arc::new(ArrowFormat::default())
+    fn default(&self) -> Arc<dyn FileFormat> {
+        Arc::new(ArrowFormat)
     }
 }
 
-impl GetExt for ArrowFormatFactory{
-    fn get_ext(&self) -> String{
+impl GetExt for ArrowFormatFactory {
+    fn get_ext(&self) -> String {
         // Removes the dot, i.e. ".parquet" -> "parquet"
         DEFAULT_ARROW_EXTENSION[1..].to_string()
     }
@@ -102,11 +108,14 @@ impl FileFormat for ArrowFormat {
         self
     }
 
-    fn get_ext(&self) -> String{
+    fn get_ext(&self) -> String {
         ArrowFormatFactory::new().get_ext()
     }
 
-    fn get_ext_with_compression(&self, file_compression_type: &FileCompressionType) -> Result<String>{
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
         let ext = self.get_ext();
         match file_compression_type.get_variant() {
             CompressionTypeVariant::UNCOMPRESSED => Ok(ext),

@@ -70,7 +70,8 @@ use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
+    ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -780,7 +781,7 @@ impl DefaultPhysicalPlanner {
                 };
 
                 let sink_format = file_type_to_format(file_type)?
-                    .create(session_state, &source_option_tuples)?;
+                    .create(session_state, source_option_tuples)?;
 
                 sink_format
                     .create_writer_physical_plan(input_exec, session_state, config, None)

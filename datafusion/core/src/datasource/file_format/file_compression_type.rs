@@ -113,7 +113,7 @@ impl FileCompressionType {
     };
 
     /// Read only access to self.variant
-    pub fn get_variant(&self) -> &CompressionTypeVariant{
+    pub fn get_variant(&self) -> &CompressionTypeVariant {
         &self.variant
     }
 

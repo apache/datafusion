@@ -42,7 +42,9 @@ use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, GetExt, DEFAULT_CSV_EXTENSION};
+use datafusion_common::{
+    exec_err, not_impl_err, DataFusionError, GetExt, DEFAULT_CSV_EXTENSION,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
@@ -53,32 +55,39 @@ use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
-/// Factory struct used to create [AvroFormat]
-pub struct CsvFormatFactory{
-    options: Option<CsvOptions>
+#[derive(Default)]
+/// Factory struct used to create [CsvFormatFactory]
+pub struct CsvFormatFactory {
+    options: Option<CsvOptions>,
 }
 
-impl CsvFormatFactory{
+impl CsvFormatFactory {
     /// Creates an instance of [CsvFormatFactory]
-    pub fn new() -> Self{
-        Self{ options: None }
+    pub fn new() -> Self {
+        Self { options: None }
     }
 
     /// Creates an instance of [CsvFormatFactory] with customized default options
-    pub fn new_with_options(options: CsvOptions) -> Self{
-        Self{ options: Some(options) }
+    pub fn new_with_options(options: CsvOptions) -> Self {
+        Self {
+            options: Some(options),
+        }
     }
 }
 
-impl FileFormatFactory for CsvFormatFactory{
-    fn create(&self, state: &SessionState, format_options: &HashMap<String, String>) -> Result<Arc<dyn FileFormat>>{
-        let csv_options = match &self.options{
+impl FileFormatFactory for CsvFormatFactory {
+    fn create(
+        &self,
+        state: &SessionState,
+        format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        let csv_options = match &self.options {
             None => {
                 let mut table_options = state.default_table_options();
                 table_options.set_file_format(ConfigFileType::CSV);
-                table_options.alter_with_string_hash_map(&format_options)?;
+                table_options.alter_with_string_hash_map(format_options)?;
                 table_options.csv
-            },
+            }
             Some(csv_options) => {
                 let mut csv_options = csv_options.clone();
                 for (k, v) in format_options {
@@ -87,17 +96,17 @@ impl FileFormatFactory for CsvFormatFactory{
                 csv_options
             }
         };
-        
+
         Ok(Arc::new(CsvFormat::default().with_options(csv_options)))
     }
 
-    fn default(&self) -> Arc<dyn FileFormat>{
+    fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(CsvFormat::default())
     }
 }
 
-impl GetExt for CsvFormatFactory{
-    fn get_ext(&self) -> String{
+impl GetExt for CsvFormatFactory {
+    fn get_ext(&self) -> String {
         // Removes the dot, i.e. ".parquet" -> "parquet"
         DEFAULT_CSV_EXTENSION[1..].to_string()
     }
@@ -256,11 +265,14 @@ impl FileFormat for CsvFormat {
         self
     }
 
-    fn get_ext(&self) -> String{
+    fn get_ext(&self) -> String {
         CsvFormatFactory::new().get_ext()
     }
 
-    fn get_ext_with_compression(&self, file_compression_type: &FileCompressionType) -> Result<String>{
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
         let ext = self.get_ext();
         Ok(format!("{}{}", ext, file_compression_type.get_ext()))
     }

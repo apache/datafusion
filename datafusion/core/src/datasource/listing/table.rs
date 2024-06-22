@@ -24,7 +24,6 @@ use std::{any::Any, sync::Arc};
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
-#[cfg(feature = "parquet")]
 use crate::datasource::{
     create_ordering, get_statistics_with_limit, TableProvider, TableType,
 };
@@ -43,8 +42,8 @@ use crate::{
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use datafusion_common::{
-    config_datafusion_err, internal_err, plan_err,
-    project_schema, Constraints, SchemaExt, ToDFSchema,
+    config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
+    SchemaExt, ToDFSchema,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -153,7 +152,7 @@ impl ListingTableConfig {
             .ok_or(config_datafusion_err!(
                 "No file_format found with extension {file_extension}"
             ))?
-            .create(&state, &HashMap::new())?;
+            .create(state, &HashMap::new())?;
 
         let listing_options = ListingOptions::new(file_format)
             .with_file_extension(file_extension)
@@ -1238,7 +1237,7 @@ mod tests {
         register_test_store(&ctx, &[(&path, 100)]);
 
         let opt = ListingOptions::new(Arc::new(AvroFormat {}))
-            .with_file_extension(AvroFormat::default().get_ext())
+            .with_file_extension(AvroFormat.get_ext())
             .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
             .with_target_partitions(4);
 

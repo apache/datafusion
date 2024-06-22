@@ -131,8 +131,8 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     }
 }
 
-/// A container of [FileFormat] which also implements [FileType].
-/// This enables converting an Arc<dyn FileFormat> to an Arc<dyn FileType>.
+/// A container of [FileFormatFactory] which also implements [FileType].
+/// This enables converting a dyn FileFormat to a dyn FileType.
 /// The former trait is a superset of the latter trait, which includes execution time
 /// relevant methods. [FileType] is only used in logical planning and only implements
 /// the subset of methods required during logical planning.
@@ -143,7 +143,9 @@ pub struct DefaultFileFormat {
 impl DefaultFileFormat {
     /// Constructs a [DefaultFileFormat] wrapper from a [FileFormatFactory]
     pub fn new(file_format_factory: Arc<dyn FileFormatFactory>) -> Self {
-        Self { file_format_factory }
+        Self {
+            file_format_factory,
+        }
     }
 }
 
@@ -169,7 +171,9 @@ impl GetExt for DefaultFileFormat {
 pub fn format_as_file_type(
     file_format_factory: Arc<dyn FileFormatFactory>,
 ) -> Arc<dyn FileType> {
-    Arc::new(DefaultFileFormat { file_format_factory })
+    Arc::new(DefaultFileFormat {
+        file_format_factory,
+    })
 }
 
 /// Converts a [FileType] to a [FileFormatFactory].

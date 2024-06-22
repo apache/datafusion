@@ -41,29 +41,33 @@ use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
+#[derive(Default)]
 /// Factory struct used to create [AvroFormat]
 pub struct AvroFormatFactory;
 
-impl AvroFormatFactory{
+impl AvroFormatFactory {
     /// Creates an instance of [AvroFormatFactory]
-    pub fn new() -> Self{
-        Self{}
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
-
-impl FileFormatFactory for AvroFormatFactory{
-    fn create(&self, _state: &SessionState, _format_options: &HashMap<String, String>) -> Result<Arc<dyn FileFormat>>{
-        Ok(Arc::new(AvroFormat::default()))
+impl FileFormatFactory for AvroFormatFactory {
+    fn create(
+        &self,
+        _state: &SessionState,
+        _format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        Ok(Arc::new(AvroFormat))
     }
 
-    fn default(&self) -> Arc<dyn FileFormat>{
-        Arc::new(AvroFormat::default())
+    fn default(&self) -> Arc<dyn FileFormat> {
+        Arc::new(AvroFormat)
     }
 }
 
-impl GetExt for AvroFormatFactory{
-    fn get_ext(&self) -> String{
+impl GetExt for AvroFormatFactory {
+    fn get_ext(&self) -> String {
         // Removes the dot, i.e. ".parquet" -> "parquet"
         DEFAULT_AVRO_EXTENSION[1..].to_string()
     }
@@ -79,11 +83,14 @@ impl FileFormat for AvroFormat {
         self
     }
 
-    fn get_ext(&self) -> String{
+    fn get_ext(&self) -> String {
         AvroFormatFactory::new().get_ext()
     }
 
-    fn get_ext_with_compression(&self, file_compression_type: &FileCompressionType) -> Result<String>{
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
         let ext = self.get_ext();
         match file_compression_type.get_variant() {
             CompressionTypeVariant::UNCOMPRESSED => Ok(ext),

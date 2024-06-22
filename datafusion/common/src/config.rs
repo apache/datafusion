@@ -1119,11 +1119,11 @@ macro_rules! extensions_options {
 /// These file types have special built in behavior for configuration.
 /// Use TableOptions::Extensions for configuring other file types.
 #[derive(Debug, Clone)]
-pub enum ConfigFileType{
+pub enum ConfigFileType {
     CSV,
     #[cfg(feature = "parquet")]
     PARQUET,
-    JSON
+    JSON,
 }
 
 /// Represents the configuration options available for handling different table formats within a data processing application.
@@ -1159,9 +1159,18 @@ impl ConfigField for TableOptions {
     /// If a format is selected, it visits only the settings relevant to that format. Otherwise,
     /// it visits all available format settings.
     fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
-        self.csv.visit(v, "csv", "");
-        self.parquet.visit(v, "parquet", "");
-        self.json.visit(v, "json", "");
+        if let Some(file_type) = &self.current_format {
+            match file_type {
+                #[cfg(feature = "parquet")]
+                ConfigFileType::PARQUET => self.parquet.visit(v, "format", ""),
+                ConfigFileType::CSV => self.csv.visit(v, "format", ""),
+                ConfigFileType::JSON => self.json.visit(v, "format", ""),
+            }
+        } else {
+            self.csv.visit(v, "csv", "");
+            self.parquet.visit(v, "parquet", "");
+            self.json.visit(v, "json", "");
+        }
     }
 
     /// Sets a configuration value for a specific key within `TableOptions`.
@@ -1354,7 +1363,7 @@ impl TableOptions {
         }
 
         let mut v = Visitor(vec![]);
-        //self.visit(&mut v, "format", "");
+        self.visit(&mut v, "format", "");
 
         v.0.extend(self.extensions.0.values().flat_map(|e| e.0.entries()));
         v.0
@@ -1687,7 +1696,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::config::{
-        ConfigEntry, ConfigExtension, ExtensionOptions, Extensions, TableOptions,
+        ConfigEntry, ConfigExtension, ConfigFileType, ExtensionOptions, Extensions,
+        TableOptions,
     };
 
     #[derive(Default, Debug, Clone)]
@@ -1746,7 +1756,7 @@ mod tests {
         let mut extension = Extensions::new();
         extension.insert(TestExtensionConfig::default());
         let mut table_config = TableOptions::new().with_extensions(extension);
-        //table_config.set_file_format(FileType::CSV);
+        table_config.set_file_format(ConfigFileType::CSV);
         table_config.set("format.delimiter", ";").unwrap();
         assert_eq!(table_config.csv.delimiter, b';');
         table_config.set("test.bootstrap.servers", "asd").unwrap();
@@ -1763,7 +1773,7 @@ mod tests {
     #[test]
     fn csv_u8_table_options() {
         let mut table_config = TableOptions::new();
-        //table_config.set_file_format(FileType::CSV);
+        table_config.set_file_format(ConfigFileType::CSV);
         table_config.set("format.delimiter", ";").unwrap();
         assert_eq!(table_config.csv.delimiter as char, ';');
         table_config.set("format.escape", "\"").unwrap();
@@ -1776,7 +1786,7 @@ mod tests {
     #[test]
     fn parquet_table_options() {
         let mut table_config = TableOptions::new();
-        //table_config.set_file_format(FileType::PARQUET);
+        table_config.set_file_format(ConfigFileType::PARQUET);
         table_config
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
@@ -1790,7 +1800,7 @@ mod tests {
     #[test]
     fn parquet_table_options_config_entry() {
         let mut table_config = TableOptions::new();
-        //table_config.set_file_format(FileType::PARQUET);
+        table_config.set_file_format(ConfigFileType::PARQUET);
         table_config
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
@@ -1804,7 +1814,7 @@ mod tests {
     #[test]
     fn parquet_table_options_config_metadata_entry() {
         let mut table_config = TableOptions::new();
-        //table_config.set_file_format(FileType::PARQUET);
+        table_config.set_file_format(ConfigFileType::PARQUET);
         table_config.set("format.metadata::key1", "").unwrap();
         table_config.set("format.metadata::key2", "value2").unwrap();
         table_config

@@ -33,7 +33,9 @@ use crate::protobuf::{proto_error, FromProtoError, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::{file_type_to_format, format_as_file_type, FileFormatFactory};
+use datafusion::datasource::file_format::{
+    file_type_to_format, format_as_file_type, FileFormatFactory,
+};
 use datafusion::{
     datasource::{
         file_format::{avro::AvroFormat, csv::CsvFormat, FileFormat},
@@ -66,6 +68,7 @@ use prost::Message;
 
 use self::to_proto::serialize_expr;
 
+pub mod file_formats;
 pub mod from_proto;
 pub mod to_proto;
 
@@ -121,7 +124,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         _buf: &[u8],
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn FileFormatFactory>> {
-        not_impl_err!("LogicalExtensionCoden is not provided for file format")
+        not_impl_err!("LogicalExtensionCodec is not provided for file format")
     }
 
     fn try_encode_file_format(

@@ -49,7 +49,8 @@ use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, GetExt, DEFAULT_PARQUET_EXTENSION
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
+    DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -90,56 +91,60 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 /// this size, it is flushed to object store
 const BUFFER_FLUSH_BYTES: usize = 1024000;
 
-/// Factory struct used to create [AvroFormat]
-pub struct ParquetFormatFactory{
-    options: Option<TableParquetOptions>
+#[derive(Default)]
+/// Factory struct used to create [ParquetFormat]
+pub struct ParquetFormatFactory {
+    options: Option<TableParquetOptions>,
 }
 
-impl ParquetFormatFactory{
+impl ParquetFormatFactory {
     /// Creates an instance of [ParquetFormatFactory]
-    pub fn new() -> Self{
-        Self{ options: None }
+    pub fn new() -> Self {
+        Self { options: None }
     }
-    
+
     /// Creates an instance of [ParquetFormatFactory] with customized default options
-    pub fn new_with_options(options: TableParquetOptions) -> Self{
-        Self{ options: Some(options) }
+    pub fn new_with_options(options: TableParquetOptions) -> Self {
+        Self {
+            options: Some(options),
+        }
     }
 }
 
-impl FileFormatFactory for ParquetFormatFactory{
-    fn create(&self, state: &SessionState, format_options: &std::collections::HashMap<String, String>) -> Result<Arc<dyn FileFormat>>{
-
-        let parquet_options = match &self.options{
+impl FileFormatFactory for ParquetFormatFactory {
+    fn create(
+        &self,
+        state: &SessionState,
+        format_options: &std::collections::HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        let parquet_options = match &self.options {
             None => {
                 let mut table_options = state.default_table_options();
                 table_options.set_file_format(ConfigFileType::PARQUET);
-                table_options.alter_with_string_hash_map(&format_options)?;
+                table_options.alter_with_string_hash_map(format_options)?;
                 table_options.parquet
-
-            },
+            }
             Some(parquet_options) => {
-                println!("{:?}", parquet_options);
                 let mut parquet_options = parquet_options.clone();
-                for (k, v) in format_options{
+                for (k, v) in format_options {
                     parquet_options.set(k, v)?;
                 }
                 parquet_options
             }
         };
 
-        println!("{:?}", parquet_options);
-        
-        Ok(Arc::new(ParquetFormat::default().with_options(parquet_options)))
+        Ok(Arc::new(
+            ParquetFormat::default().with_options(parquet_options),
+        ))
     }
 
-    fn default(&self) -> Arc<dyn FileFormat>{
+    fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ParquetFormat::default())
     }
 }
 
-impl GetExt for ParquetFormatFactory{
-    fn get_ext(&self) -> String{
+impl GetExt for ParquetFormatFactory {
+    fn get_ext(&self) -> String {
         // Removes the dot, i.e. ".parquet" -> "parquet"
         DEFAULT_PARQUET_EXTENSION[1..].to_string()
     }
@@ -246,11 +251,14 @@ impl FileFormat for ParquetFormat {
         self
     }
 
-    fn get_ext(&self) -> String{
+    fn get_ext(&self) -> String {
         ParquetFormatFactory::new().get_ext()
     }
 
-    fn get_ext_with_compression(&self, file_compression_type: &FileCompressionType) -> Result<String>{
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
         let ext = self.get_ext();
         match file_compression_type.get_variant() {
             CompressionTypeVariant::UNCOMPRESSED => Ok(ext),

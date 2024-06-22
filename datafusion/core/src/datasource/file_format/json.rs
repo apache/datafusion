@@ -54,52 +54,58 @@ use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
-/// Factory struct used to create [AvroFormat]
-pub struct JsonFormatFactory{
-    options: Option<JsonOptions>
+#[derive(Default)]
+/// Factory struct used to create [JsonFormat]
+pub struct JsonFormatFactory {
+    options: Option<JsonOptions>,
 }
 
-impl JsonFormatFactory{
+impl JsonFormatFactory {
     /// Creates an instance of [JsonFormatFactory]
-    pub fn new() -> Self{
-        Self{ options: None }
+    pub fn new() -> Self {
+        Self { options: None }
     }
 
     /// Creates an instance of [JsonFormatFactory] with customized default options
-    pub fn new_with_options(options: JsonOptions) -> Self{
-        Self{ options: Some(options) }
+    pub fn new_with_options(options: JsonOptions) -> Self {
+        Self {
+            options: Some(options),
+        }
     }
 }
 
-impl FileFormatFactory for JsonFormatFactory{
-    fn create(&self, state: &SessionState, format_options: &HashMap<String, String>) -> Result<Arc<dyn FileFormat>>{
-
-        let json_options = match &self.options{
+impl FileFormatFactory for JsonFormatFactory {
+    fn create(
+        &self,
+        state: &SessionState,
+        format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        let json_options = match &self.options {
             None => {
                 let mut table_options = state.default_table_options();
                 table_options.set_file_format(ConfigFileType::JSON);
-                table_options.alter_with_string_hash_map(&format_options)?;
+                table_options.alter_with_string_hash_map(format_options)?;
                 table_options.json
-            },
+            }
             Some(json_options) => {
                 let mut json_options = json_options.clone();
-                for (k, v) in format_options{
+                for (k, v) in format_options {
                     json_options.set(k, v)?;
                 }
                 json_options
             }
         };
-        
+
         Ok(Arc::new(JsonFormat::default().with_options(json_options)))
     }
 
-    fn default(&self) -> Arc<dyn FileFormat>{
+    fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(JsonFormat::default())
     }
 }
 
-impl GetExt for JsonFormatFactory{
-    fn get_ext(&self) -> String{
+impl GetExt for JsonFormatFactory {
+    fn get_ext(&self) -> String {
         // Removes the dot, i.e. ".parquet" -> "parquet"
         DEFAULT_JSON_EXTENSION[1..].to_string()
     }
@@ -147,11 +153,14 @@ impl FileFormat for JsonFormat {
         self
     }
 
-    fn get_ext(&self) -> String{
+    fn get_ext(&self) -> String {
         JsonFormatFactory::new().get_ext()
     }
 
-    fn get_ext_with_compression(&self, file_compression_type: &FileCompressionType) -> Result<String>{
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
         let ext = self.get_ext();
         Ok(format!("{}{}", ext, file_compression_type.get_ext()))
     }
