@@ -170,7 +170,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select COUNT(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
+        .sql("select count(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
         .await?
         .explain(false, false)?
         .collect()
@@ -211,7 +211,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     let sql_results = ctx
         .sql("select count(*) from t1")
         .await?
-        .select(vec![col("COUNT(*)")])?
+        .select(vec![col("count(*)")])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -604,7 +604,7 @@ async fn test_grouping_sets() -> Result<()> {
 
     let expected = vec![
         "+-----------+-----+---------------+",
-        "| a         | b   | COUNT(test.a) |",
+        "| a         | b   | count(test.a) |",
         "+-----------+-----+---------------+",
         "|           | 100 | 1             |",
         "|           | 10  | 2             |",
@@ -645,7 +645,7 @@ async fn test_grouping_sets_count() -> Result<()> {
 
     let expected = vec![
         "+----+----+-----------------+",
-        "| c1 | c2 | COUNT(Int32(1)) |",
+        "| c1 | c2 | count(Int32(1)) |",
         "+----+----+-----------------+",
         "|    | 5  | 14              |",
         "|    | 4  | 23              |",
@@ -1233,7 +1233,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
         .await?;
     let expected = [
         r#"+-------------+"#,
-        r#"| COUNT(tags) |"#,
+        r#"| count(tags) |"#,
         r#"+-------------+"#,
         r#"| 9           |"#,
         r#"+-------------+"#,

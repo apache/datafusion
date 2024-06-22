@@ -120,7 +120,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     //3. limit is not contained within a single partition
     //The id column is included to ensure that the parquet file is actually scanned.
     let results  = ctx
-        .sql("SELECT COUNT(*) as num_rows_per_month, month, MAX(id) from t group by month order by num_rows_per_month desc")
+        .sql("SELECT count(*) as num_rows_per_month, month, MAX(id) from t group by month order by num_rows_per_month desc")
         .await?
         .collect()
         .await?;
@@ -339,7 +339,7 @@ async fn csv_grouping_by_partition() -> Result<()> {
 
     let expected = [
         "+------------+----------+----------------------+",
-        "| date       | COUNT(*) | COUNT(DISTINCT t.c1) |",
+        "| date       | count(*) | count(DISTINCT t.c1) |",
         "+------------+----------+----------------------+",
         "| 2021-10-26 | 100      | 5                    |",
         "| 2021-10-27 | 100      | 5                    |",

@@ -141,7 +141,7 @@ fn take_optimizable_column_and_table_count(
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
     if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-        if agg_expr.fun().name() == "COUNT" && !agg_expr.is_distinct() {
+        if agg_expr.fun().name() == "count" && !agg_expr.is_distinct() {
             if let Precision::Exact(num_rows) = stats.num_rows {
                 let exprs = agg_expr.expressions();
                 if exprs.len() == 1 {
