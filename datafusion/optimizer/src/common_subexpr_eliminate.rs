@@ -186,8 +186,7 @@ impl CommonSubexprEliminate {
         id_array: &mut IdArray<'n>,
         expr_mask: ExprMask,
     ) -> Result<bool> {
-        // related to https://github.com/apache/arrow-datafusion/issues/8814
-        // If the expr contain volatile expression or is a short-circuit expression, skip it.
+        // Don't consider volatile expressions for CSE.
         Ok(if expr.is_volatile()? {
             false
         } else {
@@ -945,6 +944,9 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_, 'n> {
     fn f_down(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
         // TODO: consider non-volatile sub-expressions for CSE
         // TODO: consider surely executed children of "short circuited"s for CSE
+
+        // If an expression can short circuit its children then don't consider it for CSE
+        // (https://github.com/apache/arrow-datafusion/issues/8814).
         if expr.short_circuits() {
             self.visit_stack.push(VisitRecord::JumpMark);
 
