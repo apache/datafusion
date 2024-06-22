@@ -29,23 +29,17 @@ use sqlparser::ast::{
 };
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    /// Generate a logical plan from an SQL query
+    /// Generate a logical plan from an SQL query/subquery
     pub(crate) fn query_to_plan(
         &self,
         query: Query,
-        planner_context: &mut PlannerContext,
+        outer_planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_schema(query, planner_context)
-    }
+        // Each query has its own planner context, including CTEs that are visible within that query.
+        // It also inherits the CTEs from the outer query by cloning the outer planner context.
+        let mut query_plan_context = outer_planner_context.clone();
+        let planner_context = &mut query_plan_context;
 
-    /// Generate a logic plan from an SQL query.
-    /// It's implementation of `subquery_to_plan` and `query_to_plan`.
-    /// It shouldn't be invoked directly.
-    fn query_to_plan_with_schema(
-        &self,
-        query: Query,
-        planner_context: &mut PlannerContext,
-    ) -> Result<LogicalPlan> {
         if let Some(with) = query.with {
             self.plan_with_clause(with, planner_context)?;
         }

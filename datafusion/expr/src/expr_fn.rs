@@ -31,8 +31,9 @@ use crate::{
     Signature, Volatility,
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
+use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, Result, ScalarValue};
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Not;
@@ -240,34 +241,6 @@ pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
 /// Create an in_list expression
 pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
     Expr::InList(InList::new(Box::new(expr), list, negated))
-}
-
-/// Calculate an approximation of the specified `percentile` for `expr`.
-pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxPercentileCont,
-        vec![expr, percentile],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
-/// Calculate an approximation of the specified `percentile` for `expr` and `weight_expr`.
-pub fn approx_percentile_cont_with_weight(
-    expr: Expr,
-    weight_expr: Expr,
-    percentile: Expr,
-) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ApproxPercentileContWithWeight,
-        vec![expr, weight_expr, percentile],
-        false,
-        None,
-        None,
-        None,
-    ))
 }
 
 /// Create an EXISTS subquery expression
@@ -696,6 +669,11 @@ impl WindowUDFImpl for SimpleWindowUDF {
     fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
         (self.partition_evaluator_factory)()
     }
+}
+
+pub fn interval_month_day_nano_lit(value: &str) -> Expr {
+    let interval = parse_interval_month_day_nano(value).ok();
+    Expr::Literal(ScalarValue::IntervalMonthDayNano(interval))
 }
 
 #[cfg(test)]

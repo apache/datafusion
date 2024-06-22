@@ -30,7 +30,6 @@ use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::format_as_file_type;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
-use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_proto::logical_plan::file_formats::{
     ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, ParquetLogicalExtensionCodec,
 };
@@ -41,10 +40,11 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::FunctionRegistry;
-use datafusion::functions_aggregate::approx_median::approx_median;
+use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
-    count, count_distinct, covar_pop, covar_samp, first_value, median, stddev,
-    stddev_pop, sum, var_pop, var_sample,
+    approx_median, approx_percentile_cont, approx_percentile_cont_with_weight, count,
+    count_distinct, covar_pop, covar_samp, first_value, median, stddev, stddev_pop, sum,
+    var_pop, var_sample,
 };
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -66,6 +66,10 @@ use datafusion_expr::{
     TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
+use datafusion_functions_aggregate::expr_fn::{
+    bit_and, bit_or, bit_xor, bool_and, bool_or,
+};
+use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -679,6 +683,14 @@ async fn roundtrip_expr_api() -> Result<()> {
         stddev(lit(2.2)),
         stddev_pop(lit(2.2)),
         approx_median(lit(2)),
+        approx_percentile_cont(lit(2), lit(0.5)),
+        approx_percentile_cont_with_weight(lit(2), lit(1), lit(0.5)),
+        bit_and(lit(2)),
+        bit_or(lit(2)),
+        bit_xor(lit(2)),
+        string_agg(col("a").cast_to(&DataType::Utf8, &schema)?, lit("|")),
+        bool_and(lit(true)),
+        bool_or(lit(true)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -1811,21 +1823,6 @@ fn roundtrip_count_distinct() {
         .distinct()
         .build()
         .unwrap();
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_approx_percentile_cont() {
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-        AggregateFunction::ApproxPercentileCont,
-        vec![col("bananas"), lit(0.42_f32)],
-        false,
-        None,
-        None,
-        None,
-    ));
-
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
 }
