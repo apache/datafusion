@@ -561,12 +561,9 @@ fn infer_join_predicates(
         .filter_map(|predicate| {
             let mut join_cols_to_replace = HashMap::new();
 
-            let columns = match predicate.to_columns() {
-                Ok(columns) => columns,
-                Err(e) => return Some(Err(e)),
-            };
+            let columns = predicate.column_refs();
 
-            for col in columns.iter() {
+            for &col in columns.iter() {
                 for (l, r) in join_col_keys.iter() {
                     if col == *l {
                         join_cols_to_replace.insert(col, *r);
@@ -798,7 +795,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
                 for expr in predicates {
-                    let cols = expr.to_columns()?;
+                    let cols = expr.column_refs();
                     if cols.iter().all(|c| group_expr_columns.contains(c)) {
                         push_predicates.push(expr);
                     } else {
@@ -899,7 +896,7 @@ impl OptimizerRule for PushDownFilter {
                 let predicate_push_or_keep = split_conjunction(&filter.predicate)
                     .iter()
                     .map(|expr| {
-                        let cols = expr.to_columns()?;
+                        let cols = expr.column_refs();
                         if cols.iter().any(|c| prevent_cols.contains(&c.name)) {
                             Ok(false) // No push (keep)
                         } else {
