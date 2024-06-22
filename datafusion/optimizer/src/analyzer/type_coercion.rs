@@ -176,8 +176,7 @@ impl<'a> TypeCoercionRewriter<'a> {
                 }
                 _ => {
                     return Err(DataFusionError::Internal(
-                        "Not column type and scalar type. Try normal coercion"
-                            .to_string(),
+                        "Not including a column and a scalar type".to_string(),
                     ))
                 }
             };
