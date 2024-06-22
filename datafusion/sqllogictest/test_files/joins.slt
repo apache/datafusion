@@ -1343,15 +1343,15 @@ from (select * from join_t1 inner join join_t2 on join_t1.t1_id = join_t2.t2_id)
 group by t1_id
 ----
 logical_plan
-01)Projection: COUNT(*)
-02)--Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+01)Projection: count(*)
+02)--Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[count(Int64(1)) AS count(*)]]
 03)----Projection: join_t1.t1_id
 04)------Inner Join: join_t1.t1_id = join_t2.t2_id
 05)--------TableScan: join_t1 projection=[t1_id]
 06)--------TableScan: join_t2 projection=[t2_id]
 physical_plan
-01)ProjectionExec: expr=[COUNT(*)@1 as COUNT(*)]
-02)--AggregateExec: mode=SinglePartitioned, gby=[t1_id@0 as t1_id], aggr=[COUNT(*)]
+01)ProjectionExec: expr=[count(*)@1 as count(*)]
+02)--AggregateExec: mode=SinglePartitioned, gby=[t1_id@0 as t1_id], aggr=[count(*)]
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
 05)--------CoalesceBatchesExec: target_batch_size=2
@@ -1370,30 +1370,29 @@ from join_t1
 inner join join_t2 on join_t1.t1_id = join_t2.t2_id
 ----
 logical_plan
-01)Projection: COUNT(alias1) AS COUNT(DISTINCT join_t1.t1_id)
-02)--Aggregate: groupBy=[[]], aggr=[[COUNT(alias1)]]
+01)Projection: count(alias1) AS count(DISTINCT join_t1.t1_id)
+02)--Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
 03)----Aggregate: groupBy=[[join_t1.t1_id AS alias1]], aggr=[[]]
 04)------Projection: join_t1.t1_id
 05)--------Inner Join: join_t1.t1_id = join_t2.t2_id
 06)----------TableScan: join_t1 projection=[t1_id]
 07)----------TableScan: join_t2 projection=[t2_id]
 physical_plan
-01)ProjectionExec: expr=[COUNT(alias1)@0 as COUNT(DISTINCT join_t1.t1_id)]
-02)--AggregateExec: mode=Final, gby=[], aggr=[COUNT(alias1)]
+01)ProjectionExec: expr=[count(alias1)@0 as count(DISTINCT join_t1.t1_id)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
 03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[COUNT(alias1)]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-06)----------AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]
-07)------------CoalesceBatchesExec: target_batch_size=2
-08)--------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
-09)----------------CoalesceBatchesExec: target_batch_size=2
-10)------------------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-12)----------------------MemoryExec: partitions=1, partition_sizes=[1]
-13)----------------CoalesceBatchesExec: target_batch_size=2
-14)------------------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
-15)--------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-16)----------------------MemoryExec: partitions=1, partition_sizes=[1]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
+05)--------AggregateExec: mode=SinglePartitioned, gby=[t1_id@0 as alias1], aggr=[]
+06)----------CoalesceBatchesExec: target_batch_size=2
+07)------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
+08)--------------CoalesceBatchesExec: target_batch_size=2
+09)----------------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+11)--------------------MemoryExec: partitions=1, partition_sizes=[1]
+12)--------------CoalesceBatchesExec: target_batch_size=2
+13)----------------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+14)------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+15)--------------------MemoryExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
@@ -3686,3 +3685,99 @@ set datafusion.explain.logical_plan_only = true;
 
 statement ok
 set datafusion.execution.target_partitions = 2;
+
+# Inner join with empty left table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 as a WHERE 1=0
+) AS a INNER JOIN (SELECT 1 as a) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Inner join with empty right table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 AS a
+) AS a INNER JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Left join with empty left table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 as a WHERE 1=0
+) AS a LEFT JOIN (SELECT 1 as a) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Left join with empty left and empty right table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 as a WHERE 1=0
+) AS a LEFT JOIN (SELECT 1 as a WHERE 1=0) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Right join with empty right table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 AS a
+) AS a RIGHT JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Right join with empty right and empty left table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 as a WHERE 1=0
+) AS a RIGHT JOIN (SELECT 1 as a WHERE 1=0) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Left SEMI join with empty left table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 AS a
+) AS a LEFT SEMI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Left SEMI join with empty right table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 AS a WHERE 1=0
+) AS a LEFT SEMI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Right SEMI join with empty left table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 AS a WHERE 1=0
+) AS a RIGHT SEMI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Right SEMI join with empty right table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 AS a
+) AS a RIGHT SEMI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Left ANTI join with empty left table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 AS a WHERE 1=0
+) AS a LEFT ANTI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Right ANTI join with empty right table
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 AS a
+) AS a RIGHT ANTI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation

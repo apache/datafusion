@@ -110,12 +110,12 @@ mod tests {
         )
         .await?;
         let results =
-            plan_and_collect(&ctx, "SELECT sum(c1), sum(c2), COUNT(*) FROM test").await?;
+            plan_and_collect(&ctx, "SELECT sum(c1), sum(c2), count(*) FROM test").await?;
 
         assert_eq!(results.len(), 1);
         let expected = [
             "+--------------+--------------+----------+",
-            "| sum(test.c1) | sum(test.c2) | COUNT(*) |",
+            "| sum(test.c1) | sum(test.c2) | count(*) |",
             "+--------------+--------------+----------+",
             "| 10           | 110          | 20       |",
             "+--------------+--------------+----------+",

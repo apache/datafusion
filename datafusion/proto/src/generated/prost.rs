@@ -1940,16 +1940,16 @@ pub enum AggregateFunction {
     /// STDDEV = 11;
     /// STDDEV_POP = 12;
     Correlation = 13,
-    ApproxPercentileCont = 14,
+    /// APPROX_PERCENTILE_CONT = 14;
     /// APPROX_MEDIAN = 15;
-    ApproxPercentileContWithWeight = 16,
+    /// APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
     Grouping = 17,
     /// MEDIAN = 18;
-    BitAnd = 19,
-    BitOr = 20,
-    BitXor = 21,
-    BoolAnd = 22,
-    BoolOr = 23,
+    /// BIT_AND = 19;
+    /// BIT_OR = 20;
+    /// BIT_XOR = 21;
+    ///   BOOL_AND = 22;
+    ///   BOOL_OR = 23;
     /// REGR_SLOPE = 26;
     /// REGR_INTERCEPT = 27;
     /// REGR_COUNT = 28;
@@ -1959,7 +1959,7 @@ pub enum AggregateFunction {
     /// REGR_SXX = 32;
     /// REGR_SYY = 33;
     /// REGR_SXY = 34;
-    StringAgg = 35,
+    /// STRING_AGG = 35;
     NthValueAgg = 36,
 }
 impl AggregateFunction {
@@ -1974,17 +1974,7 @@ impl AggregateFunction {
             AggregateFunction::Avg => "AVG",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::Correlation => "CORRELATION",
-            AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
-            AggregateFunction::ApproxPercentileContWithWeight => {
-                "APPROX_PERCENTILE_CONT_WITH_WEIGHT"
-            }
             AggregateFunction::Grouping => "GROUPING",
-            AggregateFunction::BitAnd => "BIT_AND",
-            AggregateFunction::BitOr => "BIT_OR",
-            AggregateFunction::BitXor => "BIT_XOR",
-            AggregateFunction::BoolAnd => "BOOL_AND",
-            AggregateFunction::BoolOr => "BOOL_OR",
-            AggregateFunction::StringAgg => "STRING_AGG",
             AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
     }
@@ -1996,17 +1986,7 @@ impl AggregateFunction {
             "AVG" => Some(Self::Avg),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "CORRELATION" => Some(Self::Correlation),
-            "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),
-            "APPROX_PERCENTILE_CONT_WITH_WEIGHT" => {
-                Some(Self::ApproxPercentileContWithWeight)
-            }
             "GROUPING" => Some(Self::Grouping),
-            "BIT_AND" => Some(Self::BitAnd),
-            "BIT_OR" => Some(Self::BitOr),
-            "BIT_XOR" => Some(Self::BitXor),
-            "BOOL_AND" => Some(Self::BoolAnd),
-            "BOOL_OR" => Some(Self::BoolOr),
-            "STRING_AGG" => Some(Self::StringAgg),
             "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
         }

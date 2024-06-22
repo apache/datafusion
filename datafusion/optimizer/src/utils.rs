@@ -35,6 +35,10 @@ use log::{debug, trace};
 /// This also handles the case when the `plan` is a [`LogicalPlan::Explain`].
 ///
 /// Returning `Ok(None)` indicates that the plan can't be optimized by the `optimizer`.
+#[deprecated(
+    since = "40.0.0",
+    note = "please use OptimizerRule::apply_order with ApplyOrder::BottomUp instead"
+)]
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
@@ -43,9 +47,16 @@ pub fn optimize_children(
     let mut new_inputs = Vec::with_capacity(plan.inputs().len());
     let mut plan_is_changed = false;
     for input in plan.inputs() {
-        let new_input = optimizer.try_optimize(input, config)?;
-        plan_is_changed = plan_is_changed || new_input.is_some();
-        new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
+        if optimizer.supports_rewrite() {
+            let new_input = optimizer.rewrite(input.clone(), config)?;
+            plan_is_changed = plan_is_changed || new_input.transformed;
+            new_inputs.push(new_input.data);
+        } else {
+            #[allow(deprecated)]
+            let new_input = optimizer.try_optimize(input, config)?;
+            plan_is_changed = plan_is_changed || new_input.is_some();
+            new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
+        }
     }
     if plan_is_changed {
         let exprs = plan.expressions();

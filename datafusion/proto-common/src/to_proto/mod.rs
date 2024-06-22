@@ -347,6 +347,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
+            ScalarValue::Utf8View(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::Utf8ViewValue(s.to_owned())
+                })
+            }
             ScalarValue::List(arr) => {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
@@ -459,6 +464,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             ScalarValue::Binary(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::BinaryValue(s.to_owned())
+                })
+            }
+            ScalarValue::BinaryView(val) => {
+                create_proto_scalar(val.as_ref(), &data_type, |s| {
+                    Value::BinaryViewValue(s.to_owned())
                 })
             }
             ScalarValue::LargeBinary(val) => {

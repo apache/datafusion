@@ -33,7 +33,7 @@ use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
 use datafusion_expr::{
-    exists, in_subquery, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
+    exists, in_subquery, not, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
     LogicalPlan, LogicalPlanBuilder, Operator,
 };
 
@@ -79,6 +79,25 @@ impl DecorrelatePredicateSubquery {
         let mut others = vec![];
         for it in filters.into_iter() {
             match it {
+                Expr::Not(not_expr) => match *not_expr {
+                    Expr::InSubquery(InSubquery {
+                        expr,
+                        subquery,
+                        negated,
+                    }) => {
+                        let new_subquery = self.rewrite_subquery(subquery, config)?;
+                        subqueries.push(SubqueryInfo::new_with_in_expr(
+                            new_subquery,
+                            *expr,
+                            !negated,
+                        ));
+                    }
+                    Expr::Exists(Exists { subquery, negated }) => {
+                        let new_subquery = self.rewrite_subquery(subquery, config)?;
+                        subqueries.push(SubqueryInfo::new(new_subquery, !negated));
+                    }
+                    expr => others.push(not(expr)),
+                },
                 Expr::InSubquery(InSubquery {
                     expr,
                     subquery,
@@ -126,9 +145,17 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
         };
 
         // if there are no subqueries in the predicate, return the original plan
-        let has_subqueries = split_conjunction(&filter.predicate)
-            .iter()
-            .any(|expr| matches!(expr, Expr::InSubquery(_) | Expr::Exists(_)));
+        let has_subqueries =
+            split_conjunction(&filter.predicate)
+                .iter()
+                .any(|expr| match expr {
+                    Expr::Not(not_expr) => {
+                        matches!(not_expr.as_ref(), Expr::InSubquery(_) | Expr::Exists(_))
+                    }
+                    Expr::InSubquery(_) | Expr::Exists(_) => true,
+                    _ => false,
+                });
+
         if !has_subqueries {
             return Ok(Transformed::no(LogicalPlan::Filter(filter)));
         }
@@ -351,7 +378,7 @@ mod tests {
     use crate::test::*;
 
     use arrow::datatypes::DataType;
-    use datafusion_expr::{and, binary_expr, col, lit, or, out_ref_col};
+    use datafusion_expr::{and, binary_expr, col, lit, not, or, out_ref_col};
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(
@@ -1086,6 +1113,55 @@ mod tests {
 
         let expected = "Projection: test.b [b:UInt32]\
         \n  LeftAnti Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n    SubqueryAlias: __correlated_sq_1 [c:UInt32]\
+        \n      Projection: sq.c [c:UInt32]\
+        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelatePredicateSubquery::new()),
+            plan,
+            expected,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wrapped_not_in_subquery() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(not(in_subquery(col("c"), test_subquery_with_name("sq")?)))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: test.b [b:UInt32]\
+        \n  LeftAnti Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n    SubqueryAlias: __correlated_sq_1 [c:UInt32]\
+        \n      Projection: sq.c [c:UInt32]\
+        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelatePredicateSubquery::new()),
+            plan,
+            expected,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wrapped_not_not_in_subquery() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(not(not_in_subquery(
+                col("c"),
+                test_subquery_with_name("sq")?,
+            )))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: test.b [b:UInt32]\
+        \n  LeftSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n    SubqueryAlias: __correlated_sq_1 [c:UInt32]\
         \n      Projection: sq.c [c:UInt32]\

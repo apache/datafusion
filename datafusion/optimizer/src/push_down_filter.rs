@@ -32,10 +32,12 @@ use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
 };
-use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
+use datafusion_expr::utils::{
+    conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
+};
 use datafusion_expr::{
     and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    TableProviderFilterPushDown,
+    Projection, TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -691,60 +693,71 @@ impl OptimizerRule for PushDownFilter {
                 insert_below(LogicalPlan::SubqueryAlias(subquery_alias), new_filter)
             }
             LogicalPlan::Projection(projection) => {
-                // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
-                // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
-                // collect projection.
-                let (volatile_map, non_volatile_map): (HashMap<_, _>, HashMap<_, _>) =
-                    projection
-                        .schema
-                        .iter()
-                        .zip(projection.expr.iter())
-                        .map(|((qualifier, field), expr)| {
-                            // strip alias, as they should not be part of filters
-                            let expr = expr.clone().unalias();
+                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let (new_projection, keep_predicate) =
+                    rewrite_projection(predicates, projection)?;
+                if new_projection.transformed {
+                    match keep_predicate {
+                        None => Ok(new_projection),
+                        Some(keep_predicate) => new_projection.map_data(|child_plan| {
+                            Filter::try_new(keep_predicate, Arc::new(child_plan))
+                                .map(LogicalPlan::Filter)
+                        }),
+                    }
+                } else {
+                    filter.input = Arc::new(new_projection.data);
+                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                }
+            }
+            LogicalPlan::Unnest(mut unnest) => {
+                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let mut non_unnest_predicates = vec![];
+                let mut unnest_predicates = vec![];
+                for predicate in predicates {
+                    // collect all the Expr::Column in predicate recursively
+                    let mut accum: HashSet<Column> = HashSet::new();
+                    expr_to_columns(&predicate, &mut accum)?;
 
-                            (qualified_name(qualifier, field.name()), expr)
-                        })
-                        .partition(|(_, value)| value.is_volatile().unwrap_or(true));
-
-                let mut push_predicates = vec![];
-                let mut keep_predicates = vec![];
-                for expr in split_conjunction_owned(filter.predicate.clone()) {
-                    if contain(&expr, &volatile_map) {
-                        keep_predicates.push(expr);
+                    if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                        unnest_predicates.push(predicate);
                     } else {
-                        push_predicates.push(expr);
+                        non_unnest_predicates.push(predicate);
                     }
                 }
 
-                match conjunction(push_predicates) {
-                    Some(expr) => {
-                        // re-write all filters based on this projection
-                        // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
-                        let new_filter = LogicalPlan::Filter(Filter::try_new(
-                            replace_cols_by_name(expr, &non_volatile_map)?,
-                            Arc::clone(&projection.input),
-                        )?);
+                // Unnest predicates should not be pushed down.
+                // If no non-unnest predicates exist, early return
+                if non_unnest_predicates.is_empty() {
+                    filter.input = Arc::new(LogicalPlan::Unnest(unnest));
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                }
 
-                        match conjunction(keep_predicates) {
-                            None => insert_below(
-                                LogicalPlan::Projection(projection),
-                                new_filter,
-                            ),
-                            Some(keep_predicate) => insert_below(
-                                LogicalPlan::Projection(projection),
-                                new_filter,
-                            )?
-                            .map_data(|child_plan| {
-                                Filter::try_new(keep_predicate, Arc::new(child_plan))
-                                    .map(LogicalPlan::Filter)
-                            }),
-                        }
-                    }
-                    None => {
-                        filter.input = Arc::new(LogicalPlan::Projection(projection));
-                        Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                    }
+                // Push down non-unnest filter predicate
+                // Unnest
+                //   Unenst Input (Projection)
+                // -> rewritten to
+                // Unnest
+                //   Filter
+                //     Unenst Input (Projection)
+
+                let unnest_input = std::mem::take(&mut unnest.input);
+
+                let filter_with_unnest_input = LogicalPlan::Filter(Filter::try_new(
+                    conjunction(non_unnest_predicates).unwrap(), // Safe to unwrap since non_unnest_predicates is not empty.
+                    unnest_input,
+                )?);
+
+                // Directly assign new filter plan as the new unnest's input.
+                // The new filter plan will go through another rewrite pass since the rule itself
+                // is applied recursively to all the child from top to down
+                let unnest_plan =
+                    insert_below(LogicalPlan::Unnest(unnest), filter_with_unnest_input)?;
+
+                match conjunction(unnest_predicates) {
+                    None => Ok(unnest_plan),
+                    Some(predicate) => Ok(Transformed::yes(LogicalPlan::Filter(
+                        Filter::try_new(predicate, Arc::new(unnest_plan.data))?,
+                    ))),
                 }
             }
             LogicalPlan::Union(ref union) => {
@@ -948,6 +961,80 @@ impl OptimizerRule for PushDownFilter {
                 Ok(Transformed::no(LogicalPlan::Filter(filter)))
             }
         }
+    }
+}
+
+/// Attempts to push `predicate` into a `FilterExec` below `projection
+///
+/// # Returns
+/// (plan, remaining_predicate)
+///
+/// `plan` is a LogicalPlan for `projection` with possibly a new FilterExec below it.
+/// `remaining_predicate` is any part of the predicate that could not be pushed down
+///
+/// # Args
+/// - predicates: Split predicates like `[foo=5, bar=6]`
+/// - projection: The target projection plan to push down the predicates
+///
+/// # Example
+///
+/// Pushing a predicate like `foo=5 AND bar=6` with an input plan like this:
+///
+/// ```text
+/// Projection(foo, c+d as bar)
+/// ```
+///
+/// Might result in returning `remaining_predicate` of `bar=6` and a plan like
+///
+/// ```text
+/// Projection(foo, c+d as bar)
+///  Filter(foo=5)
+///   ...
+/// ```
+fn rewrite_projection(
+    predicates: Vec<Expr>,
+    projection: Projection,
+) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
+    // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
+    // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
+    // collect projection.
+    let (volatile_map, non_volatile_map): (HashMap<_, _>, HashMap<_, _>) = projection
+        .schema
+        .iter()
+        .zip(projection.expr.iter())
+        .map(|((qualifier, field), expr)| {
+            // strip alias, as they should not be part of filters
+            let expr = expr.clone().unalias();
+
+            (qualified_name(qualifier, field.name()), expr)
+        })
+        .partition(|(_, value)| value.is_volatile().unwrap_or(true));
+
+    let mut push_predicates = vec![];
+    let mut keep_predicates = vec![];
+    for expr in predicates {
+        if contain(&expr, &volatile_map) {
+            keep_predicates.push(expr);
+        } else {
+            push_predicates.push(expr);
+        }
+    }
+
+    match conjunction(push_predicates) {
+        Some(expr) => {
+            // re-write all filters based on this projection
+            // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
+            let new_filter = LogicalPlan::Filter(Filter::try_new(
+                replace_cols_by_name(expr, &non_volatile_map)?,
+                Arc::clone(&projection.input),
+            )?);
+
+            Ok((
+                insert_below(LogicalPlan::Projection(projection), new_filter)?,
+                conjunction(keep_predicates),
+            ))
+        }
+        None => Ok((Transformed::no(LogicalPlan::Projection(projection)), None)),
     }
 }
 
