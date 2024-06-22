@@ -96,6 +96,7 @@ pub fn create_aggregate_expr(
         ordering_fields,
         is_distinct,
         input_type: input_exprs_types[0].clone(),
+        input_nullable: input_phy_exprs[0].nullable(&schema)?,
     }))
 }
 
@@ -271,6 +272,7 @@ pub struct AggregateFunctionExpr {
     ordering_fields: Vec<Field>,
     is_distinct: bool,
     input_type: DataType,
+    input_nullable: bool,
 }
 
 impl AggregateFunctionExpr {
@@ -304,6 +306,7 @@ impl AggregateExpr for AggregateFunctionExpr {
         let args = StateFieldsArgs {
             name: &self.name,
             input_type: &self.input_type,
+            input_nullable: self.input_nullable,
             return_type: &self.data_type,
             ordering_fields: &self.ordering_fields,
             is_distinct: self.is_distinct,
@@ -324,6 +327,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
+            input_nullable: self.input_nullable,
             input_exprs: &self.logical_args,
             name: &self.name,
         };
@@ -339,6 +343,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
+            input_nullable: self.input_nullable,
             input_exprs: &self.logical_args,
             name: &self.name,
         };
@@ -409,6 +414,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
+            input_nullable: self.input_nullable,
             input_exprs: &self.logical_args,
             name: &self.name,
         };
@@ -423,6 +429,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
+            input_nullable: self.input_nullable,
             input_exprs: &self.logical_args,
             name: &self.name,
         };
