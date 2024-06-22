@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
-use std::str::FromStr;
 
 use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
@@ -34,6 +33,7 @@ use crate::{
 
 use datafusion::common::instant::Instant;
 use datafusion::common::plan_datafusion_err;
+use datafusion::config::ConfigFileType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
@@ -42,7 +42,6 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
-use datafusion::common::FileType;
 use datafusion::sql::sqlparser;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
@@ -291,6 +290,16 @@ impl AdjustedPrintOptions {
     }
 }
 
+fn config_file_type_from_str(ext: &str) -> Option<ConfigFileType>{
+    match ext.to_lowercase().as_str(){
+        "csv" => Some(ConfigFileType::CSV),
+        "json" => Some(ConfigFileType::JSON),
+        "parquet" => Some(ConfigFileType::PARQUET),
+        _ => None,
+
+    }
+}
+
 async fn create_plan(
     ctx: &mut SessionContext,
     statement: Statement,
@@ -302,7 +311,7 @@ async fn create_plan(
     // will raise Configuration errors.
     if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
         // To support custom formats, treat error as None
-        let format = FileType::from_str(&cmd.file_type).ok();
+        let format = config_file_type_from_str(&cmd.file_type);
         register_object_store_and_config_extensions(
             ctx,
             &cmd.location,
@@ -313,13 +322,13 @@ async fn create_plan(
     }
 
     if let LogicalPlan::Copy(copy_to) = &mut plan {
-        let format: FileType = (&copy_to.format_options).into();
+        let format = config_file_type_from_str(&copy_to.file_type.get_ext());
 
         register_object_store_and_config_extensions(
             ctx,
             &copy_to.output_url,
             &copy_to.options,
-            Some(format),
+            format,
         )
         .await?;
     }
@@ -357,7 +366,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     ctx: &SessionContext,
     location: &String,
     options: &HashMap<String, String>,
-    format: Option<FileType>,
+    format: Option<ConfigFileType>,
 ) -> Result<()> {
     // Parse the location URL to extract the scheme and other components
     let table_path = ListingTableUrl::parse(location)?;
@@ -391,7 +400,6 @@ pub(crate) async fn register_object_store_and_config_extensions(
 mod tests {
     use super::*;
 
-    use datafusion::common::config::FormatOptions;
     use datafusion::common::plan_err;
 
     use url::Url;
@@ -401,7 +409,7 @@ mod tests {
         let plan = ctx.state().create_logical_plan(sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
-            let format = FileType::from_str(&cmd.file_type).ok();
+            let format = config_file_type_from_str(&cmd.file_type);
             register_object_store_and_config_extensions(
                 &ctx,
                 &cmd.location,
@@ -427,12 +435,12 @@ mod tests {
         let plan = ctx.state().create_logical_plan(sql).await?;
 
         if let LogicalPlan::Copy(cmd) = &plan {
-            let format: FileType = (&cmd.format_options).into();
+            let format = config_file_type_from_str(&cmd.file_type.get_ext());
             register_object_store_and_config_extensions(
                 &ctx,
                 &cmd.output_url,
                 &cmd.options,
-                Some(format),
+                format,
             )
             .await?;
         } else {
@@ -482,7 +490,7 @@ mod tests {
                 let mut plan = create_plan(&mut ctx, statement).await?;
                 if let LogicalPlan::Copy(copy_to) = &mut plan {
                     assert_eq!(copy_to.output_url, location);
-                    assert!(matches!(copy_to.format_options, FormatOptions::PARQUET(_)));
+                    assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());
                     ctx.runtime_env()
                         .object_store_registry
                         .get_store(&Url::parse(&copy_to.output_url).unwrap())?;
