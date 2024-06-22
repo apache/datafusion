@@ -73,6 +73,7 @@ async fn main() {
     let bootstrap_servers =
         String::from("localhost:19092,localhost:29092,localhost:39092");
 
+    // Configure Kafka source for IMU data
     let imu_stream = create_kafka_source(
         &r#"{
             "driver_id": "690c119e-63c9-479b-b822-872ee7d89165",
@@ -106,6 +107,7 @@ async fn main() {
         "kafka_rideshare".to_string(),
     );
 
+    // Configure Kafka source for Trip data
     let trip_stream = create_kafka_source(
         &r#"{
             "event_name": "TRIP_START",
@@ -127,16 +129,6 @@ async fn main() {
 
     // Create the context object with a source from kafka
     let ctx = SessionContext::new_with_config(config.into());
-    // let _ = ctx.register_table("imu_data", Arc::new(imu_stream));
-    // let _ = ctx.register_table("trips", Arc::new(trip_stream));
-
-    // let df = ctx.sql("
-    //     SELECT imu_data.driver_id, imu_data.occurred_at_ms, trips.trip_id, trips.event_name
-    //     FROM imu_data
-    //     JOIN trips ON trips.driver_id = imu_data.driver_id
-    // ").await.unwrap();
-
-    // let df = ctx.sql("SELECT * FROM imu_data").await.unwrap();
 
     let imu_stream_plan = LogicalPlanBuilder::scan_with_filters(
         "imu_data",
@@ -172,6 +164,7 @@ async fn main() {
         .streaming_window(
             vec![],
             vec![
+                min(col("trips.occurred_at_ms")),
                 max(col("imu_data.imu_measurement").field("gps").field("speed")),
                 min(col("imu_data.imu_measurement").field("gps").field("altitude")),
                 count(col("imu_data.imu_measurement")).alias("count"),
@@ -186,12 +179,6 @@ async fn main() {
     let writer = PrettyPrinter::new().unwrap();
     let sink = Box::new(writer) as Box<dyn FranzSink>;
     let _ = windowed_df.sink(sink).await;
-
-    // let fname = "/tmp/out.jsonl";
-    // println!("Writing results to file {}", fname);
-    // let writer = FileSink::new(fname).unwrap();
-    // let file_writer = Box::new(writer) as Box<dyn FranzSink>;
-    // let _ = windowed_df.sink(file_writer).await;
 }
 
 fn create_kafka_source(
