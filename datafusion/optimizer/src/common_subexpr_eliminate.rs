@@ -55,14 +55,14 @@ struct Identifier<'n> {
 }
 
 impl<'n> Identifier<'n> {
-    pub fn new(expr: &'n Expr, random_state: &RandomState) -> Self {
+    fn new(expr: &'n Expr, random_state: &RandomState) -> Self {
         let mut hasher = random_state.build_hasher();
         expr.hash_node(&mut hasher);
         let hash = hasher.finish();
         Self { hash, expr }
     }
 
-    pub fn combine(mut self, other: Option<Self>) -> Self {
+    fn combine(mut self, other: Option<Self>) -> Self {
         other.map_or(self, |other_id| {
             self.hash = combine_hashes(self.hash, other_id.hash);
             self
@@ -73,12 +73,6 @@ impl<'n> Identifier<'n> {
 impl Hash for Identifier<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.hash);
-    }
-}
-
-impl From<Identifier<'_>> for String {
-    fn from(id: Identifier<'_>) -> Self {
-        format!("common_{}", id.hash)
     }
 }
 
@@ -1554,6 +1548,10 @@ mod test {
         Ok(())
     }
 
+    fn test_identifier(hash: u64, expr: &Expr) -> Identifier {
+        Identifier { hash, expr }
+    }
+
     #[test]
     fn redundant_project_fields() {
         let table_scan = test_table_scan().unwrap();
@@ -1561,17 +1559,11 @@ mod test {
         let b_plus_a = col("b") + col("a");
         let common_exprs_1 = CommonExprs::from([
             (
-                Identifier {
-                    hash: 0,
-                    expr: &c_plus_a,
-                },
+                test_identifier(0, &c_plus_a),
                 (c_plus_a.clone(), format!("{CSE_PREFIX}_1")),
             ),
             (
-                Identifier {
-                    hash: 1,
-                    expr: &b_plus_a,
-                },
+                test_identifier(1, &b_plus_a),
                 (b_plus_a.clone(), format!("{CSE_PREFIX}_2")),
             ),
         ]);
@@ -1579,17 +1571,11 @@ mod test {
         let b_plus_a_2 = col(format!("{CSE_PREFIX}_2"));
         let common_exprs_2 = CommonExprs::from([
             (
-                Identifier {
-                    hash: 3,
-                    expr: &c_plus_a_2,
-                },
+                test_identifier(3, &c_plus_a_2),
                 (c_plus_a_2.clone(), format!("{CSE_PREFIX}_3")),
             ),
             (
-                Identifier {
-                    hash: 4,
-                    expr: &b_plus_a_2,
-                },
+                test_identifier(4, &b_plus_a_2),
                 (b_plus_a_2.clone(), format!("{CSE_PREFIX}_4")),
             ),
         ]);
@@ -1615,17 +1601,11 @@ mod test {
         let b_plus_a = col("test1.b") + col("test1.a");
         let common_exprs_1 = CommonExprs::from([
             (
-                Identifier {
-                    hash: 0,
-                    expr: &c_plus_a,
-                },
+                test_identifier(0, &c_plus_a),
                 (c_plus_a.clone(), format!("{CSE_PREFIX}_1")),
             ),
             (
-                Identifier {
-                    hash: 1,
-                    expr: &b_plus_a,
-                },
+                test_identifier(1, &b_plus_a),
                 (b_plus_a.clone(), format!("{CSE_PREFIX}_2")),
             ),
         ]);
@@ -1633,17 +1613,11 @@ mod test {
         let b_plus_a_2 = col(format!("{CSE_PREFIX}_2"));
         let common_exprs_2 = CommonExprs::from([
             (
-                Identifier {
-                    hash: 3,
-                    expr: &c_plus_a_2,
-                },
+                test_identifier(3, &c_plus_a_2),
                 (c_plus_a_2.clone(), format!("{CSE_PREFIX}_3")),
             ),
             (
-                Identifier {
-                    hash: 4,
-                    expr: &b_plus_a_2,
-                },
+                test_identifier(4, &b_plus_a_2),
                 (b_plus_a_2.clone(), format!("{CSE_PREFIX}_4")),
             ),
         ]);
