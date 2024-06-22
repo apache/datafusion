@@ -102,7 +102,7 @@ pub trait OptimizerRule {
 
     /// Does this rule support rewriting owned plans (rather than by reference)?
     fn supports_rewrite(&self) -> bool {
-        false
+        true
     }
 
     /// Try to rewrite `plan` to an optimized form, returning `Transformed::yes`
