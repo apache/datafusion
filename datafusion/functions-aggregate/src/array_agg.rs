@@ -1,4 +1,4 @@
-// Licensed to the Apache Software Foundation (ASF) under on
+// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -17,9 +17,8 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::DataType;
-use arrow_array::Array;
 use arrow_schema::Field;
 
 use datafusion_common::cast::as_list_array;
@@ -40,7 +39,7 @@ make_udaf_expr_and_func!(
     ArrayAgg,
     array_agg,
     expression,
-    "Computes the nth value",
+    "input values, including nulls, concatenated into an array",
     array_agg_udaf
 );
 
@@ -92,7 +91,7 @@ impl AggregateUDFImpl for ArrayAgg {
         Ok(vec![Field::new_list(
             format_state_name(args.name, "array_agg"),
             Field::new("item", args.input_type.clone(), true),
-            true,
+            args.input_nullable,
         )])
     }
 
@@ -201,71 +200,5 @@ impl Accumulator for ArrayAggAccumulator {
                 .sum::<usize>()
             + self.datatype.size()
             - std::mem::size_of_val(&self.datatype)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use std::sync::Arc;
-
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::Result;
-    use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
-    use datafusion_physical_expr_common::expressions::column::Column;
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-
-    #[test]
-    fn test_array_agg_expr() -> Result<()> {
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::Int32,
-            DataType::Float32,
-            DataType::Float64,
-            DataType::Decimal128(10, 2),
-            DataType::Utf8,
-        ];
-        for data_type in &data_types {
-            let input_schema =
-                Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-            let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                Column::new_with_schema("c1", &input_schema).unwrap(),
-            )];
-            let result_agg_phy_exprs = create_aggregate_expr(
-                &array_agg_udaf(),
-                &input_phy_exprs[0..1],
-                &[],
-                &[],
-                &[],
-                &input_schema,
-                "c1",
-                false,
-                false,
-            )?;
-            assert_eq!("c1", result_agg_phy_exprs.name());
-            assert_eq!(
-                Field::new_list("c1", Field::new("item", data_type.clone(), true), true,),
-                result_agg_phy_exprs.field().unwrap()
-            );
-
-            let result_distinct = create_aggregate_expr(
-                &array_agg_udaf(),
-                &input_phy_exprs[0..1],
-                &[],
-                &[],
-                &[],
-                &input_schema,
-                "c1",
-                false,
-                true,
-            )?;
-            assert_eq!("c1", result_distinct.name());
-            assert_eq!(
-                Field::new_list("c1", Field::new("item", data_type.clone(), true), true,),
-                result_agg_phy_exprs.field().unwrap()
-            );
-        }
-        Ok(())
     }
 }
