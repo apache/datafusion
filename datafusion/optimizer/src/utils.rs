@@ -17,7 +17,7 @@
 
 //! Utility functions leveraged by the query optimizer rules
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -64,6 +64,16 @@ pub fn optimize_children(
     } else {
         Ok(None)
     }
+}
+
+/// Returns true if all columns in col_refs are in `schema_cols`
+///
+/// Note: can't use `HashSet::intersect` here because they have different types.
+pub(crate) fn has_all_refs(
+    schema_cols: &HashSet<Column>,
+    col_refs: &HashSet<&Column>,
+) -> bool {
+    schema_cols.iter().filter(|c| col_refs.contains(c)).count() == col_refs.len()
 }
 
 pub(crate) fn collect_subquery_cols(
