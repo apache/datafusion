@@ -266,7 +266,7 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     )
                 })?;
                 let expr = match left_type {
-                    DataType::Dictionary(_, Utf8) => expr,
+                    DataType::Dictionary(_, inner) if *inner == DataType::Utf8 => expr,
                     _ => Box::new(expr.cast_to(&coerced_type, self.schema)?),
                 };
                 let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
