@@ -436,7 +436,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                             Transformed::yes(Expr::Literal(ScalarValue::Null))
                         }
                         AggregateFunctionDefinition::UDF(fun) => {
-                            if fun.name() == "COUNT" {
+                            if fun.name() == "count" {
                                 Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(
                                     0,
                                 ))))

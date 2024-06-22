@@ -176,8 +176,8 @@ mod tests {
             .build()?;
 
         let expected = "\
-            Projection: test.a, UInt32(1), COUNT(test.c)\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.c)]]\
+            Projection: test.a, UInt32(1), count(test.c)\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]\
             \n    TableScan: test\
         ";
 
@@ -196,8 +196,8 @@ mod tests {
             .build()?;
 
         let expected = "\
-            Projection: Utf8(\"test\"), UInt32(123), COUNT(test.c)\
-            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(test.c)]]\
+            Projection: Utf8(\"test\"), UInt32(123), count(test.c)\
+            \n  Aggregate: groupBy=[[]], aggr=[[count(test.c)]]\
             \n    TableScan: test\
         ";
 
@@ -216,7 +216,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-            Aggregate: groupBy=[[test.a, test.b]], aggr=[[COUNT(test.c)]]\
+            Aggregate: groupBy=[[test.a, test.b]], aggr=[[count(test.c)]]\
             \n  TableScan: test\
         ";
 
@@ -257,8 +257,8 @@ mod tests {
             .build()?;
 
         let expected = "\
-            Projection: UInt32(123) AS const, test.a, COUNT(test.c)\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.c)]]\
+            Projection: UInt32(123) AS const, test.a, count(test.c)\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]\
             \n    TableScan: test\
         ";
 
@@ -282,8 +282,8 @@ mod tests {
             .build()?;
 
         let expected = "\
-            Projection: scalar_fn_mock(UInt32(123)), test.a, COUNT(test.c)\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.c)]]\
+            Projection: scalar_fn_mock(UInt32(123)), test.a, count(test.c)\
+            \n  Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]\
             \n    TableScan: test\
         ";
 
@@ -307,7 +307,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-            Aggregate: groupBy=[[scalar_fn_mock(UInt32(123)), test.a]], aggr=[[COUNT(test.c)]]\
+            Aggregate: groupBy=[[scalar_fn_mock(UInt32(123)), test.a]], aggr=[[count(test.c)]]\
             \n  TableScan: test\
         ";
 
