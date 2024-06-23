@@ -884,58 +884,6 @@ impl<'a> StatisticsConverter<'a> {
         Ok(Some(builder.finish()))
     }
 
-    /// Returns a [`UInt64Array`] with total byte sizes for each row group
-    ///
-    /// # Return Value
-    ///
-    /// The returned array has no nulls, and has one value for each row group.
-    /// Each value is the total byte size of the row group.
-    ///
-    /// # Example
-    /// ```no_run
-    /// # use arrow::datatypes::Schema;
-    /// # use arrow_array::ArrayRef;
-    /// # use parquet::file::metadata::ParquetMetaData;
-    /// # use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
-    /// # fn get_parquet_metadata() -> ParquetMetaData { unimplemented!() }
-    /// # fn get_arrow_schema() -> Schema { unimplemented!() }
-    /// // Given the metadata for a parquet file and the arrow schema
-    /// let metadata: ParquetMetaData = get_parquet_metadata();
-    /// let arrow_schema: Schema = get_arrow_schema();
-    /// let parquet_schema = metadata.file_metadata().schema_descr();
-    /// // create a converter
-    /// let converter = StatisticsConverter::try_new("foo", &arrow_schema, parquet_schema)
-    ///   .unwrap();
-    /// // get the row counts for each row group
-    /// let row_counts = converter.row_group_row_total_bytes(metadata
-    ///   .row_groups()
-    ///   .iter()
-    /// );
-    /// ```
-    pub fn row_group_row_total_bytes<I>(
-        &self,
-        metadatas: I,
-    ) -> Result<Option<UInt64Array>>
-    where
-        I: IntoIterator<Item = &'a RowGroupMetaData>,
-    {
-        let Some(_) = self.parquet_index else {
-            return Ok(None);
-        };
-
-        let mut builder = UInt64Array::builder(10);
-        for metadata in metadatas.into_iter() {
-            let row_count = metadata.total_byte_size();
-            let row_count: u64 = row_count.try_into().map_err(|e| {
-                internal_datafusion_err!(
-                    "Parquet row count {row_count} too large to convert to u64: {e}"
-                )
-            })?;
-            builder.append_value(row_count);
-        }
-        Ok(Some(builder.finish()))
-    }
-
     /// Create a new `StatisticsConverter` to extract statistics for a column
     ///
     /// Note if there is no corresponding column in the parquet file, the returned
