@@ -84,6 +84,7 @@ fn parse_decimals() {
             ParserOptions {
                 parse_float_as_decimal: true,
                 enable_ident_normalization: false,
+                error_on_varchar_with_length: false,
             },
         );
     }
@@ -137,6 +138,7 @@ fn parse_ident_normalization() {
             ParserOptions {
                 parse_float_as_decimal: false,
                 enable_ident_normalization,
+                error_on_varchar_with_length: false,
             },
         );
         if plan.is_ok() {
