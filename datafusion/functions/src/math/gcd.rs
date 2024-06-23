@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int64Array};
+use arrow::error::ArrowError;
 use std::any::Any;
 use std::mem::swap;
 use std::sync::Arc;
@@ -24,7 +25,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -73,26 +74,31 @@ impl ScalarUDFImpl for GcdFunc {
 /// Gcd SQL function
 fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        Int64 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
-            &args[1],
-            "x",
-            "y",
-            Int64Array,
-            Int64Array,
-            { compute_gcd }
-        )) as ArrayRef),
+        Int64 => {
+            let arg1 = downcast_arg!(&args[0], "x", Int64Array);
+            let arg2 = downcast_arg!(&args[1], "y", Int64Array);
+
+            Ok(arg1
+                .iter()
+                .zip(arg2.iter())
+                .map(|(a1, a2)| match (a1, a2) {
+                    (Some(a1), Some(a2)) => Ok(Some(compute_gcd(a1, a2)?)),
+                    _ => Ok(None),
+                })
+                .collect::<Result<Int64Array>>()
+                .map(Arc::new)? as ArrayRef)
+        }
         other => exec_err!("Unsupported data type {other:?} for function gcd"),
     }
 }
 
 /// Computes greatest common divisor using Binary GCD algorithm.
-pub fn compute_gcd(x: i64, y: i64) -> i64 {
+pub fn compute_gcd(x: i64, y: i64) -> Result<i64> {
     if x == 0 {
-        return y;
+        return Ok(y);
     }
     if y == 0 {
-        return x;
+        return Ok(x);
     }
 
     let mut a = x.unsigned_abs();
@@ -113,7 +119,11 @@ pub fn compute_gcd(x: i64, y: i64) -> i64 {
 
         if b == 0 {
             // because the input values are i64, casting this back to i64 is safe
-            return (a << shift) as i64;
+            return (a << shift).try_into().map_err(|_| {
+                arrow_datafusion_err!(ArrowError::ComputeError(format!(
+                    "Signed integer overflow in GCD({x}, {y})"
+                )))
+            });
         }
     }
 }
@@ -122,10 +132,13 @@ pub fn compute_gcd(x: i64, y: i64) -> i64 {
 mod test {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int64Array};
+    use arrow::{
+        array::{ArrayRef, Int64Array},
+        error::ArrowError,
+    };
 
     use crate::math::gcd::gcd;
-    use datafusion_common::cast::as_int64_array;
+    use datafusion_common::{cast::as_int64_array, DataFusionError};
 
     #[test]
     fn test_gcd_i64() {
@@ -142,5 +155,22 @@ mod test {
         assert_eq!(ints.value(1), 1);
         assert_eq!(ints.value(2), 5);
         assert_eq!(ints.value(3), 8);
+    }
+
+    #[test]
+    fn overflow_on_both_param_i64_min() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![i64::MIN])), // x
+            Arc::new(Int64Array::from(vec![i64::MIN])), // y
+        ];
+
+        match gcd(&args) {
+            // we expect a overflow
+            Err(DataFusionError::ArrowError(ArrowError::ComputeError(_), _)) => {}
+            Err(_) => {
+                panic!("failed to initialize function gcd")
+            }
+            Ok(_) => panic!("GCD({0}, {0}) should have overflown", i64::MIN),
+        };
     }
 }
