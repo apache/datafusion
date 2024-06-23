@@ -45,10 +45,12 @@ const CSE_PREFIX: &str = "__common_expr";
 
 /// Identifier that represents a subexpression tree.
 ///
-/// An identifier should (ideally) be able to "hash", "accumulate", "equal" and "have no
-/// collision (as low as possible)"
+/// This identifier is designed to be efficient and  "hash", "accumulate", "equal" and
+/// "have no collision (as low as possible)"
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Identifier<'n> {
+    // Hash of `expr` built up incrementally during the first, visiting traversal, but its
+    // value is not necessarily equal to `expr.hash()`.
     hash: u64,
     expr: &'n Expr,
 }
@@ -177,7 +179,7 @@ impl CommonSubexprEliminate {
             .map(|id_arrays| (found_common, id_arrays))
     }
 
-    /// Go through an expression tree and generate identifier for every node in this tree.
+    /// Add an identifier to `id_array` for every subexpression in this tree.
     fn expr_to_identifier<'n>(
         &self,
         expr: &'n Expr,
@@ -392,6 +394,8 @@ impl CommonSubexprEliminate {
             assert_eq!(window_exprs.len(), arrays_per_window.len());
             let num_window_exprs = window_exprs.len();
             let rewritten_window_exprs = self.rewrite_expr(
+                // Must clone as Identifiers use references to original expressions so we
+                // have to keep the original expressions intact.
                 window_exprs.clone(),
                 arrays_per_window,
                 plan,
@@ -479,6 +483,8 @@ impl CommonSubexprEliminate {
             if group_found_common || aggr_found_common {
                 // rewrite both group exprs and aggr_expr
                 let rewritten = self.rewrite_expr(
+                    // Must clone as Identifiers use references to original expressions so
+                    // we have to keep the original expressions intact.
                     vec![group_expr.clone(), aggr_expr.clone()],
                     vec![group_arrays, aggr_arrays],
                     unwrap_arc(input),
@@ -508,6 +514,8 @@ impl CommonSubexprEliminate {
         if aggr_found_common {
             let mut common_exprs = CommonExprs::new();
             let mut rewritten_exprs = self.rewrite_exprs_list(
+                // Must clone as Identifiers use references to original expressions so we
+                // have to keep the original expressions intact.
                 vec![new_aggr_expr.clone()],
                 vec![aggr_arrays],
                 &expr_stats,
@@ -611,6 +619,8 @@ impl CommonSubexprEliminate {
 
         if found_common {
             let rewritten = self.rewrite_expr(
+                // Must clone as Identifiers use references to original expressions so we
+                // have to keep the original expressions intact.
                 vec![expr.clone()],
                 vec![id_arrays],
                 input,

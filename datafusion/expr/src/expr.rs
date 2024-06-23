@@ -1463,11 +1463,15 @@ impl Expr {
         }
     }
 
-    /// This method hashes the direct content of an expression node without recursing into
-    /// its children. This is useful because in `CommonSubexprEliminate` we can build up
-    /// the deep hash of a node and its descendants during the bottom-up phase of the
-    /// first traversal and so avoid computing the hash of the node and then the hash of
-    /// its descendants separately.
+    /// Hashes the direct content of an `Expr` without recursing into its children.
+    ///
+    /// This method is useful to incrementally compute hashes, such as  in
+    /// `CommonSubexprEliminate` which builds a deep hash of a node and its descendants
+    /// during the bottom-up phase of the first traversal and so avoid computing the hash
+    /// of the node and then the hash of its descendants separately.
+    ///
+    /// If a node doesn't have any children then this method is similar to `.hash()`, but
+    /// not necessarily returns the same value.
     ///
     /// As it is pretty easy to forget changing this method when `Expr` changes the
     /// implementation doesn't use wildcard patterns (`..`, `_`) to catch changes
@@ -1611,17 +1615,13 @@ impl Expr {
             Expr::Wildcard { qualifier } => {
                 qualifier.hash(hasher);
             }
-            Expr::GroupingSet(grouping_set) => match grouping_set {
-                GroupingSet::Rollup(_exprs) => {
-                    hasher.write_u8(0);
+            Expr::GroupingSet(grouping_set) => {
+                mem::discriminant(grouping_set).hash(hasher);
+                match grouping_set {
+                    GroupingSet::Rollup(_exprs) | GroupingSet::Cube(_exprs) => {}
+                    GroupingSet::GroupingSets(_exprs) => {}
                 }
-                GroupingSet::Cube(_exprs) => {
-                    hasher.write_u8(1);
-                }
-                GroupingSet::GroupingSets(_exprs) => {
-                    hasher.write_u8(2);
-                }
-            },
+            }
             Expr::Placeholder(place_holder) => {
                 place_holder.hash(hasher);
             }
