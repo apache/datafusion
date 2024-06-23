@@ -32,8 +32,10 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_physical_expr::expressions::{col, Sum};
-use datafusion_physical_expr::{AggregateExpr, PhysicalSortExpr};
+use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_plan::udaf::create_aggregate_expr;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
@@ -101,11 +103,18 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             .with_sort_information(vec![sort_keys]),
     );
 
-    let aggregate_expr = vec![Arc::new(Sum::new(
-        col("d", &schema).unwrap(),
+    let aggregate_expr = vec![create_aggregate_expr(
+        &sum_udaf(),
+        &[col("d", &schema).unwrap()],
+        &[],
+        &[],
+        &[],
+        &schema,
         "sum1",
-        DataType::Int64,
-    )) as Arc<dyn AggregateExpr>];
+        false,
+        false,
+    )
+    .unwrap()];
     let expr = group_by_columns
         .iter()
         .map(|elem| (col(elem, &schema).unwrap(), elem.to_string()))

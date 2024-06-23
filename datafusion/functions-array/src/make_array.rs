@@ -80,11 +80,7 @@ impl ScalarUDFImpl for MakeArray {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types.len() {
-            0 => Ok(DataType::List(Arc::new(Field::new(
-                "item",
-                DataType::Null,
-                true,
-            )))),
+            0 => Ok(empty_array_type()),
             _ => {
                 let mut expr_type = DataType::Null;
                 for arg_type in arg_types {
@@ -92,6 +88,10 @@ impl ScalarUDFImpl for MakeArray {
                         expr_type = arg_type.clone();
                         break;
                     }
+                }
+
+                if expr_type.is_null() {
+                    expr_type = DataType::Int64;
                 }
 
                 Ok(List(Arc::new(Field::new("item", expr_type, true))))
@@ -131,6 +131,11 @@ impl ScalarUDFImpl for MakeArray {
     }
 }
 
+// Empty array is a special case that is useful for many other array functions
+pub(super) fn empty_array_type() -> DataType {
+    DataType::List(Arc::new(Field::new("item", DataType::Int64, true)))
+}
+
 /// `make_array_inner` is the implementation of the `make_array` function.
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
@@ -147,7 +152,9 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     match data_type {
         // Either an empty array or all nulls:
         Null => {
-            let array = new_null_array(&Null, arrays.iter().map(|a| a.len()).sum());
+            let length = arrays.iter().map(|a| a.len()).sum();
+            // By default Int64
+            let array = new_null_array(&DataType::Int64, length);
             Ok(Arc::new(array_into_list_array(array)))
         }
         LargeList(..) => array_array::<i64>(arrays, data_type),

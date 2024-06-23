@@ -73,7 +73,6 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-physical-expr = { workspace = true, default-features = true }
 hashbrown = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
@@ -87,6 +86,7 @@ uuid = { version = "1.7", features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
+arrow-buffer = { workspace = true }
 criterion = "0.5"
 rand = { workspace = true }
 rstest = { workspace = true }

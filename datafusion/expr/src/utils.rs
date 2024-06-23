@@ -46,6 +46,7 @@ pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::Int64(Some(1));
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression
+#[deprecated(since = "40.0.0", note = "Expr::add_column_refs instead")]
 pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result<()> {
     for e in expr {
         expr_to_columns(e, accum)?;
@@ -818,7 +819,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
                 }
             }
             Expr::Literal(_) => {
-                indexes.push(std::usize::MAX);
+                indexes.push(usize::MAX);
             }
             _ => {}
         }
@@ -1252,8 +1253,9 @@ impl AggregateOrderSensitivity {
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup, AggregateFunction,
-        Cast, WindowFrame, WindowFunctionDefinition,
+        col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup,
+        test::function_stub::sum_udaf, AggregateFunction, Cast, WindowFrame,
+        WindowFunctionDefinition,
     };
 
     #[test]
@@ -1291,7 +1293,7 @@ mod tests {
             None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
             vec![],
             vec![],
@@ -1338,7 +1340,7 @@ mod tests {
             None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
             vec![],
             vec![name_desc.clone(), age_asc.clone(), created_at_desc.clone()],
@@ -1381,7 +1383,7 @@ mod tests {
                 None,
             )),
             Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
+                WindowFunctionDefinition::AggregateUDF(sum_udaf()),
                 vec![col("age")],
                 vec![],
                 vec![

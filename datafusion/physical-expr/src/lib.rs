@@ -17,7 +17,9 @@
 
 pub mod aggregate;
 pub mod analysis;
-pub mod binary_map;
+pub mod binary_map {
+    pub use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
+}
 pub mod equivalence;
 pub mod expressions;
 pub mod functions;
@@ -41,7 +43,9 @@ pub mod execution_props {
 
 pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
-pub use datafusion_physical_expr_common::aggregate::AggregateExpr;
+pub use datafusion_physical_expr_common::aggregate::{
+    AggregateExpr, AggregatePhysicalExpressions,
+};
 pub use equivalence::EquivalenceProperties;
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{

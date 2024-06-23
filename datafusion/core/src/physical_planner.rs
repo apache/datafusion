@@ -1766,7 +1766,8 @@ pub fn create_window_expr_with_name(
             window_frame,
             null_treatment,
         }) => {
-            let args = create_physical_exprs(args, logical_schema, execution_props)?;
+            let physical_args =
+                create_physical_exprs(args, logical_schema, execution_props)?;
             let partition_by =
                 create_physical_exprs(partition_by, logical_schema, execution_props)?;
             let order_by =
@@ -1780,13 +1781,13 @@ pub fn create_window_expr_with_name(
             }
 
             let window_frame = Arc::new(window_frame.clone());
-            let ignore_nulls = null_treatment
-                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+            let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
             windows::create_window_expr(
                 fun,
                 name,
-                &args,
+                &physical_args,
+                args,
                 &partition_by,
                 &order_by,
                 window_frame,
@@ -1837,7 +1838,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             order_by,
             null_treatment,
         }) => {
-            let args =
+            let physical_args =
                 create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {
                 Some(e) => Some(create_physical_expr(
@@ -1867,7 +1868,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     let agg_expr = aggregates::create_aggregate_expr(
                         fun,
                         *distinct,
-                        &args,
+                        &physical_args,
                         &ordering_reqs,
                         physical_input_schema,
                         name,
@@ -1889,7 +1890,8 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         physical_sort_exprs.clone().unwrap_or(vec![]);
                     let agg_expr = udaf::create_aggregate_expr(
                         fun,
-                        &args,
+                        &physical_args,
+                        args,
                         &sort_exprs,
                         &ordering_reqs,
                         physical_input_schema,
@@ -1916,6 +1918,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
+        Expr::AggregateFunction(_) => (e.display_name().unwrap_or(physical_name(e)?), e),
         _ => (physical_name(e)?, e),
     };
 
@@ -2181,7 +2184,6 @@ impl DefaultPhysicalPlanner {
         expr: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input_schema = input.as_ref().schema();
-
         let physical_exprs = expr
             .iter()
             .map(|e| {
@@ -2257,9 +2259,8 @@ mod tests {
     use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
-    use datafusion_expr::{
-        col, lit, sum, LogicalPlanBuilder, UserDefinedLogicalNodeCore,
-    };
+    use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
+    use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
 
     fn make_session_state() -> SessionState {
@@ -2587,7 +2588,7 @@ mod tests {
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
-            "SUM(aggregate_test_100.c2)",
+            "sum(aggregate_test_100.c2)",
             final_hash_agg.schema().field(1).name()
         );
         // we need access to the input to the partial aggregate so that other projects can
@@ -2615,7 +2616,7 @@ mod tests {
             .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
-            "SUM(aggregate_test_100.c3)",
+            "sum(aggregate_test_100.c3)",
             final_hash_agg.schema().field(2).name()
         );
         // we need access to the input to the partial aggregate so that other projects can

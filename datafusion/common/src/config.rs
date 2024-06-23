@@ -1393,6 +1393,13 @@ pub struct TableParquetOptions {
     pub key_value_metadata: HashMap<String, Option<String>>,
 }
 
+impl TableParquetOptions {
+    /// Return new default TableParquetOptions
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 impl ConfigField for TableParquetOptions {
     fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, description: &'static str) {
         self.global.visit(v, key_prefix, description);
@@ -1559,6 +1566,7 @@ config_namespace! {
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
+        pub double_quote: Option<bool>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
         pub schema_infer_max_rec: usize, default = 100
         pub date_format: Option<String>, default = None
@@ -1567,6 +1575,7 @@ config_namespace! {
         pub timestamp_tz_format: Option<String>, default = None
         pub time_format: Option<String>, default = None
         pub null_value: Option<String>, default = None
+        pub comment: Option<u8>, default = None
     }
 }
 
@@ -1623,6 +1632,13 @@ impl CsvOptions {
         self
     }
 
+    /// Set true to indicate that the CSV quotes should be doubled.
+    /// - default to true
+    pub fn with_double_quote(mut self, double_quote: bool) -> Self {
+        self.double_quote = Some(double_quote);
+        self
+    }
+
     /// Set a `CompressionTypeVariant` of CSV
     /// - defaults to `CompressionTypeVariant::UNCOMPRESSED`
     pub fn with_file_compression_type(
@@ -1667,6 +1683,7 @@ pub enum FormatOptions {
     AVRO,
     ARROW,
 }
+
 impl Display for FormatOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let out = match self {

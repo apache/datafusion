@@ -15,10 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod count_distinct;
 pub mod groups_accumulator;
 pub mod stats;
+pub mod tdigest;
 pub mod utils;
 
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::{not_impl_err, Result};
+use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::type_coercion::aggregates::check_arg_count;
+use datafusion_expr::ReversedUDAF;
+use datafusion_expr::{
+    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
+};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
@@ -27,14 +37,8 @@ use crate::physical_expr::PhysicalExpr;
 use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
 use crate::utils::reverse_order_bys;
 
-use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{exec_err, not_impl_err, Result};
-use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::type_coercion::aggregates::check_arg_count;
+use datafusion_common::exec_err;
 use datafusion_expr::utils::AggregateOrderSensitivity;
-use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
-};
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
@@ -42,6 +46,7 @@ use datafusion_expr::{
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    input_exprs: &[Expr],
     sort_exprs: &[Expr],
     ordering_req: &[PhysicalSortExpr],
     schema: &Schema,
@@ -50,6 +55,7 @@ pub fn create_aggregate_expr(
     is_distinct: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
     debug_assert_eq!(sort_exprs.len(), ordering_req.len());
+
     let input_exprs_types = input_phy_exprs
         .iter()
         .map(|arg| arg.data_type(schema))
@@ -71,6 +77,7 @@ pub fn create_aggregate_expr(
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
         args: input_phy_exprs.to_vec(),
+        logical_args: input_exprs.to_vec(),
         data_type: fun.return_type(&input_exprs_types)?,
         name: name.into(),
         schema: schema.clone(),
@@ -185,13 +192,48 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         not_impl_err!("Retractable Accumulator hasn't been implemented for {self:?} yet")
     }
+
+    /// Returns all expressions used in the [`AggregateExpr`].
+    /// These expressions are  (1)function arguments, (2) order by expressions.
+    fn all_expressions(&self) -> AggregatePhysicalExpressions {
+        let args = self.expressions();
+        let order_bys = self.order_bys().unwrap_or(&[]);
+        let order_by_exprs = order_bys
+            .iter()
+            .map(|sort_expr| sort_expr.expr.clone())
+            .collect::<Vec<_>>();
+        AggregatePhysicalExpressions {
+            args,
+            order_by_exprs,
+        }
+    }
+
+    /// Rewrites [`AggregateExpr`], with new expressions given. The argument should be consistent
+    /// with the return value of the [`AggregateExpr::all_expressions`] method.
+    /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
+    fn with_new_expressions(
+        &self,
+        _args: Vec<Arc<dyn PhysicalExpr>>,
+        _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Option<Arc<dyn AggregateExpr>> {
+        None
+    }
+}
+
+/// Stores the physical expressions used inside the `AggregateExpr`.
+pub struct AggregatePhysicalExpressions {
+    /// Aggregate function arguments
+    pub args: Vec<Arc<dyn PhysicalExpr>>,
+    /// Order by expressions
+    pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
 /// Physical aggregate expression of a UDAF.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
+    logical_args: Vec<Expr>,
     /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
@@ -200,7 +242,9 @@ pub struct AggregateFunctionExpr {
     sort_exprs: Vec<Expr>,
     // The physical order by expressions
     ordering_req: LexOrdering,
+    // Whether to ignore null values
     ignore_nulls: bool,
+    // fields used for order sensitive aggregation functions
     ordering_fields: Vec<Field>,
     is_distinct: bool,
     input_type: DataType,
@@ -252,7 +296,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            args_num: self.args.len(),
+            input_exprs: &self.logical_args,
             name: &self.name,
         };
 
@@ -260,7 +304,18 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let accumulator = self.create_accumulator()?;
+        let args = AccumulatorArgs {
+            data_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            sort_exprs: &self.sort_exprs,
+            is_distinct: self.is_distinct,
+            input_type: &self.input_type,
+            input_exprs: &self.logical_args,
+            name: &self.name,
+        };
+
+        let accumulator = self.fun.create_sliding_accumulator(args)?;
 
         // Accumulators that have window frame startings different
         // than `UNBOUNDED PRECEDING`, such as `1 PRECEEDING`, need to
@@ -326,18 +381,36 @@ impl AggregateExpr for AggregateFunctionExpr {
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
-            args_num: self.args.len(),
+            input_exprs: &self.logical_args,
             name: &self.name,
         };
         self.fun.groups_accumulator_supported(args)
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        self.fun.create_groups_accumulator()
+        let args = AccumulatorArgs {
+            data_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            sort_exprs: &self.sort_exprs,
+            is_distinct: self.is_distinct,
+            input_type: &self.input_type,
+            input_exprs: &self.logical_args,
+            name: &self.name,
+        };
+        self.fun.create_groups_accumulator(args)
     }
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+        if self.ordering_req.is_empty() {
+            return None;
+        }
+
+        if !self.order_sensitivity().is_insensitive() {
+            return Some(&self.ordering_req);
+        }
+
+        None
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
@@ -364,6 +437,7 @@ impl AggregateExpr for AggregateFunctionExpr {
         create_aggregate_expr(
             &updated_fn,
             &self.args,
+            &self.logical_args,
             &self.sort_exprs,
             &self.ordering_req,
             &self.schema,
@@ -375,37 +449,42 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        if let Some(reverse_udf) = self.fun.reverse_udf() {
-            let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
-            let reverse_sort_exprs = self
-                .sort_exprs
-                .iter()
-                .map(|e| {
-                    if let Expr::Sort(s) = e {
-                        Expr::Sort(s.reverse())
-                    } else {
-                        // Expects to receive `Expr::Sort`.
-                        unreachable!()
-                    }
-                })
-                .collect::<Vec<_>>();
-            let mut name = self.name().to_string();
-            replace_order_by_clause(&mut name);
-            replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
-            let reverse_aggr = create_aggregate_expr(
-                &reverse_udf,
-                &self.args,
-                &reverse_sort_exprs,
-                &reverse_ordering_req,
-                &self.schema,
-                name,
-                self.ignore_nulls,
-                self.is_distinct,
-            )
-            .unwrap();
-            return Some(reverse_aggr);
+        match self.fun.reverse_udf() {
+            ReversedUDAF::NotSupported => None,
+            ReversedUDAF::Identical => Some(Arc::new(self.clone())),
+            ReversedUDAF::Reversed(reverse_udf) => {
+                let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
+                let reverse_sort_exprs = self
+                    .sort_exprs
+                    .iter()
+                    .map(|e| {
+                        if let Expr::Sort(s) = e {
+                            Expr::Sort(s.reverse())
+                        } else {
+                            // Expects to receive `Expr::Sort`.
+                            unreachable!()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mut name = self.name().to_string();
+                replace_order_by_clause(&mut name);
+                replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
+                let reverse_aggr = create_aggregate_expr(
+                    &reverse_udf,
+                    &self.args,
+                    &self.logical_args,
+                    &reverse_sort_exprs,
+                    &reverse_ordering_req,
+                    &self.schema,
+                    name,
+                    self.ignore_nulls,
+                    self.is_distinct,
+                )
+                .unwrap();
+
+                Some(reverse_aggr)
+            }
         }
-        None
     }
 }
 

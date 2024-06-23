@@ -23,6 +23,14 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy)]
+pub enum Hint {
+    /// Indicates the argument needs to be padded if it is scalar
+    Pad,
+    /// Indicates the argument can be converted to an array of length 1
+    AcceptsSingular,
+}
+
 /// Scalar function
 ///
 /// The Fn param is the wrapped function but be aware that the function will
@@ -70,6 +78,9 @@ pub struct AccumulatorArgs<'a> {
     /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
     pub sort_exprs: &'a [Expr],
 
+    /// The name of the aggregate expression
+    pub name: &'a str,
+
     /// Whether the aggregate function is distinct.
     ///
     /// ```sql
@@ -80,11 +91,8 @@ pub struct AccumulatorArgs<'a> {
     /// The input type of the aggregate function.
     pub input_type: &'a DataType,
 
-    /// The number of arguments the aggregate function takes.
-    pub args_num: usize,
-
-    /// The name of the expression
-    pub name: &'a str,
+    /// The logical expression of arguments the aggregate function takes.
+    pub input_exprs: &'a [Expr],
 }
 
 /// [`StateFieldsArgs`] contains information about the fields that an
@@ -131,6 +139,19 @@ pub type StateTypeFunction =
 pub type AggregateFunctionSimplification = Box<
     dyn Fn(
         crate::expr::AggregateFunction,
+        &dyn crate::simplify::SimplifyInfo,
+    ) -> Result<Expr>,
+>;
+
+/// [crate::udwf::WindowUDFImpl::simplify] simplifier closure
+/// A closure with two arguments:
+/// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
+/// * 'info': [crate::simplify::SimplifyInfo]
+///
+/// closure returns simplified [Expr] or an error.
+pub type WindowFunctionSimplification = Box<
+    dyn Fn(
+        crate::expr::WindowFunction,
         &dyn crate::simplify::SimplifyInfo,
     ) -> Result<Expr>,
 >;

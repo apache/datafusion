@@ -244,8 +244,7 @@ impl ScalarUDF {
     /// # Example
     ///
     /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
-    /// input `a` is given as `[-7, -6]`, then propagation would would return
-    /// `[-5, 5]`.
+    /// input `a` is given as `[-7, 3]`, then propagation would return `[-5, 3]`.
     pub fn propagate_constraints(
         &self,
         interval: &Interval,
@@ -445,8 +444,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// optimizations manually for specific UDFs.
     ///
     /// # Arguments
-    /// * 'args': The arguments of the function
-    /// * 'schema': The schema of the function
+    /// * `args`: The arguments of the function
+    /// * `info`: The necessary information for simplification
     ///
     /// # Returns
     /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE
@@ -504,8 +503,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// # Example
     ///
     /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
-    /// input `a` is given as `[-7, -6]`, then propagation would would return
-    /// `[-5, 5]`.
+    /// input `a` is given as `[-7, 3]`, then propagation would return `[-5, 3]`.
     fn propagate_constraints(
         &self,
         _interval: &Interval,

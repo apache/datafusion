@@ -18,7 +18,6 @@
 //! This file has test utils for hash joins
 
 use std::sync::Arc;
-use std::usize;
 
 use crate::joins::utils::{JoinFilter, JoinOn};
 use crate::joins::{
@@ -33,6 +32,7 @@ use arrow_array::{
     ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
     TimestampMillisecondArray,
 };
+use arrow_buffer::IntervalDayTime;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;
@@ -462,8 +462,11 @@ pub fn build_sides_record_batches(
     ));
     let interval_time: ArrayRef = Arc::new(IntervalDayTimeArray::from(
         initial_range
-            .map(|x| x as i64 * 100) // x * 100ms
-            .collect::<Vec<i64>>(),
+            .map(|x| IntervalDayTime {
+                days: 0,
+                milliseconds: x * 100,
+            }) // x * 100ms
+            .collect::<Vec<_>>(),
     ));
 
     let float_asc = Arc::new(Float64Array::from_iter_values(

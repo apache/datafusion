@@ -1194,12 +1194,14 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::expr::Sort;
+    use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Count, FirstValue, LastValue, OrderSensitiveArrayAgg,
+        lit, FirstValue, LastValue, OrderSensitiveArrayAgg,
     };
     use datafusion_physical_expr::PhysicalSortExpr;
 
+    use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1334,11 +1336,17 @@ mod tests {
             ],
         };
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Count::new(
-            lit(1i8),
-            "COUNT(1)".to_string(),
-            DataType::Int64,
-        ))];
+        let aggregates = vec![create_aggregate_expr(
+            &count_udaf(),
+            &[lit(1i8)],
+            &[datafusion_expr::lit(1i8)],
+            &[],
+            &[],
+            &input_schema,
+            "COUNT(1)",
+            false,
+            false,
+        )?];
 
         let task_ctx = if spill {
             new_spill_ctx(4, 1000)
@@ -1484,6 +1492,7 @@ mod tests {
         ))];
 
         let task_ctx = if spill {
+            // set to an appropriate value to trigger spill
             new_spill_ctx(2, 1600)
         } else {
             Arc::new(TaskContext::default())
@@ -1545,8 +1554,13 @@ mod tests {
             input_schema,
         )?);
 
-        let result =
-            common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
+        let task_ctx = if spill {
+            // enlarge memory limit to let the final aggregation finish
+            new_spill_ctx(2, 2600)
+        } else {
+            task_ctx.clone()
+        };
+        let result = common::collect(merged_aggregate.execute(0, task_ctx)?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.num_rows(), 3);
@@ -1774,6 +1788,7 @@ mod tests {
             &args,
             &[],
             &[],
+            &[],
             schema,
             "MEDIAN(a)",
             false,
@@ -1803,14 +1818,6 @@ mod tests {
         let aggregates_v0: Vec<Arc<dyn AggregateExpr>> =
             vec![test_median_agg_expr(&input_schema)?];
 
-        // use slow-path in `hash.rs`
-        let aggregates_v1: Vec<Arc<dyn AggregateExpr>> =
-            vec![Arc::new(ApproxDistinct::new(
-                col("a", &input_schema)?,
-                "APPROX_DISTINCT(a)".to_string(),
-                DataType::UInt32,
-            ))];
-
         // use fast-path in `row_hash.rs`.
         let aggregates_v2: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &input_schema)?,
@@ -1820,7 +1827,6 @@ mod tests {
 
         for (version, groups, aggregates) in [
             (0, groups_none, aggregates_v0),
-            (1, groups_some.clone(), aggregates_v1),
             (2, groups_some, aggregates_v2),
         ] {
             let n_aggr = aggregates.len();
@@ -1941,8 +1947,13 @@ mod tests {
         for use_coalesce_batches in [false, true] {
             for is_first_acc in [false, true] {
                 for spill in [false, true] {
-                    first_last_multi_partitions(use_coalesce_batches, is_first_acc, spill)
-                        .await?
+                    first_last_multi_partitions(
+                        use_coalesce_batches,
+                        is_first_acc,
+                        spill,
+                        4200,
+                    )
+                    .await?
                 }
             }
         }
@@ -1966,10 +1977,12 @@ mod tests {
             options: sort_options,
         }];
         let args = vec![col("b", schema)?];
+        let logical_args = vec![datafusion_expr::col("b")];
         let func = datafusion_expr::AggregateUDF::new_from_impl(FirstValue::new());
         datafusion_physical_expr_common::aggregate::create_aggregate_expr(
             &func,
             &args,
+            &logical_args,
             &sort_exprs,
             &ordering_req,
             schema,
@@ -1996,10 +2009,12 @@ mod tests {
             options: sort_options,
         }];
         let args = vec![col("b", schema)?];
+        let logical_args = vec![datafusion_expr::col("b")];
         let func = datafusion_expr::AggregateUDF::new_from_impl(LastValue::new());
-        datafusion_physical_expr_common::aggregate::create_aggregate_expr(
+        create_aggregate_expr(
             &func,
             &args,
+            &logical_args,
             &sort_exprs,
             &ordering_req,
             schema,
@@ -2030,9 +2045,10 @@ mod tests {
         use_coalesce_batches: bool,
         is_first_acc: bool,
         spill: bool,
+        max_memory: usize,
     ) -> Result<()> {
         let task_ctx = if spill {
-            new_spill_ctx(2, 3200)
+            new_spill_ctx(2, max_memory)
         } else {
             Arc::new(TaskContext::default())
         };

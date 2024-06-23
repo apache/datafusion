@@ -29,27 +29,34 @@ use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Signature, TypeSignature,
-    Volatility,
+    Accumulator, AggregateExt, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
 use datafusion_physical_expr_common::sort_expr::{
     limited_convert_logical_sort_exprs_to_physical, LexOrdering, PhysicalSortExpr,
 };
 
-make_udaf_expr_and_func!(
-    FirstValue,
-    first_value,
-    "Returns the first value in a group of values.",
-    first_value_udaf
-);
+create_func!(FirstValue, first_value_udaf);
+
+/// Returns the first value in a group of values.
+pub fn first_value(expression: Expr, order_by: Option<Vec<Expr>>) -> Expr {
+    if let Some(order_by) = order_by {
+        first_value_udaf()
+            .call(vec![expression])
+            .order_by(order_by)
+            .build()
+            // guaranteed to be `Expr::AggregateFunction`
+            .unwrap()
+    } else {
+        first_value_udaf().call(vec![expression])
+    }
+}
 
 pub struct FirstValue {
     signature: Signature,
-    aliases: Vec<String>,
     requirement_satisfied: bool,
 }
 
@@ -72,12 +79,12 @@ impl Default for FirstValue {
 impl FirstValue {
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("first_value")],
             signature: Signature::one_of(
                 vec![
                     // TODO: we can introduce more strict signature that only numeric of array types are allowed
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
-                    TypeSignature::Uniform(1, NUMERICS.to_vec()),
+                    TypeSignature::Numeric(1),
+                    TypeSignature::Uniform(1, vec![DataType::Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -97,7 +104,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn name(&self) -> &str {
-        "FIRST_VALUE"
+        "first_value"
     }
 
     fn signature(&self) -> &Signature {
@@ -144,7 +151,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn with_beneficial_ordering(
@@ -161,7 +168,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
-        datafusion_expr::ReversedUDAF::Reversed(last_value_udaf().inner())
+        datafusion_expr::ReversedUDAF::Reversed(last_value_udaf())
     }
 }
 
@@ -349,7 +356,6 @@ make_udaf_expr_and_func!(
 
 pub struct LastValue {
     signature: Signature,
-    aliases: Vec<String>,
     requirement_satisfied: bool,
 }
 
@@ -372,12 +378,12 @@ impl Default for LastValue {
 impl LastValue {
     pub fn new() -> Self {
         Self {
-            aliases: vec![String::from("last_value")],
             signature: Signature::one_of(
                 vec![
                     // TODO: we can introduce more strict signature that only numeric of array types are allowed
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
-                    TypeSignature::Uniform(1, NUMERICS.to_vec()),
+                    TypeSignature::Numeric(1),
+                    TypeSignature::Uniform(1, vec![DataType::Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -397,7 +403,7 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn name(&self) -> &str {
-        "LAST_VALUE"
+        "last_value"
     }
 
     fn signature(&self) -> &Signature {
@@ -449,7 +455,7 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn with_beneficial_ordering(
@@ -466,7 +472,7 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
-        datafusion_expr::ReversedUDAF::Reversed(first_value_udaf().inner())
+        datafusion_expr::ReversedUDAF::Reversed(first_value_udaf())
     }
 }
 

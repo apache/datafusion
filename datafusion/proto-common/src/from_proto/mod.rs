@@ -25,8 +25,8 @@ use arrow::array::{ArrayRef, AsArray};
 use arrow::buffer::Buffer;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
-    i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
-    UnionFields, UnionMode,
+    i256, DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    Schema, TimeUnit, UnionFields, UnionMode,
 };
 use arrow::ipc::{reader::read_record_batch, root_as_message};
 
@@ -224,8 +224,10 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::Float32(_) => DataType::Float32,
             arrow_type::ArrowTypeEnum::Float64(_) => DataType::Float64,
             arrow_type::ArrowTypeEnum::Utf8(_) => DataType::Utf8,
+            arrow_type::ArrowTypeEnum::Utf8View(_) => DataType::Utf8View,
             arrow_type::ArrowTypeEnum::LargeUtf8(_) => DataType::LargeUtf8,
             arrow_type::ArrowTypeEnum::Binary(_) => DataType::Binary,
+            arrow_type::ArrowTypeEnum::BinaryView(_) => DataType::BinaryView,
             arrow_type::ArrowTypeEnum::FixedSizeBinary(size) => {
                 DataType::FixedSizeBinary(*size)
             }
@@ -361,6 +363,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
         Ok(match value {
             Value::BoolValue(v) => Self::Boolean(Some(*v)),
             Value::Utf8Value(v) => Self::Utf8(Some(v.to_owned())),
+            Value::Utf8ViewValue(v) => Self::Utf8View(Some(v.to_owned())),
             Value::LargeUtf8Value(v) => Self::LargeUtf8(Some(v.to_owned())),
             Value::Int8Value(v) => Self::Int8(Some(*v as i8)),
             Value::Int16Value(v) => Self::Int16(Some(*v as i16)),
@@ -525,7 +528,6 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 }
             }
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
-            Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
             Value::DurationSecondValue(v) => Self::DurationSecond(Some(*v)),
             Value::DurationMillisecondValue(v) => Self::DurationMillisecond(Some(*v)),
             Value::DurationMicrosecondValue(v) => Self::DurationMicrosecond(Some(*v)),
@@ -572,7 +574,11 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 Self::Dictionary(Box::new(index_type), Box::new(value))
             }
             Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
+            Value::BinaryViewValue(v) => Self::BinaryView(Some(v.clone())),
             Value::LargeBinaryValue(v) => Self::LargeBinary(Some(v.clone())),
+            Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(
+                IntervalDayTimeType::make_value(v.days, v.milliseconds),
+            )),
             Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
                 IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
             )),
@@ -851,6 +857,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             delimiter: proto_opts.delimiter[0],
             quote: proto_opts.quote[0],
             escape: proto_opts.escape.first().copied(),
+            double_quote: proto_opts.has_header.first().map(|h| *h != 0),
             compression: proto_opts.compression().into(),
             schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
             date_format: (!proto_opts.date_format.is_empty())
@@ -865,6 +872,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .then(|| proto_opts.time_format.clone()),
             null_value: (!proto_opts.null_value.is_empty())
                 .then(|| proto_opts.null_value.clone()),
+            comment: proto_opts.comment.first().copied(),
         })
     }
 }
@@ -1084,11 +1092,34 @@ pub(crate) fn csv_writer_options_from_proto(
             return Err(proto_error("Error parsing CSV Delimiter"));
         }
     }
+    if !writer_options.quote.is_empty() {
+        if let Some(quote) = writer_options.quote.chars().next() {
+            if quote.is_ascii() {
+                builder = builder.with_quote(quote as u8);
+            } else {
+                return Err(proto_error("CSV Quote is not ASCII"));
+            }
+        } else {
+            return Err(proto_error("Error parsing CSV Quote"));
+        }
+    }
+    if !writer_options.escape.is_empty() {
+        if let Some(escape) = writer_options.escape.chars().next() {
+            if escape.is_ascii() {
+                builder = builder.with_escape(escape as u8);
+            } else {
+                return Err(proto_error("CSV Escape is not ASCII"));
+            }
+        } else {
+            return Err(proto_error("Error parsing CSV Escape"));
+        }
+    }
     Ok(builder
         .with_header(writer_options.has_header)
         .with_date_format(writer_options.date_format.clone())
         .with_datetime_format(writer_options.datetime_format.clone())
         .with_timestamp_format(writer_options.timestamp_format.clone())
         .with_time_format(writer_options.time_format.clone())
-        .with_null(writer_options.null_value.clone()))
+        .with_null(writer_options.null_value.clone())
+        .with_double_quote(writer_options.double_quote))
 }

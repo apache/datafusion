@@ -125,11 +125,17 @@ impl serde::Serialize for ArrowType {
                 arrow_type::ArrowTypeEnum::Utf8(v) => {
                     struct_ser.serialize_field("UTF8", v)?;
                 }
+                arrow_type::ArrowTypeEnum::Utf8View(v) => {
+                    struct_ser.serialize_field("UTF8VIEW", v)?;
+                }
                 arrow_type::ArrowTypeEnum::LargeUtf8(v) => {
                     struct_ser.serialize_field("LARGEUTF8", v)?;
                 }
                 arrow_type::ArrowTypeEnum::Binary(v) => {
                     struct_ser.serialize_field("BINARY", v)?;
+                }
+                arrow_type::ArrowTypeEnum::BinaryView(v) => {
+                    struct_ser.serialize_field("BINARYVIEW", v)?;
                 }
                 arrow_type::ArrowTypeEnum::FixedSizeBinary(v) => {
                     struct_ser.serialize_field("FIXEDSIZEBINARY", v)?;
@@ -216,9 +222,13 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             "FLOAT32",
             "FLOAT64",
             "UTF8",
+            "UTF8_VIEW",
+            "UTF8VIEW",
             "LARGE_UTF8",
             "LARGEUTF8",
             "BINARY",
+            "BINARY_VIEW",
+            "BINARYVIEW",
             "FIXED_SIZE_BINARY",
             "FIXEDSIZEBINARY",
             "LARGE_BINARY",
@@ -258,8 +268,10 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             Float32,
             Float64,
             Utf8,
+            Utf8View,
             LargeUtf8,
             Binary,
+            BinaryView,
             FixedSizeBinary,
             LargeBinary,
             Date32,
@@ -312,8 +324,10 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             "FLOAT32" => Ok(GeneratedField::Float32),
                             "FLOAT64" => Ok(GeneratedField::Float64),
                             "UTF8" => Ok(GeneratedField::Utf8),
+                            "UTF8VIEW" | "UTF8_VIEW" => Ok(GeneratedField::Utf8View),
                             "LARGEUTF8" | "LARGE_UTF8" => Ok(GeneratedField::LargeUtf8),
                             "BINARY" => Ok(GeneratedField::Binary),
+                            "BINARYVIEW" | "BINARY_VIEW" => Ok(GeneratedField::BinaryView),
                             "FIXEDSIZEBINARY" | "FIXED_SIZE_BINARY" => Ok(GeneratedField::FixedSizeBinary),
                             "LARGEBINARY" | "LARGE_BINARY" => Ok(GeneratedField::LargeBinary),
                             "DATE32" => Ok(GeneratedField::Date32),
@@ -451,6 +465,13 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Utf8)
 ;
                         }
+                        GeneratedField::Utf8View => {
+                            if arrow_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("UTF8VIEW"));
+                            }
+                            arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Utf8View)
+;
+                        }
                         GeneratedField::LargeUtf8 => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("LARGEUTF8"));
@@ -463,6 +484,13 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                                 return Err(serde::de::Error::duplicate_field("BINARY"));
                             }
                             arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Binary)
+;
+                        }
+                        GeneratedField::BinaryView => {
+                            if arrow_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("BINARYVIEW"));
+                            }
+                            arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::BinaryView)
 ;
                         }
                         GeneratedField::FixedSizeBinary => {
@@ -1850,6 +1878,12 @@ impl serde::Serialize for CsvOptions {
         if !self.null_value.is_empty() {
             len += 1;
         }
+        if !self.comment.is_empty() {
+            len += 1;
+        }
+        if !self.double_quote.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1894,6 +1928,14 @@ impl serde::Serialize for CsvOptions {
         if !self.null_value.is_empty() {
             struct_ser.serialize_field("nullValue", &self.null_value)?;
         }
+        if !self.comment.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("comment", pbjson::private::base64::encode(&self.comment).as_str())?;
+        }
+        if !self.double_quote.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("doubleQuote", pbjson::private::base64::encode(&self.double_quote).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1924,6 +1966,9 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "timeFormat",
             "null_value",
             "nullValue",
+            "comment",
+            "double_quote",
+            "doubleQuote",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1940,6 +1985,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             TimestampTzFormat,
             TimeFormat,
             NullValue,
+            Comment,
+            DoubleQuote,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1973,6 +2020,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "timestampTzFormat" | "timestamp_tz_format" => Ok(GeneratedField::TimestampTzFormat),
                             "timeFormat" | "time_format" => Ok(GeneratedField::TimeFormat),
                             "nullValue" | "null_value" => Ok(GeneratedField::NullValue),
+                            "comment" => Ok(GeneratedField::Comment),
+                            "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2004,6 +2053,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut timestamp_tz_format__ = None;
                 let mut time_format__ = None;
                 let mut null_value__ = None;
+                let mut comment__ = None;
+                let mut double_quote__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -2088,6 +2139,22 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             }
                             null_value__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Comment => {
+                            if comment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("comment"));
+                            }
+                            comment__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DoubleQuote => {
+                            if double_quote__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("doubleQuote"));
+                            }
+                            double_quote__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvOptions {
@@ -2103,6 +2170,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     timestamp_tz_format: timestamp_tz_format__.unwrap_or_default(),
                     time_format: time_format__.unwrap_or_default(),
                     null_value: null_value__.unwrap_or_default(),
+                    comment: comment__.unwrap_or_default(),
+                    double_quote: double_quote__.unwrap_or_default(),
                 })
             }
         }
@@ -2141,6 +2210,15 @@ impl serde::Serialize for CsvWriterOptions {
         if !self.null_value.is_empty() {
             len += 1;
         }
+        if !self.quote.is_empty() {
+            len += 1;
+        }
+        if !self.escape.is_empty() {
+            len += 1;
+        }
+        if self.double_quote {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvWriterOptions", len)?;
         if self.compression != 0 {
             let v = CompressionTypeVariant::try_from(self.compression)
@@ -2168,6 +2246,15 @@ impl serde::Serialize for CsvWriterOptions {
         if !self.null_value.is_empty() {
             struct_ser.serialize_field("nullValue", &self.null_value)?;
         }
+        if !self.quote.is_empty() {
+            struct_ser.serialize_field("quote", &self.quote)?;
+        }
+        if !self.escape.is_empty() {
+            struct_ser.serialize_field("escape", &self.escape)?;
+        }
+        if self.double_quote {
+            struct_ser.serialize_field("doubleQuote", &self.double_quote)?;
+        }
         struct_ser.end()
     }
 }
@@ -2192,6 +2279,10 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             "timeFormat",
             "null_value",
             "nullValue",
+            "quote",
+            "escape",
+            "double_quote",
+            "doubleQuote",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2204,6 +2295,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             TimestampFormat,
             TimeFormat,
             NullValue,
+            Quote,
+            Escape,
+            DoubleQuote,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2233,6 +2327,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             "timestampFormat" | "timestamp_format" => Ok(GeneratedField::TimestampFormat),
                             "timeFormat" | "time_format" => Ok(GeneratedField::TimeFormat),
                             "nullValue" | "null_value" => Ok(GeneratedField::NullValue),
+                            "quote" => Ok(GeneratedField::Quote),
+                            "escape" => Ok(GeneratedField::Escape),
+                            "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2260,6 +2357,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                 let mut timestamp_format__ = None;
                 let mut time_format__ = None;
                 let mut null_value__ = None;
+                let mut quote__ = None;
+                let mut escape__ = None;
+                let mut double_quote__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Compression => {
@@ -2310,6 +2410,24 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             }
                             null_value__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Quote => {
+                            if quote__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("quote"));
+                            }
+                            quote__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Escape => {
+                            if escape__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("escape"));
+                            }
+                            escape__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::DoubleQuote => {
+                            if double_quote__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("doubleQuote"));
+                            }
+                            double_quote__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(CsvWriterOptions {
@@ -2321,6 +2439,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                     timestamp_format: timestamp_format__.unwrap_or_default(),
                     time_format: time_format__.unwrap_or_default(),
                     null_value: null_value__.unwrap_or_default(),
+                    quote: quote__.unwrap_or_default(),
+                    escape: escape__.unwrap_or_default(),
+                    double_quote: double_quote__.unwrap_or_default(),
                 })
             }
         }
@@ -3415,6 +3536,118 @@ impl<'de> serde::Deserialize<'de> for FixedSizeList {
             }
         }
         deserializer.deserialize_struct("datafusion_common.FixedSizeList", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for IntervalDayTimeValue {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.days != 0 {
+            len += 1;
+        }
+        if self.milliseconds != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion_common.IntervalDayTimeValue", len)?;
+        if self.days != 0 {
+            struct_ser.serialize_field("days", &self.days)?;
+        }
+        if self.milliseconds != 0 {
+            struct_ser.serialize_field("milliseconds", &self.milliseconds)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for IntervalDayTimeValue {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "days",
+            "milliseconds",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Days,
+            Milliseconds,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "days" => Ok(GeneratedField::Days),
+                            "milliseconds" => Ok(GeneratedField::Milliseconds),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = IntervalDayTimeValue;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion_common.IntervalDayTimeValue")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<IntervalDayTimeValue, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut days__ = None;
+                let mut milliseconds__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Days => {
+                            if days__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("days"));
+                            }
+                            days__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Milliseconds => {
+                            if milliseconds__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("milliseconds"));
+                            }
+                            milliseconds__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(IntervalDayTimeValue {
+                    days: days__.unwrap_or_default(),
+                    milliseconds: milliseconds__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion_common.IntervalDayTimeValue", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for IntervalMonthDayNanoValue {
@@ -6123,6 +6356,9 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::LargeUtf8Value(v) => {
                     struct_ser.serialize_field("largeUtf8Value", v)?;
                 }
+                scalar_value::Value::Utf8ViewValue(v) => {
+                    struct_ser.serialize_field("utf8ViewValue", v)?;
+                }
                 scalar_value::Value::Int8Value(v) => {
                     struct_ser.serialize_field("int8Value", v)?;
                 }
@@ -6186,10 +6422,6 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::IntervalYearmonthValue(v) => {
                     struct_ser.serialize_field("intervalYearmonthValue", v)?;
                 }
-                scalar_value::Value::IntervalDaytimeValue(v) => {
-                    #[allow(clippy::needless_borrow)]
-                    struct_ser.serialize_field("intervalDaytimeValue", ToString::to_string(&v).as_str())?;
-                }
                 scalar_value::Value::DurationSecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
                     struct_ser.serialize_field("durationSecondValue", ToString::to_string(&v).as_str())?;
@@ -6220,8 +6452,15 @@ impl serde::Serialize for ScalarValue {
                     #[allow(clippy::needless_borrow)]
                     struct_ser.serialize_field("largeBinaryValue", pbjson::private::base64::encode(&v).as_str())?;
                 }
+                scalar_value::Value::BinaryViewValue(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    struct_ser.serialize_field("binaryViewValue", pbjson::private::base64::encode(&v).as_str())?;
+                }
                 scalar_value::Value::Time64Value(v) => {
                     struct_ser.serialize_field("time64Value", v)?;
+                }
+                scalar_value::Value::IntervalDaytimeValue(v) => {
+                    struct_ser.serialize_field("intervalDaytimeValue", v)?;
                 }
                 scalar_value::Value::IntervalMonthDayNano(v) => {
                     struct_ser.serialize_field("intervalMonthDayNano", v)?;
@@ -6252,6 +6491,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "utf8Value",
             "large_utf8_value",
             "largeUtf8Value",
+            "utf8_view_value",
+            "utf8ViewValue",
             "int8_value",
             "int8Value",
             "int16_value",
@@ -6292,8 +6533,6 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "date64Value",
             "interval_yearmonth_value",
             "intervalYearmonthValue",
-            "interval_daytime_value",
-            "intervalDaytimeValue",
             "duration_second_value",
             "durationSecondValue",
             "duration_millisecond_value",
@@ -6310,8 +6549,12 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "binaryValue",
             "large_binary_value",
             "largeBinaryValue",
+            "binary_view_value",
+            "binaryViewValue",
             "time64_value",
             "time64Value",
+            "interval_daytime_value",
+            "intervalDaytimeValue",
             "interval_month_day_nano",
             "intervalMonthDayNano",
             "fixed_size_binary_value",
@@ -6326,6 +6569,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             BoolValue,
             Utf8Value,
             LargeUtf8Value,
+            Utf8ViewValue,
             Int8Value,
             Int16Value,
             Int32Value,
@@ -6346,7 +6590,6 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             Decimal256Value,
             Date64Value,
             IntervalYearmonthValue,
-            IntervalDaytimeValue,
             DurationSecondValue,
             DurationMillisecondValue,
             DurationMicrosecondValue,
@@ -6355,7 +6598,9 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             DictionaryValue,
             BinaryValue,
             LargeBinaryValue,
+            BinaryViewValue,
             Time64Value,
+            IntervalDaytimeValue,
             IntervalMonthDayNano,
             FixedSizeBinaryValue,
             UnionValue,
@@ -6384,6 +6629,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "boolValue" | "bool_value" => Ok(GeneratedField::BoolValue),
                             "utf8Value" | "utf8_value" => Ok(GeneratedField::Utf8Value),
                             "largeUtf8Value" | "large_utf8_value" => Ok(GeneratedField::LargeUtf8Value),
+                            "utf8ViewValue" | "utf8_view_value" => Ok(GeneratedField::Utf8ViewValue),
                             "int8Value" | "int8_value" => Ok(GeneratedField::Int8Value),
                             "int16Value" | "int16_value" => Ok(GeneratedField::Int16Value),
                             "int32Value" | "int32_value" => Ok(GeneratedField::Int32Value),
@@ -6404,7 +6650,6 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "decimal256Value" | "decimal256_value" => Ok(GeneratedField::Decimal256Value),
                             "date64Value" | "date_64_value" => Ok(GeneratedField::Date64Value),
                             "intervalYearmonthValue" | "interval_yearmonth_value" => Ok(GeneratedField::IntervalYearmonthValue),
-                            "intervalDaytimeValue" | "interval_daytime_value" => Ok(GeneratedField::IntervalDaytimeValue),
                             "durationSecondValue" | "duration_second_value" => Ok(GeneratedField::DurationSecondValue),
                             "durationMillisecondValue" | "duration_millisecond_value" => Ok(GeneratedField::DurationMillisecondValue),
                             "durationMicrosecondValue" | "duration_microsecond_value" => Ok(GeneratedField::DurationMicrosecondValue),
@@ -6413,7 +6658,9 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "dictionaryValue" | "dictionary_value" => Ok(GeneratedField::DictionaryValue),
                             "binaryValue" | "binary_value" => Ok(GeneratedField::BinaryValue),
                             "largeBinaryValue" | "large_binary_value" => Ok(GeneratedField::LargeBinaryValue),
+                            "binaryViewValue" | "binary_view_value" => Ok(GeneratedField::BinaryViewValue),
                             "time64Value" | "time64_value" => Ok(GeneratedField::Time64Value),
+                            "intervalDaytimeValue" | "interval_daytime_value" => Ok(GeneratedField::IntervalDaytimeValue),
                             "intervalMonthDayNano" | "interval_month_day_nano" => Ok(GeneratedField::IntervalMonthDayNano),
                             "fixedSizeBinaryValue" | "fixed_size_binary_value" => Ok(GeneratedField::FixedSizeBinaryValue),
                             "unionValue" | "union_value" => Ok(GeneratedField::UnionValue),
@@ -6463,6 +6710,12 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                                 return Err(serde::de::Error::duplicate_field("largeUtf8Value"));
                             }
                             value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::LargeUtf8Value);
+                        }
+                        GeneratedField::Utf8ViewValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("utf8ViewValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::Utf8ViewValue);
                         }
                         GeneratedField::Int8Value => {
                             if value__.is_some() {
@@ -6591,12 +6844,6 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             }
                             value__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::IntervalYearmonthValue(x.0));
                         }
-                        GeneratedField::IntervalDaytimeValue => {
-                            if value__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("intervalDaytimeValue"));
-                            }
-                            value__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::IntervalDaytimeValue(x.0));
-                        }
                         GeneratedField::DurationSecondValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("durationSecondValue"));
@@ -6647,11 +6894,24 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             }
                             value__ = map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| scalar_value::Value::LargeBinaryValue(x.0));
                         }
+                        GeneratedField::BinaryViewValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("binaryViewValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| scalar_value::Value::BinaryViewValue(x.0));
+                        }
                         GeneratedField::Time64Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("time64Value"));
                             }
                             value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::Time64Value)
+;
+                        }
+                        GeneratedField::IntervalDaytimeValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("intervalDaytimeValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::IntervalDaytimeValue)
 ;
                         }
                         GeneratedField::IntervalMonthDayNano => {

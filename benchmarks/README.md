@@ -67,6 +67,13 @@ Create / download a specific dataset (TPCH)
 
 Data is placed in the `data` subdirectory.
 
+## Select join algorithm
+The benchmark runs with `prefer_hash_join == true` by default, which enforces HASH join algorithm.
+To run TPCH benchmarks with join other than HASH:
+```shell
+PREFER_HASH_JOIN=false ./bench.sh run tpch
+```
+
 ## Comparing performance of main and a branch
 
 ```shell
@@ -177,7 +184,6 @@ The benchmark program also supports CSV and Parquet input file formats and a uti
 ```bash
 cargo run --release --bin tpch -- convert --input ./data --output /mnt/tpch-parquet --format parquet
 ```
-
 Or if you want to verify and run all the queries in the benchmark, you can just run `cargo test`.
 
 ### Comparing results between runs
@@ -261,7 +267,7 @@ SUBCOMMANDS:
 
 # Benchmarks
 
-The output of `dfbench` help includes a descripion of each benchmark, which is reproducedd here for convenience
+The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience
 
 ## ClickBench
 

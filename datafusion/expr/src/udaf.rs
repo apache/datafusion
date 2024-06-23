@@ -17,6 +17,7 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
+use crate::expr::AggregateFunction;
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
@@ -26,7 +27,8 @@ use crate::utils::AggregateOrderSensitivity;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, plan_err, Result};
+use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -83,6 +85,12 @@ impl std::hash::Hash for AggregateUDF {
     }
 }
 
+impl std::fmt::Display for AggregateUDF {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
 impl AggregateUDF {
     /// Create a new AggregateUDF
     ///
@@ -133,8 +141,7 @@ impl AggregateUDF {
     /// This utility allows using the UDAF without requiring access to
     /// the registry, such as with the DataFrame API.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
-        // TODO: Support dictinct, filter, order by and null_treatment
-        Expr::AggregateFunction(crate::expr::AggregateFunction::new_udf(
+        Expr::AggregateFunction(AggregateFunction::new_udf(
             Arc::new(self.clone()),
             args,
             false,
@@ -190,8 +197,22 @@ impl AggregateUDF {
     }
 
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
-    pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        self.inner.create_groups_accumulator()
+    pub fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        self.inner.create_groups_accumulator(args)
+    }
+
+    pub fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        self.inner.create_sliding_accumulator(args)
+    }
+
+    pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(arg_types)
     }
 
     /// See [`AggregateUDFImpl::with_beneficial_ordering`] for more details.
@@ -213,16 +234,8 @@ impl AggregateUDF {
     /// Reserves the `AggregateUDF` (e.g. returns the `AggregateUDF` that will
     /// generate same result with this `AggregateUDF` when iterated in reverse
     /// order, and `None` if there is no such `AggregateUDF`).
-    pub fn reverse_udf(&self) -> Option<AggregateUDF> {
-        match self.inner.reverse_expr() {
-            ReversedUDAF::NotSupported => None,
-            ReversedUDAF::Identical => Some(self.clone()),
-            ReversedUDAF::Reversed(reverse) => Some(Self { inner: reverse }),
-        }
-    }
-
-    pub fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        not_impl_err!("coerce_types not implemented for {:?} yet", self.name())
+    pub fn reverse_udf(&self) -> ReversedUDAF {
+        self.inner.reverse_expr()
     }
 
     /// Do the function rewrite
@@ -327,7 +340,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// # Arguments:
     /// 1. `name`: the name of the expression (e.g. AVG, SUM, etc)
-    /// 2. `value_type`: Aggregate's aggregate's output (returned by [`Self::return_type`])
+    /// 2. `value_type`: Aggregate function output returned by [`Self::return_type`] if defined, otherwise
+    /// it is equivalent to the data type of the first arguments
     /// 3. `ordering_fields`: the fields used to order the input arguments, if any.
     ///     Empty if no ordering expression is provided.
     ///
@@ -377,7 +391,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// For maximum performance, a [`GroupsAccumulator`] should be
     /// implemented in addition to [`Accumulator`].
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
     }
 
@@ -387,6 +404,19 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Defaults to `[]` (no aliases)
     fn aliases(&self) -> &[String] {
         &[]
+    }
+
+    /// Sliding accumulator is an alternative accumulator that can be used for
+    /// window functions. It has retract method to revert the previous update.
+    ///
+    /// See [retract_batch] for more details.
+    ///
+    /// [retract_batch]: crate::accumulator::Accumulator::retract_batch
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        self.accumulator(args)
     }
 
     /// Sets the indicator whether ordering requirements of the AggregateUDFImpl is
@@ -451,6 +481,29 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::NotSupported
     }
+
+    /// Coerce arguments of a function call to types that the function can evaluate.
+    ///
+    /// This function is only called if [`AggregateUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
+    /// UDAFs should return one of the other variants of `TypeSignature` which handle common
+    /// cases
+    ///
+    /// See the [type coercion module](crate::type_coercion)
+    /// documentation for more details on type coercion
+    ///
+    /// For example, if your function requires a floating point arguments, but the user calls
+    /// it like `my_func(1::int)` (aka with `1` as an integer), coerce_types could return `[DataType::Float64]`
+    /// to ensure the argument was cast to `1::double`
+    ///
+    /// # Parameters
+    /// * `arg_types`: The argument types of the arguments  this function with
+    ///
+    /// # Return value
+    /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
+    /// arguments to these specific types.
+    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!("Function {} does not implement coerce_types", self.name())
+    }
 }
 
 pub enum ReversedUDAF {
@@ -459,7 +512,7 @@ pub enum ReversedUDAF {
     /// The expression does not support reverse calculation, like ArrayAgg
     NotSupported,
     /// The expression is different from the original expression
-    Reversed(Arc<dyn AggregateUDFImpl>),
+    Reversed(Arc<AggregateUDF>),
 }
 
 /// AggregateUDF that adds an alias to the underlying function. It is better to
@@ -552,5 +605,179 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(acc_args)
+    }
+}
+
+/// Extensions for configuring [`Expr::AggregateFunction`]
+///
+/// Adds methods to [`Expr`] that make it easy to set optional aggregate options
+/// such as `ORDER BY`, `FILTER` and `DISTINCT`
+///
+/// # Example
+/// ```no_run
+/// # use datafusion_common::Result;
+/// # use datafusion_expr::{AggregateUDF, col, Expr, lit};
+/// # use sqlparser::ast::NullTreatment;
+/// # fn count(arg: Expr) -> Expr { todo!{} }
+/// # fn first_value(arg: Expr) -> Expr { todo!{} }
+/// # fn main() -> Result<()> {
+/// use datafusion_expr::AggregateExt;
+///
+/// // Create COUNT(x FILTER y > 5)
+/// let agg = count(col("x"))
+///    .filter(col("y").gt(lit(5)))
+///    .build()?;
+///  // Create FIRST_VALUE(x ORDER BY y IGNORE NULLS)
+/// let sort_expr = col("y").sort(true, true);
+/// let agg = first_value(col("x"))
+///   .order_by(vec![sort_expr])
+///   .null_treatment(NullTreatment::IgnoreNulls)
+///   .build()?;
+/// # Ok(())
+/// # }
+/// ```
+pub trait AggregateExt {
+    /// Add `ORDER BY <order_by>`
+    ///
+    /// Note: `order_by` must be [`Expr::Sort`]
+    fn order_by(self, order_by: Vec<Expr>) -> AggregateBuilder;
+    /// Add `FILTER <filter>`
+    fn filter(self, filter: Expr) -> AggregateBuilder;
+    /// Add `DISTINCT`
+    fn distinct(self) -> AggregateBuilder;
+    /// Add `RESPECT NULLS` or `IGNORE NULLS`
+    fn null_treatment(self, null_treatment: NullTreatment) -> AggregateBuilder;
+}
+
+/// Implementation of [`AggregateExt`].
+///
+/// See [`AggregateExt`] for usage and examples
+#[derive(Debug, Clone)]
+pub struct AggregateBuilder {
+    udaf: Option<AggregateFunction>,
+    order_by: Option<Vec<Expr>>,
+    filter: Option<Expr>,
+    distinct: bool,
+    null_treatment: Option<NullTreatment>,
+}
+
+impl AggregateBuilder {
+    /// Create a new `AggregateBuilder`, see [`AggregateExt`]
+
+    fn new(udaf: Option<AggregateFunction>) -> Self {
+        Self {
+            udaf,
+            order_by: None,
+            filter: None,
+            distinct: false,
+            null_treatment: None,
+        }
+    }
+
+    /// Updates and returns the in progress [`Expr::AggregateFunction`]
+    ///
+    /// # Errors:
+    ///
+    /// Returns an error of this builder  [`AggregateExt`] was used with an
+    /// `Expr` variant other than [`Expr::AggregateFunction`]
+    pub fn build(self) -> Result<Expr> {
+        let Self {
+            udaf,
+            order_by,
+            filter,
+            distinct,
+            null_treatment,
+        } = self;
+
+        let Some(mut udaf) = udaf else {
+            return plan_err!(
+                "AggregateExt can only be used with Expr::AggregateFunction"
+            );
+        };
+
+        if let Some(order_by) = &order_by {
+            for expr in order_by.iter() {
+                if !matches!(expr, Expr::Sort(_)) {
+                    return plan_err!(
+                        "ORDER BY expressions must be Expr::Sort, found {expr:?}"
+                    );
+                }
+            }
+        }
+
+        udaf.order_by = order_by;
+        udaf.filter = filter.map(Box::new);
+        udaf.distinct = distinct;
+        udaf.null_treatment = null_treatment;
+        Ok(Expr::AggregateFunction(udaf))
+    }
+
+    /// Add `ORDER BY <order_by>`
+    ///
+    /// Note: `order_by` must be [`Expr::Sort`]
+    pub fn order_by(mut self, order_by: Vec<Expr>) -> AggregateBuilder {
+        self.order_by = Some(order_by);
+        self
+    }
+
+    /// Add `FILTER <filter>`
+    pub fn filter(mut self, filter: Expr) -> AggregateBuilder {
+        self.filter = Some(filter);
+        self
+    }
+
+    /// Add `DISTINCT`
+    pub fn distinct(mut self) -> AggregateBuilder {
+        self.distinct = true;
+        self
+    }
+
+    /// Add `RESPECT NULLS` or `IGNORE NULLS`
+    pub fn null_treatment(mut self, null_treatment: NullTreatment) -> AggregateBuilder {
+        self.null_treatment = Some(null_treatment);
+        self
+    }
+}
+
+impl AggregateExt for Expr {
+    fn order_by(self, order_by: Vec<Expr>) -> AggregateBuilder {
+        match self {
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.order_by = Some(order_by);
+                builder
+            }
+            _ => AggregateBuilder::new(None),
+        }
+    }
+    fn filter(self, filter: Expr) -> AggregateBuilder {
+        match self {
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.filter = Some(filter);
+                builder
+            }
+            _ => AggregateBuilder::new(None),
+        }
+    }
+    fn distinct(self) -> AggregateBuilder {
+        match self {
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.distinct = true;
+                builder
+            }
+            _ => AggregateBuilder::new(None),
+        }
+    }
+    fn null_treatment(self, null_treatment: NullTreatment) -> AggregateBuilder {
+        match self {
+            Expr::AggregateFunction(udaf) => {
+                let mut builder = AggregateBuilder::new(Some(udaf));
+                builder.null_treatment = Some(null_treatment);
+                builder
+            }
+            _ => AggregateBuilder::new(None),
+        }
     }
 }

@@ -1194,9 +1194,9 @@ mod tests {
         RecordBatchStream, SendableRecordBatchStream, TaskContext,
     };
     use datafusion_expr::{
-        AggregateFunction, WindowFrame, WindowFrameBound, WindowFrameUnits,
-        WindowFunctionDefinition,
+        Expr, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
+    use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::{col, Column, NthValue};
     use datafusion_physical_expr::window::{
         BuiltInWindowExpr, BuiltInWindowFunctionExpr,
@@ -1298,11 +1298,13 @@ mod tests {
         order_by: &str,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = input.schema();
-        let window_fn =
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count);
+        let window_fn = WindowFunctionDefinition::AggregateUDF(count_udaf());
         let col_expr =
             Arc::new(Column::new(schema.fields[0].name(), 0)) as Arc<dyn PhysicalExpr>;
+        let log_expr =
+            Expr::Column(datafusion_common::Column::from(schema.fields[0].name()));
         let args = vec![col_expr];
+        let log_args = vec![log_expr];
         let partitionby_exprs = vec![col(hash, &schema)?];
         let orderby_exprs = vec![PhysicalSortExpr {
             expr: col(order_by, &schema)?,
@@ -1323,6 +1325,7 @@ mod tests {
                 &window_fn,
                 fn_name,
                 &args,
+                &log_args,
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
@@ -1650,7 +1653,7 @@ mod tests {
     //
     // Effectively following query is run on this data
     //
-    //   SELECT *, COUNT(*) OVER(PARTITION BY duplicated_hash ORDER BY sn RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
+    //   SELECT *, count(*) OVER(PARTITION BY duplicated_hash ORDER BY sn RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
     //   FROM test;
     //
     // partition `duplicated_hash=2` receives following data from the input
@@ -1724,8 +1727,8 @@ mod tests {
         let plan = projection_exec(window)?;
 
         let expected_plan = vec![
-            "ProjectionExec: expr=[sn@0 as sn, hash@1 as hash, COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]@2 as col_2]",
-            "  BoundedWindowAggExec: wdw=[COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]: Ok(Field { name: \"COUNT([Column { name: \\\"sn\\\", index: 0 }]) PARTITION BY: [[Column { name: \\\"hash\\\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \\\"sn\\\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)), is_causal: false }], mode=[Linear]",
+            "ProjectionExec: expr=[sn@0 as sn, hash@1 as hash, count([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]@2 as col_2]",
+            "  BoundedWindowAggExec: wdw=[count([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]: Ok(Field { name: \"count([Column { name: \\\"sn\\\", index: 0 }]) PARTITION BY: [[Column { name: \\\"hash\\\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \\\"sn\\\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)), is_causal: false }], mode=[Linear]",
             "    StreamingTableExec: partition_sizes=1, projection=[sn, hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST]",
         ];
 

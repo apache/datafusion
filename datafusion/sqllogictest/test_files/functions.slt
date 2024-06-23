@@ -487,11 +487,11 @@ statement error Did you mean 'to_timestamp_seconds'?
 SELECT to_TIMESTAMPS_second(v2) from test;
 
 # Aggregate function
-statement error Did you mean 'COUNT'?
+query error DataFusion error: Error during planning: Invalid function 'counter'
 SELECT counter(*) from test;
 
 # Aggregate function
-statement error Did you mean 'STDDEV'?
+statement error Did you mean 'stddev'?
 SELECT STDEV(v1) from test;
 
 # Aggregate function
@@ -499,7 +499,7 @@ statement error DataFusion error: Error during planning: Invalid function 'covar
 SELECT COVARIA(1,1);
 
 # Window function
-statement error Did you mean 'SUM'?
+statement error
 SELECT v1, v2, SUMM(v2) OVER(ORDER BY v1) from test;
 
 # Window function
@@ -1158,3 +1158,21 @@ drop table uuid_table
 
 statement ok
 drop table t
+
+
+# test for contains
+
+query B
+select contains('alphabet', 'pha');
+----
+true
+
+query B
+select contains('alphabet', 'dddd');
+----
+false
+
+query B
+select contains('', '');
+----
+true

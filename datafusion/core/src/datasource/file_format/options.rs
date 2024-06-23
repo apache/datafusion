@@ -61,6 +61,8 @@ pub struct CsvReadOptions<'a> {
     pub quote: u8,
     /// An optional escape character. Defaults to None.
     pub escape: Option<u8>,
+    /// If enabled, lines beginning with this byte are ignored.
+    pub comment: Option<u8>,
     /// An optional schema representing the CSV files. If None, CSV reader will try to infer it
     /// based on data in file.
     pub schema: Option<&'a Schema>,
@@ -97,12 +99,19 @@ impl<'a> CsvReadOptions<'a> {
             table_partition_cols: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             file_sort_order: vec![],
+            comment: None,
         }
     }
 
     /// Configure has_header setting
     pub fn has_header(mut self, has_header: bool) -> Self {
         self.has_header = has_header;
+        self
+    }
+
+    /// Specify comment char to use for CSV read
+    pub fn comment(mut self, comment: u8) -> Self {
+        self.comment = Some(comment);
         self
     }
 
@@ -477,6 +486,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
         let file_format = CsvFormat::default()
             .with_options(table_options.csv)
             .with_has_header(self.has_header)
+            .with_comment(self.comment)
             .with_delimiter(self.delimiter)
             .with_quote(self.quote)
             .with_escape(self.escape)

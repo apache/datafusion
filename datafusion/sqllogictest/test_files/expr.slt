@@ -63,7 +63,7 @@ SELECT
 NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
 
 # test_array_cast_invalid_timezone_will_panic
-statement error Parser error: Invalid timezone "Foo": 'Foo' is not a valid timezone
+statement error Parser error: Invalid timezone "Foo": failed to parse timezone
 SELECT arrow_cast('2021-01-02T03:04:00', 'Timestamp(Nanosecond, Some("Foo"))')
 
 # test_array_index
@@ -542,6 +542,11 @@ SELECT repeat('Pg', 4)
 PgPgPgPg
 
 query T
+SELECT repeat('Pg', -1)
+----
+(empty)
+
+query T
 SELECT repeat('Pg', CAST(NULL AS INT))
 ----
 NULL
@@ -620,6 +625,19 @@ query T
 SELECT split_part('abc~@~def~@~ghi', '~@~', CAST(NULL AS INT))
 ----
 NULL
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', -1)
+----
+ghi
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', -100)
+----
+(empty)
+
+statement error DataFusion error: Execution error: field position must not be zero
+SELECT split_part('abc~@~def~@~ghi', '~@~', 0)
 
 query B
 SELECT starts_with('alphabet', 'alph')
@@ -809,6 +827,12 @@ SELECT
 
 # test_extract_date_part
 
+query error
+SELECT EXTRACT("'''year'''" FROM  timestamp '2020-09-08T12:00:00+00:00')
+
+query error
+SELECT EXTRACT("'year'" FROM  timestamp '2020-09-08T12:00:00+00:00')
+
 query R
 SELECT date_part('YEAR', CAST('2000-01-01' AS DATE))
 ----
@@ -818,6 +842,14 @@ query R
 SELECT EXTRACT(year FROM  timestamp '2020-09-08T12:00:00+00:00')
 ----
 2020
+
+query R
+SELECT EXTRACT("year" FROM  timestamp '2020-09-08T12:00:00+00:00')
+----
+2020
+
+query error
+SELECT EXTRACT('year' FROM  timestamp '2020-09-08T12:00:00+00:00')
 
 query R
 SELECT date_part('QUARTER', CAST('2000-01-01' AS DATE))
@@ -830,6 +862,14 @@ SELECT EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 3
 
 query R
+SELECT EXTRACT("quarter" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+3
+
+query error
+SELECT EXTRACT('quarter' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+
+query R
 SELECT date_part('MONTH', CAST('2000-01-01' AS DATE))
 ----
 1
@@ -838,6 +878,14 @@ query R
 SELECT EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 9
+
+query R
+SELECT EXTRACT("month" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+9
+
+query error
+SELECT EXTRACT('month' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 
 query R
 SELECT date_part('WEEK', CAST('2003-01-01' AS DATE))
@@ -850,6 +898,14 @@ SELECT EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 37
 
 query R
+SELECT EXTRACT("WEEK" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+37
+
+query error
+SELECT EXTRACT('WEEK' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+
+query R
 SELECT date_part('DAY', CAST('2000-01-01' AS DATE))
 ----
 1
@@ -858,6 +914,14 @@ query R
 SELECT EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 8
+
+query R
+SELECT EXTRACT("day" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+8
+
+query error
+SELECT EXTRACT('day' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 
 query R
 SELECT date_part('DOY', CAST('2000-01-01' AS DATE))
@@ -870,6 +934,14 @@ SELECT EXTRACT(doy FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 252
 
 query R
+SELECT EXTRACT("doy" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+252
+
+query error
+SELECT EXTRACT('doy' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+
+query R
 SELECT date_part('DOW', CAST('2000-01-01' AS DATE))
 ----
 6
@@ -878,6 +950,14 @@ query R
 SELECT EXTRACT(dow FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 2
+
+query R
+SELECT EXTRACT("dow" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+2
+
+query error
+SELECT EXTRACT('dow' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 
 query R
 SELECT date_part('HOUR', CAST('2000-01-01' AS DATE))
@@ -890,9 +970,25 @@ SELECT EXTRACT(hour FROM to_timestamp('2020-09-08T12:03:03+00:00'))
 12
 
 query R
+SELECT EXTRACT("hour" FROM to_timestamp('2020-09-08T12:03:03+00:00'))
+----
+12
+
+query error
+SELECT EXTRACT('hour' FROM to_timestamp('2020-09-08T12:03:03+00:00'))
+
+query R
 SELECT EXTRACT(minute FROM to_timestamp('2020-09-08T12:12:00+00:00'))
 ----
 12
+
+query R
+SELECT EXTRACT("minute" FROM to_timestamp('2020-09-08T12:12:00+00:00'))
+----
+12
+
+query error
+SELECT EXTRACT('minute' FROM to_timestamp('2020-09-08T12:12:00+00:00'))
 
 query R
 SELECT date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'))
@@ -918,6 +1014,38 @@ query R
 SELECT EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456780
+
+query R
+SELECT EXTRACT("second" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12.12345678
+
+query R
+SELECT EXTRACT("millisecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123.45678
+
+query R
+SELECT EXTRACT("microsecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123456.78
+
+query R
+SELECT EXTRACT("nanosecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123456780
+
+query error
+SELECT EXTRACT('second' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+
+query error
+SELECT EXTRACT('millisecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+
+query error
+SELECT EXTRACT('microsecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+
+query error
+SELECT EXTRACT('nanosecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 # Keep precision when coercing Utf8 to Timestamp
 query R
@@ -2345,7 +2473,7 @@ host2 202
 host3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
-query error
+query TR
 select 
     t2.server['c3'] as host, 
     sum((
@@ -2360,6 +2488,10 @@ select
     ) t2 
     where t2.server['c3'] IS NOT NULL 
     group by t2.server['c3'] order by host;
+----
+host1 101
+host2 202
+host3 303
 
 # can have 2 projections with aggr(short_circuited), with different short-circuited expr
 query TRR
@@ -2431,7 +2563,7 @@ host2 2.2 202
 host3 3.3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
-query error
+query TRR
 select 
     t2.server['c3'] as host, 
     sum((
@@ -2451,6 +2583,10 @@ select
     ) t2 
     where t2.server['c3'] IS NOT NULL 
     group by t2.server['c3'] order by host;
+----
+host1 1.1 101
+host2 2.2 202
+host3 3.3 303
 
 # can have 2 projections with aggr(short_circuited), with the same short-circuited expr (e.g. coalesce)
 query TRR
@@ -2459,3 +2595,28 @@ select t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] as host, sum(coalesc
 host1 1.1 101
 host2 2.2 202
 host3 3.3 303
+
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+statement ok
+create table t (a float) as values (1), (2), (3);
+
+query TT
+explain select min(a) filter (where a > 1) as x from t;
+----
+logical_plan
+01)Projection: MIN(t.a) FILTER (WHERE t.a > Int64(1)) AS x
+02)--Aggregate: groupBy=[[]], aggr=[[MIN(t.a) FILTER (WHERE t.a > Float32(1)) AS MIN(t.a) FILTER (WHERE t.a > Int64(1))]]
+03)----TableScan: t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[MIN(t.a) FILTER (WHERE t.a > Int64(1))@0 as x]
+02)--AggregateExec: mode=Single, gby=[], aggr=[MIN(t.a) FILTER (WHERE t.a > Int64(1))]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+
+
+statement ok
+drop table t;
+
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';

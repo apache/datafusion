@@ -33,6 +33,7 @@ use datafusion::assert_batches_eq;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::ExprSchemable;
+use datafusion_functions_aggregate::expr_fn::{approx_median, approx_percentile_cont};
 
 fn test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -342,7 +343,7 @@ async fn test_fn_approx_median() -> Result<()> {
 
     let expected = [
         "+-----------------------+",
-        "| APPROX_MEDIAN(test.b) |",
+        "| approx_median(test.b) |",
         "+-----------------------+",
         "| 10                    |",
         "+-----------------------+",
@@ -362,7 +363,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
 
     let expected = [
         "+---------------------------------------------+",
-        "| APPROX_PERCENTILE_CONT(test.b,Float64(0.5)) |",
+        "| approx_percentile_cont(test.b,Float64(0.5)) |",
         "+---------------------------------------------+",
         "| 10                                          |",
         "+---------------------------------------------+",
@@ -383,7 +384,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     let df = create_test_table().await?;
     let expected = [
         "+--------------------------------------+",
-        "| APPROX_PERCENTILE_CONT(test.b,arg_2) |",
+        "| approx_percentile_cont(test.b,arg_2) |",
         "+--------------------------------------+",
         "| 10                                   |",
         "+--------------------------------------+",

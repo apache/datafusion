@@ -17,7 +17,7 @@
 
 //! [`EliminateOuterJoin`] converts `LEFT/RIGHT/FULL` joins to `INNER` joins
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{internal_err, Column, DFSchema, Result};
+use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
 use datafusion_expr::{Expr, Filter, Operator};
 
@@ -60,14 +60,6 @@ impl EliminateOuterJoin {
 
 /// Attempt to eliminate outer joins.
 impl OptimizerRule for EliminateOuterJoin {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called EliminateOuterJoin::rewrite")
-    }
-
     fn name(&self) -> &str {
         "eliminate_outer_join"
     }

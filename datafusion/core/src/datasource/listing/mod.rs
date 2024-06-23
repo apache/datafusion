@@ -134,6 +134,17 @@ impl PartitionedFile {
         self.range = Some(FileRange { start, end });
         self
     }
+
+    /// Update the user defined extensions for this file.
+    ///
+    /// This can be used to pass reader specific information.
+    pub fn with_extensions(
+        mut self,
+        extensions: Arc<dyn std::any::Any + Send + Sync>,
+    ) -> Self {
+        self.extensions = Some(extensions);
+        self
+    }
 }
 
 impl From<ObjectMeta> for PartitionedFile {

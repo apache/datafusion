@@ -17,11 +17,9 @@
 
 //! "math" DataFusion functions
 
-use std::sync::Arc;
-
 use crate::math::monotonicity::*;
-
 use datafusion_expr::ScalarUDF;
+use std::sync::Arc;
 
 pub mod abs;
 pub mod cot;
@@ -92,200 +90,48 @@ make_math_unary_udf!(TanhFunc, TANH, tanh, tanh, super::tanh_order);
 make_udf_function!(trunc::TruncFunc, TRUNC, trunc);
 
 pub mod expr_fn {
-    use datafusion_expr::Expr;
-
-    #[doc = "returns the absolute value of a given number"]
-    pub fn abs(num: Expr) -> Expr {
-        super::abs().call(vec![num])
-    }
-
-    #[doc = "returns the arc cosine or inverse cosine of a number"]
-    pub fn acos(num: Expr) -> Expr {
-        super::acos().call(vec![num])
-    }
-
-    #[doc = "returns inverse hyperbolic cosine"]
-    pub fn acosh(num: Expr) -> Expr {
-        super::acosh().call(vec![num])
-    }
-
-    #[doc = "returns the arc sine or inverse sine of a number"]
-    pub fn asin(num: Expr) -> Expr {
-        super::asin().call(vec![num])
-    }
-
-    #[doc = "returns inverse hyperbolic sine"]
-    pub fn asinh(num: Expr) -> Expr {
-        super::asinh().call(vec![num])
-    }
-
-    #[doc = "returns inverse tangent"]
-    pub fn atan(num: Expr) -> Expr {
-        super::atan().call(vec![num])
-    }
-
-    #[doc = "returns inverse tangent of a division given in the argument"]
-    pub fn atan2(y: Expr, x: Expr) -> Expr {
-        super::atan2().call(vec![y, x])
-    }
-
-    #[doc = "returns inverse hyperbolic tangent"]
-    pub fn atanh(num: Expr) -> Expr {
-        super::atanh().call(vec![num])
-    }
-
-    #[doc = "cube root of a number"]
-    pub fn cbrt(num: Expr) -> Expr {
-        super::cbrt().call(vec![num])
-    }
-
-    #[doc = "nearest integer greater than or equal to argument"]
-    pub fn ceil(num: Expr) -> Expr {
-        super::ceil().call(vec![num])
-    }
-
-    #[doc = "cosine"]
-    pub fn cos(num: Expr) -> Expr {
-        super::cos().call(vec![num])
-    }
-
-    #[doc = "hyperbolic cosine"]
-    pub fn cosh(num: Expr) -> Expr {
-        super::cosh().call(vec![num])
-    }
-
-    #[doc = "cotangent of a number"]
-    pub fn cot(num: Expr) -> Expr {
-        super::cot().call(vec![num])
-    }
-
-    #[doc = "converts radians to degrees"]
-    pub fn degrees(num: Expr) -> Expr {
-        super::degrees().call(vec![num])
-    }
-
-    #[doc = "exponential"]
-    pub fn exp(num: Expr) -> Expr {
-        super::exp().call(vec![num])
-    }
-
-    #[doc = "factorial"]
-    pub fn factorial(num: Expr) -> Expr {
-        super::factorial().call(vec![num])
-    }
-
-    #[doc = "nearest integer less than or equal to argument"]
-    pub fn floor(num: Expr) -> Expr {
-        super::floor().call(vec![num])
-    }
-
-    #[doc = "greatest common divisor"]
-    pub fn gcd(x: Expr, y: Expr) -> Expr {
-        super::gcd().call(vec![x, y])
-    }
-
-    #[doc = "returns true if a given number is +NaN or -NaN otherwise returns false"]
-    pub fn isnan(num: Expr) -> Expr {
-        super::isnan().call(vec![num])
-    }
-
-    #[doc = "returns true if a given number is +0.0 or -0.0 otherwise returns false"]
-    pub fn iszero(num: Expr) -> Expr {
-        super::iszero().call(vec![num])
-    }
-
-    #[doc = "least common multiple"]
-    pub fn lcm(x: Expr, y: Expr) -> Expr {
-        super::lcm().call(vec![x, y])
-    }
-
-    #[doc = "natural logarithm (base e) of a number"]
-    pub fn ln(num: Expr) -> Expr {
-        super::ln().call(vec![num])
-    }
-
-    #[doc = "logarithm of a number for a particular `base`"]
-    pub fn log(base: Expr, num: Expr) -> Expr {
-        super::log().call(vec![base, num])
-    }
-
-    #[doc = "base 2 logarithm of a number"]
-    pub fn log2(num: Expr) -> Expr {
-        super::log2().call(vec![num])
-    }
-
-    #[doc = "base 10 logarithm of a number"]
-    pub fn log10(num: Expr) -> Expr {
-        super::log10().call(vec![num])
-    }
-
-    #[doc = "returns x if x is not NaN otherwise returns y"]
-    pub fn nanvl(x: Expr, y: Expr) -> Expr {
-        super::nanvl().call(vec![x, y])
-    }
-
-    #[doc = "Returns an approximate value of π"]
-    pub fn pi() -> Expr {
-        super::pi().call(vec![])
-    }
-
-    #[doc = "`base` raised to the power of `exponent`"]
-    pub fn power(base: Expr, exponent: Expr) -> Expr {
-        super::power().call(vec![base, exponent])
-    }
-
-    #[doc = "converts degrees to radians"]
-    pub fn radians(num: Expr) -> Expr {
-        super::radians().call(vec![num])
-    }
-
-    #[doc = "Returns a random value in the range 0.0 <= x < 1.0"]
-    pub fn random() -> Expr {
-        super::random().call(vec![])
-    }
-
-    #[doc = "round to nearest integer"]
-    pub fn round(args: Vec<Expr>) -> Expr {
-        super::round().call(args)
-    }
-
-    #[doc = "sign of the argument (-1, 0, +1)"]
-    pub fn signum(num: Expr) -> Expr {
-        super::signum().call(vec![num])
-    }
-
-    #[doc = "sine"]
-    pub fn sin(num: Expr) -> Expr {
-        super::sin().call(vec![num])
-    }
-
-    #[doc = "hyperbolic sine"]
-    pub fn sinh(num: Expr) -> Expr {
-        super::sinh().call(vec![num])
-    }
-
-    #[doc = "square root of a number"]
-    pub fn sqrt(num: Expr) -> Expr {
-        super::sqrt().call(vec![num])
-    }
-
-    #[doc = "returns the tangent of a number"]
-    pub fn tan(num: Expr) -> Expr {
-        super::tan().call(vec![num])
-    }
-
-    #[doc = "returns the hyperbolic tangent of a number"]
-    pub fn tanh(num: Expr) -> Expr {
-        super::tanh().call(vec![num])
-    }
-
-    #[doc = "truncate toward zero, with optional precision"]
-    pub fn trunc(args: Vec<Expr>) -> Expr {
-        super::trunc().call(args)
-    }
+    export_functions!(
+        (abs, "returns the absolute value of a given number", num),
+        (acos, "returns the arc cosine or inverse cosine of a number", num),
+        (acosh, "returns inverse hyperbolic cosine", num),
+        (asin, "returns the arc sine or inverse sine of a number", num),
+        (asinh, "returns inverse hyperbolic sine", num),
+        (atan, "returns inverse tangent", num),
+        (atan2, "returns inverse tangent of a division given in the argument", y x),
+        (atanh, "returns inverse hyperbolic tangent", num),
+        (cbrt, "cube root of a number", num),
+        (ceil, "nearest integer greater than or equal to argument", num),
+        (cos, "cosine", num),
+        (cosh, "hyperbolic cosine", num),
+        (cot, "cotangent of a number", num),
+        (degrees, "converts radians to degrees", num),
+        (exp, "exponential", num),
+        (factorial, "factorial", num),
+        (floor, "nearest integer less than or equal to argument", num),
+        (gcd, "greatest common divisor", x y),
+        (isnan, "returns true if a given number is +NaN or -NaN otherwise returns false", num),
+        (iszero, "returns true if a given number is +0.0 or -0.0 otherwise returns false", num),
+        (lcm, "least common multiple", x y),
+        (ln, "natural logarithm (base e) of a number", num),
+        (log, "logarithm of a number for a particular `base`", base num),
+        (log2, "base 2 logarithm of a number", num),
+        (log10, "base 10 logarithm of a number", num),
+        (nanvl, "returns x if x is not NaN otherwise returns y", x y),
+        (pi, "Returns an approximate value of π",),
+        (power, "`base` raised to the power of `exponent`", base exponent),
+        (radians, "converts degrees to radians", num),
+        (random, "Returns a random value in the range 0.0 <= x < 1.0",),
+        (signum, "sign of the argument (-1, 0, +1)", num),
+        (sin, "sine", num),
+        (sinh, "hyperbolic sine", num),
+        (sqrt, "square root of a number", num),
+        (tan, "returns the tangent of a number", num),
+        (tanh, "returns the hyperbolic tangent of a number", num),
+        (round, "round to nearest integer", args,),
+        (trunc, "truncate toward zero, with optional precision", args,)
+    );
 }
 
-///   Return a list of all functions in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         abs(),
@@ -318,13 +164,13 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         power(),
         radians(),
         random(),
-        round(),
         signum(),
         sin(),
         sinh(),
         sqrt(),
         tan(),
         tanh(),
+        round(),
         trunc(),
     ]
 }

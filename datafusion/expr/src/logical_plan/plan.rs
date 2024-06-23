@@ -56,19 +56,139 @@ use crate::logical_plan::tree_node::unwrap_arc;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
-/// A LogicalPlan represents the different types of relational
-/// operators (such as Projection, Filter, etc) and can be created by
-/// the SQL query planner and the DataFrame API.
+/// A `LogicalPlan` is a node in a tree of relational operators (such as
+/// Projection or Filter).
 ///
-/// A LogicalPlan represents transforming an input relation (table) to
-/// an output relation (table) with a (potentially) different
-/// schema. A plan represents a dataflow tree where data flows
-/// from leaves up to the root to produce the query result.
+/// Represents transforming an input relation (table) to an output relation
+/// (table) with a potentially different schema. Plans form a dataflow tree
+/// where data flows from leaves up to the root to produce the query result.
+///
+/// `LogicalPlan`s can be created by the SQL query planner, the DataFrame API,
+/// or programmatically (for example custom query languages).
 ///
 /// # See also:
-/// * [`tree_node`]: To inspect and rewrite `LogicalPlan` trees
+/// * [`Expr`]: For the expressions that are evaluated by the plan
+/// * [`LogicalPlanBuilder`]: For building `LogicalPlan`s
+/// * [`tree_node`]: To inspect and rewrite `LogicalPlan`s
 ///
 /// [`tree_node`]: crate::logical_plan::tree_node
+///
+/// # Examples
+///
+/// ## Creating a LogicalPlan from SQL:
+///
+/// See [`SessionContext::sql`](https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql)
+///
+/// ## Creating a LogicalPlan from the DataFrame API:
+///
+/// See [`DataFrame::logical_plan`](https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.logical_plan)
+///
+/// ## Creating a LogicalPlan programmatically:
+///
+/// See [`LogicalPlanBuilder`]
+///
+/// # Visiting and Rewriting `LogicalPlan`s
+///
+/// Using the [`tree_node`] API, you can recursively walk all nodes in a
+/// `LogicalPlan`. For example, to find all column references in a plan:
+///
+/// ```
+/// # use std::collections::HashSet;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_expr::{Expr, col, lit, LogicalPlan, LogicalPlanBuilder, table_scan};
+/// # use datafusion_common::tree_node::{TreeNodeRecursion, TreeNode};
+/// # use datafusion_common::{Column, Result};
+/// # fn employee_schema() -> Schema {
+/// #    Schema::new(vec![
+/// #           Field::new("name", DataType::Utf8, false),
+/// #           Field::new("salary", DataType::Int32, false),
+/// #       ])
+/// #   }
+/// // Projection(name, salary)
+/// //   Filter(salary > 1000)
+/// //     TableScan(employee)
+/// # fn main() -> Result<()> {
+/// let plan = table_scan(Some("employee"), &employee_schema(), None)?
+///  .filter(col("salary").gt(lit(1000)))?
+///  .project(vec![col("name")])?
+///  .build()?;
+///
+/// // use apply to walk the plan and collect all expressions
+/// let mut expressions = HashSet::new();
+/// plan.apply(|node| {
+///   // collect all expressions in the plan
+///   node.apply_expressions(|expr| {
+///    expressions.insert(expr.clone());
+///    Ok(TreeNodeRecursion::Continue) // control walk of expressions
+///   })?;
+///   Ok(TreeNodeRecursion::Continue) // control walk of plan nodes
+/// }).unwrap();
+///
+/// // we found the expression in projection and filter
+/// assert_eq!(expressions.len(), 2);
+/// println!("Found expressions: {:?}", expressions);
+/// // found predicate in the Filter: employee.salary > 1000
+/// let salary = Expr::Column(Column::new(Some("employee"), "salary"));
+/// assert!(expressions.contains(&salary.gt(lit(1000))));
+/// // found projection in the Projection: employee.name
+/// let name = Expr::Column(Column::new(Some("employee"), "name"));
+/// assert!(expressions.contains(&name));
+/// # Ok(())
+/// # }
+/// ```
+///
+/// You can also rewrite plans using the [`tree_node`] API. For example, to
+/// replace the filter predicate in a plan:
+///
+/// ```
+/// # use std::collections::HashSet;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_expr::{Expr, col, lit, LogicalPlan, LogicalPlanBuilder, table_scan};
+/// # use datafusion_common::tree_node::{TreeNodeRecursion, TreeNode};
+/// # use datafusion_common::{Column, Result};
+/// # fn employee_schema() -> Schema {
+/// #    Schema::new(vec![
+/// #           Field::new("name", DataType::Utf8, false),
+/// #           Field::new("salary", DataType::Int32, false),
+/// #       ])
+/// #   }
+/// // Projection(name, salary)
+/// //   Filter(salary > 1000)
+/// //     TableScan(employee)
+/// # fn main() -> Result<()> {
+/// use datafusion_common::tree_node::Transformed;
+/// let plan = table_scan(Some("employee"), &employee_schema(), None)?
+///  .filter(col("salary").gt(lit(1000)))?
+///  .project(vec![col("name")])?
+///  .build()?;
+///
+/// // use transform to rewrite the plan
+/// let transformed_result = plan.transform(|node| {
+///   // when we see the filter node
+///   if let LogicalPlan::Filter(mut filter) = node {
+///     // replace predicate with salary < 2000
+///     filter.predicate = Expr::Column(Column::new(Some("employee"), "salary")).lt(lit(2000));
+///     let new_plan = LogicalPlan::Filter(filter);
+///     return Ok(Transformed::yes(new_plan)); // communicate the node was changed
+///   }
+///   // return the node unchanged
+///   Ok(Transformed::no(node))
+/// }).unwrap();
+///
+/// // Transformed result contains rewritten plan and information about
+/// // whether the plan was changed
+/// assert!(transformed_result.transformed);
+/// let rewritten_plan = transformed_result.data;
+///
+/// // we found the filter
+/// assert_eq!(rewritten_plan.display_indent().to_string(),
+/// "Projection: employee.name\
+/// \n  Filter: employee.salary < Int32(2000)\
+/// \n    TableScan: employee");
+/// # Ok(())
+/// # }
+/// ```
+///
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
@@ -159,6 +279,15 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
+}
+
+impl Default for LogicalPlan {
+    fn default() -> Self {
+        LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        })
+    }
 }
 
 impl LogicalPlan {
@@ -750,37 +879,7 @@ impl LogicalPlan {
             LogicalPlan::Filter { .. } => {
                 assert_eq!(1, expr.len());
                 let predicate = expr.pop().unwrap();
-
-                // filter predicates should not contain aliased expressions so we remove any aliases
-                // before this logic was added we would have aliases within filters such as for
-                // benchmark q6:
-                //
-                // lineitem.l_shipdate >= Date32(\"8766\")
-                // AND lineitem.l_shipdate < Date32(\"9131\")
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
-                // Decimal128(Some(49999999999999),30,15)
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
-                // Decimal128(Some(69999999999999),30,15)
-                // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
-
-                let predicate = predicate
-                    .transform_down(|expr| {
-                        match expr {
-                            Expr::Exists { .. }
-                            | Expr::ScalarSubquery(_)
-                            | Expr::InSubquery(_) => {
-                                // subqueries could contain aliases so we don't recurse into those
-                                Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
-                            }
-                            Expr::Alias(_) => Ok(Transformed::new(
-                                expr.unalias(),
-                                true,
-                                TreeNodeRecursion::Jump,
-                            )),
-                            _ => Ok(Transformed::no(expr)),
-                        }
-                    })
-                    .data()?;
+                let predicate = Filter::remove_aliases(predicate)?.data;
 
                 Filter::try_new(predicate, Arc::new(inputs.swap_remove(0)))
                     .map(LogicalPlan::Filter)
@@ -2110,6 +2209,38 @@ impl Filter {
         }
         false
     }
+
+    /// Remove aliases from a predicate for use in a `Filter`
+    ///
+    /// filter predicates should not contain aliased expressions so we remove
+    /// any aliases.
+    ///
+    /// before this logic was added we would have aliases within filters such as
+    /// for benchmark q6:
+    ///
+    /// ```sql
+    /// lineitem.l_shipdate >= Date32(\"8766\")
+    /// AND lineitem.l_shipdate < Date32(\"9131\")
+    /// AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
+    /// Decimal128(Some(49999999999999),30,15)
+    /// AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
+    /// Decimal128(Some(69999999999999),30,15)
+    /// AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
+    /// ```
+    pub fn remove_aliases(predicate: Expr) -> Result<Transformed<Expr>> {
+        predicate.transform_down(|expr| {
+            match expr {
+                Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_) => {
+                    // subqueries could contain aliases so we don't recurse into those
+                    Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
+                }
+                Expr::Alias(Alias { expr, .. }) => {
+                    Ok(Transformed::new(*expr, true, TreeNodeRecursion::Jump))
+                }
+                _ => Ok(Transformed::no(expr)),
+            }
+        })
+    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
@@ -2182,13 +2313,33 @@ impl Window {
             window_func_dependencies.extend(new_deps);
         }
 
-        Ok(Window {
-            input,
+        Self::try_new_with_schema(
             window_expr,
-            schema: Arc::new(
+            input,
+            Arc::new(
                 DFSchema::new_with_metadata(window_fields, metadata)?
                     .with_functional_dependencies(window_func_dependencies)?,
             ),
+        )
+    }
+
+    pub fn try_new_with_schema(
+        window_expr: Vec<Expr>,
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+    ) -> Result<Self> {
+        if window_expr.len() != schema.fields().len() - input.schema().fields().len() {
+            return plan_err!(
+                "Window has mismatch between number of expressions ({}) and number of fields in schema ({})",
+                window_expr.len(),
+                schema.fields().len() - input.schema().fields().len()
+            );
+        }
+
+        Ok(Window {
+            input,
+            window_expr,
+            schema,
         })
     }
 }
@@ -2825,10 +2976,12 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
-    use crate::{col, count, exists, in_subquery, lit, placeholder, GroupingSet};
+    use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
 
     use datafusion_common::tree_node::TreeNodeVisitor;
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
+
+    use crate::test::function_stub::count;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![

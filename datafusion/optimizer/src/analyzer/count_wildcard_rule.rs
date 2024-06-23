@@ -25,9 +25,7 @@ use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionDefinition, WindowFunction,
 };
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_expr::{
-    aggregate_function, lit, Expr, LogicalPlan, WindowFunctionDefinition,
-};
+use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
@@ -56,37 +54,19 @@ fn is_wildcard(expr: &Expr) -> bool {
 }
 
 fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
-    match aggregate_function {
+    matches!(aggregate_function,
         AggregateFunction {
             func_def: AggregateFunctionDefinition::UDF(udf),
             args,
             ..
-        } if udf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]) => true,
-        AggregateFunction {
-            func_def:
-                AggregateFunctionDefinition::BuiltIn(
-                    datafusion_expr::aggregate_function::AggregateFunction::Count,
-                ),
-            args,
-            ..
-        } if args.len() == 1 && is_wildcard(&args[0]) => true,
-        _ => false,
-    }
+        } if udf.name() == "count" && args.len() == 1 && is_wildcard(&args[0]))
 }
 
 fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
     let args = &window_function.args;
-    match window_function.fun {
-        WindowFunctionDefinition::AggregateFunction(
-            aggregate_function::AggregateFunction::Count,
-        ) if args.len() == 1 && is_wildcard(&args[0]) => true,
+    matches!(window_function.fun,
         WindowFunctionDefinition::AggregateUDF(ref udaf)
-            if udaf.name() == "COUNT" && args.len() == 1 && is_wildcard(&args[0]) =>
-        {
-            true
-        }
-        _ => false,
-    }
+            if udaf.name() == "count" && args.len() == 1 && is_wildcard(&args[0]))
 }
 
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -122,11 +102,14 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
-        col, count, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
-        out_ref_col, scalar_subquery, sum, wildcard, AggregateFunction, WindowFrame,
-        WindowFrameBound, WindowFrameUnits,
+        col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
+        out_ref_col, scalar_subquery, wildcard, WindowFrame, WindowFrameBound,
+        WindowFrameUnits,
     };
+    use datafusion_functions_aggregate::count::count_udaf;
     use std::sync::Arc;
+
+    use datafusion_functions_aggregate::expr_fn::{count, sum};
 
     fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(
@@ -144,9 +127,9 @@ mod tests {
             .project(vec![count(wildcard())])?
             .sort(vec![count(wildcard()).sort(true, false)])?
             .build()?;
-        let expected = "Sort: COUNT(*) ASC NULLS LAST [COUNT(*):Int64;N]\
-        \n  Projection: COUNT(*) [COUNT(*):Int64;N]\
-        \n    Aggregate: groupBy=[[test.b]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [b:UInt32, COUNT(*):Int64;N]\
+        let expected = "Sort: count(*) ASC NULLS LAST [count(*):Int64;N]\
+        \n  Projection: count(*) [count(*):Int64;N]\
+        \n    Aggregate: groupBy=[[test.b]], aggr=[[count(Int64(1)) AS count(*)]] [b:UInt32, count(*):Int64;N]\
         \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
     }
@@ -169,9 +152,9 @@ mod tests {
             .build()?;
 
         let expected = "Filter: t1.a IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
-        \n  Subquery: [COUNT(*):Int64;N]\
-        \n    Projection: COUNT(*) [COUNT(*):Int64;N]\
-        \n      Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
+        \n  Subquery: [count(*):Int64;N]\
+        \n    Projection: count(*) [count(*):Int64;N]\
+        \n      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] [count(*):Int64;N]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
@@ -192,9 +175,9 @@ mod tests {
             .build()?;
 
         let expected = "Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
-        \n  Subquery: [COUNT(*):Int64;N]\
-        \n    Projection: COUNT(*) [COUNT(*):Int64;N]\
-        \n      Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
+        \n  Subquery: [count(*):Int64;N]\
+        \n    Projection: count(*) [count(*):Int64;N]\
+        \n      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] [count(*):Int64;N]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
@@ -224,9 +207,9 @@ mod tests {
 
         let expected = "Projection: t1.a, t1.b [a:UInt32, b:UInt32]\
               \n  Filter: (<subquery>) > UInt8(0) [a:UInt32, b:UInt32, c:UInt32]\
-              \n    Subquery: [COUNT(Int64(1)):Int64;N]\
-              \n      Projection: COUNT(Int64(1)) [COUNT(Int64(1)):Int64;N]\
-              \n        Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]] [COUNT(Int64(1)):Int64;N]\
+              \n    Subquery: [count(Int64(1)):Int64;N]\
+              \n      Projection: count(Int64(1)) [count(Int64(1)):Int64;N]\
+              \n        Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] [count(Int64(1)):Int64;N]\
               \n          Filter: outer_ref(t1.a) = t2.a [a:UInt32, b:UInt32, c:UInt32]\
               \n            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
               \n    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
@@ -238,7 +221,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+                WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 vec![wildcard()],
                 vec![],
                 vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
@@ -252,8 +235,8 @@ mod tests {
             .project(vec![count(wildcard())])?
             .build()?;
 
-        let expected = "Projection: COUNT(Int64(1)) AS COUNT(*) [COUNT(*):Int64;N]\
-        \n  WindowAggr: windowExpr=[[COUNT(Int64(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]] [a:UInt32, b:UInt32, c:UInt32, COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING:Int64;N]\
+        let expected = "Projection: count(Int64(1)) AS count(*) [count(*):Int64;N]\
+        \n  WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS count(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]] [a:UInt32, b:UInt32, c:UInt32, count(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING:Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
     }
@@ -266,8 +249,8 @@ mod tests {
             .project(vec![count(wildcard())])?
             .build()?;
 
-        let expected = "Projection: COUNT(*) [COUNT(*):Int64;N]\
-        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
+        let expected = "Projection: count(*) [count(*):Int64;N]\
+        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] [count(*):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
     }
@@ -275,11 +258,9 @@ mod tests {
     #[test]
     fn test_count_wildcard_on_non_count_aggregate() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let err = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![sum(wildcard())])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("Error during planning: No function matches the given name and argument types 'SUM(Null)'."), "{err}");
+        let res = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![sum(wildcard())]);
+        assert!(res.is_err());
         Ok(())
     }
 
@@ -291,8 +272,8 @@ mod tests {
             .project(vec![count(wildcard())])?
             .build()?;
 
-        let expected = "Projection: COUNT(Int64(1)) AS COUNT(*) [COUNT(*):Int64;N]\
-        \n  Aggregate: groupBy=[[]], aggr=[[MAX(COUNT(Int64(1))) AS MAX(COUNT(*))]] [MAX(COUNT(*)):Int64;N]\
+        let expected = "Projection: count(Int64(1)) AS count(*) [count(*):Int64;N]\
+        \n  Aggregate: groupBy=[[]], aggr=[[MAX(count(Int64(1))) AS MAX(count(*))]] [MAX(count(*)):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
     }

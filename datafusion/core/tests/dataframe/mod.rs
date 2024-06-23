@@ -31,6 +31,7 @@ use arrow::{
 };
 use arrow_array::Float32Array;
 use arrow_schema::ArrowError;
+use datafusion_functions_aggregate::count::count_udaf;
 use object_store::local::LocalFileSystem;
 use std::fs;
 use std::sync::Arc;
@@ -51,11 +52,11 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
-    array_agg, avg, cast, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
-    placeholder, scalar_subquery, sum, when, wildcard, AggregateFunction, Expr,
-    ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    array_agg, avg, cast, col, exists, expr, in_subquery, lit, max, out_ref_col,
+    placeholder, scalar_subquery, when, wildcard, Expr, ExprSchemable, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
+use datafusion_functions_aggregate::expr_fn::{count, sum};
 
 #[tokio::test]
 async fn test_count_wildcard_on_sort() -> Result<()> {
@@ -169,7 +170,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select COUNT(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
+        .sql("select count(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
         .await?
         .explain(false, false)?
         .collect()
@@ -178,7 +179,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .table("t1")
         .await?
         .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![wildcard()],
             vec![],
             vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
@@ -210,7 +211,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     let sql_results = ctx
         .sql("select count(*) from t1")
         .await?
-        .select(vec![col("COUNT(*)")])?
+        .select(vec![col("count(*)")])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -603,7 +604,7 @@ async fn test_grouping_sets() -> Result<()> {
 
     let expected = vec![
         "+-----------+-----+---------------+",
-        "| a         | b   | COUNT(test.a) |",
+        "| a         | b   | count(test.a) |",
         "+-----------+-----+---------------+",
         "|           | 100 | 1             |",
         "|           | 10  | 2             |",
@@ -644,7 +645,7 @@ async fn test_grouping_sets_count() -> Result<()> {
 
     let expected = vec![
         "+----+----+-----------------+",
-        "| c1 | c2 | COUNT(Int32(1)) |",
+        "| c1 | c2 | count(Int32(1)) |",
         "+----+----+-----------------+",
         "|    | 5  | 14              |",
         "|    | 4  | 23              |",
@@ -1232,7 +1233,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
         .await?;
     let expected = [
         r#"+-------------+"#,
-        r#"| COUNT(tags) |"#,
+        r#"| count(tags) |"#,
         r#"+-------------+"#,
         r#"| 9           |"#,
         r#"+-------------+"#,
