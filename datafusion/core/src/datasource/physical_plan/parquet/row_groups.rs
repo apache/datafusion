@@ -54,7 +54,7 @@ impl RowGroupAccessPlanFilter {
         Self { access_plan }
     }
 
-    /// Return true if there are no row groups to scan
+    /// Return true if there are no row groups
     pub fn is_empty(&self) -> bool {
         self.access_plan.is_empty()
     }

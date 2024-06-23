@@ -156,8 +156,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::{
-        avg, cast, col, lit, logical_plan::builder::LogicalTableSource, min, try_cast,
-        LogicalPlanBuilder,
+        cast, col, lit, logical_plan::builder::LogicalTableSource, min,
+        test::function_stub::avg, try_cast, LogicalPlanBuilder,
     };
 
     use super::*;
@@ -246,9 +246,9 @@ mod test {
                 expected: sort(col("c1") + col("MIN(t.c2)")),
             },
             TestCase {
-                desc: r#"avg(c3) --> "AVG(t.c3)" as average (column *named* "AVG(t.c3)", aliased)"#,
+                desc: r#"avg(c3) --> "avg(t.c3)" as average (column *named* "avg(t.c3)", aliased)"#,
                 input: sort(avg(col("c3"))),
-                expected: sort(col("AVG(t.c3)").alias("average")),
+                expected: sort(col("avg(t.c3)").alias("average")),
             },
         ];
 

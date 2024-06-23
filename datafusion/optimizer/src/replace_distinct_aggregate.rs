@@ -20,7 +20,7 @@ use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, Column, Result};
+use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{col, AggregateExt, LogicalPlanBuilder};
@@ -155,14 +155,6 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
             }
             _ => Ok(Transformed::no(plan)),
         }
-    }
-
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called ReplaceDistinctWithAggregate::rewrite")
     }
 
     fn name(&self) -> &str {

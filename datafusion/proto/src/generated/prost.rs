@@ -1929,7 +1929,7 @@ pub enum AggregateFunction {
     Min = 0,
     Max = 1,
     /// SUM = 2;
-    Avg = 3,
+    /// AVG = 3;
     /// COUNT = 4;
     /// APPROX_DISTINCT = 5;
     ArrayAgg = 6,
@@ -1971,7 +1971,6 @@ impl AggregateFunction {
         match self {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
-            AggregateFunction::Avg => "AVG",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
             AggregateFunction::Grouping => "GROUPING",
             AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
@@ -1982,7 +1981,6 @@ impl AggregateFunction {
         match value {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
-            "AVG" => Some(Self::Avg),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
             "GROUPING" => Some(Self::Grouping),
             "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
