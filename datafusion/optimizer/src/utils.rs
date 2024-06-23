@@ -66,14 +66,14 @@ pub fn optimize_children(
     }
 }
 
-/// Returns true if all columns in col_refs are in `schema_cols`
-///
-/// Note: can't use `HashSet::intersect` here because they have different types.
-pub(crate) fn has_all_refs(
+/// Returns true if `expr` contains all columns in `schema_cols`
+pub(crate) fn has_all_column_refs(
+    expr: &Expr,
     schema_cols: &HashSet<Column>,
-    col_refs: &HashSet<&Column>,
 ) -> bool {
-    schema_cols.iter().filter(|c| col_refs.contains(c)).count() == col_refs.len()
+    let column_refs = expr.column_refs();
+    // note can't use HashSet::intersect because of different types (owned vs References)
+    schema_cols.iter().filter(|c| column_refs.contains(c)).count() == column_refs.len()
 }
 
 pub(crate) fn collect_subquery_cols(
