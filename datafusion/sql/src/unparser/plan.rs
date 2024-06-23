@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_err, not_impl_err, plan_err,
+    tree_node::{TransformedResult, TreeNode},
+    DataFusionError, Result,
+};
 use datafusion_expr::{
     expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
@@ -28,6 +32,7 @@ use super::{
         BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
+    rewrite::NormalizeUnionSchema,
     utils::{find_agg_node_within_select, unproject_window_exprs, AggVariant},
     Unparser,
 };
@@ -63,6 +68,9 @@ pub fn plan_to_sql(plan: &LogicalPlan) -> Result<ast::Statement> {
 
 impl Unparser<'_> {
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
+        let mut union_schema_normalizer = NormalizeUnionSchema::new();
+        let plan = plan.clone().rewrite(&mut union_schema_normalizer).data()?;
+
         match plan {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
@@ -80,8 +88,8 @@ impl Unparser<'_> {
             | LogicalPlan::Limit(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Values(_)
-            | LogicalPlan::Distinct(_) => self.select_to_sql_statement(plan),
-            LogicalPlan::Dml(_) => self.dml_to_sql(plan),
+            | LogicalPlan::Distinct(_) => self.select_to_sql_statement(&plan),
+            LogicalPlan::Dml(_) => self.dml_to_sql(&plan),
             LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Extension(_)
