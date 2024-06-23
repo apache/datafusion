@@ -1169,6 +1169,13 @@ impl ScalarValue {
 
     /// Calculate arithmetic negation for a scalar value
     pub fn arithmetic_negate(&self) -> Result<Self> {
+        fn neg_checked_with_ctx<T: ArrowNativeTypeOp>(
+            v: T,
+            ctx: impl Into<String>,
+        ) -> Result<T> {
+            v.neg_checked()
+                .map_err(|e| arrow_datafusion_err!(e).context(ctx))
+        }
         match self {
             ScalarValue::Int8(None)
             | ScalarValue::Int16(None)
@@ -1183,43 +1190,99 @@ impl ScalarValue {
             ScalarValue::Int32(Some(v)) => Ok(ScalarValue::Int32(Some(v.neg_checked()?))),
             ScalarValue::Int64(Some(v)) => Ok(ScalarValue::Int64(Some(v.neg_checked()?))),
             ScalarValue::IntervalYearMonth(Some(v)) => {
-                Ok(ScalarValue::IntervalYearMonth(Some(v.neg_checked()?)))
+                Ok(ScalarValue::IntervalYearMonth(Some(neg_checked_with_ctx(
+                    *v,
+                    format!("In negation of IntervalYearMonth({v})"),
+                )?)))
             }
             ScalarValue::IntervalDayTime(Some(v)) => {
                 let (days, ms) = IntervalDayTimeType::to_parts(*v);
                 let val = IntervalDayTimeType::make_value(
-                    days.neg_checked()?,
-                    ms.neg_checked()?,
+                    neg_checked_with_ctx(
+                        days,
+                        format!("In negation of days {days} in IntervalDayTime"),
+                    )?,
+                    neg_checked_with_ctx(
+                        ms,
+                        format!("In negation of milliseconds {ms} in IntervalDayTime"),
+                    )?,
                 );
                 Ok(ScalarValue::IntervalDayTime(Some(val)))
             }
             ScalarValue::IntervalMonthDayNano(Some(v)) => {
                 let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*v);
                 let val = IntervalMonthDayNanoType::make_value(
-                    months.neg_checked()?,
-                    days.neg_checked()?,
-                    nanos.neg_checked()?,
+                    neg_checked_with_ctx(
+                        months,
+                        format!("In negation of months {months} of IntervalMonthDayNano"),
+                    )?,
+                    neg_checked_with_ctx(
+                        days,
+                        format!("In negation of days {days} of IntervalMonthDayNano"),
+                    )?,
+                    neg_checked_with_ctx(
+                        nanos,
+                        format!("In negation of nanos {nanos} of IntervalMonthDayNano"),
+                    )?,
                 );
                 Ok(ScalarValue::IntervalMonthDayNano(Some(val)))
             }
-            ScalarValue::Decimal128(Some(v), precision, scale) => Ok(
-                ScalarValue::Decimal128(Some(v.neg_checked()?), *precision, *scale),
-            ),
-            ScalarValue::Decimal256(Some(v), precision, scale) => Ok(
-                ScalarValue::Decimal256(Some(v.neg_checked()?), *precision, *scale),
-            ),
-            ScalarValue::TimestampSecond(Some(v), tz) => Ok(
-                ScalarValue::TimestampSecond(Some(v.neg_checked()?), tz.clone()),
-            ),
-            ScalarValue::TimestampNanosecond(Some(v), tz) => Ok(
-                ScalarValue::TimestampNanosecond(Some(v.neg_checked()?), tz.clone()),
-            ),
-            ScalarValue::TimestampMicrosecond(Some(v), tz) => Ok(
-                ScalarValue::TimestampMicrosecond(Some(v.neg_checked()?), tz.clone()),
-            ),
-            ScalarValue::TimestampMillisecond(Some(v), tz) => Ok(
-                ScalarValue::TimestampMillisecond(Some(v.neg_checked()?), tz.clone()),
-            ),
+            ScalarValue::Decimal128(Some(v), precision, scale) => {
+                Ok(ScalarValue::Decimal128(
+                    Some(neg_checked_with_ctx(
+                        *v,
+                        format!("In negation of Decimal128({v}, {precision}, {scale})"),
+                    )?),
+                    *precision,
+                    *scale,
+                ))
+            }
+            ScalarValue::Decimal256(Some(v), precision, scale) => {
+                Ok(ScalarValue::Decimal256(
+                    Some(neg_checked_with_ctx(
+                        *v,
+                        format!("In negation of Decimal256({v}, {precision}, {scale})"),
+                    )?),
+                    *precision,
+                    *scale,
+                ))
+            }
+            ScalarValue::TimestampSecond(Some(v), tz) => {
+                Ok(ScalarValue::TimestampSecond(
+                    Some(neg_checked_with_ctx(
+                        *v,
+                        format!("In negation of TimestampSecond({v})"),
+                    )?),
+                    tz.clone(),
+                ))
+            }
+            ScalarValue::TimestampNanosecond(Some(v), tz) => {
+                Ok(ScalarValue::TimestampNanosecond(
+                    Some(neg_checked_with_ctx(
+                        *v,
+                        format!("In negation of TimestampNanoSecond({v})"),
+                    )?),
+                    tz.clone(),
+                ))
+            }
+            ScalarValue::TimestampMicrosecond(Some(v), tz) => {
+                Ok(ScalarValue::TimestampMicrosecond(
+                    Some(neg_checked_with_ctx(
+                        *v,
+                        format!("In negation of TimestampMicroSecond({v})"),
+                    )?),
+                    tz.clone(),
+                ))
+            }
+            ScalarValue::TimestampMillisecond(Some(v), tz) => {
+                Ok(ScalarValue::TimestampMillisecond(
+                    Some(neg_checked_with_ctx(
+                        *v,
+                        format!("In negation of TimestampMilliSecond({v})"),
+                    )?),
+                    tz.clone(),
+                ))
+            }
             value => _internal_err!(
                 "Can not run arithmetic negative on scalar value {value:?}"
             ),
