@@ -323,15 +323,6 @@ impl QueryPlanner for TopKQueryPlanner {
 
 struct TopKOptimizerRule {}
 impl OptimizerRule for TopKOptimizerRule {
-    // Example rewrite pass to insert a user defined LogicalPlanNode
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        unreachable!()
-    }
-
     fn name(&self) -> &str {
         "topk"
     }
@@ -344,6 +335,7 @@ impl OptimizerRule for TopKOptimizerRule {
         true
     }
 
+    // Example rewrite pass to insert a user defined LogicalPlanNode
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -515,6 +507,10 @@ impl DisplayAs for TopKExec {
 
 #[async_trait]
 impl ExecutionPlan for TopKExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

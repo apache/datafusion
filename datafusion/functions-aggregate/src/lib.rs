@@ -56,6 +56,7 @@
 pub mod macros;
 
 pub mod approx_distinct;
+pub mod correlation;
 pub mod count;
 pub mod covariance;
 pub mod first_last;
@@ -69,9 +70,11 @@ pub mod variance;
 pub mod approx_median;
 pub mod approx_percentile_cont;
 pub mod approx_percentile_cont_with_weight;
+pub mod average;
 pub mod bit_and_or_xor;
 pub mod bool_and_or;
 pub mod string_agg;
+
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;
 use datafusion_common::Result;
@@ -86,11 +89,13 @@ pub mod expr_fn {
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
+    pub use super::average::avg;
     pub use super::bit_and_or_xor::bit_and;
     pub use super::bit_and_or_xor::bit_or;
     pub use super::bit_and_or_xor::bit_xor;
     pub use super::bool_and_or::bool_and;
     pub use super::bool_and_or::bool_or;
+    pub use super::correlation::corr;
     pub use super::count::count;
     pub use super::count::count_distinct;
     pub use super::covariance::covar_pop;
@@ -120,8 +125,9 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         first_last::first_value_udaf(),
         first_last::last_value_udaf(),
         covariance::covar_samp_udaf(),
-        sum::sum_udaf(),
         covariance::covar_pop_udaf(),
+        correlation::corr_udaf(),
+        sum::sum_udaf(),
         median::median_udaf(),
         count::count_udaf(),
         regr::regr_slope_udaf(),
@@ -147,6 +153,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         bit_and_or_xor::bit_xor_udaf(),
         bool_and_or::bool_and_udaf(),
         bool_and_or::bool_or_udaf(),
+        average::avg_udaf(),
     ]
 }
 
@@ -176,7 +183,7 @@ mod tests {
         let mut names = HashSet::new();
         for func in all_default_aggregate_functions() {
             // TODO: remove this
-            // These functions are in intermidiate migration state, skip them
+            // These functions are in intermediate migration state, skip them
             if func.name().to_lowercase() == "count" {
                 continue;
             }

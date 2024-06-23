@@ -148,6 +148,14 @@ impl PartialEq<dyn Any> for LikeExpr {
     }
 }
 
+/// used for optimize Dictionary like
+fn can_like_type(from_type: &DataType) -> bool {
+    match from_type {
+        DataType::Dictionary(_, inner_type_from) => **inner_type_from == DataType::Utf8,
+        _ => false,
+    }
+}
+
 /// Create a like expression, erroring if the argument types are not compatible.
 pub fn like(
     negated: bool,
@@ -158,7 +166,7 @@ pub fn like(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = &expr.data_type(input_schema)?;
     let pattern_type = &pattern.data_type(input_schema)?;
-    if !expr_type.eq(pattern_type) {
+    if !expr_type.eq(pattern_type) && !can_like_type(expr_type) {
         return internal_err!(
             "The type of {expr_type} AND {pattern_type} of like physical should be same"
         );

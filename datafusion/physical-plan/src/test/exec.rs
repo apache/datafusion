@@ -177,6 +177,10 @@ impl DisplayAs for MockExec {
 }
 
 impl ExecutionPlan for MockExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -335,6 +339,10 @@ impl DisplayAs for BarrierExec {
 }
 
 impl ExecutionPlan for BarrierExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -444,6 +452,10 @@ impl DisplayAs for ErrorExec {
 }
 
 impl ExecutionPlan for ErrorExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -527,6 +539,10 @@ impl DisplayAs for StatisticsExec {
 }
 
 impl ExecutionPlan for StatisticsExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -619,6 +635,10 @@ impl DisplayAs for BlockingExec {
 }
 
 impl ExecutionPlan for BlockingExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -760,6 +780,10 @@ impl DisplayAs for PanicExec {
 }
 
 impl ExecutionPlan for PanicExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

@@ -131,14 +131,6 @@ impl OptimizerRule for MyOptimizerRule {
         "my_optimizer_rule"
     }
 
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        unreachable!()
-    }
-
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::BottomUp)
     }

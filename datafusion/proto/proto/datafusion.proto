@@ -475,7 +475,7 @@ enum AggregateFunction {
   MIN = 0;
   MAX = 1;
   // SUM = 2;
-  AVG = 3;
+  // AVG = 3;
   // COUNT = 4;
   // APPROX_DISTINCT = 5;
   ARRAY_AGG = 6;
@@ -485,7 +485,7 @@ enum AggregateFunction {
   // COVARIANCE_POP = 10;
   // STDDEV = 11;
   // STDDEV_POP = 12;
-  CORRELATION = 13;
+  // CORRELATION = 13;
   // APPROX_PERCENTILE_CONT = 14;
   // APPROX_MEDIAN = 15;
   // APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;

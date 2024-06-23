@@ -77,14 +77,6 @@ impl EliminateCrossJoin {
 ///
 /// This fix helps to improve the performance of TPCH Q19. issue#78
 impl OptimizerRule for EliminateCrossJoin {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called EliminateCrossJoin::rewrite")
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }
