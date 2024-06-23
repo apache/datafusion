@@ -47,7 +47,7 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, NotExpr, NthValue,
+    binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, NthValue,
     PhysicalSortExpr,
 };
 use datafusion::physical_plan::filter::FilterExec;
@@ -60,6 +60,7 @@ use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::udaf::create_aggregate_expr;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
@@ -79,6 +80,7 @@ use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
     ScalarUDFImpl, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
+use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::string_agg::StringAgg;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
@@ -282,11 +284,17 @@ fn roundtrip_window() -> Result<()> {
     ));
 
     let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
-        Arc::new(Avg::new(
-            cast(col("b", &schema)?, &schema, DataType::Float64)?,
-            "AVG(b)".to_string(),
-            DataType::Float64,
-        )),
+        create_aggregate_expr(
+            &avg_udaf(),
+            &[cast(col("b", &schema)?, &schema, DataType::Float64)?],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "avg(b)",
+            false,
+            false,
+        )?,
         &[],
         &[],
         Arc::new(WindowFrame::new(None)),
@@ -342,11 +350,17 @@ fn rountrip_aggregate() -> Result<()> {
 
     let test_cases: Vec<Vec<Arc<dyn AggregateExpr>>> = vec![
         // AVG
-        vec![Arc::new(Avg::new(
-            cast(col("b", &schema)?, &schema, DataType::Float64)?,
-            "AVG(b)".to_string(),
-            DataType::Float64,
-        ))],
+        vec![create_aggregate_expr(
+            &avg_udaf(),
+            &[col("b", &schema)?],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "AVG(b)",
+            false,
+            false,
+        )?],
         // NTH_VALUE
         vec![Arc::new(NthValueAgg::new(
             col("b", &schema)?,
@@ -398,11 +412,17 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-        cast(col("b", &schema)?, &schema, DataType::Float64)?,
-        "AVG(b)".to_string(),
-        DataType::Float64,
-    ))];
+    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
+        &avg_udaf(),
+        &[col("b", &schema)?],
+        &[],
+        &[],
+        &[],
+        &schema,
+        "AVG(b)",
+        false,
+        false,
+    )?];
 
     let agg = AggregateExec::try_new(
         AggregateMode::Final,

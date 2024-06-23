@@ -25,6 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
+use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
@@ -64,16 +65,16 @@ fn subquery_filter_with_cast() -> Result<()> {
     // regression test for https://github.com/apache/datafusion/issues/3760
     let sql = "SELECT col_int32 FROM test \
     WHERE col_int32 > (\
-      SELECT AVG(col_int32) FROM test \
+      SELECT avg(col_int32) FROM test \
       WHERE col_utf8 BETWEEN '2002-05-08' \
         AND (cast('2002-05-08' as date) + interval '5 days')\
     )";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_int32\
-    \n  Inner Join:  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.AVG(test.col_int32)\
+    \n  Inner Join:  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.avg(test.col_int32)\
     \n    TableScan: test projection=[col_int32]\
     \n    SubqueryAlias: __scalar_sq_1\
-    \n      Aggregate: groupBy=[[]], aggr=[[AVG(CAST(test.col_int32 AS Float64))]]\
+    \n      Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]\
     \n        Projection: test.col_int32\
     \n          Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
     \n            TableScan: test projection=[col_int32, col_utf8]";
@@ -326,7 +327,8 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let statement = &ast[0];
     let context_provider = MyContextProvider::default()
         .with_udaf(sum_udaf())
-        .with_udaf(count_udaf());
+        .with_udaf(count_udaf())
+        .with_udaf(avg_udaf());
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 

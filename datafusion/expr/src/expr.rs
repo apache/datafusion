@@ -2451,7 +2451,6 @@ mod test {
             "nth_value",
             "min",
             "max",
-            "avg",
         ];
         for name in names {
             let fun = find_df_window_func(name).unwrap();
@@ -2478,12 +2477,6 @@ mod test {
             find_df_window_func("min"),
             Some(WindowFunctionDefinition::AggregateFunction(
                 aggregate_function::AggregateFunction::Min
-            ))
-        );
-        assert_eq!(
-            find_df_window_func("avg"),
-            Some(WindowFunctionDefinition::AggregateFunction(
-                aggregate_function::AggregateFunction::Avg
             ))
         );
         assert_eq!(

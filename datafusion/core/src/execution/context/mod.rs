@@ -486,6 +486,32 @@ impl SessionContext {
         self.execute_logical_plan(plan).await
     }
 
+    /// Creates logical expresssions from SQL query text.
+    ///
+    /// # Example: Parsing SQL queries
+    ///
+    /// ```
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion::prelude::*;
+    /// # use datafusion_common::{DFSchema, Result};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// // datafusion will parse number as i64 first.
+    /// let sql = "a > 10";
+    /// let expected = col("a").gt(lit(10 as i64));
+    /// // provide type information that `a` is an Int32
+    /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+    /// let df_schema = DFSchema::try_from(schema).unwrap();
+    /// let expr = SessionContext::new()
+    ///  .parse_sql_expr(sql, &df_schema)?;
+    /// assert_eq!(expected, expr);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn parse_sql_expr(&self, sql: &str, df_schema: &DFSchema) -> Result<Expr> {
+        self.state.read().create_logical_expr(sql, df_schema)
+    }
+
     /// Execute the [`LogicalPlan`], return a [`DataFrame`]. This API
     /// is not featured limited (so all SQL such as `CREATE TABLE` and
     /// `COPY` will be run).
