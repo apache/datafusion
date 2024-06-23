@@ -41,6 +41,7 @@ use datafusion_expr::{
 };
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::has_all_column_refs;
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
@@ -199,13 +200,7 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
             ]
         })
         .collect::<HashSet<_>>();
-    let columns = predicate.to_columns()?;
-
-    Ok(schema_columns
-        .intersection(&columns)
-        .collect::<HashSet<_>>()
-        .len()
-        == columns.len())
+    Ok(has_all_column_refs(predicate, &schema_columns))
 }
 
 /// Determine whether the predicate can evaluate as the join conditions
@@ -372,14 +367,7 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
             }
         }
         _ => {
-            let columns = expr.to_columns().ok().unwrap();
-
-            if schema_columns
-                .intersection(&columns)
-                .collect::<HashSet<_>>()
-                .len()
-                == columns.len()
-            {
+            if has_all_column_refs(expr, schema_columns) {
                 predicate = Some(expr.clone());
             }
         }

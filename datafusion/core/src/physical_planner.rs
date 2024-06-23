@@ -1259,7 +1259,7 @@ impl DefaultPhysicalPlanner {
                 let join_filter = match filter {
                     Some(expr) => {
                         // Extract columns from filter expression and saved in a HashSet
-                        let cols = expr.to_columns()?;
+                        let cols = expr.column_refs();
 
                         // Collect left & right field indices, the field indices are sorted in ascending order
                         let left_field_indices = cols
