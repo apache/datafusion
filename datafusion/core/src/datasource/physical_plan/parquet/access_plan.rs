@@ -139,6 +139,11 @@ impl ParquetAccessPlan {
         self.set(idx, RowGroupAccess::Skip);
     }
 
+    /// scan the i-th row group
+    pub fn scan(&mut self, idx: usize) {
+        self.set(idx, RowGroupAccess::Scan);
+    }
+
     /// Return true if the i-th row group should be scanned
     pub fn should_scan(&self, idx: usize) -> bool {
         self.row_groups[idx].should_scan()

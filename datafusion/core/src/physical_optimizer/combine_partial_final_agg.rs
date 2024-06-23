@@ -27,8 +27,7 @@ use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
+use datafusion_physical_expr::{physical_exprs_equal, AggregateExpr, PhysicalExpr};
 
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
@@ -132,19 +131,23 @@ type GroupExprsRef<'a> = (
     &'a [Option<Arc<dyn PhysicalExpr>>],
 );
 
-type GroupExprs = (
-    PhysicalGroupBy,
-    Vec<Arc<dyn AggregateExpr>>,
-    Vec<Option<Arc<dyn PhysicalExpr>>>,
-);
-
 fn can_combine(final_agg: GroupExprsRef, partial_agg: GroupExprsRef) -> bool {
-    let (final_group_by, final_aggr_expr, final_filter_expr) =
-        normalize_group_exprs(final_agg);
-    let (input_group_by, input_aggr_expr, input_filter_expr) =
-        normalize_group_exprs(partial_agg);
+    let (final_group_by, final_aggr_expr, final_filter_expr) = final_agg;
+    let (input_group_by, input_aggr_expr, input_filter_expr) = partial_agg;
 
-    final_group_by.eq(&input_group_by)
+    // Compare output expressions of the partial, and input expressions of the final operator.
+    physical_exprs_equal(
+        &input_group_by.output_exprs(),
+        &final_group_by.input_exprs(),
+    ) && input_group_by.groups() == final_group_by.groups()
+        && input_group_by.null_expr().len() == final_group_by.null_expr().len()
+        && input_group_by
+            .null_expr()
+            .iter()
+            .zip(final_group_by.null_expr().iter())
+            .all(|((lhs_expr, lhs_str), (rhs_expr, rhs_str))| {
+                lhs_expr.eq(rhs_expr) && lhs_str == rhs_str
+            })
         && final_aggr_expr.len() == input_aggr_expr.len()
         && final_aggr_expr
             .iter()
@@ -158,41 +161,6 @@ fn can_combine(final_agg: GroupExprsRef, partial_agg: GroupExprsRef) -> bool {
                 _ => false,
             },
         )
-}
-
-// To compare the group expressions between the final and partial aggregations, need to discard all the column indexes and compare
-fn normalize_group_exprs(group_exprs: GroupExprsRef) -> GroupExprs {
-    let (group, agg, filter) = group_exprs;
-    let new_group_expr = group
-        .expr()
-        .iter()
-        .map(|(expr, name)| (discard_column_index(expr.clone()), name.clone()))
-        .collect::<Vec<_>>();
-    let new_group = PhysicalGroupBy::new(
-        new_group_expr,
-        group.null_expr().to_vec(),
-        group.groups().to_vec(),
-    );
-    (new_group, agg.to_vec(), filter.to_vec())
-}
-
-fn discard_column_index(group_expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
-    group_expr
-        .clone()
-        .transform(|expr| {
-            let normalized_form: Option<Arc<dyn PhysicalExpr>> =
-                match expr.as_any().downcast_ref::<Column>() {
-                    Some(column) => Some(Arc::new(Column::new(column.name(), 0))),
-                    None => None,
-                };
-            Ok(if let Some(normalized_form) = normalized_form {
-                Transformed::yes(normalized_form)
-            } else {
-                Transformed::no(expr)
-            })
-        })
-        .data()
-        .unwrap_or(group_expr)
 }
 
 #[cfg(test)]

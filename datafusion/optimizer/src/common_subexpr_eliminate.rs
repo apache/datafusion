@@ -31,8 +31,7 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{
-    internal_datafusion_err, internal_err, qualified_name, Column, DFSchema, DFSchemaRef,
-    Result,
+    internal_datafusion_err, qualified_name, Column, DFSchema, DFSchemaRef, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
@@ -681,14 +680,6 @@ fn get_consecutive_window_exprs(
 }
 
 impl OptimizerRule for CommonSubexprEliminate {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called CommonSubexprEliminate::rewrite")
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }

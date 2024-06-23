@@ -857,6 +857,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             delimiter: proto_opts.delimiter[0],
             quote: proto_opts.quote[0],
             escape: proto_opts.escape.first().copied(),
+            double_quote: proto_opts.has_header.first().map(|h| *h != 0),
             compression: proto_opts.compression().into(),
             schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
             date_format: (!proto_opts.date_format.is_empty())
@@ -1091,11 +1092,34 @@ pub(crate) fn csv_writer_options_from_proto(
             return Err(proto_error("Error parsing CSV Delimiter"));
         }
     }
+    if !writer_options.quote.is_empty() {
+        if let Some(quote) = writer_options.quote.chars().next() {
+            if quote.is_ascii() {
+                builder = builder.with_quote(quote as u8);
+            } else {
+                return Err(proto_error("CSV Quote is not ASCII"));
+            }
+        } else {
+            return Err(proto_error("Error parsing CSV Quote"));
+        }
+    }
+    if !writer_options.escape.is_empty() {
+        if let Some(escape) = writer_options.escape.chars().next() {
+            if escape.is_ascii() {
+                builder = builder.with_escape(escape as u8);
+            } else {
+                return Err(proto_error("CSV Escape is not ASCII"));
+            }
+        } else {
+            return Err(proto_error("Error parsing CSV Escape"));
+        }
+    }
     Ok(builder
         .with_header(writer_options.has_header)
         .with_date_format(writer_options.date_format.clone())
         .with_datetime_format(writer_options.datetime_format.clone())
         .with_timestamp_format(writer_options.timestamp_format.clone())
         .with_time_format(writer_options.time_format.clone())
-        .with_null(writer_options.null_value.clone()))
+        .with_null(writer_options.null_value.clone())
+        .with_double_quote(writer_options.double_quote))
 }

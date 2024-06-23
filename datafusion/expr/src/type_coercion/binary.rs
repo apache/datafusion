@@ -1050,12 +1050,16 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         }
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
-                // can't cast across timezones
                 (Some(lhs_tz), Some(rhs_tz)) => {
-                    if lhs_tz != rhs_tz {
-                        return None;
-                    } else {
-                        Some(lhs_tz.clone())
+                    match (lhs_tz.as_ref(), rhs_tz.as_ref()) {
+                        // UTC and "+00:00" are the same by definition. Most other timezones
+                        // do not have a 1-1 mapping between timezone and an offset from UTC
+                        ("UTC", "+00:00") | ("+00:00", "UTC") => Some(lhs_tz.clone()),
+                        (lhs, rhs) if lhs == rhs => Some(lhs_tz.clone()),
+                        // can't cast across timezones
+                        _ => {
+                            return None;
+                        }
                     }
                 }
                 (Some(lhs_tz), None) => Some(lhs_tz.clone()),

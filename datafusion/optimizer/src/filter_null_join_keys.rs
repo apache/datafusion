@@ -20,7 +20,7 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::Result;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
     logical_plan::Filter, logical_plan::JoinType, Expr, ExprSchemable, LogicalPlan,
@@ -35,14 +35,6 @@ use std::sync::Arc;
 pub struct FilterNullJoinKeys {}
 
 impl OptimizerRule for FilterNullJoinKeys {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called FilterNullJoinKeys::rewrite")
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }

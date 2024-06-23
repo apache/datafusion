@@ -996,12 +996,12 @@ fn select_aggregate_with_having_with_aggregate_not_in_select() {
 
 #[test]
 fn select_aggregate_with_having_referencing_column_not_in_select() {
-    let sql = "SELECT COUNT(*)
+    let sql = "SELECT count(*)
                    FROM person
                    HAVING first_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: HAVING clause references non-aggregate values: Expression person.first_name could not be resolved from available columns: COUNT(*)",
+        "Error during planning: HAVING clause references non-aggregate values: Expression person.first_name could not be resolved from available columns: count(*)",
         err.strip_backtrace()
     );
 }
@@ -1200,10 +1200,10 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
     let sql = "SELECT first_name, MAX(age)
                    FROM person
                    GROUP BY first_name
-                   HAVING MAX(age) > 100 AND COUNT(*) < 50";
+                   HAVING MAX(age) > 100 AND count(*) < 50";
     let expected = "Projection: person.first_name, MAX(person.age)\
-                        \n  Filter: MAX(person.age) > Int64(100) AND COUNT(*) < Int64(50)\
-                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age), COUNT(*)]]\
+                        \n  Filter: MAX(person.age) > Int64(100) AND count(*) < Int64(50)\
+                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age), count(*)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
@@ -1464,15 +1464,15 @@ fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby()
 #[test]
 fn select_simple_aggregate_with_groupby_can_use_positions() {
     quick_test(
-        "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 1, 2",
-        "Projection: person.state, person.age AS b, COUNT(Int64(1))\
-             \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[COUNT(Int64(1))]]\
+        "SELECT state, age AS b, count(1) FROM person GROUP BY 1, 2",
+        "Projection: person.state, person.age AS b, count(Int64(1))\
+             \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[count(Int64(1))]]\
              \n    TableScan: person",
     );
     quick_test(
-        "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 2, 1",
-        "Projection: person.state, person.age AS b, COUNT(Int64(1))\
-             \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[COUNT(Int64(1))]]\
+        "SELECT state, age AS b, count(1) FROM person GROUP BY 2, 1",
+        "Projection: person.state, person.age AS b, count(Int64(1))\
+             \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[count(Int64(1))]]\
              \n    TableScan: person",
     );
 }
@@ -1633,18 +1633,18 @@ fn test_wildcard() {
 
 #[test]
 fn select_count_one() {
-    let sql = "SELECT COUNT(1) FROM person";
-    let expected = "Projection: COUNT(Int64(1))\
-                        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
+    let sql = "SELECT count(1) FROM person";
+    let expected = "Projection: count(Int64(1))\
+                        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
                         \n    TableScan: person";
     quick_test(sql, expected);
 }
 
 #[test]
 fn select_count_column() {
-    let sql = "SELECT COUNT(id) FROM person";
-    let expected = "Projection: COUNT(person.id)\
-                        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(person.id)]]\
+    let sql = "SELECT count(id) FROM person";
+    let expected = "Projection: count(person.id)\
+                        \n  Aggregate: groupBy=[[]], aggr=[[count(person.id)]]\
                         \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -1814,9 +1814,9 @@ fn select_group_by_columns_not_in_select() {
 
 #[test]
 fn select_group_by_count_star() {
-    let sql = "SELECT state, COUNT(*) FROM person GROUP BY state";
-    let expected = "Projection: person.state, COUNT(*)\
-                        \n  Aggregate: groupBy=[[person.state]], aggr=[[COUNT(*)]]\
+    let sql = "SELECT state, count(*) FROM person GROUP BY state";
+    let expected = "Projection: person.state, count(*)\
+                        \n  Aggregate: groupBy=[[person.state]], aggr=[[count(*)]]\
                         \n    TableScan: person";
 
     quick_test(sql, expected);
@@ -1824,10 +1824,10 @@ fn select_group_by_count_star() {
 
 #[test]
 fn select_group_by_needs_projection() {
-    let sql = "SELECT COUNT(state), state FROM person GROUP BY state";
+    let sql = "SELECT count(state), state FROM person GROUP BY state";
     let expected = "\
-        Projection: COUNT(person.state), person.state\
-        \n  Aggregate: groupBy=[[person.state]], aggr=[[COUNT(person.state)]]\
+        Projection: count(person.state), person.state\
+        \n  Aggregate: groupBy=[[person.state]], aggr=[[count(person.state)]]\
         \n    TableScan: person";
 
     quick_test(sql, expected);
@@ -3000,8 +3000,8 @@ fn scalar_subquery_reference_outer_field() {
     let expected = "Projection: j1.j1_string, j2.j2_string\
         \n  Filter: j1.j1_id = j2.j2_id - Int64(1) AND j2.j2_id < (<subquery>)\
         \n    Subquery:\
-        \n      Projection: COUNT(*)\
-        \n        Aggregate: groupBy=[[]], aggr=[[COUNT(*)]]\
+        \n      Projection: count(*)\
+        \n        Aggregate: groupBy=[[]], aggr=[[count(*)]]\
         \n          Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id\
         \n            CrossJoin:\
         \n              TableScan: j1\
@@ -3098,19 +3098,19 @@ fn cte_unbalanced_number_of_columns() {
 #[test]
 fn aggregate_with_rollup() {
     let sql =
-        "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
-    let expected = "Projection: person.id, person.state, person.age, COUNT(*)\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[COUNT(*)]]\
+        "SELECT id, state, age, count(*) FROM person GROUP BY id, ROLLUP (state, age)";
+    let expected = "Projection: person.id, person.state, person.age, count(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[count(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
 
 #[test]
 fn aggregate_with_rollup_with_grouping() {
-    let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), COUNT(*) \
+    let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), count(*) \
         FROM person GROUP BY id, ROLLUP (state, age)";
-    let expected = "Projection: person.id, person.state, person.age, GROUPING(person.state), GROUPING(person.age), GROUPING(person.state) + GROUPING(person.age), COUNT(*)\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[GROUPING(person.state), GROUPING(person.age), COUNT(*)]]\
+    let expected = "Projection: person.id, person.state, person.age, GROUPING(person.state), GROUPING(person.age), GROUPING(person.state) + GROUPING(person.age), count(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[GROUPING(person.state), GROUPING(person.age), count(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -3140,9 +3140,9 @@ fn rank_partition_grouping() {
 #[test]
 fn aggregate_with_cube() {
     let sql =
-        "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
-    let expected = "Projection: person.id, person.state, person.age, COUNT(*)\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[COUNT(*)]]\
+        "SELECT id, state, age, count(*) FROM person GROUP BY id, CUBE (state, age)";
+    let expected = "Projection: person.id, person.state, person.age, count(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[count(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -3157,9 +3157,9 @@ fn round_decimal() {
 
 #[test]
 fn aggregate_with_grouping_sets() {
-    let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
-    let expected = "Projection: person.id, person.state, person.age, COUNT(*)\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[COUNT(*)]]\
+    let sql = "SELECT id, state, age, count(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
+    let expected = "Projection: person.id, person.state, person.age, count(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[count(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
