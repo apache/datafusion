@@ -265,7 +265,10 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                         "There isn't a common type to coerce {left_type} and {right_type} in {op_name} expression"
                     )
                 })?;
-                let expr = Box::new(expr.cast_to(&coerced_type, self.schema)?);
+                let expr = match left_type {
+                    DataType::Dictionary(_, inner) if *inner == DataType::Utf8 => expr,
+                    _ => Box::new(expr.cast_to(&coerced_type, self.schema)?),
+                };
                 let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
                 Ok(Transformed::yes(Expr::Like(Like::new(
                     negated,
