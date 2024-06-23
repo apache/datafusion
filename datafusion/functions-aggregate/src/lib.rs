@@ -69,6 +69,7 @@ pub mod variance;
 pub mod approx_median;
 pub mod approx_percentile_cont;
 pub mod approx_percentile_cont_with_weight;
+pub mod average;
 pub mod bit_and_or_xor;
 pub mod bool_and_or;
 pub mod string_agg;
@@ -86,6 +87,7 @@ pub mod expr_fn {
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
+    pub use super::average::avg;
     pub use super::bit_and_or_xor::bit_and;
     pub use super::bit_and_or_xor::bit_or;
     pub use super::bit_and_or_xor::bit_xor;
@@ -147,6 +149,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         bit_and_or_xor::bit_xor_udaf(),
         bool_and_or::bool_and_udaf(),
         bool_and_or::bool_or_udaf(),
+        average::avg_udaf(),
     ]
 }
 

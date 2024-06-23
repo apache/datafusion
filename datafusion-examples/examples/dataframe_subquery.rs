@@ -19,6 +19,7 @@ use arrow_schema::DataType;
 use std::sync::Arc;
 
 use datafusion::error::Result;
+use datafusion::functions_aggregate::average::avg;
 use datafusion::prelude::*;
 use datafusion::test_util::arrow_test_data;
 use datafusion_common::ScalarValue;
