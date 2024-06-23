@@ -75,7 +75,7 @@ use url::Url;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_optimizer::AnalyzerRule;
+use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 
 mod avro;
 mod csv;
@@ -332,13 +332,21 @@ impl SessionContext {
         self
     }
 
-    /// Adds an analyzer rule to the `SessionState` in the current `SessionContext`.
-    pub fn add_analyzer_rule(
-        self,
-        analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    ) -> Self {
+    /// Adds an optimizer rule to the end of the existing rules.
+    ///
+    /// See [`SessionState`] for more control of when the rule is applied.
+    pub fn add_optimizer_rule(
+        &self,
+        optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
+    ) {
+        self.state.write().append_optimizer_rule(optimizer_rule);
+    }
+
+    /// Adds an analyzer rule to the end of the existing rules.
+    ///
+    /// See [`SessionState`] for more control of when the rule is applied.
+    pub fn add_analyzer_rule(&self, analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>) {
         self.state.write().add_analyzer_rule(analyzer_rule);
-        self
     }
 
     /// Registers an [`ObjectStore`] to be used with a specific URL prefix.
