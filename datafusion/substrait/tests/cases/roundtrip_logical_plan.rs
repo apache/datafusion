@@ -239,7 +239,7 @@ async fn aggregate_grouping_sets() -> Result<()> {
 async fn aggregate_grouping_rollup() -> Result<()> {
     assert_expected_plan(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",
-        "Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[AVG(data.b)]]\
+        "Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
         \n  TableScan: data projection=[a, b, c, e]",
         true
     ).await

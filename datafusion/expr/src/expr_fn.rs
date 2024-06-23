@@ -183,18 +183,6 @@ pub fn array_agg(expr: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the avg() aggregate function
-pub fn avg(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Avg,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Return a new expression with bitwise AND
 pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(

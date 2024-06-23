@@ -48,13 +48,11 @@ use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
-use datafusion_expr::lit;
+use datafusion_expr::{case, is_null, lit};
 use datafusion_expr::{
-    avg, max, min, utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown,
-    UNNAMED_TABLE,
+    max, min, utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
-use datafusion_expr::{case, is_null};
-use datafusion_functions_aggregate::expr_fn::{count, median, stddev, sum};
+use datafusion_functions_aggregate::expr_fn::{avg, count, median, stddev, sum};
 
 use async_trait::async_trait;
 
@@ -561,7 +559,7 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
-    ///   // Return a single row (a, b) for each distinct value of a  
+    ///   // Return a single row (a, b) for each distinct value of a
     ///   .distinct_on(vec![col("a")], vec![col("a"), col("b")], None)?;
     /// # Ok(())
     /// # }
@@ -2045,7 +2043,7 @@ mod tests {
 
         assert_batches_sorted_eq!(
             ["+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
-                "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) | AVG(aggregate_test_100.c12) | sum(aggregate_test_100.c12) | count(aggregate_test_100.c12) | count(DISTINCT aggregate_test_100.c12) |",
+                "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) | avg(aggregate_test_100.c12) | sum(aggregate_test_100.c12) | count(aggregate_test_100.c12) | count(DISTINCT aggregate_test_100.c12) |",
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
                 "| a  | 0.02182578039211991         | 0.9800193410444061          | 0.48754517466109415         | 10.238448667882977          | 21                            | 21                                     |",
                 "| b  | 0.04893135681998029         | 0.9185813970744787          | 0.41040709263815384         | 7.797734760124923           | 19                            | 19                                     |",

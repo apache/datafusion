@@ -37,8 +37,6 @@ pub enum AggregateFunction {
     Min,
     /// Maximum
     Max,
-    /// Average
-    Avg,
     /// Aggregation into an array
     ArrayAgg,
     /// N'th value in a group according to some ordering
@@ -55,7 +53,6 @@ impl AggregateFunction {
         match self {
             Min => "MIN",
             Max => "MAX",
-            Avg => "AVG",
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
             Correlation => "CORR",
@@ -75,9 +72,7 @@ impl FromStr for AggregateFunction {
     fn from_str(name: &str) -> Result<AggregateFunction> {
         Ok(match name {
             // general
-            "avg" => AggregateFunction::Avg,
             "max" => AggregateFunction::Max,
-            "mean" => AggregateFunction::Avg,
             "min" => AggregateFunction::Min,
             "array_agg" => AggregateFunction::ArrayAgg,
             "nth_value" => AggregateFunction::NthValue,
@@ -123,7 +118,6 @@ impl AggregateFunction {
             AggregateFunction::Correlation => {
                 correlation_return_type(&coerced_data_types[0])
             }
-            AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
             AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
                 "item",
                 coerced_data_types[0].clone(),
@@ -133,19 +127,6 @@ impl AggregateFunction {
             AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
         }
     }
-}
-
-/// Returns the internal sum datatype of the avg aggregate function.
-pub fn sum_type_of_avg(input_expr_types: &[DataType]) -> Result<DataType> {
-    // Note that this function *must* return the same type that the respective physical expression returns
-    // or the execution panics.
-    let fun = AggregateFunction::Avg;
-    let coerced_data_types = crate::type_coercion::aggregates::coerce_types(
-        &fun,
-        input_expr_types,
-        &fun.signature(),
-    )?;
-    avg_sum_type(&coerced_data_types[0])
 }
 
 impl AggregateFunction {
@@ -167,9 +148,6 @@ impl AggregateFunction {
                     .cloned()
                     .collect::<Vec<_>>();
                 Signature::uniform(1, valid, Volatility::Immutable)
-            }
-            AggregateFunction::Avg => {
-                Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
             AggregateFunction::Correlation => {
