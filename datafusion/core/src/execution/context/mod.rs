@@ -1297,6 +1297,11 @@ impl SessionContext {
         state
     }
 
+    /// Get reference to [`SessionState`]
+    pub fn state_ref(&self) -> Arc<RwLock<SessionState>> {
+        self.state.clone()
+    }
+
     /// Get weak reference to [`SessionState`]
     pub fn state_weak_ref(&self) -> Weak<RwLock<SessionState>> {
         Arc::downgrade(&self.state)
