@@ -283,6 +283,23 @@ fn roundtrip_window() -> Result<()> {
         Arc::new(window_frame),
     ));
 
+    let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
+        create_aggregate_expr(
+            &avg_udaf(),
+            &[cast(col("b", &schema)?, &schema, DataType::Float64)?],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "avg(b)",
+            false,
+            false,
+        )?,
+        &[],
+        &[],
+        Arc::new(WindowFrame::new(None)),
+    ));
+
     let window_frame = WindowFrame::new_bounds(
         datafusion_expr::WindowFrameUnits::Range,
         WindowFrameBound::CurrentRow,
@@ -312,7 +329,11 @@ fn roundtrip_window() -> Result<()> {
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     roundtrip_test(Arc::new(WindowAggExec::try_new(
-        vec![builtin_window_expr, sliding_aggr_window_expr],
+        vec![
+            builtin_window_expr,
+            plain_aggr_window_expr,
+            sliding_aggr_window_expr,
+        ],
         input,
         vec![col("b", &schema)?],
     )?))
