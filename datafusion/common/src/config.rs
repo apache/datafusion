@@ -204,6 +204,12 @@ config_namespace! {
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
         pub dialect: String, default = "generic".to_string()
 
+        /// If set to true, the system will return an error when encountering a `Varchar`
+        /// type with a specified length. This can be useful for enforcing certain schema
+        /// constraints or maintaining compatibility with systems that do not support
+        /// length-specified `Varchar` types.
+        pub error_on_varchar_with_length: bool, default = false
+
     }
 }
 
@@ -303,6 +309,7 @@ config_namespace! {
         /// statistics into the same file groups.
         /// Currently experimental
         pub split_file_groups_by_statistics: bool, default = false
+
     }
 }
 

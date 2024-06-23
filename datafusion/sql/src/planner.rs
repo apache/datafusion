@@ -97,6 +97,7 @@ pub trait ContextProvider {
 pub struct ParserOptions {
     pub parse_float_as_decimal: bool,
     pub enable_ident_normalization: bool,
+    pub error_on_varchar_with_length: bool,
 }
 
 impl Default for ParserOptions {
@@ -104,6 +105,7 @@ impl Default for ParserOptions {
         Self {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
+            error_on_varchar_with_length: false,
         }
     }
 }
@@ -398,12 +400,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::UnsignedInt(_) | SQLDataType::UnsignedInteger(_) | SQLDataType::UnsignedInt4(_) => {
                 Ok(DataType::UInt32)
             }
+            SQLDataType::Varchar(length) => {
+                match (length, self.options.error_on_varchar_with_length) {
+                    (Some(_), true) => plan_err!("does not support Varchar with length, please set corresponding parameter"),
+                    _ => Ok(DataType::Utf8),
+                }
+            }
             SQLDataType::UnsignedBigInt(_) | SQLDataType::UnsignedInt8(_) => Ok(DataType::UInt64),
             SQLDataType::Float(_) => Ok(DataType::Float32),
             SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
             SQLDataType::Double | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
             SQLDataType::Char(_)
-            | SQLDataType::Varchar(_)
             | SQLDataType::Text
             | SQLDataType::String(_) => Ok(DataType::Utf8),
             SQLDataType::Timestamp(None, tz_info) => {

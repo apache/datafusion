@@ -78,3 +78,42 @@ e1
 p2
 p2e1
 p2m1e1
+
+statement ok
+set datafusion.sql_parser.error_on_varchar_with_length = true;
+
+# could not process due to config setting
+query error
+SELECT '12345'::VARCHAR(2);
+
+query error
+SELECT s::VARCHAR(2) FROM (VALUES ('12345')) t(s);
+
+statement ok
+create table vals(s char) as values('abc'), ('def');
+
+query error
+SELECT s::VARCHAR(2) FROM vals
+
+statement ok
+set datafusion.sql_parser.error_on_varchar_with_length = false;
+
+# could be done when we diable this setting
+query T
+SELECT '12345'::VARCHAR(2)
+----
+12345
+
+query T
+SELECT s::VARCHAR(2) FROM (VALUES ('12345')) t(s)
+----
+12345
+
+query T
+SELECT s::VARCHAR(2) FROM vals
+----
+abc
+def
+
+statement ok
+drop table vals;
