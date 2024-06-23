@@ -43,7 +43,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -404,10 +404,13 @@ pub async fn statistics_from_parquet_meta(
     let mut null_counts_array = vec![Precision::Exact(0); table_schema.fields().len()];
     let row_groups_metadata = metadata.row_groups();
 
-    let Some(num_rows) = row_groups_metadata.first().map(|rg| rg.num_rows() as usize)
-    else {
-        return Ok(statistics);
-    };
+    // The num_rows needs to be calculated even when the statistics converter fails.
+    // This is due to the null counts being calculated based on the number of rows when the prerequisites is not met.
+    // Below the test read_merged_batches checks for this behavior.
+    let num_rows = row_groups_metadata
+        .iter()
+        .map(|rg| rg.num_rows() as usize)
+        .sum();
     statistics.num_rows = Precision::Exact(num_rows);
 
     let mut fields_iter = table_schema.fields().iter();
