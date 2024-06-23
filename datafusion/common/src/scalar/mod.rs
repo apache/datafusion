@@ -1177,41 +1177,48 @@ impl ScalarValue {
             | ScalarValue::Float64(None) => Ok(self.clone()),
             ScalarValue::Float64(Some(v)) => Ok(ScalarValue::Float64(Some(-v))),
             ScalarValue::Float32(Some(v)) => Ok(ScalarValue::Float32(Some(-v))),
-            ScalarValue::Int8(Some(v)) => Ok(ScalarValue::Int8(Some(-v))),
-            ScalarValue::Int16(Some(v)) => Ok(ScalarValue::Int16(Some(-v))),
-            ScalarValue::Int32(Some(v)) => Ok(ScalarValue::Int32(Some(-v))),
-            ScalarValue::Int64(Some(v)) => Ok(ScalarValue::Int64(Some(-v))),
+            ScalarValue::Int8(Some(v)) => Ok(ScalarValue::Int8(Some(v.neg_checked()?))),
+            ScalarValue::Int16(Some(v)) => Ok(ScalarValue::Int16(Some(v.neg_checked()?))),
+            ScalarValue::Int32(Some(v)) => Ok(ScalarValue::Int32(Some(v.neg_checked()?))),
+            ScalarValue::Int64(Some(v)) => Ok(ScalarValue::Int64(Some(v.neg_checked()?))),
             ScalarValue::IntervalYearMonth(Some(v)) => {
-                Ok(ScalarValue::IntervalYearMonth(Some(-v)))
+                Ok(ScalarValue::IntervalYearMonth(Some(v.neg_checked()?)))
             }
             ScalarValue::IntervalDayTime(Some(v)) => {
                 let (days, ms) = IntervalDayTimeType::to_parts(*v);
-                let val = IntervalDayTimeType::make_value(-days, -ms);
+                let val = IntervalDayTimeType::make_value(
+                    days.neg_checked()?,
+                    ms.neg_checked()?,
+                );
                 Ok(ScalarValue::IntervalDayTime(Some(val)))
             }
             ScalarValue::IntervalMonthDayNano(Some(v)) => {
                 let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*v);
-                let val = IntervalMonthDayNanoType::make_value(-months, -days, -nanos);
+                let val = IntervalMonthDayNanoType::make_value(
+                    months.neg_checked()?,
+                    days.neg_checked()?,
+                    nanos.neg_checked()?,
+                );
                 Ok(ScalarValue::IntervalMonthDayNano(Some(val)))
             }
-            ScalarValue::Decimal128(Some(v), precision, scale) => {
-                Ok(ScalarValue::Decimal128(Some(-v), *precision, *scale))
-            }
-            ScalarValue::Decimal256(Some(v), precision, scale) => Ok(
-                ScalarValue::Decimal256(Some(v.neg_wrapping()), *precision, *scale),
+            ScalarValue::Decimal128(Some(v), precision, scale) => Ok(
+                ScalarValue::Decimal128(Some(v.neg_checked()?), *precision, *scale),
             ),
-            ScalarValue::TimestampSecond(Some(v), tz) => {
-                Ok(ScalarValue::TimestampSecond(Some(-v), tz.clone()))
-            }
-            ScalarValue::TimestampNanosecond(Some(v), tz) => {
-                Ok(ScalarValue::TimestampNanosecond(Some(-v), tz.clone()))
-            }
-            ScalarValue::TimestampMicrosecond(Some(v), tz) => {
-                Ok(ScalarValue::TimestampMicrosecond(Some(-v), tz.clone()))
-            }
-            ScalarValue::TimestampMillisecond(Some(v), tz) => {
-                Ok(ScalarValue::TimestampMillisecond(Some(-v), tz.clone()))
-            }
+            ScalarValue::Decimal256(Some(v), precision, scale) => Ok(
+                ScalarValue::Decimal256(Some(v.neg_checked()?), *precision, *scale),
+            ),
+            ScalarValue::TimestampSecond(Some(v), tz) => Ok(
+                ScalarValue::TimestampSecond(Some(v.neg_checked()?), tz.clone()),
+            ),
+            ScalarValue::TimestampNanosecond(Some(v), tz) => Ok(
+                ScalarValue::TimestampNanosecond(Some(v.neg_checked()?), tz.clone()),
+            ),
+            ScalarValue::TimestampMicrosecond(Some(v), tz) => Ok(
+                ScalarValue::TimestampMicrosecond(Some(v.neg_checked()?), tz.clone()),
+            ),
+            ScalarValue::TimestampMillisecond(Some(v), tz) => Ok(
+                ScalarValue::TimestampMillisecond(Some(v.neg_checked()?), tz.clone()),
+            ),
             value => _internal_err!(
                 "Can not run arithmetic negative on scalar value {value:?}"
             ),
