@@ -29,6 +29,7 @@ use std::iter::repeat;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::arrow_datafusion_err;
 use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
     as_fixed_size_binary_array, as_fixed_size_list_array,
@@ -3508,6 +3509,7 @@ mod tests {
     use crate::assert_batches_eq;
     use arrow::buffer::OffsetBuffer;
     use arrow::compute::{is_null, kernels};
+    use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use arrow_buffer::Buffer;
     use arrow_schema::Fields;
@@ -5498,6 +5500,69 @@ mod tests {
         assert!(value.arithmetic_negate().is_err());
         let value = ScalarValue::Boolean(None);
         assert!(value.arithmetic_negate().is_err());
+        Ok(())
+    }
+
+    #[test]
+    #[allow(arithmetic_overflow)] // we want to test them
+    fn test_scalar_negative_overflows() -> Result<()> {
+        macro_rules! test_overflow_on_value {
+            ($($val:expr),* $(,)?) => {$(
+                {
+                    let value: ScalarValue = $val;
+                    let err = value.arithmetic_negate().expect_err("Should receive overflow error on negating {value:?}");
+                    let root_err = err.find_root();
+                    match  root_err{
+                        DataFusionError::ArrowError(
+                            ArrowError::ComputeError(_),
+                            _,
+                        ) => {}
+                        _ => return Err(err),
+                    };
+                }
+            )*};
+        }
+        test_overflow_on_value!(
+            // the integers
+            i8::MIN.into(),
+            i16::MIN.into(),
+            i32::MIN.into(),
+            i64::MIN.into(),
+            // for decimals, only value needs to be tested
+            ScalarValue::try_new_decimal128(i128::MIN, 10, 5)?,
+            ScalarValue::Decimal256(Some(i256::MIN), 20, 5),
+            // interval, check all possible values
+            ScalarValue::IntervalYearMonth(Some(i32::MIN)),
+            ScalarValue::new_interval_dt(i32::MIN, 999),
+            ScalarValue::new_interval_dt(1, i32::MIN),
+            ScalarValue::new_interval_mdn(i32::MIN, 15, 123_456),
+            ScalarValue::new_interval_mdn(12, i32::MIN, 123_456),
+            ScalarValue::new_interval_mdn(12, 15, i64::MIN),
+            // tz doesn't matter when negating
+            ScalarValue::TimestampSecond(Some(i64::MIN), None),
+            ScalarValue::TimestampMillisecond(Some(i64::MIN), None),
+            ScalarValue::TimestampMicrosecond(Some(i64::MIN), None),
+            ScalarValue::TimestampNanosecond(Some(i64::MIN), None),
+        );
+
+        let float_cases = [
+            (
+                ScalarValue::Float16(Some(f16::MIN)),
+                ScalarValue::Float16(Some(f16::MAX)),
+            ),
+            (
+                ScalarValue::Float16(Some(f16::MAX)),
+                ScalarValue::Float16(Some(f16::MIN)),
+            ),
+            (f32::MIN.into(), f32::MAX.into()),
+            (f32::MAX.into(), f32::MIN.into()),
+            (f64::MIN.into(), f64::MAX.into()),
+            (f64::MAX.into(), f64::MIN.into()),
+        ];
+        // skip float 16 because they aren't supported
+        for (test, expected) in float_cases.into_iter().skip(2) {
+            assert_eq!(test.arithmetic_negate()?, expected);
+        }
         Ok(())
     }
 
