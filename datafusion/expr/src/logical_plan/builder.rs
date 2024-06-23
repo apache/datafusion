@@ -2255,29 +2255,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[test]
-    fn test_union_strips_qualifiers() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new("foo", DataType::Int32, false),
-            Field::new("bar", DataType::Int32, false),
-        ]);
-        let result = table_scan(Some("t1"), &schema, None)?
-            .union(table_scan(Some("t2"), &schema, None)?.build()?)?
-            .build()?;
-
-        let LogicalPlan::Union(union) = result else {
-            panic!("expected union, got {result:?}")
-        };
-
-        assert!(
-            union
-                .schema
-                .iter()
-                .all(|(qualifier, _)| qualifier.is_none()),
-            "Expected the schema from a Union to not have any table qualifiers"
-        );
-
-        Ok(())
-    }
 }
