@@ -1939,7 +1939,7 @@ pub enum AggregateFunction {
     /// COVARIANCE_POP = 10;
     /// STDDEV = 11;
     /// STDDEV_POP = 12;
-    /// Correlation = 13,
+    /// CORRELATION = 13;
     /// APPROX_PERCENTILE_CONT = 14;
     /// APPROX_MEDIAN = 15;
     /// APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;

@@ -21,15 +21,12 @@ pub(crate) mod array_agg;
 pub(crate) mod array_agg_distinct;
 pub(crate) mod array_agg_ordered;
 pub(crate) mod average;
-pub(crate) mod covariance;
 pub(crate) mod grouping;
 pub(crate) mod nth_value;
 #[macro_use]
 pub(crate) mod min_max;
 pub(crate) mod groups_accumulator;
 pub(crate) mod stats;
-pub(crate) mod stddev;
-pub(crate) mod variance;
 
 pub mod build_in;
 pub mod moving_min_max;
