@@ -393,6 +393,18 @@ pub async fn statistics_from_parquet_meta(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
 ) -> Result<Statistics> {
+    let row_groups_metadata = metadata.row_groups();
+
+    let mut has_statistics = false;
+    for row_group_meta in row_groups_metadata {
+        for column in row_group_meta.columns() {
+            if let Some(_) = column.statistics() {
+                has_statistics = true;
+                break;
+            }
+        }
+    }
+
     let file_metadata = metadata.file_metadata();
     let file_schema = parquet_to_arrow_schema(
         file_metadata.schema_descr(),
@@ -402,7 +414,6 @@ pub async fn statistics_from_parquet_meta(
     let mut statistics = Statistics::new_unknown(&table_schema);
     let (mut max_accs, mut min_accs) = create_max_min_accs(&table_schema);
     let mut null_counts_array = vec![Precision::Exact(0); table_schema.fields().len()];
-    let row_groups_metadata = metadata.row_groups();
 
     // The num_rows needs to be calculated even when the statistics converter fails.
     // This is due to the null counts being calculated based on the number of rows when the prerequisites is not met.
@@ -480,12 +491,16 @@ pub async fn statistics_from_parquet_meta(
         }
     });
 
-    statistics.column_statistics = get_col_stats(
-        &table_schema,
-        null_counts_array,
-        &mut max_accs,
-        &mut min_accs,
-    );
+    statistics.column_statistics = if has_statistics {
+        get_col_stats(
+            &table_schema,
+            null_counts_array,
+            &mut max_accs,
+            &mut min_accs,
+        )
+    } else {
+        Statistics::unknown_column(&table_schema)
+    };
 
     Ok(statistics)
 }
