@@ -91,7 +91,6 @@ pub fn coerce_types(
     input_types: &[DataType],
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
-    use DataType::*;
     // Validate input_types matches (at least one of) the func signature.
     check_arg_count(agg_fun.name(), input_types, &signature.type_signature)?;
 
@@ -101,16 +100,6 @@ pub fn coerce_types(
             // min and max support the dictionary data type
             // unpack the dictionary to get the value
             get_min_max_result_type(input_types)
-        }
-        AggregateFunction::Correlation => {
-            if !is_correlation_support_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            Ok(vec![Float64, Float64])
         }
         AggregateFunction::NthValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),

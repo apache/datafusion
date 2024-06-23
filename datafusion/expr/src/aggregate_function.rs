@@ -41,8 +41,6 @@ pub enum AggregateFunction {
     ArrayAgg,
     /// N'th value in a group according to some ordering
     NthValue,
-    /// Correlation
-    Correlation,
     /// Grouping
     Grouping,
 }
@@ -55,7 +53,6 @@ impl AggregateFunction {
             Max => "MAX",
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
-            Correlation => "CORR",
             Grouping => "GROUPING",
         }
     }
@@ -76,8 +73,6 @@ impl FromStr for AggregateFunction {
             "min" => AggregateFunction::Min,
             "array_agg" => AggregateFunction::ArrayAgg,
             "nth_value" => AggregateFunction::NthValue,
-            // statistical
-            "corr" => AggregateFunction::Correlation,
             // other
             "grouping" => AggregateFunction::Grouping,
             _ => {
@@ -115,9 +110,6 @@ impl AggregateFunction {
                 // The coerced_data_types is same with input_types.
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::Correlation => {
-                correlation_return_type(&coerced_data_types[0])
-            }
             AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
                 "item",
                 coerced_data_types[0].clone(),
@@ -150,9 +142,6 @@ impl AggregateFunction {
                 Signature::uniform(1, valid, Volatility::Immutable)
             }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
-            AggregateFunction::Correlation => {
-                Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
-            }
         }
     }
 }

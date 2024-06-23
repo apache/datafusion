@@ -1939,7 +1939,7 @@ pub enum AggregateFunction {
     /// COVARIANCE_POP = 10;
     /// STDDEV = 11;
     /// STDDEV_POP = 12;
-    Correlation = 13,
+    /// CORRELATION = 13;
     /// APPROX_PERCENTILE_CONT = 14;
     /// APPROX_MEDIAN = 15;
     /// APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
@@ -1972,7 +1972,6 @@ impl AggregateFunction {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
-            AggregateFunction::Correlation => "CORRELATION",
             AggregateFunction::Grouping => "GROUPING",
             AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
@@ -1983,7 +1982,6 @@ impl AggregateFunction {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
-            "CORRELATION" => Some(Self::Correlation),
             "GROUPING" => Some(Self::Grouping),
             "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
