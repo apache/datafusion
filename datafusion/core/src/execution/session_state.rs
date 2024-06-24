@@ -251,7 +251,7 @@ impl SessionState {
         #[cfg(feature = "parquet")]
         if let Err(e) = new_self.register_file_format(Arc::new(ParquetFormatFactory::new()), false)
         {
-           log::info!("Unable to register default ParquetFormat: {e}"),
+           log::info!("Unable to register default ParquetFormat: {e}")
         };
 
         match new_self.register_file_format(Arc::new(JsonFormatFactory::new()), false) {
