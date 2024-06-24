@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::JoinType;
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, Projection, Union};
@@ -41,14 +41,6 @@ impl PropagateEmptyRelation {
 }
 
 impl OptimizerRule for PropagateEmptyRelation {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called PropagateEmptyRelation::rewrite")
-    }
-
     fn name(&self) -> &str {
         "propagate_empty_relation"
     }

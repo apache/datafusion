@@ -37,6 +37,7 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
+use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf,
 };
@@ -2309,10 +2310,10 @@ fn empty_over_plus() {
 
 #[test]
 fn empty_over_multiple() {
-    let sql = "SELECT order_id, MAX(qty) OVER (), min(qty) over (), aVg(qty) OVER () from orders";
+    let sql = "SELECT order_id, MAX(qty) OVER (), min(qty) over (), avg(qty) OVER () from orders";
     let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, AVG(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
-        \n  WindowAggr: windowExpr=[[MAX(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, AVG(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        Projection: orders.order_id, MAX(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, avg(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[MAX(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, avg(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
     quick_test(sql, expected);
 }
@@ -2627,8 +2628,8 @@ fn select_groupby_orderby() {
     // expect that this is not an ambiguous reference
     let expected =
         "Sort: birth_date ASC NULLS LAST\
-         \n  Projection: AVG(person.age) AS value, date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date\
-         \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[AVG(person.age)]]\
+         \n  Projection: avg(person.age) AS value, date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date\
+         \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]\
          \n      TableScan: person";
     quick_test(sql, expected);
 
@@ -2705,7 +2706,8 @@ fn logical_plan_with_dialect_and_options(
         .with_udf(make_udf("sqrt", vec![DataType::Int64], DataType::Int64))
         .with_udaf(sum_udaf())
         .with_udaf(approx_median_udaf())
-        .with_udaf(count_udaf());
+        .with_udaf(count_udaf())
+        .with_udaf(avg_udaf());
 
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);

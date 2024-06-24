@@ -385,6 +385,12 @@ message CsvWriterOptions {
   string time_format = 7;
   // Optional value to represent null
   string null_value = 8;
+  // Optional quote. Defaults to `b'"'`
+  string quote = 9;
+  // Optional escape. Defaults to `'\\'`
+  string escape = 10;
+  // Optional flag whether to double quotes, instead of escaping. Defaults to `true`
+  bool double_quote = 11;
 }
 
 // Options controlling CSV format
@@ -402,6 +408,7 @@ message CsvOptions {
   string time_format = 11; // Optional time format
   string null_value = 12; // Optional representation of null value
   bytes comment = 13; // Optional comment character as a byte
+  bytes double_quote = 14; // Indicates if quotes are doubled
 }
 
 // Options controlling CSV format

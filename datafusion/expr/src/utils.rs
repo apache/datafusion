@@ -46,6 +46,7 @@ pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::Int64(Some(1));
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression
+#[deprecated(since = "40.0.0", note = "Expr::add_column_refs instead")]
 pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result<()> {
     for e in expr {
         expr_to_columns(e, accum)?;
@@ -871,7 +872,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
 
 /// Check whether all columns are from the schema.
 pub fn check_all_columns_from_schema(
-    columns: &HashSet<Column>,
+    columns: &HashSet<&Column>,
     schema: &DFSchema,
 ) -> Result<bool> {
     for col in columns.iter() {
@@ -899,8 +900,8 @@ pub fn find_valid_equijoin_key_pair(
     left_schema: &DFSchema,
     right_schema: &DFSchema,
 ) -> Result<Option<(Expr, Expr)>> {
-    let left_using_columns = left_key.to_columns()?;
-    let right_using_columns = right_key.to_columns()?;
+    let left_using_columns = left_key.column_refs();
+    let right_using_columns = right_key.column_refs();
 
     // Conditions like a = 10, will be added to non-equijoin.
     if left_using_columns.is_empty() || right_using_columns.is_empty() {

@@ -41,6 +41,7 @@ use datafusion_expr::{
 };
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::has_all_column_refs;
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
@@ -199,13 +200,7 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
             ]
         })
         .collect::<HashSet<_>>();
-    let columns = predicate.to_columns()?;
-
-    Ok(schema_columns
-        .intersection(&columns)
-        .collect::<HashSet<_>>()
-        .len()
-        == columns.len())
+    Ok(has_all_column_refs(predicate, &schema_columns))
 }
 
 /// Determine whether the predicate can evaluate as the join conditions
@@ -372,14 +367,7 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
             }
         }
         _ => {
-            let columns = expr.to_columns().ok().unwrap();
-
-            if schema_columns
-                .intersection(&columns)
-                .collect::<HashSet<_>>()
-                .len()
-                == columns.len()
-            {
+            if has_all_column_refs(expr, schema_columns) {
                 predicate = Some(expr.clone());
             }
         }
@@ -561,12 +549,9 @@ fn infer_join_predicates(
         .filter_map(|predicate| {
             let mut join_cols_to_replace = HashMap::new();
 
-            let columns = match predicate.to_columns() {
-                Ok(columns) => columns,
-                Err(e) => return Some(Err(e)),
-            };
+            let columns = predicate.column_refs();
 
-            for col in columns.iter() {
+            for &col in columns.iter() {
                 for (l, r) in join_col_keys.iter() {
                     if col == *l {
                         join_cols_to_replace.insert(col, *r);
@@ -596,14 +581,6 @@ fn infer_join_predicates(
 }
 
 impl OptimizerRule for PushDownFilter {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called PushDownFilter::rewrite")
-    }
-
     fn name(&self) -> &str {
         "push_down_filter"
     }
@@ -798,7 +775,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
                 for expr in predicates {
-                    let cols = expr.to_columns()?;
+                    let cols = expr.column_refs();
                     if cols.iter().all(|c| group_expr_columns.contains(c)) {
                         push_predicates.push(expr);
                     } else {
@@ -899,7 +876,7 @@ impl OptimizerRule for PushDownFilter {
                 let predicate_push_or_keep = split_conjunction(&filter.predicate)
                     .iter()
                     .map(|expr| {
-                        let cols = expr.to_columns()?;
+                        let cols = expr.column_refs();
                         if cols.iter().any(|c| prevent_cols.contains(&c.name)) {
                             Ok(false) // No push (keep)
                         } else {

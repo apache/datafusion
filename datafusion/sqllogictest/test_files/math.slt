@@ -564,3 +564,14 @@ SELECT c1%0 FROM test_non_nullable_decimal
 
 statement ok
 drop table test_non_nullable_decimal 
+
+query II
+select gcd(20, 1000), lcm(20, 1000);
+----
+20 1000
+
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(\-9223372036854775808, \-9223372036854775808\)
+select gcd(-9223372036854775808, -9223372036854775808);
+
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(\-9223372036854775808, \-9223372036854775808\)
+select lcm(-9223372036854775808, -9223372036854775808);

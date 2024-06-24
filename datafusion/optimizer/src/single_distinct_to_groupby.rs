@@ -123,14 +123,6 @@ fn contains_grouping_set(expr: &[Expr]) -> bool {
 }
 
 impl OptimizerRule for SingleDistinctToGroupBy {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called SingleDistinctToGroupBy::rewrite")
-    }
-
     fn name(&self) -> &str {
         "single_distinct_aggregation_to_group_by"
     }

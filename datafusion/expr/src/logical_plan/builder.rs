@@ -534,11 +534,11 @@ impl LogicalPlanBuilder {
             .clone()
             .into_iter()
             .try_for_each::<_, Result<()>>(|expr| {
-                let columns = expr.to_columns()?;
+                let columns = expr.column_refs();
 
                 columns.into_iter().for_each(|c| {
-                    if schema.field_from_column(&c).is_err() {
-                        missing_cols.push(c);
+                    if !schema.has_column(c) {
+                        missing_cols.push(c.clone());
                     }
                 });
 

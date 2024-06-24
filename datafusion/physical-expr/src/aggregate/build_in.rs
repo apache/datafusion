@@ -33,7 +33,6 @@ use arrow::datatypes::Schema;
 use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
-use crate::aggregate::average::Avg;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 
@@ -108,23 +107,6 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::Avg, false) => {
-            Arc::new(Avg::new(input_phy_exprs[0].clone(), name, data_type))
-        }
-        (AggregateFunction::Avg, true) => {
-            return not_impl_err!("AVG(DISTINCT) aggregations are not available");
-        }
-        (AggregateFunction::Correlation, false) => {
-            Arc::new(expressions::Correlation::new(
-                input_phy_exprs[0].clone(),
-                input_phy_exprs[1].clone(),
-                name,
-                data_type,
-            ))
-        }
-        (AggregateFunction::Correlation, true) => {
-            return not_impl_err!("CORR(DISTINCT) aggregations are not available");
-        }
         (AggregateFunction::NthValue, _) => {
             let expr = &input_phy_exprs[0];
             let Some(n) = input_phy_exprs[1]
@@ -155,7 +137,7 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_expr::{type_coercion, Signature};
 
-    use crate::expressions::{try_cast, ArrayAgg, Avg, DistinctArrayAgg, Max, Min};
+    use crate::expressions::{try_cast, ArrayAgg, DistinctArrayAgg, Max, Min};
 
     use super::*;
     #[test]
@@ -270,44 +252,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sum_avg_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::Avg];
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Float32,
-            DataType::Float64,
-        ];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema =
-                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::Avg {
-                    assert!(result_agg_phy_exprs.as_any().is::<Avg>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new("c1", DataType::Float64, true),
-                        result_agg_phy_exprs.field().unwrap()
-                    );
-                };
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_min_max() -> Result<()> {
         let observed = AggregateFunction::Min.return_type(&[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
@@ -326,33 +270,6 @@ mod tests {
         assert_eq!(DataType::Decimal128(28, 13), observed);
 
         Ok(())
-    }
-
-    #[test]
-    fn test_avg_return_type() -> Result<()> {
-        let observed = AggregateFunction::Avg.return_type(&[DataType::Float32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Avg.return_type(&[DataType::Float64])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Avg.return_type(&[DataType::Int32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed =
-            AggregateFunction::Avg.return_type(&[DataType::Decimal128(10, 6)])?;
-        assert_eq!(DataType::Decimal128(14, 10), observed);
-
-        let observed =
-            AggregateFunction::Avg.return_type(&[DataType::Decimal128(36, 6)])?;
-        assert_eq!(DataType::Decimal128(38, 10), observed);
-        Ok(())
-    }
-
-    #[test]
-    fn test_avg_no_utf8() {
-        let observed = AggregateFunction::Avg.return_type(&[DataType::Utf8]);
-        assert!(observed.is_err());
     }
 
     // Helper function

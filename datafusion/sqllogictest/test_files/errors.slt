@@ -108,7 +108,7 @@ query error
 select count();
 
 # AggregateFunction with wrong number of arguments
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Utf8, Float64\)'\. You might need to add explicit type casts\.\n\tCandidate functions:\n\tAVG\(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64\)
+query error
 select avg(c1, c12) from aggregate_test_100;
 
 # AggregateFunction with wrong argument type

@@ -31,7 +31,9 @@ use crate::{
     Signature, Volatility,
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
-use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
+use arrow::compute::kernels::cast_utils::{
+    parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
+};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, Result, ScalarValue};
 use std::any::Any;
@@ -173,18 +175,6 @@ pub fn max(expr: Expr) -> Expr {
 pub fn array_agg(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::ArrayAgg,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
-/// Create an expression to represent the avg() aggregate function
-pub fn avg(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Avg,
         vec![expr],
         false,
         None,
@@ -669,6 +659,16 @@ impl WindowUDFImpl for SimpleWindowUDF {
     fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
         (self.partition_evaluator_factory)()
     }
+}
+
+pub fn interval_year_month_lit(value: &str) -> Expr {
+    let interval = parse_interval_year_month(value).ok();
+    Expr::Literal(ScalarValue::IntervalYearMonth(interval))
+}
+
+pub fn interval_datetime_lit(value: &str) -> Expr {
+    let interval = parse_interval_day_time(value).ok();
+    Expr::Literal(ScalarValue::IntervalDayTime(interval))
 }
 
 pub fn interval_month_day_nano_lit(value: &str) -> Expr {
