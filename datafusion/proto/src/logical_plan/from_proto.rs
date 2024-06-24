@@ -593,19 +593,8 @@ pub fn parse_expr(
             parse_exprs(&in_list.list, registry, codec)?,
             in_list.negated,
         ))),
-        #[allow(deprecated)]
-        ExprType::Wildcard(protobuf::Wildcard {
-            qualifier,
-            relation,
-        }) => {
-            let qualifier = match (qualifier.as_str(), relation) {
-                ("", None) => None,
-                (qualifier, None) => Some(TableReference::from(qualifier)),
-                ("", Some(relation)) => Some(relation.clone().try_into()?),
-                (_, Some(_)) => {
-                    return Err(proto_error("Cannot specify both qualifier string and table reference for wildcard"));
-                }
-            };
+        ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
+            let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
             Ok(Expr::Wildcard { qualifier })
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
