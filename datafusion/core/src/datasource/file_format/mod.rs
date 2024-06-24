@@ -138,12 +138,12 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 /// The former trait is a superset of the latter trait, which includes execution time
 /// relevant methods. [FileType] is only used in logical planning and only implements
 /// the subset of methods required during logical planning.
-pub struct DefaultFileFormat {
+pub struct DefaultFileType {
     file_format_factory: Arc<dyn FileFormatFactory>,
 }
 
-impl DefaultFileFormat {
-    /// Constructs a [DefaultFileFormat] wrapper from a [FileFormatFactory]
+impl DefaultFileType {
+    /// Constructs a [DefaultFileType] wrapper from a [FileFormatFactory]
     pub fn new(file_format_factory: Arc<dyn FileFormatFactory>) -> Self {
         Self {
             file_format_factory,
@@ -151,19 +151,19 @@ impl DefaultFileFormat {
     }
 }
 
-impl FileType for DefaultFileFormat {
+impl FileType for DefaultFileType {
     fn as_any(&self) -> &dyn Any {
         self
     }
 }
 
-impl Display for DefaultFileFormat {
+impl Display for DefaultFileType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.file_format_factory.default().fmt(f)
     }
 }
 
-impl GetExt for DefaultFileFormat {
+impl GetExt for DefaultFileType {
     fn get_ext(&self) -> String {
         self.file_format_factory.get_ext()
     }
@@ -173,24 +173,24 @@ impl GetExt for DefaultFileFormat {
 pub fn format_as_file_type(
     file_format_factory: Arc<dyn FileFormatFactory>,
 ) -> Arc<dyn FileType> {
-    Arc::new(DefaultFileFormat {
+    Arc::new(DefaultFileType {
         file_format_factory,
     })
 }
 
 /// Converts a [FileType] to a [FileFormatFactory].
 /// Returns an error if the [FileType] cannot be
-/// downcasted to a [DefaultFileFormat].
+/// downcasted to a [DefaultFileType].
 pub fn file_type_to_format(
     file_type: &Arc<dyn FileType>,
 ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
     match file_type
         .as_ref()
         .as_any()
-        .downcast_ref::<DefaultFileFormat>()
+        .downcast_ref::<DefaultFileType>()
     {
         Some(source) => Ok(source.file_format_factory.clone()),
-        _ => internal_err!("FileType was not DefaultFileFormat"),
+        _ => internal_err!("FileType was not DefaultFileType"),
     }
 }
 
