@@ -844,6 +844,11 @@ impl SessionState {
         &self.window_functions
     }
 
+    /// Return reference to table_functions
+    pub fn table_functions(&self) -> &HashMap<String, Arc<TableFunction>> {
+        &self.table_functions
+    }
+
     /// Return [SerializerRegistry] for extensions
     pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
         self.serializer_registry.clone()
@@ -860,6 +865,15 @@ impl SessionState {
             name.to_owned(),
             Arc::new(TableFunction::new(name.to_owned(), fun)),
         );
+    }
+
+    /// Deregsiter a user defined table function
+    pub fn deregister_udtf(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
+        let udtf = self.table_functions.remove(name);
+        Ok(udtf.map(|x| x.function().clone()))
     }
 }
 
