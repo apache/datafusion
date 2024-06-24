@@ -926,6 +926,7 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             overwrite,
+            keep_partition_by_columns: false,
         };
 
         let unsorted: Vec<Vec<Expr>> = vec![];

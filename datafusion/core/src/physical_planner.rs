@@ -777,6 +777,18 @@ impl DefaultPhysicalPlanner {
                     .map(|s| (s.to_string(), arrow_schema::DataType::Null))
                     .collect::<Vec<_>>();
 
+                let keep_partition_by_columns = source_option_tuples
+                    .get("format.keep_partition_by_columns")
+                    .map(|v| v.trim() == "true")
+                    .unwrap_or(false);
+
+                let mut updated_source_options_tuples = HashMap::new();
+                for (k, v) in source_option_tuples {
+                    if k != "format.keep_partition_by_columns" {
+                        updated_source_options_tuples.insert(k.clone(), v.clone());
+                    }
+                }
+
                 // Set file sink related options
                 let config = FileSinkConfig {
                     object_store_url,
@@ -785,26 +797,27 @@ impl DefaultPhysicalPlanner {
                     output_schema: Arc::new(schema),
                     table_partition_cols,
                     overwrite: false,
+                    keep_partition_by_columns,
                 };
                 let mut table_options = session_state.default_table_options();
                 let sink_format: Arc<dyn FileFormat> = match format_options {
                     FormatOptions::CSV(options) => {
                         table_options.csv = options.clone();
                         table_options.set_file_format(FileType::CSV);
-                        table_options.alter_with_string_hash_map(source_option_tuples)?;
+                        table_options.alter_with_string_hash_map(&updated_source_options_tuples)?;
                         Arc::new(CsvFormat::default().with_options(table_options.csv))
                     }
                     FormatOptions::JSON(options) => {
                         table_options.json = options.clone();
                         table_options.set_file_format(FileType::JSON);
-                        table_options.alter_with_string_hash_map(source_option_tuples)?;
+                        table_options.alter_with_string_hash_map(&updated_source_options_tuples)?;
                         Arc::new(JsonFormat::default().with_options(table_options.json))
                     }
                     #[cfg(feature = "parquet")]
                     FormatOptions::PARQUET(options) => {
                         table_options.parquet = options.clone();
                         table_options.set_file_format(FileType::PARQUET);
-                        table_options.alter_with_string_hash_map(source_option_tuples)?;
+                        table_options.alter_with_string_hash_map(&updated_source_options_tuples)?;
                         Arc::new(
                             ParquetFormat::default().with_options(table_options.parquet),
                         )

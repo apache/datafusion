@@ -75,6 +75,7 @@ pub(crate) fn start_demuxer_task(
     partition_by: Option<Vec<(String, DataType)>>,
     base_output_path: ListingTableUrl,
     file_extension: String,
+    keep_partition_by_columns: bool,
 ) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
     let (tx, rx) = mpsc::unbounded_channel();
     let context = context.clone();
@@ -91,6 +92,7 @@ pub(crate) fn start_demuxer_task(
                     parts,
                     base_output_path,
                     file_extension,
+                    keep_partition_by_columns,
                 )
                 .await
             })
@@ -111,7 +113,7 @@ pub(crate) fn start_demuxer_task(
     (task, rx)
 }
 
-/// Dynamically partitions input stream to acheive desired maximum rows per file
+/// Dynamically partitions input stream to achieve desired maximum rows per file
 async fn row_count_demuxer(
     mut tx: UnboundedSender<(Path, Receiver<RecordBatch>)>,
     mut input: SendableRecordBatchStream,
@@ -240,13 +242,13 @@ async fn hive_style_partitions_demuxer(
     partition_by: Vec<(String, DataType)>,
     base_output_path: ListingTableUrl,
     file_extension: String,
+    keep_partition_by_columns: bool,
 ) -> Result<()> {
     let write_id =
         rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
 
     let exec_options = &context.session_config().options().execution;
     let max_buffered_recordbatches = exec_options.max_buffered_batches_per_output_file;
-    let keep_partition_by_columns = exec_options.keep_partition_by_columns;
 
     // To support non string partition col types, cast the type to &str first
     let mut value_map: HashMap<Vec<String>, Sender<RecordBatch>> = HashMap::new();
@@ -302,7 +304,6 @@ async fn hive_style_partitions_demuxer(
             let final_batch_to_send = if keep_partition_by_columns {
                 parted_batch
             } else {
-                // remove partitions columns
                 remove_partition_by_columns(&parted_batch, &partition_by)?
             };
 

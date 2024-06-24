@@ -303,9 +303,6 @@ config_namespace! {
         /// statistics into the same file groups.
         /// Currently experimental
         pub split_file_groups_by_statistics: bool, default = false
-
-        /// Should Datafusion keep the columns used for partition_by in the output RecordBatches
-        pub keep_partition_by_columns: bool, default = false
     }
 }
 

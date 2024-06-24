@@ -548,7 +548,7 @@ impl ParquetSink {
     /// of hive style partitioning where some columns are removed from the
     /// underlying files.
     fn get_writer_schema(&self) -> Arc<Schema> {
-        if !self.config.table_partition_cols.is_empty() {
+        if !self.config.table_partition_cols.is_empty() && !self.config.keep_partition_by_columns {
             let schema = self.config.output_schema();
             let partition_names: Vec<_> = self
                 .config
@@ -638,6 +638,7 @@ impl DataSink for ParquetSink {
             part_col,
             self.config.table_paths[0].clone(),
             "parquet".into(),
+            self.config.keep_partition_by_columns,
         );
 
         let mut file_write_tasks: JoinSet<
@@ -1875,6 +1876,7 @@ mod tests {
             output_schema: schema.clone(),
             table_partition_cols: vec![],
             overwrite: true,
+            keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
@@ -1969,6 +1971,7 @@ mod tests {
             output_schema: schema.clone(),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
             overwrite: true,
+            keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
