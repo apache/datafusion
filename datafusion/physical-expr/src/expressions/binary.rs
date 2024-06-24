@@ -265,23 +265,30 @@ impl PhysicalExpr for BinaryExpr {
         let schema = batch.schema();
         let input_schema = schema.as_ref();
 
+        if left_data_type.is_nested() {
+            if right_data_type != left_data_type {
+                return internal_err!("type mismatch");
+            }
+            if matches!(
+                self.op,
+                Operator::Eq
+                    | Operator::NotEq
+                    | Operator::Lt
+                    | Operator::Gt
+                    | Operator::LtEq
+                    | Operator::GtEq
+            ) {
+                return apply_cmp_for_nested(self.op, &lhs, &rhs);
+            }
+        }
+
         match self.op {
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
             Operator::Minus => return apply(&lhs, &rhs, sub_wrapping),
             Operator::Multiply => return apply(&lhs, &rhs, mul_wrapping),
             Operator::Divide => return apply(&lhs, &rhs, div),
             Operator::Modulo => return apply(&lhs, &rhs, rem),
-            Operator::Eq => {
-                if left_data_type.is_nested() {
-                    if right_data_type != left_data_type {
-                        return internal_err!("type mismatch");
-                    }
-                    // apply cmp for nested
-                    return apply_cmp_for_nested(self.op, &lhs, &rhs);
-                }
-
-                return apply_cmp(&lhs, &rhs, eq);
-            }
+            Operator::Eq => return apply_cmp(&lhs, &rhs, eq),
             Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
             Operator::Lt => return apply_cmp(&lhs, &rhs, lt),
             Operator::Gt => return apply_cmp(&lhs, &rhs, gt),
