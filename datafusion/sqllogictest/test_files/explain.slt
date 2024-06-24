@@ -93,7 +93,7 @@ query TT
 EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)
 ----
 physical_plan
-01)ProjectionExec: expr=[2 as COUNT(*)]
+01)ProjectionExec: expr=[2 as count(*)]
 02)--PlaceholderRowExec
 
 statement ok

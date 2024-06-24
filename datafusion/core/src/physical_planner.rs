@@ -1259,7 +1259,7 @@ impl DefaultPhysicalPlanner {
                 let join_filter = match filter {
                     Some(expr) => {
                         // Extract columns from filter expression and saved in a HashSet
-                        let cols = expr.to_columns()?;
+                        let cols = expr.column_refs();
 
                         // Collect left & right field indices, the field indices are sorted in ascending order
                         let left_field_indices = cols
@@ -1918,6 +1918,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
+        Expr::AggregateFunction(_) => (e.display_name().unwrap_or(physical_name(e)?), e),
         _ => (physical_name(e)?, e),
     };
 

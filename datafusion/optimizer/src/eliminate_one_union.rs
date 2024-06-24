@@ -17,7 +17,7 @@
 
 //! [`EliminateOneUnion`]  eliminates single element `Union`
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{internal_err, tree_node::Transformed, Result};
+use datafusion_common::{tree_node::Transformed, Result};
 use datafusion_expr::logical_plan::{tree_node::unwrap_arc, LogicalPlan, Union};
 
 use crate::optimizer::ApplyOrder;
@@ -34,14 +34,6 @@ impl EliminateOneUnion {
 }
 
 impl OptimizerRule for EliminateOneUnion {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called EliminateOneUnion::rewrite")
-    }
-
     fn name(&self) -> &str {
         "eliminate_one_union"
     }
@@ -88,10 +80,11 @@ mod tests {
     }
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq_with_rules(
+        assert_optimized_plan_with_rules(
             vec![Arc::new(EliminateOneUnion::new())],
             plan,
             expected,
+            true,
         )
     }
 

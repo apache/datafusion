@@ -19,7 +19,7 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::JoinType::Inner;
 use datafusion_expr::{
     logical_plan::{EmptyRelation, LogicalPlan},
@@ -38,14 +38,6 @@ impl EliminateJoin {
 }
 
 impl OptimizerRule for EliminateJoin {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called EliminateJoin::rewrite")
-    }
-
     fn name(&self) -> &str {
         "eliminate_join"
     }

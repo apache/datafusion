@@ -1383,16 +1383,16 @@ ORDER BY c1, c2)
 GROUP BY c2;
 ----
 logical_plan
-01)Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+01)Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[count(Int64(1)) AS count(*)]]
 02)--Projection: aggregate_test_100.c2
 03)----Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST
 04)------Projection: aggregate_test_100.c2, aggregate_test_100.c1
 05)--------TableScan: aggregate_test_100 projection=[c1, c2]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[COUNT(*)]
+01)AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(*)]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
-04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[COUNT(*)]
+04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(*)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2], has_header=true
 

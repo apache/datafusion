@@ -285,6 +285,10 @@ impl DisplayAs for UnboundedExec {
 }
 
 impl ExecutionPlan for UnboundedExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

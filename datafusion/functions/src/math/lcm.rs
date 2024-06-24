@@ -22,7 +22,8 @@ use arrow::array::{ArrayRef, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use arrow::error::ArrowError;
+use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -78,21 +79,32 @@ fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
         let b = y.wrapping_abs();
 
         if a == 0 || b == 0 {
-            return 0;
+            return Ok(0);
         }
-        a / compute_gcd(a, b) * b
+        match compute_gcd(a, b) {
+            Ok(gcd) => Ok(a / gcd * b),
+            // change the error string to use LCM instead of GCD
+            Err(_) => Err(arrow_datafusion_err!(ArrowError::ComputeError(format!(
+                "Signed integer overflow in LCM({x}, {y})"
+            )))),
+        }
     };
 
     match args[0].data_type() {
-        Int64 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
-            &args[1],
-            "x",
-            "y",
-            Int64Array,
-            Int64Array,
-            { compute_lcm }
-        )) as ArrayRef),
+        Int64 => {
+            let arg1 = downcast_arg!(&args[0], "x", Int64Array);
+            let arg2 = downcast_arg!(&args[1], "y", Int64Array);
+
+            Ok(arg1
+                .iter()
+                .zip(arg2.iter())
+                .map(|(a1, a2)| match (a1, a2) {
+                    (Some(a1), Some(a2)) => Ok(Some(compute_lcm(a1, a2)?)),
+                    _ => Ok(None),
+                })
+                .collect::<Result<Int64Array>>()
+                .map(Arc::new)? as ArrayRef)
+        }
         other => exec_err!("Unsupported data type {other:?} for function lcm"),
     }
 }
