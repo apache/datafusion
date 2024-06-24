@@ -1412,17 +1412,19 @@ mod tests {
                 r#"INTERVAL '1 YEARS 7 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
             ),
             (
-                (col("a") + col("b"))
-                    .gt(Expr::Literal(ScalarValue::Decimal128(Some(100123), 28, 3))),
+                (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal128(
+                    Some(100123),
+                    28,
+                    3,
+                ))),
                 r#"((a + b) > 100.123)"#,
             ),
             (
-                (col("a") + col("b"))
-                    .gt(Expr::Literal(ScalarValue::Decimal256(
-                        Some(100123.into()),
-                        28,
-                        3,
-                    ))),
+                (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal256(
+                    Some(100123.into()),
+                    28,
+                    3,
+                ))),
                 r#"((a + b) > 100.123)"#,
             ),
             (
