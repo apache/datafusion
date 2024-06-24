@@ -16,6 +16,19 @@
 // under the License.
 
 //! This example demonstrates how to compose multiple PhysicalExtensionCodecs
+//!
+//! This can be helpful when an Execution plan tree has different nodes from different crates
+//! that need to be serialized.
+//!
+//! For example if your plan has `ShuffleWriterExec` from `datafusion-ballista` and `DeltaScan` from `deltalake`
+//! both crates both provide PhysicalExtensionCodec and this example shows how to combine them together
+//!
+//! ```text
+//! ShuffleWriterExec
+//!     ProjectionExec
+//!        ...
+//!           DeltaScan
+//! ```
 
 use datafusion::common::Result;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
