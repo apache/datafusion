@@ -382,7 +382,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     // Clone and modify the default table options based on the provided options
     let mut table_options = ctx.session_state().default_table_options().clone();
     if let Some(format) = format {
-        table_options.set_file_format(format);
+        table_options.set_config_format(format);
     }
     table_options.alter_with_string_hash_map(options)?;
 
