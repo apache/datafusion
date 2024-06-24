@@ -57,7 +57,7 @@ pub mod type_coercion;
 /// Use [`SessionState::add_analyzer_rule`] to register additional
 /// `AnalyzerRule`s.
 ///
-/// [`SessionState::add_analyzer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_analyzer_rule
+/// [`SessionState::add_analyzer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_analyzer_rule
 pub trait AnalyzerRule {
     /// Rewrite `plan`
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;

@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
@@ -48,14 +48,6 @@ use super::ExprSimplifier;
 pub struct SimplifyExpressions {}
 
 impl OptimizerRule for SimplifyExpressions {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called SimplifyExpressions::rewrite")
-    }
-
     fn name(&self) -> &str {
         "simplify_expressions"
     }

@@ -964,7 +964,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.order_by_to_sort_expr(&expr, schema, planner_context, true, None)?;
             // Verify that columns of all SortExprs exist in the schema:
             for expr in expr_vec.iter() {
-                for column in expr.to_columns()?.iter() {
+                for column in expr.column_refs().iter() {
                     if !schema.has_column(column) {
                         // Return an error if any column is not in the schema:
                         return plan_err!("Column {column} is not in schema");

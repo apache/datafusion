@@ -51,7 +51,7 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
     let actual = plan_and_collect(&ctx, sql).await.unwrap();
     let expected = [
         "+------------------------------------------+",
-        "| AVG(custom_sqrt(aggregate_test_100.c11)) |",
+        "| avg(custom_sqrt(aggregate_test_100.c11)) |",
         "+------------------------------------------+",
         "| 0.6584408483418835                       |",
         "+------------------------------------------+",
@@ -69,7 +69,7 @@ async fn csv_query_avg_sqrt() -> Result<()> {
     let actual = plan_and_collect(&ctx, sql).await.unwrap();
     let expected = [
         "+------------------------------------------+",
-        "| AVG(custom_sqrt(aggregate_test_100.c12)) |",
+        "| avg(custom_sqrt(aggregate_test_100.c12)) |",
         "+------------------------------------------+",
         "| 0.6706002946036459                       |",
         "+------------------------------------------+",

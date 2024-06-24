@@ -592,8 +592,8 @@ pub mod logical_expr_node {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Wildcard {
-    #[prost(string, tag = "1")]
-    pub qualifier: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "1")]
+    pub qualifier: ::core::option::Option<TableReference>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1929,7 +1929,7 @@ pub enum AggregateFunction {
     Min = 0,
     Max = 1,
     /// SUM = 2;
-    Avg = 3,
+    /// AVG = 3;
     /// COUNT = 4;
     /// APPROX_DISTINCT = 5;
     ArrayAgg = 6,
@@ -1939,7 +1939,7 @@ pub enum AggregateFunction {
     /// COVARIANCE_POP = 10;
     /// STDDEV = 11;
     /// STDDEV_POP = 12;
-    Correlation = 13,
+    /// CORRELATION = 13;
     /// APPROX_PERCENTILE_CONT = 14;
     /// APPROX_MEDIAN = 15;
     /// APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
@@ -1948,8 +1948,8 @@ pub enum AggregateFunction {
     /// BIT_AND = 19;
     /// BIT_OR = 20;
     /// BIT_XOR = 21;
-    BoolAnd = 22,
-    BoolOr = 23,
+    ///   BOOL_AND = 22;
+    ///   BOOL_OR = 23;
     /// REGR_SLOPE = 26;
     /// REGR_INTERCEPT = 27;
     /// REGR_COUNT = 28;
@@ -1971,12 +1971,8 @@ impl AggregateFunction {
         match self {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
-            AggregateFunction::Avg => "AVG",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
-            AggregateFunction::Correlation => "CORRELATION",
             AggregateFunction::Grouping => "GROUPING",
-            AggregateFunction::BoolAnd => "BOOL_AND",
-            AggregateFunction::BoolOr => "BOOL_OR",
             AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
     }
@@ -1985,12 +1981,8 @@ impl AggregateFunction {
         match value {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
-            "AVG" => Some(Self::Avg),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
-            "CORRELATION" => Some(Self::Correlation),
             "GROUPING" => Some(Self::Grouping),
-            "BOOL_AND" => Some(Self::BoolAnd),
-            "BOOL_OR" => Some(Self::BoolOr),
             "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
         }

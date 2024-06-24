@@ -48,7 +48,8 @@ use datafusion_expr::{
     create_udaf, function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator,
     SimpleAggregateUDF,
 };
-use datafusion_physical_expr::expressions::AvgAccumulator;
+use datafusion_functions_aggregate::average::AvgAccumulator;
+
 /// Test to show the contents of the setup
 #[tokio::test]
 async fn test_setup() {
