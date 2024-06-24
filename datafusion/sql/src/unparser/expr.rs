@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::Decimal128Type;
-use arrow::datatypes::Decimal256Type;
-use arrow::datatypes::DecimalType;
+use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
 use arrow::util::display::array_value_to_string;
 use core::fmt;
 use std::{fmt::Display, vec};
