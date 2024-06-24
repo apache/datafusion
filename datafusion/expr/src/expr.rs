@@ -1329,6 +1329,7 @@ impl Expr {
     }
 
     /// Return all referenced columns of this expression.
+    #[deprecated(since = "40.0.0", note = "use Expr::column_refs instead")]
     pub fn to_columns(&self) -> Result<HashSet<Column>> {
         let mut using_columns = HashSet::new();
         expr_to_columns(self, &mut using_columns)?;
