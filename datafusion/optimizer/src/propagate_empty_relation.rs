@@ -489,7 +489,7 @@ mod tests {
     fn assert_anti_join_empty_join_table_is_base_table(
         anti_left_join: bool,
     ) -> Result<()> {
-        // if we have an anti join with an empty join table, than the result is the base_table
+        // if we have an anti join with an empty join table, then the result is the base_table
         let (left, right, join_type, expected) = if anti_left_join {
             let left = test_table_scan()?;
             let right = LogicalPlanBuilder::from(test_table_scan()?)
