@@ -807,8 +807,8 @@ impl SessionState {
     }
 
     /// Return catalog list
-    pub fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
-        self.catalog_list.clone()
+    pub fn catalog_list(&self) -> &Arc<dyn CatalogProviderList> {
+        &self.catalog_list
     }
 
     /// set the catalog list
@@ -835,8 +835,8 @@ impl SessionState {
     }
 
     /// Return [SerializerRegistry] for extensions
-    pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
-        self.serializer_registry.clone()
+    pub fn serializer_registry(&self) -> &Arc<dyn SerializerRegistry> {
+        &self.serializer_registry
     }
 
     /// Return version of the cargo package that produced this query
