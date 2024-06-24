@@ -142,7 +142,6 @@ impl PartitionStream for KafkaStreamRead {
         let timestamp_unit = self.config.timestamp_unit.clone();
 
         let _ = builder.spawn(async move {
-            // should this be blocking?
             loop {
                 let batch: Vec<serde_json::Value> = consumer
                     .stream()

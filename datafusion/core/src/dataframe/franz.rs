@@ -32,7 +32,7 @@ impl DataFrame {
     /// Return a new DataFrame that adds the result of evaluating one or more
     /// window functions ([`Expr::WindowFunction`]) to the existing columns
     ///
-    pub fn franz_window(
+    pub fn streaming_window(
         self,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
@@ -40,12 +40,12 @@ impl DataFrame {
         slide: Option<Duration>,
     ) -> Result<Self> {
         let plan = LogicalPlanBuilder::from(self.plan)
-            .franz_window(group_expr, aggr_expr, window_length, slide)?
+            .streaming_window(group_expr, aggr_expr, window_length, slide)?
             .build()?;
         Ok(DataFrame::new(*self.session_state, plan))
     }
 
-    /// TODO
+    /// Iterate over a continuous DataFrame and write the results to a sink
     pub async fn sink(self, mut sink: Box<dyn FranzSink>) -> Result<DataFusionError> {
         // todo: replace with execute_stream_partitioned()
         let mut stream: SendableRecordBatchStream = self.execute_stream().await.unwrap();
