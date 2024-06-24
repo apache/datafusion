@@ -180,7 +180,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
             .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &self.data_type))
             .collect::<Result<Vec<_>>>()?;
 
-        let arr = ScalarValue::new_list(&all_values, &self.data_type);
+        let arr = ScalarValue::new_list_nullable(&all_values, &self.data_type);
         Ok(vec![ScalarValue::List(arr)])
     }
 
@@ -237,7 +237,7 @@ impl<T: ArrowNumericType> Accumulator for DistinctMedianAccumulator<T> {
             .map(|x| ScalarValue::new_primitive::<T>(Some(x.0), &self.data_type))
             .collect::<Result<Vec<_>>>()?;
 
-        let arr = ScalarValue::new_list(&all_values, &self.data_type);
+        let arr = ScalarValue::new_list_nullable(&all_values, &self.data_type);
         Ok(vec![ScalarValue::List(arr)])
     }
 

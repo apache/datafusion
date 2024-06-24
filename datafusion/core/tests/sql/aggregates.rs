@@ -36,7 +36,7 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
         *actual[0].schema(),
         Schema::new(vec![Field::new_list(
             "ARRAY_AGG(DISTINCT aggregate_test_100.c2)",
-            Field::new("item", DataType::UInt32, true),
+            Field::new("item", DataType::UInt32, false),
             false
         ),])
     );

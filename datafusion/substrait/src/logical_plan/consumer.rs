@@ -1686,7 +1686,7 @@ fn from_substrait_literal(
             let element_type = elements[0].data_type();
             match lit.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::List(
-                    ScalarValue::new_list(elements.as_slice(), &element_type),
+                    ScalarValue::new_list_nullable(elements.as_slice(), &element_type),
                 ),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
                     ScalarValue::new_large_list(elements.as_slice(), &element_type),
@@ -1704,7 +1704,7 @@ fn from_substrait_literal(
             )?;
             match lit.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
-                    ScalarValue::List(ScalarValue::new_list(&[], &element_type))
+                    ScalarValue::List(ScalarValue::new_list_nullable(&[], &element_type))
                 }
                 LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
                     ScalarValue::new_large_list(&[], &element_type),
