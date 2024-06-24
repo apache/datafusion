@@ -308,7 +308,7 @@ pub enum Expr {
     ///
     /// This expr has to be resolved to a list of columns before translating logical
     /// plan into physical plan.
-    Wildcard { qualifier: Option<String> },
+    Wildcard { qualifier: Option<TableReference> },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
