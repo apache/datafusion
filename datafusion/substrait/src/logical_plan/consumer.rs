@@ -413,10 +413,10 @@ fn make_renamed_schema(
             dfs_names.len());
     }
 
-    Ok(DFSchema::from_field_specific_qualified_schema(
+    DFSchema::from_field_specific_qualified_schema(
         qualifiers,
         &Arc::new(Schema::new(fields)),
-    )?)
+    )
 }
 
 /// Convert Substrait Rel to DataFusion DataFrame
@@ -875,7 +875,7 @@ fn requalify_sides_if_needed(
     let right_cols = right.schema().columns();
     if left_cols.iter().any(|l| {
         right_cols.iter().any(|r| {
-            l == r || (l.name == r.name && (l.relation == None || r.relation == None))
+            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
         })
     }) {
         // These names have no connection to the original plan, but they'll make the columns
