@@ -249,7 +249,7 @@ fn check_aggregation_in_scalar_subquery(
         let mut group_columns = agg
             .group_expr
             .iter()
-            .map(|group| Ok(group.to_columns()?.into_iter().collect::<Vec<_>>()))
+            .map(|group| Ok(group.column_refs().into_iter().cloned().collect::<Vec<_>>()))
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten();
