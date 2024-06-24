@@ -62,6 +62,8 @@ pub struct NullState {
     /// If `seen_values[i]` is false, have not seen any values that
     /// pass the filter yet for group `i`
     seen_values: BooleanBufferBuilder,
+
+    seen_nulls: BooleanBufferBuilder,
 }
 
 impl Default for NullState {
@@ -74,13 +76,14 @@ impl NullState {
     pub fn new() -> Self {
         Self {
             seen_values: BooleanBufferBuilder::new(0),
+            seen_nulls: BooleanBufferBuilder::new(0),
         }
     }
 
     /// return the size of all buffers allocated by this null state, not including self
     pub fn size(&self) -> usize {
         // capacity is in bits, so convert to bytes
-        self.seen_values.capacity() / 8
+        self.seen_values.capacity() / 8 + self.seen_nulls.capacity() / 8
     }
 
     /// Invokes `value_fn(group_index, value)` for each non null, non
@@ -144,7 +147,8 @@ impl NullState {
         // "not seen" valid)
         let seen_values =
             initialize_builder(&mut self.seen_values, total_num_groups, false);
-
+        let null_values =
+            initialize_builder(&mut self.seen_nulls, total_num_groups, false);
         match (values.null_count() > 0, opt_filter) {
             // no nulls, no filter,
             (false, None) => {
@@ -179,6 +183,8 @@ impl NullState {
                                 if is_valid {
                                     seen_values.set_bit(group_index, true);
                                     value_fn(group_index, new_value);
+                                } else {
+                                    null_values.set_bit(group_index, true);
                                 }
                                 index_mask <<= 1;
                             },
@@ -196,6 +202,8 @@ impl NullState {
                         if is_valid {
                             seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value);
+                        } else {
+                            null_values.set_bit(group_index, true);
                         }
                     });
             }
@@ -231,6 +239,8 @@ impl NullState {
                             if let Some(new_value) = new_value {
                                 seen_values.set_bit(group_index, true);
                                 value_fn(group_index, new_value)
+                            } else {
+                                null_values.set_bit(group_index, true);
                             }
                         }
                     })
@@ -266,6 +276,9 @@ impl NullState {
         let seen_values =
             initialize_builder(&mut self.seen_values, total_num_groups, false);
 
+        let seen_nulls =
+            initialize_builder(&mut self.seen_nulls, total_num_groups, false);
+
         // These could be made more performant by iterating in chunks of 64 bits at a time
         match (values.null_count() > 0, opt_filter) {
             // no nulls, no filter,
@@ -290,6 +303,8 @@ impl NullState {
                         if is_valid {
                             seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value);
+                        } else {
+                            seen_nulls.set_bit(group_index, true);
                         }
                     })
             }
@@ -320,6 +335,8 @@ impl NullState {
                             if let Some(new_value) = new_value {
                                 seen_values.set_bit(group_index, true);
                                 value_fn(group_index, new_value)
+                            } else {
+                                seen_nulls.set_bit(group_index, true);
                             }
                         }
                     })
@@ -351,6 +368,9 @@ impl NullState {
         let seen_values =
             initialize_builder(&mut self.seen_values, total_num_groups, false);
 
+        let seen_nulls =
+            initialize_builder(&mut self.seen_nulls, total_num_groups, false);
+
         match (values.null_count() > 0, opt_filter) {
             // no nulls, no filter,
             (false, None) => {
@@ -371,6 +391,8 @@ impl NullState {
                         if is_valid {
                             seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value.unwrap());
+                        } else {
+                            seen_nulls.set_bit(group_index, true);
                         }
                     })
             }
@@ -400,6 +422,8 @@ impl NullState {
                             if let Some(new_value) = new_value {
                                 seen_values.set_bit(group_index, true);
                                 value_fn(group_index, new_value);
+                            } else {
+                                seen_nulls.set_bit(group_index, true);
                             }
                         }
                     });
@@ -431,6 +455,9 @@ impl NullState {
         let seen_values =
             initialize_builder(&mut self.seen_values, total_num_groups, false);
 
+        let seen_nulls =
+            initialize_builder(&mut self.seen_nulls, total_num_groups, false);
+
         match (values.null_count() > 0, opt_filter) {
             // no nulls, no filter,
             (false, None) => {
@@ -451,6 +478,8 @@ impl NullState {
                         if is_valid {
                             seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value.unwrap());
+                        } else {
+                            seen_nulls.set_bit(group_index, true);
                         }
                     })
             }
@@ -480,6 +509,8 @@ impl NullState {
                             if let Some(new_value) = new_value {
                                 seen_values.set_bit(group_index, true);
                                 value_fn(group_index, new_value);
+                            } else {
+                                seen_nulls.set_bit(group_index, true);
                             }
                         }
                     });
@@ -511,6 +542,39 @@ impl NullState {
             }
         };
         NullBuffer::new(nulls)
+    }
+
+    /// Same as [`Self::build`], but also returns a [`NullBuffer`]
+    /// representing which group_indices have seen null values
+    pub fn build_with_seen_nulls(&mut self, emit_to: EmitTo) -> (NullBuffer, NullBuffer) {
+        let nulls: BooleanBuffer = self.seen_values.finish();
+        let seen_nulls = self.seen_nulls.finish();
+
+        let (nulls, seen_nulls) = match emit_to {
+            EmitTo::All => (nulls, seen_nulls),
+            EmitTo::First(n) => {
+                // split off the first N values in seen_values
+                //
+                // TODO make this more efficient rather than two
+                // copies and bitwise manipulation
+                let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
+
+                // reset the existing seen buffer
+                for seen in nulls.iter().skip(n) {
+                    self.seen_values.append(seen);
+                }
+
+                // same story for seen_nulls
+                let first_n_seen_nulls: BooleanBuffer =
+                    seen_nulls.iter().take(n).collect();
+                for seen in seen_nulls.iter().skip(n) {
+                    self.seen_nulls.append(seen);
+                }
+
+                (first_n_null, first_n_seen_nulls)
+            }
+        };
+        (NullBuffer::new(nulls), NullBuffer::new(seen_nulls))
     }
 }
 

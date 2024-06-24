@@ -3705,7 +3705,14 @@ query T?
 SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(Millisecond, None)')) FROM t GROUP BY tag ORDER BY tag;
 ----
 X [0 days 0 hours 0 mins 0.011 secs, 0 days 0 hours 0 mins 0.123 secs]
-Y [, 0 days 0 hours 0 mins 0.432 secs]
+Y [0 days 0 hours 0 mins 0.432 secs, ]
+
+# aggregate_duration_array_agg_ignore_nulls
+query T?
+SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(Millisecond, None)')) IGNORE NULLS FROM t GROUP BY tag ORDER BY tag;
+----
+X [0 days 0 hours 0 mins 0.011 secs, 0 days 0 hours 0 mins 0.123 secs]
+Y [0 days 0 hours 0 mins 0.432 secs]
 
 statement ok
 drop table t_source;

@@ -52,6 +52,8 @@ pub struct ArrayAgg {
     expr: Arc<dyn PhysicalExpr>,
     /// If the input expression can have NULLs
     nullable: bool,
+    // If the aggregate should ignore NULLs
+    ignore_nulls: bool,
 }
 
 impl ArrayAgg {
@@ -61,12 +63,14 @@ impl ArrayAgg {
         name: impl Into<String>,
         data_type: DataType,
         nullable: bool,
+        ignore_nulls: bool,
     ) -> Self {
         Self {
             name: name.into(),
             input_data_type: data_type,
             expr,
             nullable,
+            ignore_nulls,
         }
     }
 }
@@ -88,6 +92,7 @@ impl AggregateExpr for ArrayAgg {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(ArrayAggAccumulator::try_new(
             &self.input_data_type,
+            self.ignore_nulls,
         )?))
     }
 
@@ -115,124 +120,174 @@ impl AggregateExpr for ArrayAgg {
         match self.input_data_type {
             DataType::Int8 => Ok(Box::new(ArrayAggGroupsAccumulator::<Int8Type>::new(
                 &self.input_data_type,
+                self.ignore_nulls,
             ))),
             DataType::Int16 => Ok(Box::new(ArrayAggGroupsAccumulator::<Int16Type>::new(
                 &self.input_data_type,
+                self.ignore_nulls,
             ))),
             DataType::Int32 => Ok(Box::new(ArrayAggGroupsAccumulator::<Int32Type>::new(
                 &self.input_data_type,
+                self.ignore_nulls,
             ))),
             DataType::Int64 => Ok(Box::new(ArrayAggGroupsAccumulator::<Int64Type>::new(
                 &self.input_data_type,
+                self.ignore_nulls,
             ))),
             DataType::UInt8 => Ok(Box::new(ArrayAggGroupsAccumulator::<UInt8Type>::new(
                 &self.input_data_type,
+                self.ignore_nulls,
             ))),
-            DataType::UInt16 => Ok(Box::new(
-                ArrayAggGroupsAccumulator::<UInt16Type>::new(&self.input_data_type),
-            )),
-            DataType::UInt32 => Ok(Box::new(
-                ArrayAggGroupsAccumulator::<UInt32Type>::new(&self.input_data_type),
-            )),
-            DataType::UInt64 => Ok(Box::new(
-                ArrayAggGroupsAccumulator::<UInt64Type>::new(&self.input_data_type),
-            )),
-            DataType::Float32 => Ok(Box::new(
-                ArrayAggGroupsAccumulator::<Float32Type>::new(&self.input_data_type),
-            )),
-            DataType::Float64 => Ok(Box::new(
-                ArrayAggGroupsAccumulator::<Float64Type>::new(&self.input_data_type),
-            )),
+            DataType::UInt16 => {
+                Ok(Box::new(ArrayAggGroupsAccumulator::<UInt16Type>::new(
+                    &self.input_data_type,
+                    self.ignore_nulls,
+                )))
+            }
+            DataType::UInt32 => {
+                Ok(Box::new(ArrayAggGroupsAccumulator::<UInt32Type>::new(
+                    &self.input_data_type,
+                    self.ignore_nulls,
+                )))
+            }
+            DataType::UInt64 => {
+                Ok(Box::new(ArrayAggGroupsAccumulator::<UInt64Type>::new(
+                    &self.input_data_type,
+                    self.ignore_nulls,
+                )))
+            }
+            DataType::Float32 => {
+                Ok(Box::new(ArrayAggGroupsAccumulator::<Float32Type>::new(
+                    &self.input_data_type,
+                    self.ignore_nulls,
+                )))
+            }
+            DataType::Float64 => {
+                Ok(Box::new(ArrayAggGroupsAccumulator::<Float64Type>::new(
+                    &self.input_data_type,
+                    self.ignore_nulls,
+                )))
+            }
             DataType::Decimal128(_, _) => {
                 Ok(Box::new(ArrayAggGroupsAccumulator::<Decimal128Type>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 )))
             }
             DataType::Decimal256(_, _) => {
                 Ok(Box::new(ArrayAggGroupsAccumulator::<Decimal256Type>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 )))
             }
-            DataType::Date32 => Ok(Box::new(
-                ArrayAggGroupsAccumulator::<Date32Type>::new(&self.input_data_type),
-            )),
-            DataType::Date64 => Ok(Box::new(
-                ArrayAggGroupsAccumulator::<Date64Type>::new(&self.input_data_type),
-            )),
+            DataType::Date32 => {
+                Ok(Box::new(ArrayAggGroupsAccumulator::<Date32Type>::new(
+                    &self.input_data_type,
+                    self.ignore_nulls,
+                )))
+            }
+            DataType::Date64 => {
+                Ok(Box::new(ArrayAggGroupsAccumulator::<Date64Type>::new(
+                    &self.input_data_type,
+                    self.ignore_nulls,
+                )))
+            }
             DataType::Timestamp(TimeUnit::Second, _) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<TimestampSecondType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Timestamp(TimeUnit::Millisecond, _) => {
                 Ok(Box::new(ArrayAggGroupsAccumulator::<
                     TimestampMillisecondType,
-                >::new(&self.input_data_type)))
+                >::new(
+                    &self.input_data_type, self.ignore_nulls
+                )))
             }
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 Ok(Box::new(ArrayAggGroupsAccumulator::<
                     TimestampMicrosecondType,
-                >::new(&self.input_data_type)))
+                >::new(
+                    &self.input_data_type, self.ignore_nulls
+                )))
             }
             DataType::Timestamp(TimeUnit::Nanosecond, _) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<TimestampNanosecondType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Time32(TimeUnit::Second) => Ok(Box::new(
-                ArrayAggGroupsAccumulator::<Time32SecondType>::new(&self.input_data_type),
+                ArrayAggGroupsAccumulator::<Time32SecondType>::new(
+                    &self.input_data_type,
+                    self.ignore_nulls,
+                ),
             )),
             DataType::Time32(TimeUnit::Millisecond) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<Time32MillisecondType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Time64(TimeUnit::Microsecond) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<Time64MicrosecondType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Time64(TimeUnit::Nanosecond) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<Time64NanosecondType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Duration(TimeUnit::Second) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<DurationSecondType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Duration(TimeUnit::Millisecond) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<DurationMillisecondType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Duration(TimeUnit::Microsecond) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<DurationMicrosecondType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Duration(TimeUnit::Nanosecond) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<DurationNanosecondType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Interval(IntervalUnit::YearMonth) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<IntervalYearMonthType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Interval(IntervalUnit::DayTime) => Ok(Box::new(
                 ArrayAggGroupsAccumulator::<IntervalDayTimeType>::new(
                     &self.input_data_type,
+                    self.ignore_nulls,
                 ),
             )),
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 Ok(Box::new(ArrayAggGroupsAccumulator::<
                     IntervalMonthDayNanoType,
-                >::new(&self.input_data_type)))
+                >::new(
+                    &self.input_data_type, self.ignore_nulls
+                )))
             }
-            DataType::Utf8 => Ok(Box::new(StringArrayAggGroupsAccumulator::new())),
+            DataType::Utf8 => Ok(Box::new(StringArrayAggGroupsAccumulator::new(
+                self.ignore_nulls,
+            ))),
             _ => Err(DataFusionError::Internal(format!(
                 "ArrayAggGroupsAccumulator not supported for data type {:?}",
                 self.input_data_type
@@ -258,14 +313,16 @@ impl PartialEq<dyn Any> for ArrayAgg {
 pub(crate) struct ArrayAggAccumulator {
     values: Vec<ArrayRef>,
     datatype: DataType,
+    ignore_nulls: bool,
 }
 
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
+    pub fn try_new(datatype: &DataType, ignore_nulls: bool) -> Result<Self> {
         Ok(Self {
             values: vec![],
             datatype: datatype.clone(),
+            ignore_nulls,
         })
     }
 }
@@ -277,7 +334,18 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
         assert!(values.len() == 1, "array_agg can only take 1 param!");
+
         let val = values[0].clone();
+
+        if self.ignore_nulls {
+            if let Some(nulls) = val.logical_nulls() {
+                let predicate = BooleanArray::from(nulls.inner().clone());
+                let filtered = arrow::compute::filter(val.as_ref(), &predicate)?;
+                self.values.push(filtered);
+                return Ok(());
+            }
+        }
+
         self.values.push(val);
         Ok(())
     }
@@ -337,17 +405,19 @@ where
     values: Vec<PrimitiveBuilder<T>>,
     data_type: DataType,
     null_state: NullState,
+    ignore_nulls: bool,
 }
 
 impl<T> ArrayAggGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
 {
-    pub fn new(data_type: &DataType) -> Self {
+    pub fn new(data_type: &DataType, ignore_nulls: bool) -> Self {
         Self {
             values: vec![],
             data_type: data_type.clone(),
             null_state: NullState::new(),
+            ignore_nulls,
         }
     }
 }
@@ -355,7 +425,7 @@ where
 impl<T: ArrowPrimitiveType + Send> ArrayAggGroupsAccumulator<T> {
     fn build_list(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let arrays = emit_to.take_needed(&mut self.values);
-        let nulls = self.null_state.build(emit_to);
+        let (nulls, seen_nulls) = self.null_state.build_with_seen_nulls(emit_to);
 
         let len = nulls.len();
         assert_eq!(arrays.len(), len);
@@ -365,8 +435,16 @@ impl<T: ArrowPrimitiveType + Send> ArrayAggGroupsAccumulator<T> {
             len,
         );
 
-        for (is_valid, mut arr) in nulls.iter().zip(arrays.into_iter()) {
+        for ((is_valid, mut arr), seen_null) in nulls
+            .iter()
+            .zip(arrays.into_iter())
+            .zip(seen_nulls.into_iter())
+        {
             if is_valid {
+                if seen_null && !self.ignore_nulls {
+                    arr.append_null();
+                }
+
                 builder.append_value(arr.finish().into_iter());
             } else {
                 builder.append_null();
@@ -460,13 +538,15 @@ where
 struct StringArrayAggGroupsAccumulator {
     values: Vec<StringBuilder>,
     null_state: NullState,
+    ignore_nulls: bool,
 }
 
 impl StringArrayAggGroupsAccumulator {
-    pub fn new() -> Self {
+    pub fn new(ignore_nulls: bool) -> Self {
         Self {
             values: vec![],
             null_state: NullState::new(),
+            ignore_nulls,
         }
     }
 }
@@ -474,13 +554,20 @@ impl StringArrayAggGroupsAccumulator {
 impl StringArrayAggGroupsAccumulator {
     fn build_list(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let array = emit_to.take_needed(&mut self.values);
-        let nulls = self.null_state.build(emit_to);
+        let (nulls, seen_nulls) = self.null_state.build_with_seen_nulls(emit_to);
 
         assert_eq!(array.len(), nulls.len());
+        assert_eq!(array.len(), seen_nulls.len());
 
         let mut builder = ListBuilder::with_capacity(StringBuilder::new(), nulls.len());
-        for (is_valid, mut arr) in nulls.iter().zip(array.into_iter()) {
+        for (mut arr, (is_valid, seen_null)) in array
+            .into_iter()
+            .zip(nulls.into_iter().zip(seen_nulls.into_iter()))
+        {
             if is_valid {
+                if seen_null && !self.ignore_nulls {
+                    arr.append_null();
+                }
                 builder.append_value(arr.finish().into_iter());
             } else {
                 builder.append_null();
