@@ -18,79 +18,84 @@
 use std::sync::Arc;
 
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeIterator},
     Result,
 };
 use datafusion_expr::{Expr, LogicalPlan, Sort};
 
-/// Normalize the schema of a union plan to remove qualifiers from the schema fields.
-pub(super) struct NormalizeUnionSchema {}
+/// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
+///
+/// DataFusion will return an error if two columns in the schema have the same name with no table qualifiers.
+/// There are certain types of UNION queries that can result in having two columns with the same name, and the
+/// solution was to add table qualifiers to the schema fields.
+/// See <https://github.com/apache/datafusion/issues/5410> for more context on this decision.
+///
+/// However, this causes a problem when unparsing these queries back to SQL - as the table qualifier has
+/// logically been erased and is no longer a valid reference.
+///
+/// The following input SQL:
+/// ```sql
+/// SELECT table1.foo FROM table1
+/// UNION ALL
+/// SELECT table2.foo FROM table2
+/// ORDER BY foo
+/// ```
+///
+/// Would be unparsed into the following invalid SQL without this transformation:
+/// ```sql
+/// SELECT table1.foo FROM table1
+/// UNION ALL
+/// SELECT table2.foo FROM table2
+/// ORDER BY table1.foo
+/// ```
+///
+/// Which would result in a SQL error, as `table1.foo` is not a valid reference in the context of the UNION.
+pub(super) fn normalize_union_schema(plan: &LogicalPlan) -> Result<LogicalPlan> {
+    let plan = plan.clone();
 
-impl NormalizeUnionSchema {
-    pub fn new() -> Self {
-        Self {}
-    }
+    let transformed_plan = plan.transform_up(|plan| match plan {
+        LogicalPlan::Union(mut union) => {
+            let schema = match Arc::try_unwrap(union.schema) {
+                Ok(inner) => inner,
+                Err(schema) => (*schema).clone(),
+            };
+            let schema = schema.strip_qualifiers();
+
+            union.schema = Arc::new(schema);
+            Ok(Transformed::yes(LogicalPlan::Union(union)))
+        }
+        LogicalPlan::Sort(sort) => {
+            // Only rewrite Sort expressions that have a UNION as their input
+            if !matches!(&*sort.input, LogicalPlan::Union(_)) {
+                return Ok(Transformed::no(LogicalPlan::Sort(sort)));
+            }
+
+            Ok(Transformed::yes(LogicalPlan::Sort(Sort {
+                expr: rewrite_sort_expr_for_union(sort.expr)?,
+                input: sort.input,
+                fetch: sort.fetch,
+            })))
+        }
+        _ => Ok(Transformed::no(plan)),
+    });
+    transformed_plan.data()
 }
 
-impl TreeNodeRewriter for NormalizeUnionSchema {
-    type Node = LogicalPlan;
-
-    /// Invoked while traversing down the tree before any children are rewritten.
-    /// Default implementation returns the node as is and continues recursion.
-    fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Union(mut union) => {
-                let schema = match Arc::try_unwrap(union.schema) {
-                    Ok(inner) => inner,
-                    Err(schema) => (*schema).clone(),
-                };
-                let schema = schema.strip_qualifiers();
-
-                union.schema = Arc::new(schema);
-                Ok(Transformed::yes(LogicalPlan::Union(union)))
-            }
-            LogicalPlan::Sort(sort) => {
-                if !matches!(&*sort.input, LogicalPlan::Union(_)) {
-                    return Ok(Transformed::no(LogicalPlan::Sort(sort)));
+/// Rewrite sort expressions that have a UNION plan as their input to remove the table reference.
+fn rewrite_sort_expr_for_union(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
+    let sort_exprs: Vec<Expr> = exprs
+        .into_iter()
+        .map_until_stop_and_collect(|expr| {
+            expr.transform_up(|expr| {
+                if let Expr::Column(mut col) = expr {
+                    col.relation = None;
+                    Ok(Transformed::yes(Expr::Column(col)))
+                } else {
+                    Ok(Transformed::no(expr))
                 }
+            })
+        })
+        .data()?;
 
-                let mut sort_expr_rewriter = NormalizeSortExprForUnion::new();
-                let sort_exprs: Vec<Expr> = sort
-                    .expr
-                    .into_iter()
-                    .map(|expr| expr.rewrite(&mut sort_expr_rewriter).data())
-                    .collect::<Result<Vec<_>>>()?;
-
-                Ok(Transformed::yes(LogicalPlan::Sort(Sort {
-                    expr: sort_exprs,
-                    input: sort.input,
-                    fetch: sort.fetch,
-                })))
-            }
-            _ => Ok(Transformed::no(plan)),
-        }
-    }
-}
-
-/// Normalize the schema of sort expressions that follow a Union to remove any column relations.
-struct NormalizeSortExprForUnion {}
-
-impl NormalizeSortExprForUnion {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl TreeNodeRewriter for NormalizeSortExprForUnion {
-    type Node = Expr;
-
-    fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        match expr {
-            Expr::Column(mut col) => {
-                col.relation = None;
-                Ok(Transformed::yes(Expr::Column(col)))
-            }
-            _ => Ok(Transformed::no(expr)),
-        }
-    }
+    Ok(sort_exprs)
 }
