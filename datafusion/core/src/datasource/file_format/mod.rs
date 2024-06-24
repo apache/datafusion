@@ -50,7 +50,9 @@ use async_trait::async_trait;
 use file_compression_type::FileCompressionType;
 use object_store::{ObjectMeta, ObjectStore};
 
-/// A factory struct which produces [FileFormat] structs based on session and command level options
+/// Factory for creating [`FileFormat`] instances based on session and command level options
+///
+/// Users can provide their own `FileFormatFactory` to support arbitrary file formats
 pub trait FileFormatFactory: Sync + Send + GetExt {
     /// Initialize a [FileFormat] and configure based on session and command level options
     fn create(
