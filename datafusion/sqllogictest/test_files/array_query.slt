@@ -41,11 +41,16 @@ SELECT * FROM data;
 # Filtering
 ###########
 
-query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) == List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+query ??I
 SELECT * FROM data WHERE column1 = [1,2,3];
+----
+[1, 2, 3] [4, 5] 1
+[1, 2, 3] NULL 1
 
-query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) == List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+query ??I
 SELECT * FROM data WHERE column1 = column2
+----
+[2, 3] [2, 3] 1
 
 query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) != List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 SELECT * FROM data WHERE column1 != [1,2,3];
