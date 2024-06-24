@@ -43,6 +43,8 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
+/// This example has two types of nodes: `ParentExec` and `ChildExec` which can only
+/// be serialized with different `PhysicalExtensionCodec`s
 #[derive(Debug)]
 struct ParentExec {
     input: Arc<dyn ExecutionPlan>,
