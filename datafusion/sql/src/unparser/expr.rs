@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
 use arrow::util::display::array_value_to_string;
 use core::fmt;
 use std::{fmt::Display, vec};
@@ -679,12 +680,18 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
             }
             ScalarValue::Float64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Decimal128(Some(_), ..) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::Decimal128(Some(value), precision, scale) => {
+                Ok(ast::Expr::Value(ast::Value::Number(
+                    Decimal128Type::format_decimal(*value, *precision, *scale),
+                    false,
+                )))
             }
             ScalarValue::Decimal128(None, ..) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Decimal256(Some(_), ..) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::Decimal256(Some(value), precision, scale) => {
+                Ok(ast::Expr::Value(ast::Value::Number(
+                    Decimal256Type::format_decimal(*value, *precision, *scale),
+                    false,
+                )))
             }
             ScalarValue::Decimal256(None, ..) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Int8(Some(i)) => {
@@ -1015,11 +1022,18 @@ impl Unparser<'_> {
             DataType::Dictionary(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Decimal128(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            DataType::Decimal256(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            DataType::Decimal128(precision, scale)
+            | DataType::Decimal256(precision, scale) => {
+                let mut new_precision = *precision as u64;
+                let mut new_scale = *scale as u64;
+                if *scale < 0 {
+                    new_precision = (*precision as i16 - *scale as i16) as u64;
+                    new_scale = 0
+                }
+
+                Ok(ast::DataType::Decimal(
+                    ast::ExactNumberInfo::PrecisionAndScale(new_precision, new_scale),
+                ))
             }
             DataType::Map(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
@@ -1396,6 +1410,29 @@ mod tests {
             (
                 interval_year_month_lit("1.5 YEAR 1 MONTH"),
                 r#"INTERVAL '1 YEARS 7 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
+            ),
+            (
+                (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal128(
+                    Some(100123),
+                    28,
+                    3,
+                ))),
+                r#"((a + b) > 100.123)"#,
+            ),
+            (
+                (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal256(
+                    Some(100123.into()),
+                    28,
+                    3,
+                ))),
+                r#"((a + b) > 100.123)"#,
+            ),
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(col("a")),
+                    data_type: DataType::Decimal128(10, -2),
+                }),
+                r#"CAST(a AS DECIMAL(12,0))"#,
             ),
         ];
 
