@@ -257,7 +257,9 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
 
 #[tokio::main]
 async fn main() {
-    // build execution plan
+    // build execution plan that has both types of nodes
+    //
+    // Note each node requires a different `PhysicalExtensionCodec` to decode
     let exec_plan = Arc::new(ParentExec {
         input: Arc::new(ChildExec {}),
     });
