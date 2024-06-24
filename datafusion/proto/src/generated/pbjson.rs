@@ -19961,12 +19961,12 @@ impl serde::Serialize for Wildcard {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.qualifier.is_empty() {
+        if self.qualifier.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.Wildcard", len)?;
-        if !self.qualifier.is_empty() {
-            struct_ser.serialize_field("qualifier", &self.qualifier)?;
+        if let Some(v) = self.qualifier.as_ref() {
+            struct_ser.serialize_field("qualifier", v)?;
         }
         struct_ser.end()
     }
@@ -20032,12 +20032,12 @@ impl<'de> serde::Deserialize<'de> for Wildcard {
                             if qualifier__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("qualifier"));
                             }
-                            qualifier__ = Some(map_.next_value()?);
+                            qualifier__ = map_.next_value()?;
                         }
                     }
                 }
                 Ok(Wildcard {
-                    qualifier: qualifier__.unwrap_or_default(),
+                    qualifier: qualifier__,
                 })
             }
         }

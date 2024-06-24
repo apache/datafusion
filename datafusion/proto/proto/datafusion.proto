@@ -369,7 +369,7 @@ message LogicalExprNode {
 }
 
 message Wildcard {
-  string qualifier = 1;
+  TableReference qualifier = 1;
 }
 
 message PlaceholderNode {
