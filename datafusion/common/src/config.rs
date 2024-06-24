@@ -1251,7 +1251,7 @@ impl TableOptions {
     /// # Parameters
     ///
     /// * `format`: The file format to use (e.g., CSV, Parquet).
-    pub fn set_file_format(&mut self, format: ConfigFileType) {
+    pub fn set_config_format(&mut self, format: ConfigFileType) {
         self.current_format = Some(format);
     }
 
@@ -1756,7 +1756,7 @@ mod tests {
         let mut extension = Extensions::new();
         extension.insert(TestExtensionConfig::default());
         let mut table_config = TableOptions::new().with_extensions(extension);
-        table_config.set_file_format(ConfigFileType::CSV);
+        table_config.set_config_format(ConfigFileType::CSV);
         table_config.set("format.delimiter", ";").unwrap();
         assert_eq!(table_config.csv.delimiter, b';');
         table_config.set("test.bootstrap.servers", "asd").unwrap();
@@ -1773,7 +1773,7 @@ mod tests {
     #[test]
     fn csv_u8_table_options() {
         let mut table_config = TableOptions::new();
-        table_config.set_file_format(ConfigFileType::CSV);
+        table_config.set_config_format(ConfigFileType::CSV);
         table_config.set("format.delimiter", ";").unwrap();
         assert_eq!(table_config.csv.delimiter as char, ';');
         table_config.set("format.escape", "\"").unwrap();
@@ -1786,7 +1786,7 @@ mod tests {
     #[test]
     fn parquet_table_options() {
         let mut table_config = TableOptions::new();
-        table_config.set_file_format(ConfigFileType::PARQUET);
+        table_config.set_config_format(ConfigFileType::PARQUET);
         table_config
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
@@ -1800,7 +1800,7 @@ mod tests {
     #[test]
     fn parquet_table_options_config_entry() {
         let mut table_config = TableOptions::new();
-        table_config.set_file_format(ConfigFileType::PARQUET);
+        table_config.set_config_format(ConfigFileType::PARQUET);
         table_config
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
@@ -1814,7 +1814,7 @@ mod tests {
     #[test]
     fn parquet_table_options_config_metadata_entry() {
         let mut table_config = TableOptions::new();
-        table_config.set_file_format(ConfigFileType::PARQUET);
+        table_config.set_config_format(ConfigFileType::PARQUET);
         table_config.set("format.metadata::key1", "").unwrap();
         table_config.set("format.metadata::key2", "value2").unwrap();
         table_config
