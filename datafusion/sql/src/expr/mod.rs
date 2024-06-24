@@ -620,7 +620,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        match self.sql_expr_to_logical_expr(expr, schema, planner_context)? {
+        let result = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
+        match  result {
             Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
                 args,
@@ -638,8 +639,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?)),
                 order_by,
             ))),
+            Expr::AggregateUDF(expr::AggregateUDF {
+                fun,
+                args,
+                order_by,
+                ..
+            }) => Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+                fun,
+                args,
+                Some(Box::new(self.sql_expr_to_logical_expr(
+                    filter,
+                    schema,
+                    planner_context,
+                )?)),
+                order_by,
+            ))),
+
             _ => plan_err!(
-                "AggregateExpressionWithFilter expression was not an AggregateFunction"
+                "Unable to convert SQL expression of an aggregate function with filter to datafusion expression: {:?}", result
             ),
         }
     }
