@@ -255,24 +255,28 @@ impl SessionState {
             log::info!("Unable to register default ParquetFormat: {e}")
         };
 
-        match new_self.register_file_format(Arc::new(JsonFormatFactory::new()), false) {
-            Ok(_) => (),
-            Err(e) => log::info!("Unable to register default JsonFormat: {e}"),
+        if let Err(e) =
+            new_self.register_file_format(Arc::new(JsonFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default JsonFormat: {e}")
         };
 
-        match new_self.register_file_format(Arc::new(CsvFormatFactory::new()), false) {
-            Ok(_) => (),
-            Err(e) => log::info!("Unable to register default CsvFormat: {e}"),
+        if let Err(e) =
+            new_self.register_file_format(Arc::new(CsvFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default CsvFormat: {e}")
         };
 
-        match new_self.register_file_format(Arc::new(AvroFormatFactory::new()), false) {
-            Ok(_) => (),
-            Err(e) => log::info!("Unable to register default AvroFormat: {e}"),
+        if let Err(e) =
+            new_self.register_file_format(Arc::new(ArrowFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default ArrowFormat: {e}")
         };
 
-        match new_self.register_file_format(Arc::new(ArrowFormatFactory::new()), false) {
-            Ok(_) => (),
-            Err(e) => log::info!("Unable to register default ArrowFormat: {e}"),
+        if let Err(e) =
+            new_self.register_file_format(Arc::new(AvroFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default AvroFormat: {e}")
         };
 
         // register built in functions
