@@ -5617,6 +5617,26 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    #[should_panic(expected = "Can not run arithmetic negative on scalar value Float16")]
+    fn f16_test_overflow() {
+        // TODO: if negate supports f16, add these cases to `test_scalar_negative_overflows` test case
+        let cases = [
+            (
+                ScalarValue::Float16(Some(f16::MIN)),
+                ScalarValue::Float16(Some(f16::MAX)),
+            ),
+            (
+                ScalarValue::Float16(Some(f16::MAX)),
+                ScalarValue::Float16(Some(f16::MIN)),
+            ),
+        ];
+
+        for (test, expected) in cases {
+            assert_eq!(test.arithmetic_negate().unwrap(), expected);
+        }
+    }
+
     macro_rules! expect_operation_error {
         ($TEST_NAME:ident, $FUNCTION:ident, $EXPECTED_ERROR:expr) => {
             #[test]
