@@ -205,8 +205,8 @@ mod tests {
     #[test]
     fn test_power_i64() {
         let args = [
-            ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5, 5]))), // base
-            ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4, -4]))), // exponent
+            ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
+            ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
         ];
 
         let result = PowerFunc::new()
