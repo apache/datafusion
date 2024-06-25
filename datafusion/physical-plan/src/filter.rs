@@ -170,16 +170,17 @@ impl FilterExec {
         for conjunction in conjunctions {
             if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>() {
                 if binary.op() == &Operator::Eq {
+                    // Filter evaluates to single value for all partitions
                     if input_eqs.is_expr_constant(binary.left()) {
-                        res_constants.push(ConstExpr {
-                            expr: binary.right().clone(),
-                            across_partitions: true,
-                        })
+                        res_constants.push(
+                            ConstExpr::new(binary.right().clone())
+                                .with_across_partitions(true),
+                        )
                     } else if input_eqs.is_expr_constant(binary.right()) {
-                        res_constants.push(ConstExpr {
-                            expr: binary.left().clone(),
-                            across_partitions: true,
-                        })
+                        res_constants.push(
+                            ConstExpr::new(binary.left().clone())
+                                .with_across_partitions(true),
+                        )
                     }
                 }
             }
@@ -207,10 +208,7 @@ impl FilterExec {
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| {
                 let expr = Arc::new(column) as _;
-                ConstExpr {
-                    expr,
-                    across_partitions: true,
-                }
+                ConstExpr::new(expr).with_across_partitions(true)
             });
         // this is for statistics
         eq_properties = eq_properties.add_constants(constants);

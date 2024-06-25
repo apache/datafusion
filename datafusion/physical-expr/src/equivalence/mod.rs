@@ -27,8 +27,8 @@ mod ordering;
 mod projection;
 mod properties;
 
-pub use class::{EquivalenceClass, EquivalenceGroup};
-pub use ordering::{ConstExpr, OrderingEquivalenceClass};
+pub use class::{ConstExpr, EquivalenceClass, EquivalenceGroup};
+pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::{join_equivalence_properties, EquivalenceProperties};
 
@@ -205,10 +205,7 @@ mod tests {
         // Define a and f are aliases
         eq_properties.add_equal_conditions(col_a, col_f)?;
         // Column e has constant value.
-        eq_properties = eq_properties.add_constants([ConstExpr {
-            expr: col_e.clone(),
-            across_partitions: false,
-        }]);
+        eq_properties = eq_properties.add_constants([ConstExpr::new(col_e.clone())]);
 
         // Randomly order columns for sorting
         let mut rng = StdRng::seed_from_u64(seed);
@@ -485,7 +482,7 @@ mod tests {
 
         // Fill constant columns
         for constant in &eq_properties.constants {
-            let col = constant.expr.as_any().downcast_ref::<Column>().unwrap();
+            let col = constant.expr().as_any().downcast_ref::<Column>().unwrap();
             let (idx, _field) = schema.column_with_name(col.name()).unwrap();
             let arr = Arc::new(Float64Array::from_iter_values(vec![0 as f64; n_elem]))
                 as ArrayRef;

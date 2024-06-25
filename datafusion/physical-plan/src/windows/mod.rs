@@ -575,10 +575,7 @@ pub fn get_window_mode(
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs
         .iter()
-        .map(|expr| ConstExpr {
-            expr: expr.clone(),
-            across_partitions: false,
-        })
+        .map(|expr| ConstExpr::new(expr.clone()))
         .collect::<Vec<_>>();
     let partition_by_eqs = input_eqs.add_constants(const_exprs);
     let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);

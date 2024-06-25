@@ -183,13 +183,13 @@ fn calculate_union_eq_properties(
             .into_iter()
             .filter_map(|meet_constant| {
                 for const_expr in constants {
-                    if const_expr.expr.eq(&meet_constant.expr) {
+                    if const_expr.expr().eq(meet_constant.expr()) {
                         // TODO: Check whether constant expressions evaluates the same value or not for each partition
                         let across_partitions = false;
-                        return Some(ConstExpr {
-                            expr: meet_constant.expr,
-                            across_partitions,
-                        });
+                        return Some(
+                            ConstExpr::new(meet_constant.owned_expr())
+                                .with_across_partitions(across_partitions),
+                        );
                     }
                 }
                 None

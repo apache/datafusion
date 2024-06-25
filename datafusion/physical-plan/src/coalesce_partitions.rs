@@ -66,7 +66,6 @@ impl CoalescePartitionsExec {
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_orderings();
         eq_properties.clear_per_partition_constants();
-        println!("coalesce constants: {:?}", eq_properties.constants());
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning

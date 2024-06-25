@@ -183,6 +183,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
                 )
             })
             .data()?;
+
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
@@ -340,6 +341,7 @@ fn ensure_sorting(
         .enumerate()
     {
         let physical_ordering = child.plan.output_ordering();
+
         if let Some(required) = required_ordering {
             let eq_properties = child.plan.equivalence_properties();
             if !eq_properties.ordering_satisfy_requirement(&required) {

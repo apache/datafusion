@@ -715,6 +715,7 @@ impl RepartitionExec {
     ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties = Self::eq_properties_helper(input, preserve_order);
+
         PlanProperties::new(
             eq_properties,          // Equivalence Properties
             partitioning,           // Output Partitioning
