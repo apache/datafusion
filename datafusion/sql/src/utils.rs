@@ -322,7 +322,6 @@ pub(crate) fn transform_bottom_unnest(
             let is_root_expr = &expr == original_expr;
 
             if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
-                // TODO: why UDF is not transforming its input argument
                 let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
                 if is_root_expr{
                     root_expr.extend(transform(original_expr, arg)?);
@@ -354,6 +353,8 @@ pub(crate) fn transform_bottom_unnest(
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
     } else {
+        // A workaround, because at root level
+        // an unnest on struct column can be transformd into multiple exprs
         if !root_expr.is_empty() {
             return Ok(root_expr);
         }
