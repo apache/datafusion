@@ -108,7 +108,7 @@ fn compare_op_for_nested(
 
     // fast path, if compare with one null and operator is not 'distinct', then we can return null array directly
     if !matches!(op, Operator::IsDistinctFrom | Operator::IsNotDistinctFrom)
-        && (l.null_count() == 1 || r.null_count() == 1)
+        && (is_l_scalar && l.null_count() == 1 || is_r_scalar && r.null_count() == 1)
     {
         return Ok(BooleanArray::new_null(len));
     }

@@ -96,8 +96,8 @@ SELECT * FROM data WHERE null = column2;
 query ??I
 SELECT * FROM data WHERE column2 is distinct from null;
 ----
-[1, 2, 3] [4, 5] 1
 [2, 3] [2, 3] 1
+[1, 2, 3] [4, 5] 1
 
 query ??I
 SELECT * FROM data WHERE column2 is not distinct from null;
@@ -228,3 +228,49 @@ NULL
 
 statement ok
 drop table data;
+
+statement ok
+create table data (a int[][], b int) as values ([[1,2,3]], 1), ([[2,3], [4,5]], 2), (null, 3);
+
+query ?I
+select * from data;
+----
+[[1, 2, 3]] 1
+[[2, 3], [4, 5]] 2
+NULL 3
+
+query ?I
+select * from data where a = [[1,2,3]];
+----
+[[1, 2, 3]] 1
+
+query ?I
+select * from data where a > [[1,2,3]];
+----
+[[2, 3], [4, 5]] 2
+
+query ?I
+select * from data where a > [[1,2]];
+----
+[[1, 2, 3]] 1
+[[2, 3], [4, 5]] 2
+
+query ?I
+select * from data where a < [[2, 3]];
+----
+[[1, 2, 3]] 1
+
+# compare with null with eq results in null
+query ?I
+select * from data where a = null;
+----
+
+query ?I
+select * from data where a != null;
+----
+
+# compare with null with distinct results in true/false
+query ?I
+select * from data where a is not distinct from null;
+----
+NULL 3
