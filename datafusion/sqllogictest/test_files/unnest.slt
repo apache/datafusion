@@ -462,7 +462,7 @@ statement ok
 drop table unnest_table;
 
 ## unnest list followed by unnest struct
-query ?T??T?
+query ?T?
 select unnest(unnest(column3)), column3 from nested_unnest_table;
 ----
 [a] b [{c0: [a], c1: b}] 

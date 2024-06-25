@@ -20,9 +20,8 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
-    check_columns_satisfy_exprs, extract_aliases, rebase_expr,
-    recursive_transform_unnest, resolve_aliases_to_exprs, resolve_columns,
-    resolve_positions_to_exprs,
+    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
+    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnest,
 };
 
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
@@ -296,9 +295,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
-        let mut current_input = input;
-        let mut current_select_exprs = select_exprs;
-        // only stop if there is no transformatoin possible
+        let mut intermediate_plan = input;
+        let mut intermediate_select_exprs = select_exprs;
+        // only stop if there is no transformation possible
         for i in 0.. {
             let mut unnest_columns = vec![];
             // from which column used for projection, before the unnest happen
@@ -310,11 +309,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
             // - unnest(array_col) will be transformed into unnest(array_col).element
             // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
-            let outer_projection_exprs: Vec<Expr> = current_select_exprs
+            let outer_projection_exprs: Vec<Expr> = intermediate_select_exprs
                 .iter()
                 .map(|expr| {
-                    recursive_transform_unnest(
-                        &current_input,
+                    transform_bottom_unnest(
+                        &intermediate_plan,
                         &mut unnest_columns,
                         &mut inner_projection_exprs,
                         expr,
@@ -325,10 +324,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .flatten()
                 .collect();
 
-            // Do the final projection
+            // No more unnest is possible
             if unnest_columns.is_empty() {
+                // The original expr does not contain any unnest
                 if i == 0 {
-                    return LogicalPlanBuilder::from(current_input)
+                    return LogicalPlanBuilder::from(intermediate_plan)
                         .project(inner_projection_exprs)?
                         .build();
                 }
@@ -337,16 +337,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-                let plan = LogicalPlanBuilder::from(current_input)
+                let plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(inner_projection_exprs)?
                     .unnest_columns_with_options(columns, unnest_options)?
                     .build()?;
-                current_input = plan;
-                current_select_exprs = outer_projection_exprs;
+                intermediate_plan = plan;
+                intermediate_select_exprs = outer_projection_exprs;
             }
         }
-        LogicalPlanBuilder::from(current_input)
-            .project(current_select_exprs)?
+        LogicalPlanBuilder::from(intermediate_plan)
+            .project(intermediate_select_exprs)?
             .build()
     }
 

@@ -269,7 +269,9 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
 /// - For list column: unnest(col) with type list -> unnest(col) with type list::item
 /// - For struct column: unnest(struct(field1, field2)) -> unnest(struct).field1, unnest(struct).field2
 /// The transformed exprs will be used in the outer projection
-pub(crate) fn recursive_transform_unnest(
+/// If along the path from root to bottom, there are multiple unnest expressions, the transformation
+/// is done only for the bottom expression
+pub(crate) fn transform_bottom_unnest(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<String>,
     inner_projection_exprs: &mut Vec<Expr>,
@@ -370,70 +372,10 @@ mod tests {
     use datafusion_expr::{col, count, lit, unnest, EmptyRelation, LogicalPlan};
     use datafusion_functions_aggregate::expr_fn::count;
 
-    use crate::utils::{recursive_transform_unnest, resolve_positions_to_exprs};
-    #[test]
-    fn test_nested_transform_unnest() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new(
-                "struct_col", // {array_col: [1,2,3]}
-                ArrowDataType::Struct(Fields::from(vec![Field::new(
-                    "matrix",
-                    ArrowDataType::List(Arc::new(Field::new(
-                        "matrix_row",
-                        ArrowDataType::List(Arc::new(Field::new(
-                            "item",
-                            ArrowDataType::Int64,
-                            true,
-                        ))),
-                        true,
-                    ))),
-                    true,
-                )])),
-                false,
-            ),
-            Field::new("int_col", ArrowDataType::Int32, false),
-        ]);
-
-        let dfschema = DFSchema::try_from(schema)?;
-
-        let input = LogicalPlan::EmptyRelation(EmptyRelation {
-            produce_one_row: false,
-            schema: Arc::new(dfschema),
-        });
-
-        let mut unnest_placeholder_columns = vec![];
-        let mut inner_projection_exprs = vec![];
-
-        // unnest(struct_col)
-        let original_expr = unnest(unnest(col("struct_col").field("matrix")));
-        let transformed_exprs = recursive_transform_unnest(
-            &input,
-            &mut unnest_placeholder_columns,
-            &mut inner_projection_exprs,
-            &original_expr,
-        )?;
-        assert_eq!(
-            transformed_exprs,
-            vec![unnest(col("unnest(struct_col[matrix])"))]
-        );
-        assert_eq!(
-            unnest_placeholder_columns,
-            vec!["unnest(struct_col[matrix])"]
-        );
-        // still reference struct_col in original schema but with alias,
-        // to avoid colliding with the projection on the column itself if any
-        assert_eq!(
-            inner_projection_exprs,
-            vec![col("struct_col")
-                .field("matrix")
-                .alias("unnest(struct_col[matrix])"),]
-        );
-
-        Ok(())
-    }
+    use crate::utils::{resolve_positions_to_exprs, transform_bottom_unnest};
 
     #[test]
-    fn test_recursive_transform_unnest() -> Result<()> {
+    fn test_transform_bottom_unnest() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
                 "struct_col",
@@ -467,7 +409,7 @@ mod tests {
 
         // unnest(struct_col)
         let original_expr = unnest(col("struct_col"));
-        let transformed_exprs = recursive_transform_unnest(
+        let transformed_exprs = transform_bottom_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -490,7 +432,7 @@ mod tests {
 
         // unnest(array_col) + 1
         let original_expr = unnest(col("array_col")).add(lit(1i64));
-        let transformed_exprs = recursive_transform_unnest(
+        let transformed_exprs = transform_bottom_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -515,6 +457,62 @@ mod tests {
                 col("struct_col").alias("unnest(struct_col)"),
                 col("array_col").alias("unnest(array_col)")
             ]
+        );
+
+        // a nested structure struct[[]]
+        let schema = Schema::new(vec![
+            Field::new(
+                "struct_col", // {array_col: [1,2,3]}
+                ArrowDataType::Struct(Fields::from(vec![Field::new(
+                    "matrix",
+                    ArrowDataType::List(Arc::new(Field::new(
+                        "matrix_row",
+                        ArrowDataType::List(Arc::new(Field::new(
+                            "item",
+                            ArrowDataType::Int64,
+                            true,
+                        ))),
+                        true,
+                    ))),
+                    true,
+                )])),
+                false,
+            ),
+            Field::new("int_col", ArrowDataType::Int32, false),
+        ]);
+
+        let dfschema = DFSchema::try_from(schema)?;
+
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(dfschema),
+        });
+
+        let mut unnest_placeholder_columns = vec![];
+        let mut inner_projection_exprs = vec![];
+
+        // An expr with multiple unnest
+        let original_expr = unnest(unnest(col("struct_col").field("matrix")));
+        let transformed_exprs = transform_bottom_unnest(
+            &input,
+            &mut unnest_placeholder_columns,
+            &mut inner_projection_exprs,
+            &original_expr,
+        )?;
+        // Only the inner most/ bottom most unnest is transformed
+        assert_eq!(
+            transformed_exprs,
+            vec![unnest(col("unnest(struct_col[matrix])"))]
+        );
+        assert_eq!(
+            unnest_placeholder_columns,
+            vec!["unnest(struct_col[matrix])"]
+        );
+        assert_eq!(
+            inner_projection_exprs,
+            vec![col("struct_col")
+                .field("matrix")
+                .alias("unnest(struct_col[matrix])"),]
         );
 
         Ok(())
