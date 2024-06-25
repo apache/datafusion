@@ -667,9 +667,7 @@ impl Unparser<'_> {
                 "Failed to downcast type {v:?} to arrow array"
             ))?
             .value_as_time(0)
-            .ok_or(internal_datafusion_err!(
-                "Unable to convert {v:?} to Time"
-            ))?
+            .ok_or(internal_datafusion_err!("Unable to convert {v:?} to Time"))?
             .to_string();
         Ok(ast::Expr::Cast {
             kind: ast::CastKind::Cast,
