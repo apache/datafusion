@@ -38,8 +38,8 @@ use crate::physical_plan::{
     Statistics,
 };
 
-use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use arrow::compute::sum;
+use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
