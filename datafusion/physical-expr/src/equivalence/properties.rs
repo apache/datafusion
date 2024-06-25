@@ -2156,7 +2156,10 @@ mod tests {
         let col_h = &col("h", &test_schema)?;
 
         // Add column h as constant
-        eq_properties = eq_properties.add_constants(vec![col_h.clone()]);
+        eq_properties = eq_properties.add_constants(vec![ConstExpr {
+            expr: col_h.clone(),
+            across_partitions: false,
+        }]);
 
         let test_cases = vec![
             // TEST CASE 1
@@ -2454,7 +2457,13 @@ mod tests {
         ];
 
         for case in cases {
-            let mut properties = base_properties.clone().add_constants(case.constants);
+            let mut properties =
+                base_properties
+                    .clone()
+                    .add_constants(case.constants.into_iter().map(|expr| ConstExpr {
+                        expr,
+                        across_partitions: false,
+                    }));
             for [left, right] in &case.equal_conditions {
                 properties.add_equal_conditions(left, right)?
             }

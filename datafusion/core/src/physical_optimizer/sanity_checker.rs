@@ -33,7 +33,7 @@ use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
-use datafusion_physical_plan::{displayable, ExecutionPlanProperties};
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 /// The SanityCheckPlan rule rejects the following query plans:
 /// i) Plans that use pipeline-breaking operators on infinite input(s),
@@ -110,12 +110,6 @@ fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
                 .iter()
                 .all(|f| is_datatype_supported(f.data_type()))
     })
-}
-
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
-    let formatted = displayable(plan.as_ref()).indent(true).to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
 }
 
 /// Ensures that the plan is pipeline friendly and the order and

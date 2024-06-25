@@ -257,7 +257,7 @@ fn try_pushdown_requirements_to_join(
             let left_eq_properties =
                 left_eq_properties.clone().with_reorder(sort_expr.clone());
             if left_eq_properties
-                .ordering_satisfy_requirement(&left_requirement.unwrap_or(vec![]))
+                .ordering_satisfy_requirement(&left_requirement.unwrap_or_default())
             {
                 // After re-ordering requirement is still satisfied
                 (sort_expr.as_slice(), right_ordering)
@@ -269,7 +269,7 @@ fn try_pushdown_requirements_to_join(
             let right_eq_properties =
                 right_eq_properties.clone().with_reorder(sort_expr.clone());
             if right_eq_properties
-                .ordering_satisfy_requirement(&right_requirement.unwrap_or(vec![]))
+                .ordering_satisfy_requirement(&right_requirement.unwrap_or_default())
             {
                 // After re-ordering requirement is still satisfied
                 (left_ordering, sort_expr.as_slice())

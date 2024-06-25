@@ -64,7 +64,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
-use datafusion_physical_plan::{displayable, ExecutionPlanProperties};
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 use itertools::izip;
 
@@ -147,12 +147,6 @@ fn update_coalesce_ctx_children(
     };
 }
 
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
-    let formatted = displayable(plan.as_ref()).indent(true).to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    // println!("{:#?}", actual);
-}
-
 /// The boolean flag `repartition_sorts` defined in the config indicates
 /// whether we elect to transform [`CoalescePartitionsExec`] + [`SortExec`] cascades
 /// into [`SortExec`] + [`SortPreservingMergeExec`] cascades, which enables us to
@@ -163,14 +157,10 @@ impl PhysicalOptimizerRule for EnforceSorting {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        println!("start enforce req");
-        print_plan(&plan);
         let plan_requirements = PlanWithCorrespondingSort::new_default(plan);
         // Execute a bottom-up traversal to enforce sorting requirements,
         // remove unnecessary sorts, and optimize sort-sensitive operators:
         let adjusted = plan_requirements.transform_up(ensure_sorting)?.data;
-        println!("AFTER enforce req");
-        print_plan(&adjusted.plan);
         let new_plan = if config.optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
@@ -181,8 +171,6 @@ impl PhysicalOptimizerRule for EnforceSorting {
         } else {
             adjusted.plan
         };
-        println!("AFTER parallelize");
-        print_plan(&new_plan);
 
         let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
         let updated_plan = plan_with_pipeline_fixer
@@ -195,16 +183,12 @@ impl PhysicalOptimizerRule for EnforceSorting {
                 )
             })
             .data()?;
-        println!("AFTER replace order preserving variant");
-        print_plan(&updated_plan.plan);
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
         let adjusted = sort_pushdown.transform_down(pushdown_sorts)?.data;
 
-        println!("AFTER sort pushdown");
-        print_plan(&adjusted.plan);
         adjusted
             .plan
             .transform_up(|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
@@ -348,8 +332,6 @@ fn ensure_sorting(
     };
 
     let plan = &requirements.plan;
-    // println!("ensure sorting");
-    // print_plan(plan);
     let mut updated_children = vec![];
     for (idx, (required_ordering, mut child)) in plan
         .required_input_ordering()
