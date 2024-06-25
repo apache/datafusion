@@ -33,7 +33,7 @@ use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
-use datafusion_physical_plan::ExecutionPlanProperties;
+use datafusion_physical_plan::{displayable, ExecutionPlanProperties};
 
 /// The SanityCheckPlan rule rejects the following query plans:
 /// i) Plans that use pipeline-breaking operators on infinite input(s),
@@ -112,6 +112,12 @@ fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
     })
 }
 
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
+    let formatted = displayable(plan.as_ref()).indent(true).to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    println!("{:#?}", actual);
+}
+
 /// Ensures that the plan is pipeline friendly and the order and
 /// distribution requirements from its children are satisfied.
 pub fn check_plan_sanity(
@@ -131,8 +137,8 @@ pub fn check_plan_sanity(
             Some(child_sort_req) => {
                 if !child_eq_props.ordering_satisfy_requirement(child_sort_req) {
                     return plan_err!(
-                        "Child: {:?} does not satisfy parent order requirements",
-                        child
+                        "Child does not satisfy parent order requirements: {:?}",
+                        child_sort_req
                     );
                 }
             }
@@ -143,8 +149,8 @@ pub fn check_plan_sanity(
             .satisfy(child_dist_req, child_eq_props)
         {
             return plan_err!(
-                "Child: {:?} does not satisfy parent distribution requirements",
-                child
+                "Child does not satisfy parent distribution requirements: {:?}",
+                child_dist_req
             );
         }
     }

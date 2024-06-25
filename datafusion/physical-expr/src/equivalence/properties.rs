@@ -394,6 +394,8 @@ impl EquivalenceProperties {
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
         for normalized_req in normalized_reqs {
             // Check whether given ordering is satisfied
+            // println!("normalized_req: {:?}", normalized_req);
+            // println!("eq_properties: {:?}", eq_properties);
             if !eq_properties.ordering_satisfy_single(&normalized_req) {
                 return false;
             }
@@ -1362,6 +1364,8 @@ pub fn join_equivalence_properties(
         on,
     ));
 
+    let left_constants = left.constants().to_vec();
+    let right_constants = right.constants().to_vec();
     let left_oeq_class = left.oeq_class;
     let mut right_oeq_class = right.oeq_class;
     match maintains_input_order {
@@ -1415,6 +1419,15 @@ pub fn join_equivalence_properties(
         [false, false] => {}
         [true, true] => unreachable!("Cannot maintain ordering of both sides"),
         _ => unreachable!("Join operators can not have more than two children"),
+    }
+    match join_type {
+        JoinType::LeftAnti | JoinType::LeftSemi => {
+            result = result.add_constants(left_constants);
+        }
+        JoinType::RightAnti | JoinType::RightSemi => {
+            result = result.add_constants(right_constants);
+        }
+        _ => {}
     }
     result
 }
