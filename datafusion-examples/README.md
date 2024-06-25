@@ -19,7 +19,8 @@
 
 # DataFusion Examples
 
-This crate includes several examples of how to use various DataFusion APIs and help you on your way.
+This crate includes end to end, highly commented examples of how to use
+various DataFusion APIs to help you get started.
 
 ## Prerequisites:
 
@@ -27,7 +28,7 @@ Run `git submodule update --init` to init test files.
 
 ## Running Examples
 
-To run the examples, use the `cargo run` command, such as:
+To run an example, use the `cargo run` command, such as:
 
 ```bash
 git clone https://github.com/apache/datafusion
