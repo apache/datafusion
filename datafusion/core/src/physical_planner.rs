@@ -780,7 +780,12 @@ impl DefaultPhysicalPlanner {
                 let keep_partition_by_columns = source_option_tuples
                     .get("hive.keep_partition_by_columns")
                     .map(|v| v.trim() == "true")
-                    .unwrap_or(false) || session_state.config().options().execution.keep_partition_by_columns;
+                    .unwrap_or(false)
+                    || session_state
+                        .config()
+                        .options()
+                        .execution
+                        .keep_partition_by_columns;
 
                 // Set file sink related options
                 let config = FileSinkConfig {

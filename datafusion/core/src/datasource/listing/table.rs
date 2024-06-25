@@ -917,7 +917,8 @@ impl TableProvider for ListingTable {
         .await?;
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
-        let keep_partition_by_columns = state.config().options().execution.keep_partition_by_columns;
+        let keep_partition_by_columns =
+            state.config().options().execution.keep_partition_by_columns;
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
