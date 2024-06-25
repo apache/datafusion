@@ -308,7 +308,10 @@ fn is_supported_numeric_type(data_type: &DataType) -> bool {
 
 /// Returns true if [UnwrapCastExprRewriter] supports casting this value as a string
 fn is_supported_string_type(data_type: &DataType) -> bool {
-    matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
 }
 
 /// Returns true if [UnwrapCastExprRewriter] supports casting this value as a dictionary
@@ -481,12 +484,15 @@ fn try_cast_string_literal(
     target_type: &DataType,
 ) -> Option<ScalarValue> {
     let string_value = match lit_value {
-        ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) => s.clone(),
+        ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s) => {
+            s.clone()
+        }
         _ => return None,
     };
     let scalar_value = match target_type {
         DataType::Utf8 => ScalarValue::Utf8(string_value),
         DataType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),
+        DataType::Utf8View => ScalarValue::Utf8View(string_value),
         _ => return None,
     };
     Some(scalar_value)

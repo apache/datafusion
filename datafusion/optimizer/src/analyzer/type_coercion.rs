@@ -160,47 +160,11 @@ impl<'a> TypeCoercionRewriter<'a> {
         op: Operator,
         right: Expr,
     ) -> Result<(Expr, Expr)> {
-        // try to coerce the scalar to the column type
-        fn coerce_scalar_to_col(
-            schema: &DFSchema,
-            left: Expr,
-            op: Operator,
-            right: Expr,
-        ) -> Result<(Expr, Expr)> {
-            let (left_type, right_type) = match (&left, &right) {
-                (Expr::Column(_), Expr::ScalarFunction(_)) => {
-                    (left.get_type(schema)?, left.get_type(schema)?)
-                }
-                (Expr::ScalarFunction(_), Expr::Column(_)) => {
-                    (right.get_type(schema)?, right.get_type(schema)?)
-                }
-                _ => {
-                    return Err(DataFusionError::Internal(
-                        "Not including a column and a scalar type".to_string(),
-                    ))
-                }
-            };
-
-            let (left_type, right_type) = get_input_types(&left_type, &op, &right_type)?;
-            Ok((
-                left.cast_to(&left_type, schema)?,
-                right.cast_to(&right_type, schema)?,
-            ))
-        }
-
-        if let Ok((left_expr, right_expr)) =
-            coerce_scalar_to_col(self.schema, left.clone(), op, right.clone())
-        {
-            return Ok((left_expr, right_expr));
-        }
-
-        // try to coerce normal binary expressions
         let (left_type, right_type) = get_input_types(
             &left.get_type(self.schema)?,
             &op,
             &right.get_type(self.schema)?,
         )?;
-
         Ok((
             left.cast_to(&left_type, self.schema)?,
             right.cast_to(&right_type, self.schema)?,
