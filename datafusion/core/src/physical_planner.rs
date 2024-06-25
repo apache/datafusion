@@ -762,7 +762,6 @@ impl DefaultPhysicalPlanner {
                 format_options,
                 partition_by,
                 options: source_option_tuples,
-                hive_options
             }) => {
                 let input_exec = children.one()?;
                 let parsed_url = ListingTableUrl::parse(output_url)?;
@@ -778,7 +777,7 @@ impl DefaultPhysicalPlanner {
                     .map(|s| (s.to_string(), arrow_schema::DataType::Null))
                     .collect::<Vec<_>>();
 
-                let keep_partition_by_columns = hive_options
+                let keep_partition_by_columns = source_option_tuples
                     .get("hive.keep_partition_by_columns")
                     .map(|v| v.trim() == "true")
                     .unwrap_or(false) || session_state.config().options().execution.keep_partition_by_columns;

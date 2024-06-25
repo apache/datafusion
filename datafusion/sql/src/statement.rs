@@ -881,7 +881,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         let mut options = HashMap::new();
-        let mut hive_options = HashMap::new();
         for (key, value) in statement.options {
             let value_string = match value_to_string(&value) {
                 None => {
@@ -896,7 +895,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     key
                 };
-                hive_options.insert(renamed_key.to_lowercase(), value_string.to_lowercase());
+                options.insert(renamed_key.to_lowercase(), value_string.to_lowercase());
             } else if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
@@ -950,7 +949,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             format_options: file_type.into(),
             partition_by,
             options,
-            hive_options,
         }))
     }
 

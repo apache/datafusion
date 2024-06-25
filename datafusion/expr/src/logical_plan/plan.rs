@@ -860,14 +860,12 @@ impl LogicalPlan {
                 format_options,
                 options,
                 partition_by,
-                hive_options,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
                 format_options: format_options.clone(),
                 options: options.clone(),
                 partition_by: partition_by.clone(),
-                hive_options: hive_options.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
                 Ok(LogicalPlan::Values(Values {

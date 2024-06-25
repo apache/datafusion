@@ -258,7 +258,6 @@ impl TreeNode for LogicalPlan {
                 partition_by,
                 format_options,
                 options,
-                hive_options,
             }) => rewrite_arc(input, f)?.update_data(|input| {
                 LogicalPlan::Copy(CopyTo {
                     input,
@@ -266,7 +265,6 @@ impl TreeNode for LogicalPlan {
                     partition_by,
                     format_options,
                     options,
-                    hive_options,
                 })
             }),
             LogicalPlan::Ddl(ddl) => {

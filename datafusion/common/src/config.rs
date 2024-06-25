@@ -1285,6 +1285,11 @@ impl TableOptions {
             return ConfigField::set(self, key, value);
         }
 
+        // Only used for hive.keep_partition_by_columns
+        if prefix == "hive" {
+            return Ok(());
+        }
+
         let Some(e) = self.extensions.0.get_mut(prefix) else {
             return _config_err!("Could not find config namespace \"{prefix}\"");
         };

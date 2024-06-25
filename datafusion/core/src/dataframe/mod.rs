@@ -1338,7 +1338,6 @@ impl DataFrame {
             FormatOptions::CSV(props),
             HashMap::new(),
             options.partition_by,
-            Default::default(),
         )?
         .build()?;
 
@@ -1394,7 +1393,6 @@ impl DataFrame {
             FormatOptions::JSON(props),
             Default::default(),
             options.partition_by,
-            Default::default(),
         )?
         .build()?;
 

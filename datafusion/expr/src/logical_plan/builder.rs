@@ -274,7 +274,6 @@ impl LogicalPlanBuilder {
         format_options: FormatOptions,
         options: HashMap<String, String>,
         partition_by: Vec<String>,
-        hive_options: HashMap<String, String>,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
@@ -282,7 +281,6 @@ impl LogicalPlanBuilder {
             partition_by,
             format_options,
             options,
-            hive_options,
         })))
     }
 

@@ -39,8 +39,6 @@ pub struct CopyTo {
     pub format_options: FormatOptions,
     /// SQL Options that can affect the formats
     pub options: HashMap<String, String>,
-    /// Hive Options that can affect hive-style partitioning
-    pub hive_options: HashMap<String, String>,
 }
 
 // Implement PartialEq manually
