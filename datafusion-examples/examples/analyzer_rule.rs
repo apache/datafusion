@@ -27,11 +27,11 @@ use std::sync::{Arc, Mutex};
 /// This example demonstrates how to add your own [`AnalyzerRule`] to
 /// DataFusion.
 ///
-/// [`AnalyzerRule`]s transform [`LogicalPlan`]s prior to  the DataFusion
+/// [`AnalyzerRule`]s transform [`LogicalPlan`]s prior to the DataFusion
 /// optimization process, and can be used to change the plan's semantics (e.g.
 /// output types).
 ///
-/// This example shows an `AnalyzerRule` which implements a  simplistic of row
+/// This example shows an `AnalyzerRule` which implements a simplistic of row
 /// level access control scheme by introducing a filter to the query.
 ///
 /// See [optimizer_rule.rs] for an example of a optimizer rule
