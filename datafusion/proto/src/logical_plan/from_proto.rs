@@ -591,13 +591,10 @@ pub fn parse_expr(
             parse_exprs(&in_list.list, registry, codec)?,
             in_list.negated,
         ))),
-        ExprType::Wildcard(protobuf::Wildcard { qualifier }) => Ok(Expr::Wildcard {
-            qualifier: if qualifier.is_empty() {
-                None
-            } else {
-                Some(qualifier.clone())
-            },
-        }),
+        ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
+            let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
+            Ok(Expr::Wildcard { qualifier })
+        }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
             fun_name,
             args,
