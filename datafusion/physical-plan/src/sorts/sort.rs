@@ -842,7 +842,7 @@ impl SortExec {
             .equivalence_properties()
             .clone()
             .with_reorder(sort_exprs);
-
+        println!("sort eq properties: {:?}", eq_properties.constants());
         // Get output partitioning:
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);

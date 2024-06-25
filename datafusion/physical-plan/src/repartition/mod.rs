@@ -701,6 +701,11 @@ impl RepartitionExec {
         if !Self::maintains_input_order_helper(input, preserve_order)[0] {
             eq_properties.clear_orderings();
         }
+        println!("constants before: {:?}", eq_properties.constants());
+        if input.output_partitioning().partition_count() > 1 {
+            eq_properties.clear_per_partition_constants();
+        }
+        println!("constants  after: {:?}", eq_properties.constants());
         eq_properties
     }
 
@@ -712,7 +717,6 @@ impl RepartitionExec {
     ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties = Self::eq_properties_helper(input, preserve_order);
-
         PlanProperties::new(
             eq_properties,          // Equivalence Properties
             partitioning,           // Output Partitioning

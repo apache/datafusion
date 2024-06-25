@@ -192,6 +192,21 @@ impl OrderingEquivalenceClass {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ConstExpr {
+    pub expr: Arc<dyn PhysicalExpr>,
+    pub across_partitions: bool,
+}
+
+pub fn const_exprs_contains(
+    const_exprs: &[ConstExpr],
+    expr: &Arc<dyn PhysicalExpr>,
+) -> bool {
+    const_exprs
+        .iter()
+        .any(|const_expr| const_expr.expr.eq(expr))
+}
+
 /// This function constructs a duplicate-free `LexOrdering` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.

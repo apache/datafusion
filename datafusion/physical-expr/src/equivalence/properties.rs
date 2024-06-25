@@ -18,7 +18,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use super::ordering::collapse_lex_ordering;
+use super::ordering::{collapse_lex_ordering, const_exprs_contains, ConstExpr};
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
@@ -92,7 +92,7 @@ pub struct EquivalenceProperties {
     /// Expressions whose values are constant throughout the table.
     /// TODO: We do not need to track constants separately, they can be tracked
     ///       inside `eq_groups` as `Literal` expressions.
-    pub constants: Vec<Arc<dyn PhysicalExpr>>,
+    pub constants: Vec<ConstExpr>,
     /// Schema associated with this object.
     schema: SchemaRef,
 }
@@ -134,7 +134,7 @@ impl EquivalenceProperties {
     }
 
     /// Returns a reference to the constant expressions
-    pub fn constants(&self) -> &[Arc<dyn PhysicalExpr>] {
+    pub fn constants(&self) -> &[ConstExpr] {
         &self.constants
     }
 
@@ -144,7 +144,7 @@ impl EquivalenceProperties {
         let mut output_ordering = self.oeq_class().output_ordering().unwrap_or_default();
         // Prune out constant expressions
         output_ordering
-            .retain(|sort_expr| !physical_exprs_contains(constants, &sort_expr.expr));
+            .retain(|sort_expr| !const_exprs_contains(constants, &sort_expr.expr));
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
 
@@ -171,6 +171,10 @@ impl EquivalenceProperties {
     /// Call this method when existing orderings are invalidated.
     pub fn clear_orderings(&mut self) {
         self.oeq_class.clear();
+    }
+
+    pub fn clear_per_partition_constants(&mut self) {
+        self.constants.retain(|elem| elem.across_partitions);
     }
 
     /// Extends this `EquivalenceProperties` by adding the orderings inside the
@@ -204,13 +208,19 @@ impl EquivalenceProperties {
         // Discover new constants in light of new the equality:
         if self.is_expr_constant(left) {
             // Left expression is constant, add right as constant
-            if !physical_exprs_contains(&self.constants, right) {
-                self.constants.push(right.clone());
+            if !const_exprs_contains(&self.constants, right) {
+                self.constants.push(ConstExpr {
+                    expr: right.clone(),
+                    across_partitions: true,
+                });
             }
         } else if self.is_expr_constant(right) {
             // Right expression is constant, add left as constant
-            if !physical_exprs_contains(&self.constants, left) {
-                self.constants.push(left.clone());
+            if !const_exprs_contains(&self.constants, left) {
+                self.constants.push(ConstExpr {
+                    expr: left.clone(),
+                    across_partitions: true,
+                });
             }
         }
 
@@ -270,11 +280,33 @@ impl EquivalenceProperties {
     /// Track/register physical expressions with constant values.
     pub fn add_constants(
         mut self,
-        constants: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+        constants: impl IntoIterator<Item = ConstExpr>,
     ) -> Self {
-        for expr in self.eq_group.normalize_exprs(constants) {
-            if !physical_exprs_contains(&self.constants, &expr) {
-                self.constants.push(expr);
+        let (const_exprs, across_partition_flags): (
+            Vec<Arc<dyn PhysicalExpr>>,
+            Vec<bool>,
+        ) = constants
+            .into_iter()
+            .map(|const_expr| {
+                let ConstExpr {
+                    expr,
+                    across_partitions,
+                } = const_expr;
+                (expr, across_partitions)
+            })
+            .unzip();
+        for (expr, across_partitions) in self
+            .eq_group
+            .normalize_exprs(const_exprs)
+            .into_iter()
+            .zip(across_partition_flags)
+        {
+            if !const_exprs_contains(&self.constants, &expr) {
+                let const_expr = ConstExpr {
+                    expr,
+                    across_partitions,
+                };
+                self.constants.push(const_expr);
             }
         }
         self
@@ -326,7 +358,14 @@ impl EquivalenceProperties {
         sort_reqs: LexRequirementRef,
     ) -> LexRequirement {
         let normalized_sort_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
-        let constants_normalized = self.eq_group.normalize_exprs(self.constants.clone());
+        let mut constant_exprs = vec![];
+        constant_exprs.extend(
+            self.constants
+                .iter()
+                .map(|const_expr| const_expr.expr.clone())
+                .collect::<Vec<_>>(),
+        );
+        let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
         // Prune redundant sections in the requirement:
         collapse_lex_req(
             normalized_sort_reqs
@@ -370,8 +409,10 @@ impl EquivalenceProperties {
             // From the analysis above, we know that `[a ASC]` is satisfied. Then,
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
-            eq_properties =
-                eq_properties.add_constants(std::iter::once(normalized_req.expr));
+            eq_properties = eq_properties.add_constants(std::iter::once(ConstExpr {
+                expr: normalized_req.expr,
+                across_partitions: false,
+            }));
         }
         true
     }
@@ -781,24 +822,31 @@ impl EquivalenceProperties {
     /// # Returns
     ///
     /// Returns a `Vec<Arc<dyn PhysicalExpr>>` containing the projected constants.
-    fn projected_constants(
-        &self,
-        mapping: &ProjectionMapping,
-    ) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn projected_constants(&self, mapping: &ProjectionMapping) -> Vec<ConstExpr> {
         // First, project existing constants. For example, assume that `a + b`
         // is known to be constant. If the projection were `a as a_new`, `b as b_new`,
         // then we would project constant `a + b` as `a_new + b_new`.
         let mut projected_constants = self
             .constants
             .iter()
-            .flat_map(|expr| self.eq_group.project_expr(mapping, expr))
+            .flat_map(|const_expr| {
+                self.eq_group
+                    .project_expr(mapping, &const_expr.expr)
+                    .map(|expr| ConstExpr {
+                        expr,
+                        across_partitions: const_expr.across_partitions,
+                    })
+            })
             .collect::<Vec<_>>();
         // Add projection expressions that are known to be constant:
         for (source, target) in mapping.iter() {
             if self.is_expr_constant(source)
-                && !physical_exprs_contains(&projected_constants, target)
+                && !const_exprs_contains(&projected_constants, target)
             {
-                projected_constants.push(target.clone());
+                projected_constants.push(ConstExpr {
+                    expr: target.clone(),
+                    across_partitions: true,
+                });
             }
         }
         projected_constants
@@ -891,8 +939,10 @@ impl EquivalenceProperties {
             // Note that these expressions are not properly "constants". This is just
             // an implementation strategy confined to this function.
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
-                eq_properties =
-                    eq_properties.add_constants(std::iter::once(expr.clone()));
+                eq_properties = eq_properties.add_constants(std::iter::once(ConstExpr {
+                    expr: expr.clone(),
+                    across_partitions: false,
+                }));
                 search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
@@ -917,7 +967,12 @@ impl EquivalenceProperties {
         // As an example, assume that we know columns `a` and `b` are constant.
         // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
         // return `false`.
-        let normalized_constants = self.eq_group.normalize_exprs(self.constants.to_vec());
+        let const_exprs = self
+            .constants
+            .iter()
+            .map(|const_expr| const_expr.expr.clone())
+            .collect::<Vec<_>>();
+        let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
         let normalized_expr = self.eq_group.normalize_expr(expr.clone());
         is_constant_recurse(&normalized_constants, &normalized_expr)
     }

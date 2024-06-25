@@ -28,7 +28,7 @@ mod projection;
 mod properties;
 
 pub use class::{EquivalenceClass, EquivalenceGroup};
-pub use ordering::OrderingEquivalenceClass;
+pub use ordering::{ConstExpr, OrderingEquivalenceClass};
 pub use projection::ProjectionMapping;
 pub use properties::{join_equivalence_properties, EquivalenceProperties};
 

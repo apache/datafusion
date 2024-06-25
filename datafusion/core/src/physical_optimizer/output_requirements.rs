@@ -248,7 +248,7 @@ fn require_top_ordering_helper(
     if children.len() != 1 {
         Ok((plan, false))
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let req_ordering = sort_exec.properties().output_ordering().unwrap_or(&[]);
+        let req_ordering = sort_exec.expr();
         let req_dist = sort_exec.required_input_distribution()[0].clone();
         let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
         Ok((
