@@ -668,7 +668,7 @@ impl Unparser<'_> {
             ))?
             .value_as_time(0)
             .ok_or(internal_datafusion_err!(
-                "Unable to convert {v:?} to DateTime"
+                "Unable to convert {v:?} to Time"
             ))?
             .to_string();
         Ok(ast::Expr::Cast {
@@ -1081,7 +1081,6 @@ mod tests {
 
     use arrow::datatypes::{Field, Schema};
     use arrow_schema::DataType::Int8;
-
     use datafusion_common::TableReference;
     use datafusion_expr::{
         case, col, cube, exists, grouping_set, interval_datetime_lit,
