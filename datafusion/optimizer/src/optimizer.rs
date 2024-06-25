@@ -83,9 +83,11 @@ pub trait OptimizerRule {
     )]
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>>;
+        _plan: &LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        internal_err!("Should have called rewrite")
+    }
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
@@ -100,7 +102,7 @@ pub trait OptimizerRule {
 
     /// Does this rule support rewriting owned plans (rather than by reference)?
     fn supports_rewrite(&self) -> bool {
-        false
+        true
     }
 
     /// Try to rewrite `plan` to an optimized form, returning `Transformed::yes`
@@ -667,14 +669,6 @@ mod tests {
     struct BadRule {}
 
     impl OptimizerRule for BadRule {
-        fn try_optimize(
-            &self,
-            _: &LogicalPlan,
-            _: &dyn OptimizerConfig,
-        ) -> Result<Option<LogicalPlan>> {
-            unreachable!()
-        }
-
         fn name(&self) -> &str {
             "bad rule"
         }
@@ -696,14 +690,6 @@ mod tests {
     struct GetTableScanRule {}
 
     impl OptimizerRule for GetTableScanRule {
-        fn try_optimize(
-            &self,
-            _: &LogicalPlan,
-            _: &dyn OptimizerConfig,
-        ) -> Result<Option<LogicalPlan>> {
-            unreachable!()
-        }
-
         fn name(&self) -> &str {
             "get table_scan rule"
         }
@@ -741,14 +727,6 @@ mod tests {
     }
 
     impl OptimizerRule for RotateProjectionRule {
-        fn try_optimize(
-            &self,
-            _plan: &LogicalPlan,
-            _: &dyn OptimizerConfig,
-        ) -> Result<Option<LogicalPlan>> {
-            unreachable!()
-        }
-
         fn name(&self) -> &str {
             "rotate_projection"
         }

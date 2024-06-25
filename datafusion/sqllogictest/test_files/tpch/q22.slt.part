@@ -57,11 +57,11 @@ order by
 ----
 logical_plan
 01)Sort: custsale.cntrycode ASC NULLS LAST
-02)--Projection: custsale.cntrycode, COUNT(*) AS numcust, sum(custsale.c_acctbal) AS totacctbal
-03)----Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[COUNT(Int64(1)) AS COUNT(*), sum(custsale.c_acctbal)]]
+02)--Projection: custsale.cntrycode, count(*) AS numcust, sum(custsale.c_acctbal) AS totacctbal
+03)----Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[count(Int64(1)) AS count(*), sum(custsale.c_acctbal)]]
 04)------SubqueryAlias: custsale
 05)--------Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal
-06)----------Inner Join:  Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __scalar_sq_2.AVG(customer.c_acctbal)
+06)----------Inner Join:  Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __scalar_sq_2.avg(customer.c_acctbal)
 07)------------Projection: customer.c_phone, customer.c_acctbal
 08)--------------LeftAnti Join: customer.c_custkey = __correlated_sq_1.o_custkey
 09)----------------Filter: substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
@@ -69,21 +69,21 @@ logical_plan
 11)----------------SubqueryAlias: __correlated_sq_1
 12)------------------TableScan: orders projection=[o_custkey]
 13)------------SubqueryAlias: __scalar_sq_2
-14)--------------Aggregate: groupBy=[[]], aggr=[[AVG(customer.c_acctbal)]]
+14)--------------Aggregate: groupBy=[[]], aggr=[[avg(customer.c_acctbal)]]
 15)----------------Projection: customer.c_acctbal
 16)------------------Filter: customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
 17)--------------------TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[customer.c_acctbal > Decimal128(Some(0),15,2) AS customer.c_acctbal > Decimal128(Some(0),30,15), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")]), customer.c_acctbal > Decimal128(Some(0),15,2)]
 physical_plan
 01)SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 02)--SortExec: expr=[cntrycode@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[cntrycode@0 as cntrycode, COUNT(*)@1 as numcust, sum(custsale.c_acctbal)@2 as totacctbal]
-04)------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[COUNT(*), sum(custsale.c_acctbal)]
+03)----ProjectionExec: expr=[cntrycode@0 as cntrycode, count(*)@1 as numcust, sum(custsale.c_acctbal)@2 as totacctbal]
+04)------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[count(*), sum(custsale.c_acctbal)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([cntrycode@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[COUNT(*), sum(custsale.c_acctbal)]
+07)------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[count(*), sum(custsale.c_acctbal)]
 08)--------------ProjectionExec: expr=[substr(c_phone@0, 1, 2) as cntrycode, c_acctbal@1 as c_acctbal]
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------NestedLoopJoinExec: join_type=Inner, filter=CAST(c_acctbal@0 AS Decimal128(19, 6)) > AVG(customer.c_acctbal)@1
+10)------------------NestedLoopJoinExec: join_type=Inner, filter=CAST(c_acctbal@0 AS Decimal128(19, 6)) > avg(customer.c_acctbal)@1
 11)--------------------CoalescePartitionsExec
 12)----------------------CoalesceBatchesExec: target_batch_size=8192
 13)------------------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(c_custkey@0, o_custkey@0)], projection=[c_phone@1, c_acctbal@2]
@@ -96,9 +96,9 @@ physical_plan
 20)--------------------------CoalesceBatchesExec: target_batch_size=8192
 21)----------------------------RepartitionExec: partitioning=Hash([o_custkey@0], 4), input_partitions=4
 22)------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_custkey], has_header=false
-23)--------------------AggregateExec: mode=Final, gby=[], aggr=[AVG(customer.c_acctbal)]
+23)--------------------AggregateExec: mode=Final, gby=[], aggr=[avg(customer.c_acctbal)]
 24)----------------------CoalescePartitionsExec
-25)------------------------AggregateExec: mode=Partial, gby=[], aggr=[AVG(customer.c_acctbal)]
+25)------------------------AggregateExec: mode=Partial, gby=[], aggr=[avg(customer.c_acctbal)]
 26)--------------------------ProjectionExec: expr=[c_acctbal@1 as c_acctbal]
 27)----------------------------CoalesceBatchesExec: target_batch_size=8192
 28)------------------------------FilterExec: c_acctbal@1 > Some(0),15,2 AND Use substr(c_phone@0, 1, 2) IN (SET) ([Literal { value: Utf8("13") }, Literal { value: Utf8("31") }, Literal { value: Utf8("23") }, Literal { value: Utf8("29") }, Literal { value: Utf8("30") }, Literal { value: Utf8("18") }, Literal { value: Utf8("17") }])

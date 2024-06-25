@@ -18,12 +18,14 @@
 use std::any::Any;
 
 use arrow_schema::DataType;
+
 use datafusion::execution::context::SessionContext;
+use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::{error::Result, execution::options::CsvReadOptions};
 use datafusion_expr::function::WindowFunctionSimplification;
 use datafusion_expr::{
-    expr::WindowFunction, simplify::SimplifyInfo, AggregateFunction, Expr,
-    PartitionEvaluator, Signature, Volatility, WindowUDF, WindowUDFImpl,
+    expr::WindowFunction, simplify::SimplifyInfo, Expr, PartitionEvaluator, Signature,
+    Volatility, WindowUDF, WindowUDFImpl,
 };
 
 /// This UDWF will show how to use the WindowUDFImpl::simplify() API
@@ -71,9 +73,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
         let simplify = |window_function: datafusion_expr::expr::WindowFunction,
                         _: &dyn SimplifyInfo| {
             Ok(Expr::WindowFunction(WindowFunction {
-                fun: datafusion_expr::WindowFunctionDefinition::AggregateFunction(
-                    AggregateFunction::Avg,
-                ),
+                fun: datafusion_expr::WindowFunctionDefinition::AggregateUDF(avg_udaf()),
                 args: window_function.args,
                 partition_by: window_function.partition_by,
                 order_by: window_function.order_by,

@@ -1532,17 +1532,21 @@ fn get_filtered_join_mask(
             for i in 0..streamed_indices_length {
                 // LeftSemi respects only first true values for specific streaming index,
                 // others true values for the same index must be false
-                if mask.value(i) && !seen_as_true {
+                let streamed_idx = streamed_indices.value(i);
+                if mask.value(i)
+                    && !seen_as_true
+                    && !matched_indices.contains(&streamed_idx)
+                {
                     seen_as_true = true;
                     corrected_mask.append_value(true);
-                    filter_matched_indices.push(streamed_indices.value(i));
+                    filter_matched_indices.push(streamed_idx);
                 } else {
                     corrected_mask.append_value(false);
                 }
 
                 // if switched to next streaming index(e.g. from 0 to 1, or from 1 to 2), we reset seen_as_true flag
                 if i < streamed_indices_length - 1
-                    && streamed_indices.value(i) != streamed_indices.value(i + 1)
+                    && streamed_idx != streamed_indices.value(i + 1)
                 {
                     seen_as_true = false;
                 }
@@ -2937,6 +2941,20 @@ mod tests {
             Some((
                 BooleanArray::from(vec![false, false, false, false, false, true]),
                 vec![1]
+            ))
+        );
+
+        assert_eq!(
+            get_filtered_join_mask(
+                LeftSemi,
+                &UInt64Array::from(vec![0, 0, 0, 1, 1, 1]),
+                &BooleanArray::from(vec![true, false, false, false, false, true]),
+                &HashSet::from_iter(vec![1]),
+                &0,
+            ),
+            Some((
+                BooleanArray::from(vec![true, false, false, false, false, false]),
+                vec![0]
             ))
         );
 

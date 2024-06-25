@@ -75,7 +75,8 @@ use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
-use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
+use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -426,9 +427,9 @@ impl SessionState {
     /// Add `analyzer_rule` to the end of the list of
     /// [`AnalyzerRule`]s used to rewrite queries.
     pub fn add_analyzer_rule(
-        mut self,
+        &mut self,
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    ) -> Self {
+    ) -> &Self {
         self.analyzer.rules.push(analyzer_rule);
         self
     }
@@ -532,6 +533,27 @@ impl SessionState {
         Ok(statement)
     }
 
+    /// parse a sql string into a sqlparser-rs AST [`SQLExpr`].
+    ///
+    /// See [`Self::create_logical_expr`] for parsing sql to [`Expr`].
+    pub fn sql_to_expr(
+        &self,
+        sql: &str,
+        dialect: &str,
+    ) -> datafusion_common::Result<SQLExpr> {
+        let dialect = dialect_from_str(dialect).ok_or_else(|| {
+            plan_datafusion_err!(
+                "Unsupported SQL dialect: {dialect}. Available dialects: \
+                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+                     MsSQL, ClickHouse, BigQuery, Ansi."
+            )
+        })?;
+
+        let expr = DFParser::parse_sql_into_expr_with_dialect(sql, dialect.as_ref())?;
+
+        Ok(expr)
+    }
+
     /// Resolve all table references in the SQL statement. Does not include CTE references.
     ///
     /// See [`catalog::resolve_table_references`] for more information.
@@ -562,10 +584,6 @@ impl SessionState {
             tables: HashMap::with_capacity(references.len()),
         };
 
-        let enable_ident_normalization =
-            self.config.options().sql_parser.enable_ident_normalization;
-        let parse_float_as_decimal =
-            self.config.options().sql_parser.parse_float_as_decimal;
         for reference in references {
             let resolved = &self.resolve_table_ref(reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
@@ -577,14 +595,17 @@ impl SessionState {
             }
         }
 
-        let query = SqlToRel::new_with_options(
-            &provider,
-            ParserOptions {
-                parse_float_as_decimal,
-                enable_ident_normalization,
-            },
-        );
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.statement_to_plan(statement)
+    }
+
+    fn get_parser_options(&self) -> ParserOptions {
+        let sql_parser_options = &self.config.options().sql_parser;
+
+        ParserOptions {
+            parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
+            enable_ident_normalization: sql_parser_options.enable_ident_normalization,
+        }
     }
 
     /// Creates a [`LogicalPlan`] from the provided SQL string. This
@@ -607,6 +628,28 @@ impl SessionState {
         let statement = self.sql_to_statement(sql, dialect)?;
         let plan = self.statement_to_plan(statement).await?;
         Ok(plan)
+    }
+
+    /// Creates a datafusion style AST [`Expr`] from a SQL string.
+    ///
+    /// See example on  [SessionContext::parse_sql_expr](crate::execution::context::SessionContext::parse_sql_expr)
+    pub fn create_logical_expr(
+        &self,
+        sql: &str,
+        df_schema: &DFSchema,
+    ) -> datafusion_common::Result<Expr> {
+        let dialect = self.config.options().sql_parser.dialect.as_str();
+
+        let sql_expr = self.sql_to_expr(sql, dialect)?;
+
+        let provider = SessionContextProvider {
+            state: self,
+            tables: HashMap::new(),
+        };
+
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
+
+        query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
@@ -858,6 +901,11 @@ impl SessionState {
         &self.window_functions
     }
 
+    /// Return reference to table_functions
+    pub fn table_functions(&self) -> &HashMap<String, Arc<TableFunction>> {
+        &self.table_functions
+    }
+
     /// Return [SerializerRegistry] for extensions
     pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
         self.serializer_registry.clone()
@@ -874,6 +922,15 @@ impl SessionState {
             name.to_owned(),
             Arc::new(TableFunction::new(name.to_owned(), fun)),
         );
+    }
+
+    /// Deregsiter a user defined table function
+    pub fn deregister_udtf(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
+        let udtf = self.table_functions.remove(name);
+        Ok(udtf.map(|x| x.function().clone()))
     }
 }
 

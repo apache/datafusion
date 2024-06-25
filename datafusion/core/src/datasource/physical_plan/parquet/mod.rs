@@ -186,9 +186,9 @@ pub use writer::plan_to_parquet;
 /// let exec = ParquetExec::builder(file_scan_config).build();
 /// ```
 ///
-/// For a complete example, see the [`parquet_index_advanced` example]).
+/// For a complete example, see the [`advanced_parquet_index` example]).
 ///
-/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/parquet_index_advanced.rs
+/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_parquet_index.rs
 ///
 /// # Execution Overview
 ///

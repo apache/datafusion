@@ -15,77 +15,85 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
+//! Defines `Avg` & `Mean` aggregate & accumulators
 
-use arrow::array::{AsArray, PrimitiveBuilder};
+use arrow::array::{
+    self, Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType,
+    AsArray, PrimitiveArray, PrimitiveBuilder, UInt64Array,
+};
+use arrow::compute::sum;
+use arrow::datatypes::{
+    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType, Field,
+    Float64Type, UInt64Type,
+};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
+use datafusion_expr::utils::format_state_name;
+use datafusion_expr::Volatility::Immutable;
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
+};
+use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_physical_expr_common::aggregate::utils::DecimalAverager;
 use log::debug;
-
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::aggregate::groups_accumulator::accumulate::NullState;
-use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr};
-use arrow::compute::sum;
-use arrow::datatypes::{DataType, Decimal128Type, Float64Type, UInt64Type};
-use arrow::{
-    array::{ArrayRef, UInt64Array},
-    datatypes::Field,
-};
-use arrow_array::types::{Decimal256Type, DecimalType};
-use arrow_array::{
-    Array, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, PrimitiveArray,
-};
-use arrow_buffer::{i256, ArrowNativeType};
-use datafusion_common::{not_impl_err, Result, ScalarValue};
-use datafusion_expr::type_coercion::aggregates::avg_return_type;
-use datafusion_expr::{Accumulator, EmitTo, GroupsAccumulator};
+make_udaf_expr_and_func!(
+    Avg,
+    avg,
+    expression,
+    "Returns the avg of a group of values.",
+    avg_udaf
+);
 
-use super::utils::DecimalAverager;
-
-/// AVG aggregate expression
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Avg {
-    name: String,
-    expr: Arc<dyn PhysicalExpr>,
-    input_data_type: DataType,
-    result_data_type: DataType,
+    signature: Signature,
+    aliases: Vec<String>,
 }
 
 impl Avg {
-    /// Create a new AVG aggregate function
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        data_type: DataType,
-    ) -> Self {
-        let result_data_type = avg_return_type(&data_type).unwrap();
-
+    pub fn new() -> Self {
         Self {
-            name: name.into(),
-            expr,
-            input_data_type: data_type,
-            result_data_type,
+            signature: Signature::user_defined(Immutable),
+            aliases: vec![String::from("mean")],
         }
     }
 }
 
-impl AggregateExpr for Avg {
-    /// Return a reference to Any that can be used for downcasting
+impl Default for Avg {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AggregateUDFImpl for Avg {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.result_data_type.clone(), true))
+    fn name(&self) -> &str {
+        "avg"
     }
 
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        avg_return_type(self.name(), &arg_types[0])
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return exec_err!("avg(DISTINCT) aggregations are not available");
+        }
         use DataType::*;
         // instantiate specialized accumulator based for the type
-        match (&self.input_data_type, &self.result_data_type) {
+        match (acc_args.input_type, acc_args.data_type) {
             (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
             (
                 Decimal128(sum_precision, sum_scale),
@@ -110,59 +118,47 @@ impl AggregateExpr for Avg {
                 target_precision: *target_precision,
                 target_scale: *target_scale,
             })),
-            _ => not_impl_err!(
+            _ => exec_err!(
                 "AvgAccumulator for ({} --> {})",
-                self.input_data_type,
-                self.result_data_type
+                acc_args.input_type,
+                acc_args.data_type
             ),
         }
     }
 
-    fn state_fields(&self) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                format_state_name(&self.name, "count"),
+                format_state_name(args.name, "count"),
                 DataType::UInt64,
                 true,
             ),
             Field::new(
-                format_state_name(&self.name, "sum"),
-                self.input_data_type.clone(),
+                format_state_name(args.name, "sum"),
+                args.input_type.clone(),
                 true,
             ),
         ])
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        matches!(
+            args.data_type,
+            DataType::Float64 | DataType::Decimal128(_, _)
+        )
     }
 
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        Some(Arc::new(self.clone()))
-    }
-
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        self.create_accumulator()
-    }
-
-    fn groups_accumulator_supported(&self) -> bool {
-        use DataType::*;
-
-        matches!(&self.result_data_type, Float64 | Decimal128(_, _))
-    }
-
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         // instantiate specialized accumulator based for the type
-        match (&self.input_data_type, &self.result_data_type) {
+        match (args.input_type, args.data_type) {
             (Float64, Float64) => {
                 Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
-                    &self.input_data_type,
-                    &self.result_data_type,
+                    args.input_type,
+                    args.data_type,
                     |sum: f64, count: u64| Ok(sum / count as f64),
                 )))
             }
@@ -180,8 +176,8 @@ impl AggregateExpr for Avg {
                     move |sum: i128, count: u64| decimal_averager.avg(sum, count as i128);
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal128Type, _>::new(
-                    &self.input_data_type,
-                    &self.result_data_type,
+                    args.input_type,
+                    args.data_type,
                     avg_fn,
                 )))
             }
@@ -201,32 +197,40 @@ impl AggregateExpr for Avg {
                 };
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal256Type, _>::new(
-                    &self.input_data_type,
-                    &self.result_data_type,
+                    args.input_type,
+                    args.data_type,
                     avg_fn,
                 )))
             }
 
             _ => not_impl_err!(
                 "AvgGroupsAccumulator for ({} --> {})",
-                self.input_data_type,
-                self.result_data_type
+                args.input_type,
+                args.data_type
             ),
         }
     }
-}
 
-impl PartialEq<dyn Any> for Avg {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.input_data_type == x.input_data_type
-                    && self.result_data_type == x.result_data_type
-                    && self.expr.eq(&x.expr)
-            })
-            .unwrap_or(false)
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        self.accumulator(args)
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::Identical
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return exec_err!("{} expects exactly one argument.", self.name());
+        }
+        coerce_avg_type(self.name(), arg_types)
     }
 }
 
@@ -238,13 +242,6 @@ pub struct AvgAccumulator {
 }
 
 impl Accumulator for AvgAccumulator {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![
-            ScalarValue::from(self.count),
-            ScalarValue::Float64(self.sum),
-        ])
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<Float64Type>();
         self.count += (values.len() - values.null_count()) as u64;
@@ -255,13 +252,21 @@ impl Accumulator for AvgAccumulator {
         Ok(())
     }
 
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = values[0].as_primitive::<Float64Type>();
-        self.count -= (values.len() - values.null_count()) as u64;
-        if let Some(x) = sum(values) {
-            self.sum = Some(self.sum.unwrap() - x);
-        }
-        Ok(())
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Float64(
+            self.sum.map(|f| f / self.count as f64),
+        ))
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![
+            ScalarValue::from(self.count),
+            ScalarValue::Float64(self.sum),
+        ])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -275,23 +280,23 @@ impl Accumulator for AvgAccumulator {
         }
         Ok(())
     }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Float64(
-            self.sum.map(|f| f / self.count as f64),
-        ))
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = values[0].as_primitive::<Float64Type>();
+        self.count -= (values.len() - values.null_count()) as u64;
+        if let Some(x) = sum(values) {
+            self.sum = Some(self.sum.unwrap() - x);
+        }
+        Ok(())
     }
+
     fn supports_retract_batch(&self) -> bool {
         true
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of_val(self)
     }
 }
 
 /// An accumulator to compute the average for decimals
-struct DecimalAvgAccumulator<T: DecimalType + ArrowNumericType> {
+#[derive(Debug)]
+struct DecimalAvgAccumulator<T: DecimalType + ArrowNumericType + Debug> {
     sum: Option<T::Native>,
     count: u64,
     sum_scale: i8,
@@ -300,56 +305,12 @@ struct DecimalAvgAccumulator<T: DecimalType + ArrowNumericType> {
     target_scale: i8,
 }
 
-impl<T: DecimalType + ArrowNumericType> Debug for DecimalAvgAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DecimalAvgAccumulator")
-            .field("sum", &self.sum)
-            .field("count", &self.count)
-            .field("sum_scale", &self.sum_scale)
-            .field("sum_precision", &self.sum_precision)
-            .field("target_precision", &self.target_precision)
-            .field("target_scale", &self.target_scale)
-            .finish()
-    }
-}
-
-impl<T: DecimalType + ArrowNumericType> Accumulator for DecimalAvgAccumulator<T> {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![
-            ScalarValue::from(self.count),
-            ScalarValue::new_primitive::<T>(
-                self.sum,
-                &T::TYPE_CONSTRUCTOR(self.sum_precision, self.sum_scale),
-            )?,
-        ])
-    }
-
+impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumulator<T> {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-
         self.count += (values.len() - values.null_count()) as u64;
+
         if let Some(x) = sum(values) {
-            let v = self.sum.get_or_insert(T::Native::default());
-            self.sum = Some(v.add_wrapping(x));
-        }
-        Ok(())
-    }
-
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = values[0].as_primitive::<T>();
-        self.count -= (values.len() - values.null_count()) as u64;
-        if let Some(x) = sum(values) {
-            self.sum = Some(self.sum.unwrap().sub_wrapping(x));
-        }
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // counts are summed
-        self.count += sum(states[0].as_primitive::<UInt64Type>()).unwrap_or_default();
-
-        // sums are summed
-        if let Some(x) = sum(states[1].as_primitive::<T>()) {
             let v = self.sum.get_or_insert(T::Native::default());
             self.sum = Some(v.add_wrapping(x));
         }
@@ -374,12 +335,43 @@ impl<T: DecimalType + ArrowNumericType> Accumulator for DecimalAvgAccumulator<T>
             &T::TYPE_CONSTRUCTOR(self.target_precision, self.target_scale),
         )
     }
-    fn supports_retract_batch(&self) -> bool {
-        true
-    }
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![
+            ScalarValue::from(self.count),
+            ScalarValue::new_primitive::<T>(
+                self.sum,
+                &T::TYPE_CONSTRUCTOR(self.sum_precision, self.sum_scale),
+            )?,
+        ])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // counts are summed
+        self.count += sum(states[0].as_primitive::<UInt64Type>()).unwrap_or_default();
+
+        // sums are summed
+        if let Some(x) = sum(states[1].as_primitive::<T>()) {
+            let v = self.sum.get_or_insert(T::Native::default());
+            self.sum = Some(v.add_wrapping(x));
+        }
+        Ok(())
+    }
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = values[0].as_primitive::<T>();
+        self.count -= (values.len() - values.null_count()) as u64;
+        if let Some(x) = sum(values) {
+            self.sum = Some(self.sum.unwrap().sub_wrapping(x));
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
@@ -444,7 +436,7 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&arrow_array::BooleanArray>,
+        opt_filter: Option<&array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
@@ -463,45 +455,6 @@ where
                 *sum = sum.add_wrapping(new_value);
 
                 self.counts[group_index] += 1;
-            },
-        );
-
-        Ok(())
-    }
-
-    fn merge_batch(
-        &mut self,
-        values: &[ArrayRef],
-        group_indices: &[usize],
-        opt_filter: Option<&arrow_array::BooleanArray>,
-        total_num_groups: usize,
-    ) -> Result<()> {
-        assert_eq!(values.len(), 2, "two arguments to merge_batch");
-        // first batch is counts, second is partial sums
-        let partial_counts = values[0].as_primitive::<UInt64Type>();
-        let partial_sums = values[1].as_primitive::<T>();
-        // update counts with partial counts
-        self.counts.resize(total_num_groups, 0);
-        self.null_state.accumulate(
-            group_indices,
-            partial_counts,
-            opt_filter,
-            total_num_groups,
-            |group_index, partial_count| {
-                self.counts[group_index] += partial_count;
-            },
-        );
-
-        // update sums
-        self.sums.resize(total_num_groups, T::default_value());
-        self.null_state.accumulate(
-            group_indices,
-            partial_sums,
-            opt_filter,
-            total_num_groups,
-            |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                let sum = &mut self.sums[group_index];
-                *sum = sum.add_wrapping(new_value);
             },
         );
 
@@ -536,7 +489,7 @@ where
                 .into_iter()
                 .zip(counts.into_iter())
                 .map(|(sum, count)| (self.avg_fn)(sum, count))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
             PrimitiveArray::new(averages.into(), Some(nulls)) // no copy
                 .with_data_type(self.return_data_type.clone())
         };
@@ -560,6 +513,45 @@ where
             Arc::new(counts) as ArrayRef,
             Arc::new(sums) as ArrayRef,
         ])
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 2, "two arguments to merge_batch");
+        // first batch is counts, second is partial sums
+        let partial_counts = values[0].as_primitive::<UInt64Type>();
+        let partial_sums = values[1].as_primitive::<T>();
+        // update counts with partial counts
+        self.counts.resize(total_num_groups, 0);
+        self.null_state.accumulate(
+            group_indices,
+            partial_counts,
+            opt_filter,
+            total_num_groups,
+            |group_index, partial_count| {
+                self.counts[group_index] += partial_count;
+            },
+        );
+
+        // update sums
+        self.sums.resize(total_num_groups, T::default_value());
+        self.null_state.accumulate(
+            group_indices,
+            partial_sums,
+            opt_filter,
+            total_num_groups,
+            |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
+                let sum = &mut self.sums[group_index];
+                *sum = sum.add_wrapping(new_value);
+            },
+        );
+
+        Ok(())
     }
 
     fn size(&self) -> usize {

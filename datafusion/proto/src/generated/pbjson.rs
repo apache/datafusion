@@ -534,9 +534,7 @@ impl serde::Serialize for AggregateFunction {
         let variant = match self {
             Self::Min => "MIN",
             Self::Max => "MAX",
-            Self::Avg => "AVG",
             Self::ArrayAgg => "ARRAY_AGG",
-            Self::Correlation => "CORRELATION",
             Self::Grouping => "GROUPING",
             Self::NthValueAgg => "NTH_VALUE_AGG",
         };
@@ -552,9 +550,7 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
         const FIELDS: &[&str] = &[
             "MIN",
             "MAX",
-            "AVG",
             "ARRAY_AGG",
-            "CORRELATION",
             "GROUPING",
             "NTH_VALUE_AGG",
         ];
@@ -599,9 +595,7 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                 match value {
                     "MIN" => Ok(AggregateFunction::Min),
                     "MAX" => Ok(AggregateFunction::Max),
-                    "AVG" => Ok(AggregateFunction::Avg),
                     "ARRAY_AGG" => Ok(AggregateFunction::ArrayAgg),
-                    "CORRELATION" => Ok(AggregateFunction::Correlation),
                     "GROUPING" => Ok(AggregateFunction::Grouping),
                     "NTH_VALUE_AGG" => Ok(AggregateFunction::NthValueAgg),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
@@ -19914,12 +19908,12 @@ impl serde::Serialize for Wildcard {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.qualifier.is_empty() {
+        if self.qualifier.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.Wildcard", len)?;
-        if !self.qualifier.is_empty() {
-            struct_ser.serialize_field("qualifier", &self.qualifier)?;
+        if let Some(v) = self.qualifier.as_ref() {
+            struct_ser.serialize_field("qualifier", v)?;
         }
         struct_ser.end()
     }
@@ -19985,12 +19979,12 @@ impl<'de> serde::Deserialize<'de> for Wildcard {
                             if qualifier__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("qualifier"));
                             }
-                            qualifier__ = Some(map_.next_value()?);
+                            qualifier__ = map_.next_value()?;
                         }
                     }
                 }
                 Ok(Wildcard {
-                    qualifier: qualifier__.unwrap_or_default(),
+                    qualifier: qualifier__,
                 })
             }
         }

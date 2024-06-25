@@ -140,6 +140,10 @@ impl DisplayAs for CustomExecutionPlan {
 }
 
 impl ExecutionPlan for CustomExecutionPlan {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -278,7 +282,7 @@ async fn optimizers_catch_all_statistics() {
 
     let expected = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
-            Field::new("COUNT(*)", DataType::Int64, false),
+            Field::new("count(*)", DataType::Int64, false),
             Field::new("MIN(test.c1)", DataType::Int32, false),
             Field::new("MAX(test.c1)", DataType::Int32, false),
         ])),
