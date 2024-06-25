@@ -917,6 +917,7 @@ impl TableProvider for ListingTable {
         .await?;
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
+        let keep_partition_by_columns = state.config().options().execution.keep_partition_by_columns;
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
@@ -926,7 +927,7 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             overwrite,
-            keep_partition_by_columns: false,
+            keep_partition_by_columns,
         };
 
         let unsorted: Vec<Vec<Expr>> = vec![];

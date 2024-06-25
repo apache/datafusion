@@ -66,6 +66,7 @@ impl DataFrame {
             FormatOptions::PARQUET(props),
             Default::default(),
             options.partition_by,
+            Default::default(),
         )?
         .build()?;
         DataFrame {

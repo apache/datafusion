@@ -169,7 +169,7 @@ physical_plan
 # Copy to directory as partitioned files with keep_partition_by_columns enabled
 query TT
 COPY (values ('1', 'a'), ('2', 'b'), ('3', 'c')) TO 'test_files/scratch/copy/partitioned_table4/' STORED AS parquet PARTITIONED BY (column1)
-OPTIONS ('keep_partition_by_columns' true);
+OPTIONS (KEEP_PARTITION_BY_COLUMNS true);
 ----
 3
 

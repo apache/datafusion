@@ -428,8 +428,14 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 format_options,
                 partition_by: _,
                 options,
+                hive_options,
             }) => {
                 let op_str = options
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let hive_op_str = hive_options
                     .iter()
                     .map(|(k, v)| format!("{}={}", k, v))
                     .collect::<Vec<_>>()
@@ -438,7 +444,8 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": "CopyTo",
                     "Output URL": output_url,
                     "Format Options": format!("{}", format_options),
-                    "Options": op_str
+                    "Options": op_str,
+                    "Hive Options": hive_op_str,
                 })
             }
             LogicalPlan::Ddl(ddl) => {
