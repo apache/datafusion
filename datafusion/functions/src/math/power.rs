@@ -17,9 +17,11 @@
 
 //! Math function: `power()`.
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{ArrowNativeTypeOp, DataType};
+
 use datafusion_common::{
-    exec_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
+    arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -94,14 +96,25 @@ impl ScalarUDFImpl for PowerFunc {
                 { f64::powf }
             )),
 
-            DataType::Int64 => Arc::new(make_function_inputs2!(
-                &args[0],
-                &args[1],
-                "base",
-                "exponent",
-                Int64Array,
-                { i64::pow }
-            )),
+            DataType::Int64 => {
+                let bases = downcast_arg!(&args[0], "base", Int64Array);
+                let exponents = downcast_arg!(&args[1], "exponent", Int64Array);
+                bases
+                    .iter()
+                    .zip(exponents.iter())
+                    .map(|(base, exp)| match (base, exp) {
+                        (Some(base), Some(exp)) => Ok(Some(base.pow_checked(
+                            exp.try_into().map_err(|_| {
+                                exec_datafusion_err!(
+                                    "Can't use negative exponents: {exp} in integer computation, please use Float."
+                                )
+                            })?,
+                        ).map_err(|e| arrow_datafusion_err!(e))?)),
+                        _ => Ok(None),
+                    })
+                    .collect::<Result<Int64Array>>()
+                    .map(Arc::new)? as ArrayRef
+            }
 
             other => {
                 return exec_err!(
@@ -192,8 +205,8 @@ mod tests {
     #[test]
     fn test_power_i64() {
         let args = [
-            ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
-            ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
+            ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5, 5]))), // base
+            ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4, -4]))), // exponent
         ];
 
         let result = PowerFunc::new()
