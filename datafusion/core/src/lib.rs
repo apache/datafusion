@@ -144,7 +144,7 @@
 //! ## Design Goals
 //! DataFusion's Architecture Goals are:
 //!
-//! 1. Work “out of the box”: Provide a veru fast, world class query engine with
+//! 1. Work “out of the box”: Provide a very fast, world class query engine with
 //! minimal setup or required configuration.
 //!
 //! 2. Customizable everything: All behavior should be customizable by
