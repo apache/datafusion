@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::PrimitiveArray;
-use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
-use arrow::util::display::array_value_to_string;
 use core::fmt;
 use std::sync::Arc;
 use std::{fmt::Display, vec};
 
+use arrow::array::PrimitiveArray;
+use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
+use arrow::util::display::array_value_to_string;
 use arrow_array::types::{
     ArrowTemporalType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
@@ -1042,6 +1042,7 @@ mod tests {
 
     use arrow::datatypes::{Field, Schema};
     use arrow_schema::DataType::Int8;
+
     use datafusion_common::TableReference;
     use datafusion_expr::{
         case, col, cube, exists, grouping_set, interval_datetime_lit,
