@@ -180,7 +180,7 @@ async fn main_inner() -> Result<()> {
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that knows how to open files
     ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
-        ctx.state().catalog_list(),
+        ctx.state().catalog_list().clone(),
         ctx.state_weak_ref(),
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
