@@ -43,6 +43,41 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
+#[tokio::main]
+async fn main() {
+    // build execution plan that has both types of nodes
+    //
+    // Note each node requires a different `PhysicalExtensionCodec` to decode
+    let exec_plan = Arc::new(ParentExec {
+        input: Arc::new(ChildExec {}),
+    });
+    let ctx = SessionContext::new();
+
+    let composed_codec = ComposedPhysicalExtensionCodec {
+        codecs: vec![
+            Arc::new(ParentPhysicalExtensionCodec {}),
+            Arc::new(ChildPhysicalExtensionCodec {}),
+        ],
+    };
+
+    // serialize execution plan to proto
+    let proto: protobuf::PhysicalPlanNode =
+        protobuf::PhysicalPlanNode::try_from_physical_plan(
+            exec_plan.clone(),
+            &composed_codec,
+        )
+        .expect("to proto");
+
+    // deserialize proto back to execution plan
+    let runtime = ctx.runtime_env();
+    let result_exec_plan: Arc<dyn ExecutionPlan> = proto
+        .try_into_physical_plan(&ctx, runtime.deref(), &composed_codec)
+        .expect("from proto");
+
+    // assert that the original and deserialized execution plans are equal
+    assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
+}
+
 /// This example has two types of nodes: `ParentExec` and `ChildExec` which can only
 /// be serialized with different `PhysicalExtensionCodec`s
 #[derive(Debug)]
@@ -253,39 +288,4 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
         }
         Err(last_err.unwrap())
     }
-}
-
-#[tokio::main]
-async fn main() {
-    // build execution plan that has both types of nodes
-    //
-    // Note each node requires a different `PhysicalExtensionCodec` to decode
-    let exec_plan = Arc::new(ParentExec {
-        input: Arc::new(ChildExec {}),
-    });
-    let ctx = SessionContext::new();
-
-    let composed_codec = ComposedPhysicalExtensionCodec {
-        codecs: vec![
-            Arc::new(ParentPhysicalExtensionCodec {}),
-            Arc::new(ChildPhysicalExtensionCodec {}),
-        ],
-    };
-
-    // serialize execution plan to proto
-    let proto: protobuf::PhysicalPlanNode =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec_plan.clone(),
-            &composed_codec,
-        )
-        .expect("to proto");
-
-    // deserialize proto back to execution plan
-    let runtime = ctx.runtime_env();
-    let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx, runtime.deref(), &composed_codec)
-        .expect("from proto");
-
-    // assert that the original and deserialized execution plans are equal
-    assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
 }
