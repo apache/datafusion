@@ -297,7 +297,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let mut intermediate_plan = input;
         let mut intermediate_select_exprs = select_exprs;
-        // only stop if there is no transformation possible
+        // Each expr in select_exprs can contains multiple unnest stage
+        // The transformation happen bottom up, one at a time for each iteration
+        // Ony exaust the loop if no more unnest transformation is found
         for i in 0.. {
             let mut unnest_columns = vec![];
             // from which column used for projection, before the unnest happen
