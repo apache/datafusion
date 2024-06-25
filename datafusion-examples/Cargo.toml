@@ -64,6 +64,7 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 datafusion-optimizer = { workspace = true, default-features = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
+datafusion-proto = { workspace = true }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
