@@ -20,8 +20,8 @@ use std::any::Any;
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    ArrowTimestampType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+    ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 
 use datafusion_common::{exec_err, Result, ScalarType};
@@ -144,12 +144,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Timestamp(_, Some(tz)) => {
-                Ok(Timestamp(Nanosecond, Some(tz.clone())))
-            }
-            _ => Ok(Timestamp(Nanosecond, None)),
-        }
+        Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -202,10 +197,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Timestamp(_, Some(tz)) => Ok(Timestamp(Second, Some(tz.clone()))),
-            _ => Ok(Timestamp(Second, None)),
-        }
+        Ok(return_type_for(&arg_types[0], Second))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -255,12 +247,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Timestamp(_, Some(tz)) => {
-                Ok(Timestamp(Millisecond, Some(tz.clone())))
-            }
-            _ => Ok(Timestamp(Millisecond, None)),
-        }
+        Ok(return_type_for(&arg_types[0], Millisecond))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -310,12 +297,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Timestamp(_, Some(tz)) => {
-                Ok(Timestamp(Microsecond, Some(tz.clone())))
-            }
-            _ => Ok(Timestamp(Microsecond, None)),
-        }
+        Ok(return_type_for(&arg_types[0], Microsecond))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -365,12 +347,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Timestamp(_, Some(tz)) => {
-                Ok(Timestamp(Nanosecond, Some(tz.clone())))
-            }
-            _ => Ok(Timestamp(Nanosecond, None)),
-        }
+        Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -403,6 +380,15 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
                 )
             }
         }
+    }
+}
+
+/// Returns the return type for the to_timestamp_* function, preserving
+/// the timezone if it exists.
+fn return_type_for(arg: &DataType, unit: TimeUnit) -> DataType {
+    match arg {
+        Timestamp(_, Some(tz)) => Timestamp(unit, Some(tz.clone())),
+        _ => Timestamp(unit, None),
     }
 }
 
