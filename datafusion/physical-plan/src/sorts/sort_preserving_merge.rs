@@ -112,12 +112,10 @@ impl SortPreservingMergeExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
-        let mut eq_properties = input.equivalence_properties().clone();
-        eq_properties.clear_per_partition_constants();
         PlanProperties::new(
-            eq_properties,                        // Equivalence Properties
-            Partitioning::UnknownPartitioning(1), // Output Partitioning
-            input.execution_mode(),               // Execution Mode
+            input.equivalence_properties().clone(), // Equivalence Properties
+            Partitioning::UnknownPartitioning(1),   // Output Partitioning
+            input.execution_mode(),                 // Execution Mode
         )
     }
 }
