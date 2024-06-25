@@ -33,8 +33,8 @@ AS VALUES
 statement ok
 CREATE TABLE nested_unnest_table
 AS VALUES 
-    (struct('a', 'b', struct('c')), (struct('a', 'b', [10,20])), [struct('a', 'b')]), 
-    (struct('d', 'e', struct('f')), (struct('x', 'y', [30,40, 50])), null)
+    (struct(['a'], 'b', struct('c')), (struct('a', 'b', [[10,20]])), [struct(['a'], 'b')]), 
+    (struct(['d'], 'e', struct('f')), (struct('x', 'y', [[30,40,50]])), null)
 ;
 
 ## Basic unnest expression in select list
@@ -426,21 +426,21 @@ select unnest(array_remove(column1, 3)) - 1 as c1, column3 from unnest_table;
 query ?
 select unnest(column3) as struct_elem from nested_unnest_table;
 ----
-{c0: a, c1: b}
+{c0: [a], c1: b}
 
 ## unnest for nested struct(struct)
-query TT?
+query ?T?
 select unnest(column1) from nested_unnest_table;
 ----
-a b {c0: c}
-d e {c0: f}
+[a] b {c0: c}
+[d] e {c0: f}
 
 ## unnest for nested(struct(list))
 query TT?
 select unnest(column2) from nested_unnest_table;
 ----
-a b [10, 20]
-x y [30, 40, 50]
+a b [[10, 20]]
+x y [[30, 40, 50]]
 
 query error DataFusion error: type_coercion\ncaused by\nThis feature is not implemented: Unnest should be rewritten to LogicalPlan::Unnest before type coercion
 select sum(unnest(generate_series(1,10)));
@@ -460,3 +460,44 @@ select unnest(column1) from (select * from (values([1,2,3]), ([4,5,6])) limit 1 
 
 statement ok
 drop table unnest_table;
+
+## unnest list followed by unnest struct
+query ?T??T?
+select unnest(unnest(column3)), column3 from nested_unnest_table;
+----
+[a] b [{c0: [a], c1: b}] 
+
+## unnest->field_access->unnest
+query T?
+select unnest(unnest(column3)['c0']), column3 from nested_unnest_table;
+----
+a [{c0: [a], c1: b}]
+
+## double unnest list
+query I?
+select unnest(unnest(column2['c2'])), column2 from nested_unnest_table;
+----
+10 {c0: a, c1: b, c2: [[10, 20]]}
+20 {c0: a, c1: b, c2: [[10, 20]]}
+30 {c0: x, c1: y, c2: [[30, 40, 50]]}
+40 {c0: x, c1: y, c2: [[30, 40, 50]]}
+50 {c0: x, c1: y, c2: [[30, 40, 50]]}
+
+
+
+query TT
+explain select unnest(unnest(column3)['c0']) from nested_unnest_table;
+----
+logical_plan
+01)Unnest: lists[unnest(unnest(nested_unnest_table.column3)[c0])] structs[]
+02)--Projection: get_field(unnest(nested_unnest_table.column3), Utf8("c0")) AS unnest(unnest(nested_unnest_table.column3)[c0])
+03)----Unnest: lists[unnest(nested_unnest_table.column3)] structs[]
+04)------Projection: nested_unnest_table.column3 AS unnest(nested_unnest_table.column3)
+05)--------TableScan: nested_unnest_table projection=[column3]
+physical_plan
+01)UnnestExec
+02)--ProjectionExec: expr=[get_field(unnest(nested_unnest_table.column3)@0, c0) as unnest(unnest(nested_unnest_table.column3)[c0])]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------UnnestExec
+05)--------ProjectionExec: expr=[column3@0 as unnest(nested_unnest_table.column3)]
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
