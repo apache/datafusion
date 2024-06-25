@@ -459,10 +459,12 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let sum = &mut self.sums[group_index];
-                *sum = sum.add_wrapping(new_value);
+                if let Some(new_value) = new_value {
+                    let sum = &mut self.sums[group_index];
+                    *sum = sum.add_wrapping(new_value);
 
-                self.counts[group_index] += 1;
+                    self.counts[group_index] += 1;
+                }
             },
         );
 
@@ -488,7 +490,9 @@ where
             opt_filter,
             total_num_groups,
             |group_index, partial_count| {
-                self.counts[group_index] += partial_count;
+                if let Some(partial_count) = partial_count {
+                    self.counts[group_index] += partial_count;
+                }
             },
         );
 
@@ -499,9 +503,11 @@ where
             partial_sums,
             opt_filter,
             total_num_groups,
-            |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                let sum = &mut self.sums[group_index];
-                *sum = sum.add_wrapping(new_value);
+            |group_index, new_value: Option<<T as ArrowPrimitiveType>::Native>| {
+                if let Some(new_value) = new_value {
+                    let sum = &mut self.sums[group_index];
+                    *sum = sum.add_wrapping(new_value);
+                }
             },
         );
 

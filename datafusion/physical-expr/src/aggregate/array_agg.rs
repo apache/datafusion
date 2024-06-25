@@ -425,7 +425,7 @@ where
 impl<T: ArrowPrimitiveType + Send> ArrayAggGroupsAccumulator<T> {
     fn build_list(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let arrays = emit_to.take_needed(&mut self.values);
-        let (nulls, seen_nulls) = self.null_state.build_with_seen_nulls(emit_to);
+        let nulls = self.null_state.build(emit_to);
 
         let len = nulls.len();
         assert_eq!(arrays.len(), len);
@@ -435,16 +435,8 @@ impl<T: ArrowPrimitiveType + Send> ArrayAggGroupsAccumulator<T> {
             len,
         );
 
-        for ((is_valid, mut arr), seen_null) in nulls
-            .iter()
-            .zip(arrays.into_iter())
-            .zip(seen_nulls.into_iter())
-        {
+        for (is_valid, mut arr) in nulls.iter().zip(arrays.into_iter()) {
             if is_valid {
-                if seen_null && !self.ignore_nulls {
-                    arr.append_null();
-                }
-
                 builder.append_value(arr.finish().into_iter());
             } else {
                 builder.append_null();
@@ -480,8 +472,15 @@ where
             new_values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
-                self.values[group_index].append_value(new_value);
+            |group_index, new_value| match new_value {
+                Some(new_value) => {
+                    self.values[group_index].append_value(new_value);
+                }
+                None => {
+                    if !self.ignore_nulls {
+                        self.values[group_index].append_null();
+                    }
+                }
             },
         );
 
@@ -512,6 +511,9 @@ where
             |group_index, new_value: ArrayRef| {
                 let new_value = new_value.as_primitive::<T>();
                 self.values[group_index].extend(new_value);
+            },
+            |_group_index| {
+                // TODO: Should this not do nothing? Null here just means that the group saw no values, right?
             },
         );
 
@@ -554,20 +556,13 @@ impl StringArrayAggGroupsAccumulator {
 impl StringArrayAggGroupsAccumulator {
     fn build_list(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let array = emit_to.take_needed(&mut self.values);
-        let (nulls, seen_nulls) = self.null_state.build_with_seen_nulls(emit_to);
+        let nulls = self.null_state.build(emit_to);
 
         assert_eq!(array.len(), nulls.len());
-        assert_eq!(array.len(), seen_nulls.len());
 
         let mut builder = ListBuilder::with_capacity(StringBuilder::new(), nulls.len());
-        for (mut arr, (is_valid, seen_null)) in array
-            .into_iter()
-            .zip(nulls.into_iter().zip(seen_nulls.into_iter()))
-        {
+        for (mut arr, is_valid) in array.into_iter().zip(nulls.into_iter()) {
             if is_valid {
-                if seen_null && !self.ignore_nulls {
-                    arr.append_null();
-                }
                 builder.append_value(arr.finish().into_iter());
             } else {
                 builder.append_null();
@@ -599,7 +594,11 @@ impl GroupsAccumulator for StringArrayAggGroupsAccumulator {
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                self.values[group_index].append_value(new_value);
+                if let Some(new_value) = new_value {
+                    self.values[group_index].append_value(new_value);
+                } else if !self.ignore_nulls {
+                    self.values[group_index].append_null();
+                }
             },
         );
 
@@ -630,6 +629,7 @@ impl GroupsAccumulator for StringArrayAggGroupsAccumulator {
                 self.values[group_index]
                     .extend(new_value.into_iter().map(|s| s.map(|s| s.to_string())));
             },
+            |_group_index| {},
         );
 
         Ok(())

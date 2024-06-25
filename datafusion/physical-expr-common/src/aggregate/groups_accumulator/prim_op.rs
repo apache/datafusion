@@ -103,8 +103,10 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let value = &mut self.values[group_index];
-                (self.prim_fn)(value, new_value);
+                if let Some(new_value) = new_value {
+                    let value = &mut self.values[group_index];
+                    (self.prim_fn)(value, new_value);
+                }
             },
         );
 
