@@ -269,17 +269,7 @@ impl PhysicalExpr for BinaryExpr {
             if right_data_type != left_data_type {
                 return internal_err!("type mismatch");
             }
-            if matches!(
-                self.op,
-                Operator::Eq
-                    | Operator::NotEq
-                    | Operator::Lt
-                    | Operator::Gt
-                    | Operator::LtEq
-                    | Operator::GtEq
-            ) {
-                return apply_cmp_for_nested(self.op, &lhs, &rhs);
-            }
+            return apply_cmp_for_nested(self.op, &lhs, &rhs);
         }
 
         match self.op {

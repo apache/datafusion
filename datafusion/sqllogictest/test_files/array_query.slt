@@ -84,6 +84,26 @@ SELECT * FROM data WHERE column1 >= [1, 2, 3];
 [1, 2, 3] [4, 5] 1
 [2, 3] [2, 3] 1
 
+# test with scalar null
+query ??I
+SELECT * FROM data WHERE column2 = null;
+----
+
+query ??I
+SELECT * FROM data WHERE null = column2;
+----
+
+query ??I
+SELECT * FROM data WHERE column2 is distinct from null;
+----
+[1, 2, 3] [4, 5] 1
+[2, 3] [2, 3] 1
+
+query ??I
+SELECT * FROM data WHERE column2 is not distinct from null;
+----
+[1, 2, 3] NULL 1
+
 ###########
 # Aggregates
 ###########
@@ -189,3 +209,22 @@ SELECT * FROM data ORDER BY column1, column3, column2;
 
 statement ok
 drop table data
+
+
+# test filter column with all nulls
+statement ok
+create table data (a int) as values (null), (null), (null);
+
+query I
+select * from data where a = null;
+----
+
+query I
+select * from data where a is not distinct from null;
+----
+NULL
+NULL
+NULL
+
+statement ok
+drop table data;

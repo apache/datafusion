@@ -20,7 +20,7 @@ use arrow::array::{make_comparator, ArrayRef, Datum};
 use arrow::buffer::NullBuffer;
 use arrow::compute::SortOptions;
 use arrow::error::ArrowError;
-use datafusion_common::{internal_err, not_impl_err};
+use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Operator};
 use std::sync::Arc;
@@ -67,9 +67,23 @@ pub fn apply_cmp_for_nested(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
 ) -> Result<ColumnarValue> {
-    apply(lhs, rhs, |l, r| {
-        Ok(Arc::new(compare_op_for_nested(op, l, r)?))
-    })
+    if matches!(
+        op,
+        Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::Gt
+            | Operator::LtEq
+            | Operator::GtEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+    ) {
+        apply(lhs, rhs, |l, r| {
+            Ok(Arc::new(compare_op_for_nested(op, l, r)?))
+        })
+    } else {
+        internal_err!("invalid operator for nested")
+    }
 }
 
 /// Compare on nested type List, Struct, and so on
@@ -82,6 +96,7 @@ fn compare_op_for_nested(
     let (r, is_r_scalar) = rhs.get();
     let l_len = l.len();
     let r_len = r.len();
+
     if l_len != r_len && !is_l_scalar && !is_r_scalar {
         return internal_err!("len mismatch");
     }
@@ -91,28 +106,23 @@ fn compare_op_for_nested(
         false => l_len,
     };
 
-    let cmp = make_comparator(l, r, SortOptions::default())?;
-
-    if !matches!(
-        op,
-        Operator::Eq
-            | Operator::Lt
-            | Operator::Gt
-            | Operator::LtEq
-            | Operator::GtEq
-            | Operator::NotEq
-    ) {
-        return not_impl_err!("other operation are not implemented");
+    // fast path, if compare with one null and operator is not 'distinct', then we can return null array directly
+    if !matches!(op, Operator::IsDistinctFrom | Operator::IsNotDistinctFrom)
+        && (l.null_count() == 1 || r.null_count() == 1)
+    {
+        return Ok(BooleanArray::new_null(len));
     }
 
+    let cmp = make_comparator(l, r, SortOptions::default())?;
+
     let cmp_with_op = |i, j| match op {
-        Operator::Eq => cmp(i, j).is_eq(),
+        Operator::Eq | Operator::IsNotDistinctFrom => cmp(i, j).is_eq(),
         Operator::Lt => cmp(i, j).is_lt(),
         Operator::Gt => cmp(i, j).is_gt(),
         Operator::LtEq => !cmp(i, j).is_gt(),
         Operator::GtEq => !cmp(i, j).is_lt(),
-        Operator::NotEq => !cmp(i, j).is_eq(),
-        _ => unreachable!("other operatations should be be handled above"),
+        Operator::NotEq | Operator::IsDistinctFrom => !cmp(i, j).is_eq(),
+        _ => unreachable!("unexpected operator found"),
     };
 
     let values = match (is_l_scalar, is_r_scalar) {
@@ -122,6 +132,43 @@ fn compare_op_for_nested(
         (true, true) => std::iter::once(cmp_with_op(0, 0)).collect(),
     };
 
-    let nulls = NullBuffer::union(l.nulls(), r.nulls());
-    Ok(BooleanArray::new(values, nulls))
+    if matches!(op, Operator::IsDistinctFrom | Operator::IsNotDistinctFrom) {
+        Ok(BooleanArray::new(values, None))
+    } else {
+        let nulls = NullBuffer::union(l.nulls(), r.nulls());
+        Ok(BooleanArray::new(values, nulls))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::{
+        array::{make_comparator, Array, BooleanArray, ListArray},
+        buffer::NullBuffer,
+        compute::SortOptions,
+        datatypes::Int32Type,
+    };
+
+    #[test]
+    fn test123() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(6), Some(7)]),
+        ];
+        let a = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(6), Some(7)]),
+        ];
+        let b = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+        let cmp = make_comparator(&a, &b, SortOptions::default()).unwrap();
+        let len = a.len().min(b.len());
+        let values = (0..len).map(|i| cmp(i, i).is_eq()).collect();
+        let nulls = NullBuffer::union(a.nulls(), b.nulls());
+        println!("res: {:?}", BooleanArray::new(values, nulls));
+    }
 }
