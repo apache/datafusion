@@ -1077,7 +1077,7 @@ impl ScalarValue {
             DataType::Float64 => ScalarValue::Float64(Some(10.0)),
             _ => {
                 return _not_impl_err!(
-                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
+                    "Can't create a ten scalar from data_type \"{datatype:?}\""
                 );
             }
         })
