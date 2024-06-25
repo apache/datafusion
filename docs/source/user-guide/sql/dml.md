@@ -39,9 +39,9 @@ TO '<i><b>file_name</i></b>'
 clause is not specified, it will be inferred from the file extension if possible.
 
 `PARTITIONED BY` specifies the columns to use for partitioning the output files into
-separate hive-style directories. By default, columns used in `PARTITIONED BY` will be removed 
-from the output format. If you want to keep the columns, you should provide the option 
-`KEEP_PARTITION_BY_COLUMNS true`. `KEEP_PARTITION_BY_COLUMNS` flag can also be enabled 
+separate hive-style directories. By default, columns used in `PARTITIONED BY` will be removed
+from the output format. If you want to keep the columns, you should provide the option
+`KEEP_PARTITION_BY_COLUMNS true`. `KEEP_PARTITION_BY_COLUMNS` flag can also be enabled
 through `ExecutionOptions` within `SessionConfig`.
 
 The output format is determined by the first match of the following rules:

@@ -75,7 +75,7 @@ In this example, we write the entirety of `source_table` out to a folder of parq
 The following options are available when writing hive-style partitioned data.
 
 | Option                    | Description                                                                        | Default Value |
-|---------------------------|------------------------------------------------------------------------------------|---------------|
+| ------------------------- | ---------------------------------------------------------------------------------- | ------------- |
 | KEEP_PARTITION_BY_COLUMNS | Flag to retain the columns in the output data when using `PARTITIONED BY` queries. | false         |
 
 Note: `KEEP_PARTITION_BY_COLUMNS` flag can also be enabled through `ExecutionOptions` within `SessionConfig`.
