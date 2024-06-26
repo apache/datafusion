@@ -1362,7 +1362,9 @@ fn build_predicate_expression(
                         e.clone(),
                     )) as _
                 })
-                .reduce(|a, b| Arc::new(phys_expr::BinaryExpr::new(a, re_op.clone(), b)) as _)
+                .reduce(|a, b| {
+                    Arc::new(phys_expr::BinaryExpr::new(a, re_op.clone(), b)) as _
+                })
                 .unwrap();
             return build_predicate_expression(&change_expr, schema, required_columns);
         } else {
@@ -1394,7 +1396,11 @@ fn build_predicate_expression(
             {
                 unhandled
             }
-            _ => Arc::new(phys_expr::BinaryExpr::new(left_expr, op.clone(), right_expr)),
+            _ => Arc::new(phys_expr::BinaryExpr::new(
+                left_expr,
+                op.clone(),
+                right_expr,
+            )),
         };
         return expr;
     }
