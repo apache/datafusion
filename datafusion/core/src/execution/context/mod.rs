@@ -1864,7 +1864,7 @@ mod tests {
 
         let catalog_list_weak = {
             let state = ctx.state.read();
-            Arc::downgrade(&state.catalog_list())
+            Arc::downgrade(state.catalog_list())
         };
 
         drop(ctx);
