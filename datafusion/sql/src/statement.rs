@@ -889,14 +889,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Some(v) => v,
             };
 
-            if key.to_lowercase().contains("keep_partition_by_columns") {
-                let renamed_key = if !&key.starts_with("hive.") {
-                    format!("hive.{}", key)
-                } else {
-                    key
-                };
-                options.insert(renamed_key.to_lowercase(), value_string.to_lowercase());
-            } else if !(&key.contains('.')) {
+            if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.

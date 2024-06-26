@@ -1285,8 +1285,7 @@ impl TableOptions {
             return ConfigField::set(self, key, value);
         }
 
-        // Only used for hive.keep_partition_by_columns
-        if prefix == "hive" {
+        if prefix == "execution" {
             return Ok(());
         }
 
