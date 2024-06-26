@@ -592,3 +592,7 @@ select lcm(-9223372036854775808, -9223372036854775808);
 
 query error DataFusion error: Arrow error: Compute error: Overflow happened on: 2107754225 \^ 1221660777
 select power(2107754225, 1221660777);
+
+# factorial overflow
+query error DataFusion error: Arrow error: Compute error: Overflow happened on FACTORIAL\(350943270\)
+select FACTORIAL(350943270);
