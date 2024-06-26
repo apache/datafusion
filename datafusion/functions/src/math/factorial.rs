@@ -17,7 +17,7 @@
 
 use arrow::{
     array::{ArrayRef, Int64Array},
-    datatypes::ArrowNativeTypeOp,
+    error::ArrowError,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -79,9 +79,13 @@ fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .iter()
                 .map(|a| match a {
                     Some(a) => (2..=a)
-                        .try_fold(1i64, ArrowNativeTypeOp::mul_checked)
+                        .try_fold(1i64, i64::checked_mul)
                         .map(Some)
-                        .map_err(|e| arrow_datafusion_err!(e)),
+                        .ok_or_else(|| {
+                            arrow_datafusion_err!(ArrowError::ComputeError(format!(
+                                "Overflow happened on FACTORIAL({a})"
+                            )))
+                        }),
                     _ => Ok(None),
                 })
                 .collect::<Result<Int64Array>>()
