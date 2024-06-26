@@ -747,7 +747,7 @@ async fn test_timestamp() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "nanos",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -776,7 +776,7 @@ async fn test_timestamp() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "nanos_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -798,7 +798,7 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "micros",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -827,7 +827,7 @@ async fn test_timestamp() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "micros_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -849,7 +849,7 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "millis",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -878,7 +878,7 @@ async fn test_timestamp() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "millis_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -900,7 +900,7 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "seconds",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -929,7 +929,7 @@ async fn test_timestamp() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "seconds_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -975,7 +975,7 @@ async fn test_timestamp_diff_rg_sizes() {
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "nanos",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1002,7 +1002,7 @@ async fn test_timestamp_diff_rg_sizes() {
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "nanos_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1022,7 +1022,7 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "micros",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1049,7 +1049,7 @@ async fn test_timestamp_diff_rg_sizes() {
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "micros_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1069,7 +1069,7 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "millis",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1096,7 +1096,7 @@ async fn test_timestamp_diff_rg_sizes() {
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "millis_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1116,7 +1116,7 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "seconds",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1143,7 +1143,7 @@ async fn test_timestamp_diff_rg_sizes() {
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "seconds_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
