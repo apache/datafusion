@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array};
+use arrow::{
+    array::{ArrayRef, Int64Array},
+    error::ArrowError,
+};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -23,7 +26,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -67,28 +70,27 @@ impl ScalarUDFImpl for FactorialFunc {
     }
 }
 
-macro_rules! make_function_scalar_inputs {
-    ($ARG: expr, $NAME:expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
-        let arg = downcast_arg!($ARG, $NAME, $ARRAY_TYPE);
-
-        arg.iter()
-            .map(|a| match a {
-                Some(a) => Some($FUNC(a)),
-                _ => None,
-            })
-            .collect::<$ARRAY_TYPE>()
-    }};
-}
-
 /// Factorial SQL function
 fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::Int64 => Ok(Arc::new(make_function_scalar_inputs!(
-            &args[0],
-            "value",
-            Int64Array,
-            { |value: i64| { (1..=value).product() } }
-        )) as ArrayRef),
+        DataType::Int64 => {
+            let arg = downcast_arg!((&args[0]), "value", Int64Array);
+            Ok(arg
+                .iter()
+                .map(|a| match a {
+                    Some(a) => (2..=a)
+                        .try_fold(1i64, i64::checked_mul)
+                        .ok_or_else(|| {
+                            arrow_datafusion_err!(ArrowError::ComputeError(format!(
+                                "Overflow happened on FACTORIAL({a})"
+                            )))
+                        })
+                        .map(Some),
+                    _ => Ok(None),
+                })
+                .collect::<Result<Int64Array>>()
+                .map(Arc::new)? as ArrayRef)
+        }
         other => exec_err!("Unsupported data type {other:?} for function factorial."),
     }
 }
