@@ -21,11 +21,12 @@ use std::{fmt::Display, vec};
 
 use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
 use arrow::util::display::array_value_to_string;
-use arrow_array::types::{ArrowTemporalType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType};
-use arrow_array::{
-    Date32Array, Date64Array, PrimitiveArray, TimestampMillisecondArray,
-    TimestampNanosecondArray,
+use arrow_array::types::{
+    ArrowTemporalType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
 };
+use arrow_array::{Date32Array, Date64Array, PrimitiveArray};
 use arrow_schema::DataType;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
