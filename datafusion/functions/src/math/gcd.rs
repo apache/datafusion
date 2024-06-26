@@ -92,40 +92,42 @@ fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Computes greatest common divisor using Binary GCD algorithm.
-pub fn compute_gcd(x: i64, y: i64) -> Result<i64> {
-    if x == 0 {
-        return Ok(y);
+/// Computes gcd of two unsigned integers using Binary GCD algorithm.
+fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
+    if a == 0 {
+        return b;
     }
-    if y == 0 {
-        return Ok(x);
+    if b == 0 {
+        return a;
     }
-
-    let mut a = x.unsigned_abs();
-    let mut b = y.unsigned_abs();
 
     let shift = (a | b).trailing_zeros();
     a >>= shift;
     b >>= shift;
     a >>= a.trailing_zeros();
-
     loop {
         b >>= b.trailing_zeros();
         if a > b {
             swap(&mut a, &mut b);
         }
-
         b -= a;
-
         if b == 0 {
-            // because the input values are i64, casting this back to i64 is safe
-            return (a << shift).try_into().map_err(|_| {
-                arrow_datafusion_err!(ArrowError::ComputeError(format!(
-                    "Signed integer overflow in GCD({x}, {y})"
-                )))
-            });
+            return a << shift;
         }
     }
+}
+
+/// Computes greatest common divisor using Binary GCD algorithm.
+pub fn compute_gcd(x: i64, y: i64) -> Result<i64> {
+    let a = x.unsigned_abs();
+    let b = y.unsigned_abs();
+    let r = unsigned_gcd(a, b);
+    // gcd(i64::MIN, i64::MIN) = i64::MIN.unsigned_abs() cannot fit into i64
+    r.try_into().map_err(|_| {
+        arrow_datafusion_err!(ArrowError::ComputeError(format!(
+            "Signed integer overflow in GCD({x}, {y})"
+        )))
+    })
 }
 
 #[cfg(test)]
