@@ -124,8 +124,8 @@ impl AggregateUDF {
     }
 
     /// Return the underlying [`AggregateUDFImpl`] trait object for this function
-    pub fn inner(&self) -> Arc<dyn AggregateUDFImpl> {
-        self.inner.clone()
+    pub fn inner(&self) -> &Arc<dyn AggregateUDFImpl> {
+        &self.inner
     }
 
     /// Adds additional names that can be used to invoke this function, in

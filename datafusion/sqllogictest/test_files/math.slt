@@ -573,5 +573,22 @@ select gcd(20, 1000), lcm(20, 1000);
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(\-9223372036854775808, \-9223372036854775808\)
 select gcd(-9223372036854775808, -9223372036854775808);
 
+# gcd(i64::MIN, 0)
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(\-9223372036854775808, 0\)
+select gcd(-9223372036854775808, 0);
+
+# gcd(0, i64::MIN)
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(0, \-9223372036854775808\)
+select gcd(0, -9223372036854775808);
+
+# Test gcd with zero and negative values
+query III
+select gcd(0, 0), gcd(-100, 0), gcd(0, -100);
+----
+0 100 100
+
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(\-9223372036854775808, \-9223372036854775808\)
 select lcm(-9223372036854775808, -9223372036854775808);
+
+query error DataFusion error: Arrow error: Compute error: Overflow happened on: 2107754225 \^ 1221660777
+select power(2107754225, 1221660777);
