@@ -5135,3 +5135,22 @@ GROUP BY
     ts_chunk;
 ----
 2024-01-01T00:00:00 4
+
+# Issue: https://github.com/apache/datafusion/issues/11118
+statement ok
+CREATE TABLE test_case_expr(a INT, b TEXT) AS VALUES (1,'hello'), (2,'world')
+
+query T
+SELECT (CASE WHEN CONCAT(b, 'hello') = 'test' THEN 'good' ELSE 'bad' END) AS c 
+  FROM test_case_expr GROUP BY c;
+----
+bad
+
+query I rowsort
+SELECT (CASE a::BIGINT WHEN 1 THEN 1 END) AS c FROM test_case_expr GROUP BY c;
+----
+1
+NULL
+
+statement ok
+drop table test_case_expr
