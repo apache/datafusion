@@ -329,7 +329,7 @@ impl PhysicalExpr for BinaryExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(BinaryExpr::new(
             children[0].clone(),
-            self.op,
+            self.op.clone(),
             children[1].clone(),
         )))
     }
