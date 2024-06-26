@@ -21,7 +21,6 @@
 //! infinite input(s). In addition, it will check if all order and
 //! distribution requirements of a plan are satisfied by its children.
 
-use itertools::izip;
 use std::sync::Arc;
 
 use crate::error::Result;
@@ -33,11 +32,13 @@ use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
-use datafusion_physical_plan::ExecutionPlanProperties;
+use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
+
+use itertools::izip;
 
 /// The SanityCheckPlan rule rejects the following query plans:
 /// i) Plans that use pipeline-breaking operators on infinite input(s),
-///    these queries cannot be ran.
+///    these queries cannot be executed.
 /// ii) Plans in which their order and distribution requirements are not
 ///     satisfied by its children, these queries will most likely yield
 ///     incorrect results.
@@ -130,8 +131,10 @@ pub fn check_plan_sanity(
             None => (),
             Some(child_sort_req) => {
                 if !child_eq_props.ordering_satisfy_requirement(child_sort_req) {
+                    let child_plan_str = get_plan_string(child);
                     return plan_err!(
-                        "Child does not satisfy parent order requirements: {:?}",
+                        "Child: {:?} does not satisfy parent order requirements: {:?}",
+                        child_plan_str,
                         child_sort_req
                     );
                 }
@@ -142,8 +145,10 @@ pub fn check_plan_sanity(
             .output_partitioning()
             .satisfy(child_dist_req, child_eq_props)
         {
+            let child_plan_str = get_plan_string(child);
             return plan_err!(
-                "Child does not satisfy parent distribution requirements: {:?}",
+                "Child: {:?} does not satisfy parent distribution requirements: {:?}",
+                child_plan_str,
                 child_dist_req
             );
         }
@@ -462,6 +467,7 @@ mod tests {
             "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
             "  MemoryExec: partitions=1, partition_sizes=[0]"
         ]);
+        // Order requirement of the `BoundedWindowAggExec` is not satisfied. We expect to receive error during sanity check.
         assert_sanity_check(&bw, false);
         Ok(())
     }
@@ -501,6 +507,7 @@ mod tests {
                 "    MemoryExec: partitions=1, partition_sizes=[0]",
             ],
         );
+        // Distribution requirement of the `GlobalLimitExec` is not satisfied. We expect to receive error during sanity check.
         assert_sanity_check(&limit, false);
         Ok(())
     }
@@ -609,6 +616,7 @@ mod tests {
                 "    MemoryExec: partitions=1, partition_sizes=[0]",
             ],
         );
+        // Order requirement for the `SortMergeJoin` is not satisfied for right child. We expect to receive error during sanity check.
         assert_sanity_check(&smj, false);
         Ok(())
     }
@@ -655,6 +663,7 @@ mod tests {
                 "      MemoryExec: partitions=1, partition_sizes=[0]",
             ],
         );
+        // Distribution requirement for the `SortMergeJoin` is not satisfied for right child (has round-robin partitioning). We expect to receive error during sanity check.
         assert_sanity_check(&smj, false);
         Ok(())
     }
