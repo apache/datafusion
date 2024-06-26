@@ -80,12 +80,12 @@ fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .map(|a| match a {
                     Some(a) => (2..=a)
                         .try_fold(1i64, i64::checked_mul)
-                        .map(Some)
                         .ok_or_else(|| {
                             arrow_datafusion_err!(ArrowError::ComputeError(format!(
                                 "Overflow happened on FACTORIAL({a})"
                             )))
-                        }),
+                        })
+                        .map(Some),
                     _ => Ok(None),
                 })
                 .collect::<Result<Int64Array>>()
