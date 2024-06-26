@@ -83,7 +83,7 @@ fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
         let a = x.unsigned_abs();
         let b = y.unsigned_abs();
         let gcd = unsigned_gcd(a, b);
-        // gcd is not zero and is a divisor of a, so the division is safe.
+        // gcd is not zero since both a and b are not zero, so the division is safe.
         (a / gcd)
             .checked_mul(b)
             .and_then(|v| i64::try_from(v).ok())
