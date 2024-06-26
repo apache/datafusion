@@ -711,7 +711,10 @@ macro_rules! get_data_page_statistics {
                                     x.and_then(|x| i64::try_from(x).ok())
                                 })
                                 .map(|x| x * 24 * 60 * 60 * 1000)
-                            }).flatten().collect::<Vec<i64>>()))),
+                            }).flatten().collect::<Vec<_>>()
+                        )
+                    )
+                ),
                 _ => unimplemented!()
             }
         }
