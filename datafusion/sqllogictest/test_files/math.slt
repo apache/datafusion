@@ -636,6 +636,9 @@ NULL NULL NULL
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(\-9223372036854775808, \-9223372036854775808\)
 select lcm(-9223372036854775808, -9223372036854775808);
 
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(1, \-9223372036854775808\)
+select lcm(1, -9223372036854775808);
+
 # Overflow on multiplication
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(2, 9223372036854775803\)
 select lcm(2, 9223372036854775803);
