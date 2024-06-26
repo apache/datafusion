@@ -727,6 +727,32 @@ macro_rules! get_data_page_statistics {
                 Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter([<$stat_type_prefix Float64DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Binary) => Ok(Arc::new(BinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::LargeBinary) => Ok(Arc::new(LargeBinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Utf8) => Ok(Arc::new(StringArray::from(
+                    [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
+                        x.into_iter().filter_map(|x| {
+                        x.and_then(|x| {
+                            let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
+                            if res.is_none() {
+                                log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                            }
+                            res
+                        })
+                    })
+                    }).flatten().collect::<Vec<_>>(),
+                ))),
+                Some(DataType::LargeUtf8) => Ok(Arc::new(LargeStringArray::from(
+                    [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
+                        x.into_iter().filter_map(|x| {
+                            x.and_then(|x| {
+                                let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
+                                if res.is_none() {
+                                    log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
+                                }
+                                res
+                            })
+                    })
+                    }).flatten().collect::<Vec<_>>(),
+                ))),
                 _ => unimplemented!()
             }
         }
