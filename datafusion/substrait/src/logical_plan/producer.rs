@@ -1622,11 +1622,11 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
         DataType::Map(inner, _) => match inner.data_type() {
             DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
                 let key_type = to_substrait_type(
-                    &key_and_value[0].data_type(),
+                    key_and_value[0].data_type(),
                     key_and_value[0].is_nullable(),
                 )?;
                 let value_type = to_substrait_type(
-                    &key_and_value[1].data_type(),
+                    key_and_value[1].data_type(),
                     key_and_value[1].is_nullable(),
                 )?;
                 Ok(substrait::proto::Type {
