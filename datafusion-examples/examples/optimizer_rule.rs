@@ -60,7 +60,7 @@ pub async fn main() -> Result<()> {
     println!("Logical Plan:\n\n{}\n", plan.display_indent());
 
     // The query below doesn't respect a filter `where age = 22` because
-    // the plan has been rewritten using UDF which returns always true 
+    // the plan has been rewritten using UDF which returns always true
     //
     // And the output verifies the predicates have been changed (as the my_eq
     // function always returns true)
