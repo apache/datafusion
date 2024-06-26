@@ -15,13 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
-use arrow::util::display::array_value_to_string;
 use core::fmt;
 use std::{fmt::Display, vec};
 
+use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
+use arrow::util::display::array_value_to_string;
+use arrow_array::types::{
+    ArrowTemporalType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType,
+};
 use arrow_array::{
-    Date32Array, Date64Array, TimestampMillisecondArray, TimestampNanosecondArray,
+    Date32Array, Date64Array, PrimitiveArray, TimestampMillisecondArray,
+    TimestampNanosecondArray,
 };
 use arrow_schema::DataType;
 use sqlparser::ast::Value::SingleQuotedString;
@@ -650,6 +655,28 @@ impl Unparser<'_> {
         }
     }
 
+    fn handle_time<T: ArrowTemporalType>(&self, v: &ScalarValue) -> Result<ast::Expr>
+    where
+        i64: From<T::Native>,
+    {
+        let time = v
+            .to_array()?
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .ok_or(internal_datafusion_err!(
+                "Failed to downcast type {v:?} to arrow array"
+            ))?
+            .value_as_time(0)
+            .ok_or(internal_datafusion_err!("Unable to convert {v:?} to Time"))?
+            .to_string();
+        Ok(ast::Expr::Cast {
+            kind: ast::CastKind::Cast,
+            expr: Box::new(ast::Expr::Value(SingleQuotedString(time))),
+            data_type: ast::DataType::Time(None, TimezoneInfo::None),
+            format: None,
+        })
+    }
+
     fn timestamp_string_to_sql(&self, ts: String) -> Result<ast::Expr> {
         Ok(ast::Expr::Cast {
             kind: ast::CastKind::Cast,
@@ -801,23 +828,23 @@ impl Unparser<'_> {
             }
             ScalarValue::Date64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Time32Second(Some(_t)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+                self.handle_time::<Time32SecondType>(v)
             }
             ScalarValue::Time32Second(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Time32Millisecond(Some(_t)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+                self.handle_time::<Time32MillisecondType>(v)
             }
             ScalarValue::Time32Millisecond(None) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
             ScalarValue::Time64Microsecond(Some(_t)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+                self.handle_time::<Time64MicrosecondType>(v)
             }
             ScalarValue::Time64Microsecond(None) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
             ScalarValue::Time64Nanosecond(Some(_t)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+                self.handle_time::<Time64NanosecondType>(v)
             }
             ScalarValue::Time64Nanosecond(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::TimestampSecond(Some(_ts), _) => {
@@ -1240,6 +1267,22 @@ mod tests {
                     Some("+08:00".into()),
                 )),
                 r#"CAST('1970-01-01 08:00:00.000010001 +08:00' AS TIMESTAMP)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Time32Second(Some(10001))),
+                r#"CAST('02:46:41' AS TIME)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Time32Millisecond(Some(10001))),
+                r#"CAST('00:00:10.001' AS TIME)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Time64Microsecond(Some(10001))),
+                r#"CAST('00:00:00.010001' AS TIME)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Time64Nanosecond(Some(10001))),
+                r#"CAST('00:00:00.000010001' AS TIME)"#,
             ),
             (sum(col("a")), r#"sum(a)"#),
             (
