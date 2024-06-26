@@ -23,6 +23,11 @@ use crate::Like;
 use std::fmt;
 use std::ops;
 use std::ops::Not;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use arrow::datatypes::DataType;
+use datafusion_common::Result;
 
 /// Operators applied to expressions
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -93,11 +98,17 @@ pub enum Operator {
     AtArrow,
     /// Arrow at, like `<@`
     ArrowAt,
+    /// Custom operator
+    Custom(CustomOperatorWrapper),
 }
 
 impl Operator {
+    pub fn custom(op: Arc<dyn CustomOperator>) -> Self {
+        Operator::Custom(CustomOperatorWrapper(op))
+    }
+
     /// If the operator can be negated, return the negated operator
-    /// otherwise return None
+    /// otherwise return `None`
     pub fn negate(&self) -> Option<Operator> {
         match self {
             Operator::Eq => Some(Operator::NotEq),
@@ -131,51 +142,64 @@ impl Operator {
             | Operator::StringConcat
             | Operator::AtArrow
             | Operator::ArrowAt => None,
+            Operator::Custom(op) => op.0.negate(),
         }
     }
 
     /// Return true if the operator is a numerical operator.
     ///
-    /// For example, 'Binary(a, +, b)' would be a numerical expression.
+    /// For example, `Binary(a, +, b)` would be a numerical expression.
     /// PostgresSQL concept: <https://www.postgresql.org/docs/7.0/operators2198.htm>
     pub fn is_numerical_operators(&self) -> bool {
-        matches!(
-            self,
-            Operator::Plus
-                | Operator::Minus
-                | Operator::Multiply
-                | Operator::Divide
-                | Operator::Modulo
-        )
+        if let Self::Custom(op) = self {
+            op.0.is_numerical_operators()
+        } else {
+            matches!(
+                self,
+                Operator::Plus
+                    | Operator::Minus
+                    | Operator::Multiply
+                    | Operator::Divide
+                    | Operator::Modulo
+            )
+        }
     }
 
     /// Return true if the operator is a comparison operator.
     ///
-    /// For example, 'Binary(a, >, b)' would be a comparison expression.
+    /// For example, `Binary(a, >, b)` would be a comparison expression.
     pub fn is_comparison_operator(&self) -> bool {
-        matches!(
-            self,
-            Operator::Eq
-                | Operator::NotEq
-                | Operator::Lt
-                | Operator::LtEq
-                | Operator::Gt
-                | Operator::GtEq
-                | Operator::IsDistinctFrom
-                | Operator::IsNotDistinctFrom
-                | Operator::RegexMatch
-                | Operator::RegexIMatch
-                | Operator::RegexNotMatch
-                | Operator::RegexNotIMatch
-        )
+        if let Self::Custom(op) = self {
+            op.0.is_comparison_operator()
+        } else {
+            matches!(
+                self,
+                Operator::Eq
+                    | Operator::NotEq
+                    | Operator::Lt
+                    | Operator::LtEq
+                    | Operator::Gt
+                    | Operator::GtEq
+                    | Operator::IsDistinctFrom
+                    | Operator::IsNotDistinctFrom
+                    | Operator::RegexMatch
+                    | Operator::RegexIMatch
+                    | Operator::RegexNotMatch
+                    | Operator::RegexNotIMatch
+            )
+        }
     }
 
     /// Return true if the operator is a logic operator.
     ///
-    /// For example, 'Binary(Binary(a, >, b), AND, Binary(a, <, b + 3))' would
+    /// For example, `Binary(Binary(a, >, b), AND, Binary(a, <, b + 3))` would
     /// be a logical expression.
     pub fn is_logic_operator(&self) -> bool {
-        matches!(self, Operator::And | Operator::Or)
+        if let Self::Custom(op) = self {
+            op.0.is_logic_operator()
+        } else {
+            matches!(self, Operator::And | Operator::Or)
+        }
     }
 
     /// Return the operator where swapping lhs and rhs wouldn't change the result.
@@ -214,6 +238,7 @@ impl Operator {
             | Operator::BitwiseShiftRight
             | Operator::BitwiseShiftLeft
             | Operator::StringConcat => None,
+            Operator::Custom(op) => op.0.swap(),
         }
     }
 
@@ -249,46 +274,129 @@ impl Operator {
             | Operator::StringConcat
             | Operator::AtArrow
             | Operator::ArrowAt => 0,
+            Operator::Custom(op) => op.0.precedence(),
         }
     }
 }
 
 impl fmt::Display for Operator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let display = match &self {
-            Operator::Eq => "=",
-            Operator::NotEq => "!=",
-            Operator::Lt => "<",
-            Operator::LtEq => "<=",
-            Operator::Gt => ">",
-            Operator::GtEq => ">=",
-            Operator::Plus => "+",
-            Operator::Minus => "-",
-            Operator::Multiply => "*",
-            Operator::Divide => "/",
-            Operator::Modulo => "%",
-            Operator::And => "AND",
-            Operator::Or => "OR",
-            Operator::RegexMatch => "~",
-            Operator::RegexIMatch => "~*",
-            Operator::RegexNotMatch => "!~",
-            Operator::RegexNotIMatch => "!~*",
-            Operator::LikeMatch => "~~",
-            Operator::ILikeMatch => "~~*",
-            Operator::NotLikeMatch => "!~~",
-            Operator::NotILikeMatch => "!~~*",
-            Operator::IsDistinctFrom => "IS DISTINCT FROM",
-            Operator::IsNotDistinctFrom => "IS NOT DISTINCT FROM",
-            Operator::BitwiseAnd => "&",
-            Operator::BitwiseOr => "|",
-            Operator::BitwiseXor => "BIT_XOR",
-            Operator::BitwiseShiftRight => ">>",
-            Operator::BitwiseShiftLeft => "<<",
-            Operator::StringConcat => "||",
-            Operator::AtArrow => "@>",
-            Operator::ArrowAt => "<@",
-        };
-        write!(f, "{display}")
+        match &self {
+            Operator::Eq => write!(f, "="),
+            Operator::NotEq => write!(f, "!="),
+            Operator::Lt => write!(f, "<"),
+            Operator::LtEq => write!(f, "<="),
+            Operator::Gt => write!(f, ">"),
+            Operator::GtEq => write!(f, ">="),
+            Operator::Plus => write!(f, "+"),
+            Operator::Minus => write!(f, "-"),
+            Operator::Multiply => write!(f, "*"),
+            Operator::Divide => write!(f, "/"),
+            Operator::Modulo => write!(f, "%"),
+            Operator::And => write!(f, "AND"),
+            Operator::Or => write!(f, "OR"),
+            Operator::RegexMatch => write!(f, "~"),
+            Operator::RegexIMatch => write!(f, "~*"),
+            Operator::RegexNotMatch => write!(f, "!~"),
+            Operator::RegexNotIMatch => write!(f, "!~*"),
+            Operator::LikeMatch => write!(f, "~~"),
+            Operator::ILikeMatch => write!(f, "~~*"),
+            Operator::NotLikeMatch => write!(f, "!~~"),
+            Operator::NotILikeMatch => write!(f, "!~~*"),
+            Operator::IsDistinctFrom => write!(f, "IS DISTINCT FROM"),
+            Operator::IsNotDistinctFrom => write!(f, "IS NOT DISTINCT FROM"),
+            Operator::BitwiseAnd => write!(f, "&"),
+            Operator::BitwiseOr => write!(f, "|"),
+            Operator::BitwiseXor => write!(f, "BIT_XOR"),
+            Operator::BitwiseShiftRight => write!(f, ">>"),
+            Operator::BitwiseShiftLeft => write!(f, "<<"),
+            Operator::StringConcat => write!(f, "||"),
+            Operator::AtArrow => write!(f, "@>"),
+            Operator::ArrowAt => write!(f, "<@"),
+            Operator::Custom(op) => write!(f, "{}", op.0),
+        }
+    }
+}
+
+pub trait CustomOperator: fmt::Debug + fmt::Display + Send + Sync {
+    /// Use in `datafusion/expr/src/type_coercion/binary.rs::Signature`, but the struct there isn't public,
+    /// hence returning a tuple.
+    ///
+    /// Returns `(lhs_type, rhs_type, return_type)`
+    fn binary_signature(&self, lhs: &DataType, rhs: &DataType) -> Result<(DataType, DataType, DataType)>;
+
+    /// Used by unparse to convert the operator back to SQL
+    fn op_to_sql(&self) -> Result<sqlparser::ast::BinaryOperator>;
+
+    /// Name used to uniquely identify the operator, and in logical plan producer
+    fn name(&self) -> &'static str;
+
+    /// If the operator can be negated, return the negated operator
+    /// otherwise return None
+    fn negate(&self) -> Option<Operator> {
+        None
+    }
+    /// Return true if the operator is a numerical operator.
+    ///
+    /// For example, `Binary(a, +, b)` would be a numerical expression.
+    /// PostgresSQL concept: <https://www.postgresql.org/docs/7.0/operators2198.htm>
+    fn is_numerical_operators(&self) -> bool {
+        false
+    }
+
+    /// Return true if the operator is a comparison operator.
+    ///
+    /// For example, `Binary(a, >, b)` would be a comparison expression.
+    fn is_comparison_operator(&self) -> bool {
+        false
+    }
+
+    /// Return true if the operator is a logic operator.
+    ///
+    /// For example, `Binary(Binary(a, >, b), AND, Binary(a, <, b + 3))` would
+    /// be a logical expression.
+    fn is_logic_operator(&self) -> bool {
+        false
+    }
+
+    /// Return the operator where swapping lhs and rhs wouldn't change the result.
+    ///
+    /// For example `Binary(50, >=, a)` could also be represented as `Binary(a, <=, 50)`.
+    fn swap(&self) -> Option<Operator> {
+        None
+    }
+
+    /// Get the operator precedence
+    /// use <https://www.postgresql.org/docs/7.0/operators.htm#AEN2026> as a reference
+    fn precedence(&self) -> u8 {
+        0
+    }
+}
+
+/// This is a somewhat hacky workaround for https://github.com/rust-lang/rust/issues/31740
+/// and generally for the complexity of deriving common traits for a trait object.
+///
+/// This assumes that the String representation of the operator is unique.
+#[derive(Debug, Clone)]
+pub struct CustomOperatorWrapper(pub Arc<dyn CustomOperator>);
+
+impl Eq for CustomOperatorWrapper {}
+
+impl PartialEq for CustomOperatorWrapper {
+    fn eq(&self, rhs: &Self) -> bool {
+        self.0.name() == rhs.0.name()
+    }
+}
+
+impl PartialOrd for CustomOperatorWrapper {
+    fn partial_cmp(&self, rhs: &Self) -> Option<std::cmp::Ordering> {
+        self.0.name().partial_cmp(rhs.0.name())
+    }
+}
+
+impl Hash for CustomOperatorWrapper {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.name().hash(state)
     }
 }
 

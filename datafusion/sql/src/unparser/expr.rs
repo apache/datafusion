@@ -649,6 +649,7 @@ impl Unparser<'_> {
             Operator::BitwiseShiftRight => Ok(ast::BinaryOperator::PGBitwiseShiftRight),
             Operator::BitwiseShiftLeft => Ok(ast::BinaryOperator::PGBitwiseShiftLeft),
             Operator::StringConcat => Ok(ast::BinaryOperator::StringConcat),
+            Operator::Custom(op) => op.0.op_to_sql(),
             Operator::AtArrow => not_impl_err!("unsupported operation: {op:?}"),
             Operator::ArrowAt => not_impl_err!("unsupported operation: {op:?}"),
         }

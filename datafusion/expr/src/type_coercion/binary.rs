@@ -189,6 +189,10 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 )
             }
         }
+        Custom(op) => {
+            let (lhs, rhs, ret) = op.0.binary_signature(lhs, rhs)?;
+            Ok(Signature { lhs, rhs, ret })
+        }
     }
 }
 

@@ -53,7 +53,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
             BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
             BinaryOperator::AtArrow => Ok(Operator::AtArrow),
-            _ => not_impl_err!("Unsupported SQL binary operator {op:?}"),
+            _ => {
+                if let Some(parse_custom_op) = &self.options.parse_custom_operator {
+                    parse_custom_op(op).map(Operator::custom)
+                } else {
+                    not_impl_err!("Unsupported SQL binary operator {op:?}")
+                }
+            },
         }
     }
 }

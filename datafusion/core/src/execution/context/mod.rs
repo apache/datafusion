@@ -18,7 +18,6 @@
 //! [`SessionContext`] API for registering data sources and executing queries
 
 use std::collections::HashSet;
-use std::fmt::Debug;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
@@ -62,6 +61,7 @@ use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
+use datafusion_sql::planner::ParseCustomOperator;
 
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
@@ -488,7 +488,7 @@ impl SessionContext {
         sql: &str,
         options: SQLOptions,
     ) -> Result<DataFrame> {
-        let plan = self.state().create_logical_plan(sql).await?;
+        let plan = self.state().create_logical_plan(sql, options.parse_custom_operator.clone()).await?;
         options.verify_plan(&plan)?;
 
         self.execute_logical_plan(plan).await
@@ -1464,7 +1464,7 @@ impl SerializerRegistry for EmptySerializerRegistry {
 /// Describes which SQL statements can be run.
 ///
 /// See [`SessionContext::sql_with_options`] for more details.
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone)]
 pub struct SQLOptions {
     /// See [`Self::with_allow_ddl`]
     allow_ddl: bool,
@@ -1472,6 +1472,8 @@ pub struct SQLOptions {
     allow_dml: bool,
     /// See [`Self::with_allow_statements`]
     allow_statements: bool,
+    /// Custom SQL operator parser
+    parse_custom_operator: Option<ParseCustomOperator>,
 }
 
 impl Default for SQLOptions {
@@ -1480,6 +1482,7 @@ impl Default for SQLOptions {
             allow_ddl: true,
             allow_dml: true,
             allow_statements: true,
+            parse_custom_operator: None,
         }
     }
 }
@@ -1505,6 +1508,12 @@ impl SQLOptions {
     /// Should Statements such as (e.g. `SET VARIABLE and `BEGIN TRANSACTION` ...`) be run?. Defaults to `true`
     pub fn with_allow_statements(mut self, allow: bool) -> Self {
         self.allow_statements = allow;
+        self
+    }
+
+    /// Set the custom SQL operator parser
+    pub fn with_parse_custom_operator(mut self, parse_custom_operator: Option<ParseCustomOperator>) -> Self {
+        self.parse_custom_operator = parse_custom_operator;
         self
     }
 

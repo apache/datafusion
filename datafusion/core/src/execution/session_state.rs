@@ -67,7 +67,7 @@ use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
-use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+use datafusion_sql::planner::{ContextProvider, ParseCustomOperator, ParserOptions, PlannerContext, SqlToRel};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
 use std::collections::hash_map::Entry;
@@ -544,6 +544,7 @@ impl SessionState {
     pub async fn statement_to_plan(
         &self,
         statement: datafusion_sql::parser::Statement,
+        parse_custom_operator: Option<ParseCustomOperator>,
     ) -> datafusion_common::Result<LogicalPlan> {
         let references = self.resolve_table_references(&statement)?;
 
@@ -563,16 +564,17 @@ impl SessionState {
             }
         }
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options(parse_custom_operator));
         query.statement_to_plan(statement)
     }
 
-    fn get_parser_options(&self) -> ParserOptions {
+    fn get_parser_options(&self, parse_custom_operator: Option<ParseCustomOperator>) -> ParserOptions {
         let sql_parser_options = &self.config.options().sql_parser;
 
         ParserOptions {
             parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
             enable_ident_normalization: sql_parser_options.enable_ident_normalization,
+            parse_custom_operator,
         }
     }
 
@@ -591,10 +593,11 @@ impl SessionState {
     pub async fn create_logical_plan(
         &self,
         sql: &str,
+        parse_custom_operator: Option<ParseCustomOperator>,
     ) -> datafusion_common::Result<LogicalPlan> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
         let statement = self.sql_to_statement(sql, dialect)?;
-        let plan = self.statement_to_plan(statement).await?;
+        let plan = self.statement_to_plan(statement, parse_custom_operator).await?;
         Ok(plan)
     }
 
@@ -615,7 +618,7 @@ impl SessionState {
             tables: HashMap::new(),
         };
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options(None));
 
         query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
     }

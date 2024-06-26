@@ -723,6 +723,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::BitwiseXor => "bitwise_xor",
         Operator::BitwiseShiftRight => "bitwise_shift_right",
         Operator::BitwiseShiftLeft => "bitwise_shift_left",
+        Operator::Custom(op) => op.0.name(),
     }
 }
 

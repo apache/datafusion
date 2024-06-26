@@ -76,7 +76,7 @@ pub use function::{
 pub use groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
-pub use operator::Operator;
+pub use operator::{Operator, CustomOperator};
 pub use partition_evaluator::PartitionEvaluator;
 pub use signature::{
     ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
