@@ -177,7 +177,7 @@ pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
 /// ];
 ///
 /// // use split_binary_owned to split them
-/// assert_eq!(split_binary_owned(expr, Operator::Plus), split);
+/// assert_eq!(split_binary_owned(expr, &Operator::Plus), split);
 /// ```
 #[deprecated(
     since = "34.0.0",
