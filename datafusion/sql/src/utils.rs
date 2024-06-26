@@ -302,46 +302,53 @@ pub(crate) fn transform_bottom_unnest(
                 .collect::<Vec<_>>();
             Ok(expr)
         };
-    // expr transformed maybe either the same, or different from the originals exprs
-    // for example:
-    // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
+    // This transformation is only done for list unnest
+    // struct unnest is done at the root level, and at the later stage
+    // because the syntax of TreeNode only support transform into 1 Expr, while
+    // Unnest struct will be transformed into multiple Exprs
+    // TODO: This can be resolved after this issue is resolved: https://github.com/apache/datafusion/issues/10102
+    //
+    // The transformation looks like:
     // - unnest(array_col) will be transformed into unnest(array_col)
     // - unnest(array_col) + 1 will be transformed into unnest(array_col) + 1
-
-    // Specifically handle root level unnest expr, this is the only place
-    // unnest on struct can be handled
-    // if let Expr::Unnest(Unnest { expr: ref arg }) = original_expr {
-    //     return transform(&original_expr, arg);
-    // }
-    let mut root_expr = vec![];
     let Transformed {
-            data: transformed_expr,
-            transformed,
-            tnr: _,
-        } = original_expr.clone().transform_up(|expr: Expr| {
-            let is_root_expr = &expr == original_expr;
+        data: transformed_expr,
+        transformed,
+        tnr: _,
+    } = original_expr.clone().transform_up(|expr: Expr| {
+        let is_root_expr = &expr == original_expr;
+        // Root expr is transformed separately
+        if is_root_expr {
+            return Ok(Transformed::no(expr));
+        }
+        if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
+            let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
 
-            if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
-                let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
-                if is_root_expr{
-                    root_expr.extend(transform(original_expr, arg)?);
-                    return Ok(Transformed::new(expr,true,TreeNodeRecursion::Stop));
-                }
-                if !is_root_expr {
-                    if let DataType::Struct(_) = data_type {
-                        return internal_err!("unnest on struct can ony be applied at the root level of select expression");
-                    }
-                }
-
-                let transformed_exprs = transform(&expr, arg)?;
-                // root_expr.push(transformed_exprs[0].clone());
-                Ok(Transformed::new(transformed_exprs[0].clone(),true,TreeNodeRecursion::Stop))
-            } else {
-                Ok(Transformed::no(expr))
+            if let DataType::Struct(_) = data_type {
+                return internal_err!("unnest on struct can ony be applied at the root level of select expression");
             }
-        })?;
+
+            let mut transformed_exprs = transform(&expr, arg)?;
+            // root_expr.push(transformed_exprs[0].clone());
+            Ok(Transformed::new(
+                transformed_exprs.swap_remove(0),
+                true,
+                TreeNodeRecursion::Stop,
+            ))
+        } else {
+            Ok(Transformed::no(expr))
+        }
+    })?;
 
     if !transformed {
+        // Because root expr need to transform separately
+        // unnest struct is only possible here
+        // The transformation looks like
+        // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
+        if let Expr::Unnest(Unnest { expr: ref arg }) = transformed_expr {
+            return transform(&transformed_expr, arg);
+        }
+
         if matches!(&transformed_expr, Expr::Column(_)) {
             inner_projection_exprs.push(transformed_expr.clone());
             Ok(vec![transformed_expr])
@@ -353,11 +360,6 @@ pub(crate) fn transform_bottom_unnest(
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
     } else {
-        // A workaround, because at root level
-        // an unnest on struct column can be transformd into multiple exprs
-        if !root_expr.is_empty() {
-            return Ok(root_expr);
-        }
         Ok(vec![transformed_expr])
     }
 }
