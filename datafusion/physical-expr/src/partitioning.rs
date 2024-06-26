@@ -152,6 +152,8 @@ impl Partitioning {
         match required {
             Distribution::UnspecifiedDistribution => true,
             Distribution::SinglePartition if self.partition_count() == 1 => true,
+            // When partition count is 1, hash requirement is satisfied.
+            Distribution::HashPartitioned(_) if self.partition_count() == 1 => true,
             Distribution::HashPartitioned(required_exprs) => {
                 match self {
                     // Here we do not check the partition count for hash partitioning and assumes the partition count
@@ -290,7 +292,7 @@ mod tests {
                     assert_eq!(result, (true, false, false, false, false))
                 }
                 Distribution::HashPartitioned(_) => {
-                    assert_eq!(result, (false, false, false, true, false))
+                    assert_eq!(result, (true, false, false, true, false))
                 }
             }
         }
