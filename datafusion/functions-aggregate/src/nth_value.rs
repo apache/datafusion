@@ -31,6 +31,7 @@ use datafusion_common::utils::{
 };
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDF, AggregateUDFImpl, ReversedUDAF, Signature, Volatility,
 };
@@ -99,11 +100,19 @@ impl AggregateUDFImpl for NthValueAgg {
         .map(|acc| Box::new(acc) as _)
     }
 
-    fn state_fields(
-        &self,
-        _args: StateFieldsArgs,
-    ) -> datafusion_common::Result<Vec<Field>> {
-        todo!()
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        let mut fields = vec![Field::new_list(
+            format_state_name(&self.name(), "nth_value"),
+            Field::new("item", args.input_type.clone(), self.nullable),
+            false,
+        )];
+        let orderings = args.ordering_fields.to_vec();
+        fields.push(Field::new_list(
+            format_state_name(&self.name(), "nth_value_orderings"),
+            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
+            self.nullable,
+        ));
+        Ok(fields)
     }
 
     fn aliases(&self) -> &[String] {
