@@ -72,7 +72,7 @@ In this example, we write the entirety of `source_table` out to a folder of parq
 
 ### Execution Specific Options
 
-The following options are available when writing hive-style partitioned data.
+The following options are available when executing a `COPY` query.
 
 | Option                              | Description                                                                        | Default Value |
 |-------------------------------------| ---------------------------------------------------------------------------------- | ------------- |

@@ -650,6 +650,7 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
             overwrite: conf.overwrite,
+            keep_partition_by_columns: conf.keep_partition_by_columns,
         })
     }
 }

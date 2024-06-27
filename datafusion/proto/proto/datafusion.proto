@@ -760,6 +760,7 @@ message FileSinkConfig {
   datafusion_common.Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool overwrite = 8;
+  bool keep_partition_by_columns = 9;
 }
 
 message JsonSink {
