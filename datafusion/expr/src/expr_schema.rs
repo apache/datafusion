@@ -160,6 +160,10 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
+                let nullability = args
+                    .iter()
+                    .map(|e| e.nullable(schema))
+                    .collect::<Result<Vec<_>>>()?;
                 match fun {
                     WindowFunctionDefinition::AggregateUDF(udf) => {
                         let new_types = data_types_with_aggregate_udf(&data_types, udf).map_err(|err| {
@@ -173,10 +177,10 @@ impl ExprSchemable for Expr {
                                 )
                             )
                         })?;
-                        Ok(fun.return_type(&new_types)?)
+                        Ok(fun.return_type(&new_types, &nullability)?)
                     }
                     _ => {
-                        fun.return_type(&data_types)
+                        fun.return_type(&data_types, &nullability)
                     }
                 }
             }
@@ -185,9 +189,13 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
+                let nullability = args
+                    .iter()
+                    .map(|e| e.nullable(schema))
+                    .collect::<Result<Vec<_>>>()?;
                 match func_def {
                     AggregateFunctionDefinition::BuiltIn(fun) => {
-                        fun.return_type(&data_types)
+                        fun.return_type(&data_types, &nullability)
                     }
                     AggregateFunctionDefinition::UDF(fun) => {
                         let new_types = data_types_with_aggregate_udf(&data_types, fun).map_err(|err| {
@@ -314,11 +322,17 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
+            Expr::AggregateFunction(AggregateFunction { func_def, .. }) => {
+                match func_def {
+                    AggregateFunctionDefinition::BuiltIn(fun) => fun.nullable(),
+                    // TODO: UDF should be able to customize nullability
+                    AggregateFunctionDefinition::UDF(_) => Ok(true),
+                }
+            }
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
             | Expr::ScalarFunction(..)
             | Expr::WindowFunction { .. }
-            | Expr::AggregateFunction { .. }
             | Expr::Unnest(_)
             | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
@@ -343,9 +357,12 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
-            Expr::Wildcard { .. } => internal_err!(
-                "Wildcard expressions are not valid in a logical query plan"
-            ),
+            Expr::Wildcard { qualifier } => match qualifier {
+                Some(_) => internal_err!(
+                    "QualifiedWildcard expressions are not valid in a logical query plan"
+                ),
+                None => Ok(false),
+            },
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear
                 // in projections
