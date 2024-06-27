@@ -1449,6 +1449,36 @@ fn from_substrait_type(
                     )?,
                 }
             }
+            r#type::Kind::Map(map) => {
+                let key_type = map.key.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("Map type must have key type")
+                })?;
+                let value_type = map.value.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("Map type must have value type")
+                })?;
+                let key_field = Arc::new(Field::new(
+                    "key",
+                    from_substrait_type(key_type, dfs_names, name_idx)?,
+                    false,
+                ));
+                let value_field = Arc::new(Field::new(
+                    "value",
+                    from_substrait_type(value_type, dfs_names, name_idx)?,
+                    true,
+                ));
+                match map.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
+                        Ok(DataType::Map(Arc::new(Field::new_struct(
+                            "entries",
+                            [key_field, value_field],
+                            false, // The inner map field is always non-nullable (Arrow #1697),
+                        )), false))
+                    },
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    )?,
+                }
+            }
             r#type::Kind::Decimal(d) => match d.type_variation_reference {
                 DECIMAL_128_TYPE_VARIATION_REF => {
                     Ok(DataType::Decimal128(d.precision as u8, d.scale as i8))
