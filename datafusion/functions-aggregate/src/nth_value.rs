@@ -18,18 +18,86 @@
 //! Defines NTH_VALUE aggregate expression which may specify ordering requirement
 //! that can evaluated at runtime during query execution
 
-use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
-use arrow_schema::{DataType, Fields, SortOptions};
-use datafusion_common::utils::{
-    array_into_list_array_nullable, compare_rows, get_row_at_idx,
-};
-use datafusion_common::{exec_err, internal_err, ScalarValue};
-use datafusion_expr::Accumulator;
-use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::sync::Arc;
+
+use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
+use arrow_schema::{DataType, Field, Fields, SortOptions};
+
+use datafusion_common::utils::{
+    array_into_list_array_nullable, compare_rows, get_row_at_idx,
+};
+use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, ReversedUDAF, Signature, Volatility,
+};
+use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, PhysicalSortExpr,
+};
+
+#[derive(Debug)]
+pub struct NthValue {
+    signature: Signature,
+}
+
+impl NthValue {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::any(2, Volatility::Immutable),
+        }
+    }
+}
+
+impl Default for NthValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AggregateUDFImpl for NthValue {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "nth_value"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].clone())
+    }
+
+    fn accumulator(
+        &self,
+        _acc_args: AccumulatorArgs,
+    ) -> datafusion_common::Result<Box<dyn Accumulator>> {
+        todo!()
+    }
+
+    fn state_fields(
+        &self,
+        _args: StateFieldsArgs,
+    ) -> datafusion_common::Result<Vec<Field>> {
+        todo!()
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        todo!()
+    }
+}
 
 #[derive(Debug)]
 pub struct NthValueAccumulator {
