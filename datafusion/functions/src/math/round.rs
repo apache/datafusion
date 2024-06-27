@@ -202,9 +202,8 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     Int32Array,
                     {
                         |value: f32, decimal_places: i32| {
-                            (value * 10.0_f32.powi(decimal_places.try_into().unwrap()))
-                                .round()
-                                / 10.0_f32.powi(decimal_places.try_into().unwrap())
+                            (value * 10.0_f32.powi(decimal_places)).round()
+                                / 10.0_f32.powi(decimal_places)
                         }
                     }
                 )) as ArrayRef)
