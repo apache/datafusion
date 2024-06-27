@@ -27,7 +27,7 @@ use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result}
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
-use crate::math::gcd::compute_gcd;
+use super::gcd::unsigned_gcd;
 use crate::utils::make_scalar_function;
 
 #[derive(Debug)]
@@ -75,19 +75,23 @@ impl ScalarUDFImpl for LcmFunc {
 /// Lcm SQL function
 fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
     let compute_lcm = |x: i64, y: i64| {
-        let a = x.wrapping_abs();
-        let b = y.wrapping_abs();
-
-        if a == 0 || b == 0 {
+        if x == 0 || y == 0 {
             return Ok(0);
         }
-        match compute_gcd(a, b) {
-            Ok(gcd) => Ok(a / gcd * b),
-            // change the error string to use LCM instead of GCD
-            Err(_) => Err(arrow_datafusion_err!(ArrowError::ComputeError(format!(
-                "Signed integer overflow in LCM({x}, {y})"
-            )))),
-        }
+
+        // lcm(x, y) = |x| * |y| / gcd(|x|, |y|)
+        let a = x.unsigned_abs();
+        let b = y.unsigned_abs();
+        let gcd = unsigned_gcd(a, b);
+        // gcd is not zero since both a and b are not zero, so the division is safe.
+        (a / gcd)
+            .checked_mul(b)
+            .and_then(|v| i64::try_from(v).ok())
+            .ok_or_else(|| {
+                arrow_datafusion_err!(ArrowError::ComputeError(format!(
+                    "Signed integer overflow in LCM({x}, {y})"
+                )))
+            })
     };
 
     match args[0].data_type() {
