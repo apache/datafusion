@@ -39,12 +39,16 @@ use datafusion_physical_expr_common::sort_expr::{
     limited_convert_logical_sort_exprs_to_physical, LexOrdering, PhysicalSortExpr,
 };
 
+/// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
+/// partition setting, partial aggregations are computed for every partition,
+/// and then their results are merged.
 #[derive(Debug)]
 pub struct NthValue {
     signature: Signature,
 }
 
 impl NthValue {
+    /// Create a new `NthValueAgg` aggregate function
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
