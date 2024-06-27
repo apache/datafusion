@@ -1401,7 +1401,7 @@ impl FunctionRegistry for SessionContext {
     }
 
     fn parse_custom_operators(&self) -> Vec<Arc<dyn ParseCustomOperator>> {
-        todo!();
+        self.state.read().parse_custom_operators()
     }
 }
 
