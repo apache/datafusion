@@ -16,6 +16,7 @@
 // under the License.
 
 /// Tests for user defined Scalar functions
+mod user_defined_custom_operators;
 mod user_defined_scalar_functions;
 
 /// Tests for User Defined Aggregate Functions
