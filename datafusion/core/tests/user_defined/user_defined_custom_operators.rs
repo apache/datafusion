@@ -14,13 +14,14 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use arrow_array::RecordBatch;
+
 use std::sync::Arc;
+use arrow_array::RecordBatch;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::Transformed;
-use datafusion::common::DFSchema;
+use datafusion::common::{DFSchema, assert_batches_eq};
 use datafusion::error::Result;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr_rewriter::FunctionRewrite;
@@ -29,7 +30,6 @@ use datafusion::logical_expr::{
 };
 use datafusion::prelude::*;
 use datafusion::sql::sqlparser::ast::BinaryOperator;
-use datafusion_common::assert_batches_eq;
 
 #[derive(Debug)]
 enum MyCustomOperator {

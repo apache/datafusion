@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Tests for user defined Scalar functions
+/// Tests for custom operator parsing and substitution
 mod user_defined_custom_operators;
+/// Tests for user defined Scalar functions
 mod user_defined_scalar_functions;
 
 /// Tests for User Defined Aggregate Functions
