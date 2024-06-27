@@ -43,7 +43,7 @@ use datafusion_physical_expr_common::sort_expr::{
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
 #[derive(Debug)]
-pub struct NthValue {
+pub struct NthValueAgg {
     signature: Signature,
     /// The `N` value.
     n: i64,
@@ -51,7 +51,7 @@ pub struct NthValue {
     nullable: bool,
 }
 
-impl NthValue {
+impl NthValueAgg {
     /// Create a new `NthValueAgg` aggregate function
     pub fn new(n: i64, nullable: bool) -> Self {
         Self {
@@ -62,7 +62,7 @@ impl NthValue {
     }
 }
 
-impl AggregateUDFImpl for NthValue {
+impl AggregateUDFImpl for NthValueAgg {
     fn as_any(&self) -> &dyn Any {
         self
     }
