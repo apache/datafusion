@@ -606,3 +606,7 @@ COPY (select col2, sum(col1) from source_table
 # Copy from table with non literal
 query error DataFusion error: SQL error: ParserError\("Unexpected token \("\)
 COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);
+
+# Copy using execution.keep_partition_by_columns with an invalid value
+query error DataFusion error: Invalid or Unsupported Configuration: provided value for 'execution.keep_partition_by_columns' was not recognized: "invalid_value"
+COPY source_table  to '/tmp/table.parquet' OPTIONS (execution.keep_partition_by_columns invalid_value);

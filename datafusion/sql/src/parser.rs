@@ -1475,7 +1475,7 @@ mod tests {
     fn copy_to_multi_options() -> Result<(), ParserError> {
         // order of options is preserved
         let sql =
-            "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy, 'keep_partition_by_columns' true)";
+            "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy, 'execution.keep_partition_by_columns' true)";
 
         let expected_options = vec![
             (
@@ -1487,7 +1487,7 @@ mod tests {
                 Value::SingleQuotedString("snappy".to_string()),
             ),
             (
-                "keep_partition_by_columns".to_string(),
+                "execution.keep_partition_by_columns".to_string(),
                 Value::SingleQuotedString("true".to_string()),
             ),
         ];
