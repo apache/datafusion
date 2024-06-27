@@ -113,6 +113,8 @@ fn compare_op_for_nested(
         return Ok(BooleanArray::new_null(len));
     }
 
+    // TODO: make SortOptions configurable
+    // we choose the default behaviour from arrow-rs which has null-first that follow spark's behaviour
     let cmp = make_comparator(l, r, SortOptions::default())?;
 
     let cmp_with_op = |i, j| match op {
@@ -132,9 +134,13 @@ fn compare_op_for_nested(
         (true, true) => std::iter::once(cmp_with_op(0, 0)).collect(),
     };
 
+    // Distinct understand how to compare with NULL
+    // i.e NULL is distinct from NULL -> false
     if matches!(op, Operator::IsDistinctFrom | Operator::IsNotDistinctFrom) {
         Ok(BooleanArray::new(values, None))
     } else {
+        // If one of the side is NULL, we returns NULL
+        // i.e. NULL eq NULL -> NULL
         let nulls = NullBuffer::union(l.nulls(), r.nulls());
         Ok(BooleanArray::new(values, nulls))
     }
