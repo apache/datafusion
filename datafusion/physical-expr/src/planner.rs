@@ -23,6 +23,7 @@ use crate::{
     PhysicalExpr,
 };
 
+use arrow::datatypes::Schema;
 use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
@@ -31,8 +32,6 @@ use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{binary_expr, Between, BinaryExpr, Expr, Like, Operator, TryCast};
-
-use arrow::datatypes::Schema;
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
 /// AS int)`.
