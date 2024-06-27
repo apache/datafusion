@@ -32,8 +32,7 @@ use datafusion_common::utils::{
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::{
-    Accumulator, AggregateUDF, AggregateUDFImpl, ReversedUDAF, Signature,
-    Volatility,
+    Accumulator, AggregateUDF, AggregateUDFImpl, ReversedUDAF, Signature, Volatility,
 };
 use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
 use datafusion_physical_expr_common::sort_expr::{
@@ -48,14 +47,17 @@ pub struct NthValue {
     signature: Signature,
     /// The `N` value.
     n: i64,
+    /// If the input expression can have `NULL`s
+    nullable: bool,
 }
 
 impl NthValue {
     /// Create a new `NthValueAgg` aggregate function
-    pub fn new(n: i64) -> Self {
+    pub fn new(n: i64, nullable: bool) -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
             n,
+            nullable,
         }
     }
 }
@@ -109,7 +111,9 @@ impl AggregateUDFImpl for NthValue {
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
-        ReversedUDAF::Reversed(Arc::from(AggregateUDF::from(Self::new(-self.n))))
+        let nth_value = AggregateUDF::from(Self::new(-self.n, self.nullable));
+
+        ReversedUDAF::Reversed(Arc::from(nth_value))
     }
 }
 
