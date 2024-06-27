@@ -18,7 +18,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{
+    idents_to_table_reference, ContextProvider, PlannerContext, SqlToRel,
+};
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr,
     recursive_transform_unnest, resolve_aliases_to_exprs, resolve_columns,
@@ -475,9 +477,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(expanded_exprs)
                 }
             }
-            SelectItem::QualifiedWildcard(ref object_name, options) => {
+            SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
-                let qualifier = format!("{object_name}");
+                let qualifier = idents_to_table_reference(object_name.0, false)?;
                 // do not expand from outer schema
                 let expanded_exprs = expand_qualified_wildcard(
                     &qualifier,

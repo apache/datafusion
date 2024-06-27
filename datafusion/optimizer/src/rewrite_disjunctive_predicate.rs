@@ -19,7 +19,6 @@
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::internal_err;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::expr::BinaryExpr;
@@ -133,14 +132,6 @@ impl RewriteDisjunctivePredicate {
 }
 
 impl OptimizerRule for RewriteDisjunctivePredicate {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called RewriteDisjunctivePredicate::rewrite")
-    }
-
     fn name(&self) -> &str {
         "rewrite_disjunctive_predicate"
     }

@@ -2231,11 +2231,11 @@ mod test {
         round_trip_literal(ScalarValue::UInt64(Some(u64::MIN)))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MAX)))?;
 
-        round_trip_literal(ScalarValue::List(ScalarValue::new_list(
+        round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[ScalarValue::Float32(Some(1.0))],
             &DataType::Float32,
         )))?;
-        round_trip_literal(ScalarValue::List(ScalarValue::new_list(
+        round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[],
             &DataType::Float32,
         )))?;

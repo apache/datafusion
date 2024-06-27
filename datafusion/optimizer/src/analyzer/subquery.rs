@@ -249,7 +249,7 @@ fn check_aggregation_in_scalar_subquery(
         let mut group_columns = agg
             .group_expr
             .iter()
-            .map(|group| Ok(group.to_columns()?.into_iter().collect::<Vec<_>>()))
+            .map(|group| Ok(group.column_refs().into_iter().cloned().collect::<Vec<_>>()))
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten();
@@ -300,19 +300,17 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     }) = expr
     {
         match (left.deref(), right.deref()) {
-            (Expr::Column(_), right) if right.to_columns().unwrap().is_empty() => true,
-            (left, Expr::Column(_)) if left.to_columns().unwrap().is_empty() => true,
+            (Expr::Column(_), right) => !right.any_column_refs(),
+            (left, Expr::Column(_)) => !left.any_column_refs(),
             (Expr::Cast(Cast { expr, .. }), right)
-                if matches!(expr.deref(), Expr::Column(_))
-                    && right.to_columns().unwrap().is_empty() =>
+                if matches!(expr.deref(), Expr::Column(_)) =>
             {
-                true
+                !right.any_column_refs()
             }
             (left, Expr::Cast(Cast { expr, .. }))
-                if matches!(expr.deref(), Expr::Column(_))
-                    && left.to_columns().unwrap().is_empty() =>
+                if matches!(expr.deref(), Expr::Column(_)) =>
             {
-                true
+                !left.any_column_refs()
             }
             (_, _) => false,
         }
@@ -323,9 +321,10 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
 
 /// Check whether the window expressions contain a mixture of out reference columns and inner columns
 fn check_mixed_out_refer_in_window(window: &Window) -> Result<()> {
-    let mixed = window.window_expr.iter().any(|win_expr| {
-        win_expr.contains_outer() && !win_expr.to_columns().unwrap().is_empty()
-    });
+    let mixed = window
+        .window_expr
+        .iter()
+        .any(|win_expr| win_expr.contains_outer() && win_expr.any_column_refs());
     if mixed {
         plan_err!(
             "Window expressions should not contain a mixed of outer references and inner columns"

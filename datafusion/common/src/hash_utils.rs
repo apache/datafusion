@@ -36,7 +36,7 @@ use crate::error::{Result, _internal_err};
 
 // Combines two hashes into one hash
 #[inline]
-fn combine_hashes(l: u64, r: u64) -> u64 {
+pub fn combine_hashes(l: u64, r: u64) -> u64 {
     let hash = (17 * 37u64).wrapping_add(l);
     hash.wrapping_mul(37).wrapping_add(r)
 }

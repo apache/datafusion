@@ -116,12 +116,13 @@ pub mod udaf {
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'ParquetExec'.
-    fn name(&self) -> &'static str
-    where
-        Self: Sized,
-    {
-        Self::static_name()
-    }
+    ///
+    /// Implementation note: this method can just proxy to
+    /// [`static_name`](ExecutionPlan::static_name) if no special action is
+    /// needed. It doesn't provide a default implementation like that because
+    /// this method doesn't require the `Sized` constrain to allow a wilder
+    /// range of use cases.
+    fn name(&self) -> &str;
 
     /// Short name for the ExecutionPlan, such as 'ParquetExec'.
     /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
@@ -829,6 +830,10 @@ mod tests {
     }
 
     impl ExecutionPlan for EmptyExec {
+        fn name(&self) -> &'static str {
+            Self::static_name()
+        }
+
         fn as_any(&self) -> &dyn Any {
             self
         }
@@ -881,6 +886,10 @@ mod tests {
     }
 
     impl ExecutionPlan for RenamedEmptyExec {
+        fn name(&self) -> &'static str {
+            Self::static_name()
+        }
+
         fn static_name() -> &'static str
         where
             Self: Sized,
@@ -930,6 +939,14 @@ mod tests {
         let renamed_exec = RenamedEmptyExec::new(schema2);
         assert_eq!(renamed_exec.name(), "MyRenamedEmptyExec");
         assert_eq!(RenamedEmptyExec::static_name(), "MyRenamedEmptyExec");
+    }
+
+    /// A compilation test to ensure that the `ExecutionPlan::name()` method can
+    /// be called from a trait object.
+    /// Related ticket: https://github.com/apache/datafusion/pull/11047
+    #[allow(dead_code)]
+    fn use_execution_plan_as_trait_object(plan: &dyn ExecutionPlan) {
+        let _ = plan.name();
     }
 }
 

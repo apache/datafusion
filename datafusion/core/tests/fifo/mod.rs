@@ -272,16 +272,17 @@ mod unix_test {
             .zip(a2_iter)
             .map(|(a1, a2)| format!("{a1},{a2}\n"))
             .collect::<Vec<_>>();
+
         // Create writing threads for the left and right FIFO files
         tasks.push(create_writing_thread(
-            left_fifo.clone(),
+            left_fifo,
             "a1,a2\n".to_owned(),
             lines.clone(),
             waiting.clone(),
             TEST_BATCH_SIZE,
         ));
         tasks.push(create_writing_thread(
-            right_fifo.clone(),
+            right_fifo,
             "a1,a2\n".to_owned(),
             lines.clone(),
             waiting.clone(),
