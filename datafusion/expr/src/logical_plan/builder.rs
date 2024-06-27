@@ -39,7 +39,8 @@ use crate::logical_plan::{
 use crate::type_coercion::binary::{comparison_coercion, values_coercion};
 use crate::utils::{
     can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
-    expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
+    group_window_expr_by_sort_keys,
 };
 use crate::{
     and, binary_expr, logical_plan::tree_node::unwrap_arc, DmlStatement, Expr,
@@ -1070,14 +1071,16 @@ impl LogicalPlanBuilder {
                 let left_key = l.into();
                 let right_key = r.into();
 
-                let left_using_columns = left_key.to_columns()?;
+                let mut left_using_columns = HashSet::new();
+                expr_to_columns(&left_key, &mut left_using_columns)?;
                 let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
                     &[&[self.plan.schema(), right.schema()]],
                     &[left_using_columns],
                 )?;
 
-                let right_using_columns = right_key.to_columns()?;
+                let mut right_using_columns = HashSet::new();
+                expr_to_columns(&right_key, &mut right_using_columns)?;
                 let normalized_right_key = normalize_col_with_schemas_and_ambiguity_check(
                     right_key,
                     &[&[self.plan.schema(), right.schema()]],

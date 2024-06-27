@@ -27,7 +27,7 @@ use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, Field};
 use datafusion_common::internal_err;
-use datafusion_common::{plan_err, utils::array_into_list_array, Result};
+use datafusion_common::{plan_err, utils::array_into_list_array_nullable, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -155,7 +155,7 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             let length = arrays.iter().map(|a| a.len()).sum();
             // By default Int64
             let array = new_null_array(&DataType::Int64, length);
-            Ok(Arc::new(array_into_list_array(array)))
+            Ok(Arc::new(array_into_list_array_nullable(array)))
         }
         LargeList(..) => array_array::<i64>(arrays, data_type),
         _ => array_array::<i32>(arrays, data_type),

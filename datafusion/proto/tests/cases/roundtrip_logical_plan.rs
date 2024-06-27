@@ -1000,7 +1000,7 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt64(None),
         ScalarValue::Utf8(None),
         ScalarValue::LargeUtf8(None),
-        ScalarValue::List(ScalarValue::new_list(&[], &DataType::Boolean)),
+        ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Boolean)),
         ScalarValue::LargeList(ScalarValue::new_large_list(&[], &DataType::Boolean)),
         ScalarValue::Date32(None),
         ScalarValue::Boolean(Some(true)),
@@ -1092,7 +1092,7 @@ fn round_trip_scalar_values() {
             i64::MAX,
         ))),
         ScalarValue::IntervalMonthDayNano(None),
-        ScalarValue::List(ScalarValue::new_list(
+        ScalarValue::List(ScalarValue::new_list_nullable(
             &[
                 ScalarValue::Float32(Some(-213.1)),
                 ScalarValue::Float32(None),
@@ -1112,10 +1112,13 @@ fn round_trip_scalar_values() {
             ],
             &DataType::Float32,
         )),
-        ScalarValue::List(ScalarValue::new_list(
+        ScalarValue::List(ScalarValue::new_list_nullable(
             &[
-                ScalarValue::List(ScalarValue::new_list(&[], &DataType::Float32)),
-                ScalarValue::List(ScalarValue::new_list(
+                ScalarValue::List(ScalarValue::new_list_nullable(
+                    &[],
+                    &DataType::Float32,
+                )),
+                ScalarValue::List(ScalarValue::new_list_nullable(
                     &[
                         ScalarValue::Float32(Some(-213.1)),
                         ScalarValue::Float32(None),

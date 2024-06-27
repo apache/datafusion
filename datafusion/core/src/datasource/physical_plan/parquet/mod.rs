@@ -796,17 +796,15 @@ mod tests {
         ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
         StructArray,
     };
-
     use arrow::datatypes::{Field, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
     use arrow_schema::Fields;
-    use datafusion_common::{assert_contains, ScalarValue, ToDFSchema};
-    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};
-    use datafusion_physical_expr::create_physical_expr;
+    use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::ExecutionPlanProperties;
 
     use chrono::{TimeZone, Utc};
-    use datafusion_physical_plan::ExecutionPlanProperties;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -2059,12 +2057,6 @@ mod tests {
         assert_eq!(allparts_count, 40);
 
         Ok(())
-    }
-
-    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-        let df_schema = schema.clone().to_dfschema().unwrap();
-        let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 
     #[tokio::test]

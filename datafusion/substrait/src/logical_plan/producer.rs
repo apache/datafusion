@@ -664,7 +664,12 @@ fn to_substrait_join_expr(
             extension_info,
         )?;
         // AND with existing expression
-        exprs.push(make_binary_op_scalar_func(&l, &r, eq_op, extension_info));
+        exprs.push(make_binary_op_scalar_func(
+            &l,
+            &r,
+            eq_op.clone(),
+            extension_info,
+        ));
     }
     let join_expr: Option<Expression> =
         exprs.into_iter().reduce(|acc: Expression, e: Expression| {
@@ -1154,7 +1159,12 @@ pub fn to_substrait_rex(
             let l = to_substrait_rex(ctx, left, schema, col_ref_offset, extension_info)?;
             let r = to_substrait_rex(ctx, right, schema, col_ref_offset, extension_info)?;
 
-            Ok(make_binary_op_scalar_func(&l, &r, *op, extension_info))
+            Ok(make_binary_op_scalar_func(
+                &l,
+                &r,
+                op.clone(),
+                extension_info,
+            ))
         }
         Expr::Case(Case {
             expr,
@@ -1619,6 +1629,27 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 }))),
             })
         }
+        DataType::Map(inner, _) => match inner.data_type() {
+            DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
+                let key_type = to_substrait_type(
+                    key_and_value[0].data_type(),
+                    key_and_value[0].is_nullable(),
+                )?;
+                let value_type = to_substrait_type(
+                    key_and_value[1].data_type(),
+                    key_and_value[1].is_nullable(),
+                )?;
+                Ok(substrait::proto::Type {
+                    kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
+                        key: Some(Box::new(key_type)),
+                        value: Some(Box::new(value_type)),
+                        type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+                        nullability,
+                    }))),
+                })
+            }
+            _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
+        },
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
@@ -2231,11 +2262,11 @@ mod test {
         round_trip_literal(ScalarValue::UInt64(Some(u64::MIN)))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MAX)))?;
 
-        round_trip_literal(ScalarValue::List(ScalarValue::new_list(
+        round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[ScalarValue::Float32(Some(1.0))],
             &DataType::Float32,
         )))?;
-        round_trip_literal(ScalarValue::List(ScalarValue::new_list(
+        round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[],
             &DataType::Float32,
         )))?;
@@ -2314,6 +2345,19 @@ mod test {
         ))?;
         round_trip_type(DataType::LargeList(
             Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
+
+        round_trip_type(DataType::Map(
+            Field::new_struct(
+                "entries",
+                [
+                    Field::new("key", DataType::Utf8, false).into(),
+                    Field::new("value", DataType::Int32, true).into(),
+                ],
+                false,
+            )
+            .into(),
+            false,
         ))?;
 
         round_trip_type(DataType::Struct(
