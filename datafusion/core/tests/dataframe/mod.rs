@@ -52,11 +52,11 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
-    array_agg, avg, cast, col, exists, expr, in_subquery, lit, max, out_ref_col,
-    placeholder, scalar_subquery, when, wildcard, Expr, ExprSchemable, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    array_agg, cast, col, exists, expr, in_subquery, lit, max, out_ref_col, placeholder,
+    scalar_subquery, when, wildcard, Expr, ExprSchemable, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunctionDefinition,
 };
-use datafusion_functions_aggregate::expr_fn::{count, sum};
+use datafusion_functions_aggregate::expr_fn::{avg, count, sum};
 
 #[tokio::test]
 async fn test_count_wildcard_on_sort() -> Result<()> {
@@ -170,7 +170,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select COUNT(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
+        .sql("select count(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
         .await?
         .explain(false, false)?
         .collect()
@@ -211,7 +211,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     let sql_results = ctx
         .sql("select count(*) from t1")
         .await?
-        .select(vec![col("COUNT(*)")])?
+        .select(vec![col("count(*)")])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -604,7 +604,7 @@ async fn test_grouping_sets() -> Result<()> {
 
     let expected = vec![
         "+-----------+-----+---------------+",
-        "| a         | b   | COUNT(test.a) |",
+        "| a         | b   | count(test.a) |",
         "+-----------+-----+---------------+",
         "|           | 100 | 1             |",
         "|           | 10  | 2             |",
@@ -645,7 +645,7 @@ async fn test_grouping_sets_count() -> Result<()> {
 
     let expected = vec![
         "+----+----+-----------------+",
-        "| c1 | c2 | COUNT(Int32(1)) |",
+        "| c1 | c2 | count(Int32(1)) |",
         "+----+----+-----------------+",
         "|    | 5  | 14              |",
         "|    | 4  | 23              |",
@@ -1233,7 +1233,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
         .await?;
     let expected = [
         r#"+-------------+"#,
-        r#"| COUNT(tags) |"#,
+        r#"| count(tags) |"#,
         r#"+-------------+"#,
         r#"| 9           |"#,
         r#"+-------------+"#,
@@ -1386,7 +1386,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     let expected = vec![
         "Projection: shapes.shape_id [shape_id:UInt32]",
         "  Unnest: lists[shape_id2] structs[] [shape_id:UInt32, shape_id2:UInt32;N]",
-        "    Aggregate: groupBy=[[shapes.shape_id]], aggr=[[ARRAY_AGG(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: \"item\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]",
+        "    Aggregate: groupBy=[[shapes.shape_id]], aggr=[[ARRAY_AGG(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: \"item\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} })]",
         "      TableScan: shapes projection=[shape_id] [shape_id:UInt32]",
     ];
 

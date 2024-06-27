@@ -139,33 +139,9 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
         match agg_fun {
             protobuf::AggregateFunction::Min => Self::Min,
             protobuf::AggregateFunction::Max => Self::Max,
-            protobuf::AggregateFunction::Avg => Self::Avg,
-            protobuf::AggregateFunction::BitAnd => Self::BitAnd,
-            protobuf::AggregateFunction::BitOr => Self::BitOr,
-            protobuf::AggregateFunction::BitXor => Self::BitXor,
-            protobuf::AggregateFunction::BoolAnd => Self::BoolAnd,
-            protobuf::AggregateFunction::BoolOr => Self::BoolOr,
-            protobuf::AggregateFunction::Count => Self::Count,
             protobuf::AggregateFunction::ArrayAgg => Self::ArrayAgg,
-            protobuf::AggregateFunction::Correlation => Self::Correlation,
-            protobuf::AggregateFunction::RegrSlope => Self::RegrSlope,
-            protobuf::AggregateFunction::RegrIntercept => Self::RegrIntercept,
-            protobuf::AggregateFunction::RegrCount => Self::RegrCount,
-            protobuf::AggregateFunction::RegrR2 => Self::RegrR2,
-            protobuf::AggregateFunction::RegrAvgx => Self::RegrAvgx,
-            protobuf::AggregateFunction::RegrAvgy => Self::RegrAvgy,
-            protobuf::AggregateFunction::RegrSxx => Self::RegrSXX,
-            protobuf::AggregateFunction::RegrSyy => Self::RegrSYY,
-            protobuf::AggregateFunction::RegrSxy => Self::RegrSXY,
-            protobuf::AggregateFunction::ApproxPercentileCont => {
-                Self::ApproxPercentileCont
-            }
-            protobuf::AggregateFunction::ApproxPercentileContWithWeight => {
-                Self::ApproxPercentileContWithWeight
-            }
             protobuf::AggregateFunction::Grouping => Self::Grouping,
             protobuf::AggregateFunction::NthValueAgg => Self::NthValue,
-            protobuf::AggregateFunction::StringAgg => Self::StringAgg,
         }
     }
 }
@@ -290,7 +266,11 @@ pub fn parse_expr(
             Ok(operands
                 .into_iter()
                 .reduce(|left, right| {
-                    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+                    Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(left),
+                        op.clone(),
+                        Box::new(right),
+                    ))
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
         }
@@ -615,13 +595,10 @@ pub fn parse_expr(
             parse_exprs(&in_list.list, registry, codec)?,
             in_list.negated,
         ))),
-        ExprType::Wildcard(protobuf::Wildcard { qualifier }) => Ok(Expr::Wildcard {
-            qualifier: if qualifier.is_empty() {
-                None
-            } else {
-                Some(qualifier.clone())
-            },
-        }),
+        ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
+            let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
+            Ok(Expr::Wildcard { qualifier })
+        }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
             fun_name,
             args,

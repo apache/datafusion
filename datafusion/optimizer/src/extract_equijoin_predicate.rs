@@ -19,8 +19,8 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
+use datafusion_common::DFSchema;
 use datafusion_common::Result;
-use datafusion_common::{internal_err, DFSchema};
 use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
@@ -49,13 +49,6 @@ impl ExtractEquijoinPredicate {
 }
 
 impl OptimizerRule for ExtractEquijoinPredicate {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called ExtractEquijoinPredicate::rewrite")
-    }
     fn supports_rewrite(&self) -> bool {
         true
     }

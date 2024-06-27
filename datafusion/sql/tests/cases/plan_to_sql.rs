@@ -19,7 +19,7 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
-use datafusion_expr::test::function_stub::sum_udaf;
+use datafusion_expr::test::function_stub::{count_udaf, sum_udaf};
 use datafusion_expr::{col, table_scan};
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -153,7 +153,9 @@ fn roundtrip_statement() -> Result<()> {
             .try_with_sql(query)?
             .parse_statement()?;
 
-        let context = MockContextProvider::default().with_udaf(sum_udaf());
+        let context = MockContextProvider::default()
+            .with_udaf(sum_udaf())
+            .with_udaf(count_udaf());
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
@@ -228,6 +230,16 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
+        TestStatementWithDialect {
+            sql: "SELECT j1_id FROM j1
+                  UNION ALL
+                  SELECT tb.j2_id as j1_id FROM j2 tb
+                  ORDER BY j1_id
+                  LIMIT 10;",
+            expected: r#"SELECT j1.j1_id FROM j1 UNION ALL SELECT tb.j2_id AS j1_id FROM j2 AS tb ORDER BY j1_id ASC NULLS LAST LIMIT 10"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
     ];
 
     for query in tests {
@@ -237,7 +249,9 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
 
         let context = MockContextProvider::default();
         let sql_to_rel = SqlToRel::new(&context);
-        let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+        let plan = sql_to_rel
+            .sql_statement_to_plan(statement)
+            .unwrap_or_else(|e| panic!("Failed to parse sql: {}\n{e}", query.sql));
 
         let unparser = Unparser::new(&*query.unparser_dialect);
         let roundtrip_statement = unparser.plan_to_sql(&plan)?;

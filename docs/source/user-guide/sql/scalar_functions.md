@@ -681,6 +681,7 @@ _Alias of [nvl](#nvl)._
 - [substr_index](#substr_index)
 - [find_in_set](#find_in_set)
 - [position](#position)
+- [contains](#contains)
 
 ### `ascii`
 
@@ -1442,6 +1443,19 @@ position(substr in origstr)
 
 - **substr**: The pattern string.
 - **origstr**: The model string.
+
+### `contains`
+
+Return true if search_string is found within string.
+
+```
+contains(string, search_string)
+```
+
+#### Arguments
+
+- **string**: The pattern string.
+- **search_string**: The model string.
 
 ## Time and Date Functions
 

@@ -145,6 +145,10 @@ impl DisplayAs for StatisticsValidation {
 }
 
 impl ExecutionPlan for StatisticsValidation {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

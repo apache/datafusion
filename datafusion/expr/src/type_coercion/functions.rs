@@ -49,10 +49,7 @@ pub fn data_types_with_scalar_udf(
         if signature.type_signature.supports_zero_argument() {
             return Ok(vec![]);
         } else {
-            return plan_err!(
-                "[data_types_with_scalar_udf] signature {:?} does not support zero arguments.",
-                &signature.type_signature
-            );
+            return plan_err!("{} does not support zero arguments.", func.name());
         }
     }
 
@@ -79,11 +76,7 @@ pub fn data_types_with_aggregate_udf(
         if signature.type_signature.supports_zero_argument() {
             return Ok(vec![]);
         } else {
-            return plan_err!(
-                "[data_types_with_aggregate_udf] Coercion from {:?} to the signature {:?} failed.",
-                current_types,
-                &signature.type_signature
-            );
+            return plan_err!("{} does not support zero arguments.", func.name());
         }
     }
 
@@ -118,8 +111,7 @@ pub fn data_types(
             return Ok(vec![]);
         } else {
             return plan_err!(
-                "[data_types] Coercion from {:?} to the signature {:?} failed.",
-                current_types,
+                "signature {:?} does not support zero arguments.",
                 &signature.type_signature
             );
         }

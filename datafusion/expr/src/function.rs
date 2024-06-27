@@ -23,6 +23,14 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy)]
+pub enum Hint {
+    /// Indicates the argument needs to be padded if it is scalar
+    Pad,
+    /// Indicates the argument can be converted to an array of length 1
+    AcceptsSingular,
+}
+
 /// Scalar function
 ///
 /// The Fn param is the wrapped function but be aware that the function will
@@ -83,8 +91,8 @@ pub struct AccumulatorArgs<'a> {
     /// The input type of the aggregate function.
     pub input_type: &'a DataType,
 
-    /// The number of arguments the aggregate function takes.
-    pub args_num: usize,
+    /// The logical expression of arguments the aggregate function takes.
+    pub input_exprs: &'a [Expr],
 }
 
 /// [`StateFieldsArgs`] contains information about the fields that an

@@ -592,8 +592,8 @@ pub mod logical_expr_node {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Wildcard {
-    #[prost(string, tag = "1")]
-    pub qualifier: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "1")]
+    pub qualifier: ::core::option::Option<TableReference>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1929,8 +1929,8 @@ pub enum AggregateFunction {
     Min = 0,
     Max = 1,
     /// SUM = 2;
-    Avg = 3,
-    Count = 4,
+    /// AVG = 3;
+    /// COUNT = 4;
     /// APPROX_DISTINCT = 5;
     ArrayAgg = 6,
     /// VARIANCE = 7;
@@ -1939,27 +1939,27 @@ pub enum AggregateFunction {
     /// COVARIANCE_POP = 10;
     /// STDDEV = 11;
     /// STDDEV_POP = 12;
-    Correlation = 13,
-    ApproxPercentileCont = 14,
+    /// CORRELATION = 13;
+    /// APPROX_PERCENTILE_CONT = 14;
     /// APPROX_MEDIAN = 15;
-    ApproxPercentileContWithWeight = 16,
+    /// APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
     Grouping = 17,
     /// MEDIAN = 18;
-    BitAnd = 19,
-    BitOr = 20,
-    BitXor = 21,
-    BoolAnd = 22,
-    BoolOr = 23,
-    RegrSlope = 26,
-    RegrIntercept = 27,
-    RegrCount = 28,
-    RegrR2 = 29,
-    RegrAvgx = 30,
-    RegrAvgy = 31,
-    RegrSxx = 32,
-    RegrSyy = 33,
-    RegrSxy = 34,
-    StringAgg = 35,
+    /// BIT_AND = 19;
+    /// BIT_OR = 20;
+    /// BIT_XOR = 21;
+    ///   BOOL_AND = 22;
+    ///   BOOL_OR = 23;
+    /// REGR_SLOPE = 26;
+    /// REGR_INTERCEPT = 27;
+    /// REGR_COUNT = 28;
+    /// REGR_R2 = 29;
+    /// REGR_AVGX = 30;
+    /// REGR_AVGY = 31;
+    /// REGR_SXX = 32;
+    /// REGR_SYY = 33;
+    /// REGR_SXY = 34;
+    /// STRING_AGG = 35;
     NthValueAgg = 36,
 }
 impl AggregateFunction {
@@ -1971,30 +1971,8 @@ impl AggregateFunction {
         match self {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
-            AggregateFunction::Avg => "AVG",
-            AggregateFunction::Count => "COUNT",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
-            AggregateFunction::Correlation => "CORRELATION",
-            AggregateFunction::ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
-            AggregateFunction::ApproxPercentileContWithWeight => {
-                "APPROX_PERCENTILE_CONT_WITH_WEIGHT"
-            }
             AggregateFunction::Grouping => "GROUPING",
-            AggregateFunction::BitAnd => "BIT_AND",
-            AggregateFunction::BitOr => "BIT_OR",
-            AggregateFunction::BitXor => "BIT_XOR",
-            AggregateFunction::BoolAnd => "BOOL_AND",
-            AggregateFunction::BoolOr => "BOOL_OR",
-            AggregateFunction::RegrSlope => "REGR_SLOPE",
-            AggregateFunction::RegrIntercept => "REGR_INTERCEPT",
-            AggregateFunction::RegrCount => "REGR_COUNT",
-            AggregateFunction::RegrR2 => "REGR_R2",
-            AggregateFunction::RegrAvgx => "REGR_AVGX",
-            AggregateFunction::RegrAvgy => "REGR_AVGY",
-            AggregateFunction::RegrSxx => "REGR_SXX",
-            AggregateFunction::RegrSyy => "REGR_SYY",
-            AggregateFunction::RegrSxy => "REGR_SXY",
-            AggregateFunction::StringAgg => "STRING_AGG",
             AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
     }
@@ -2003,30 +1981,8 @@ impl AggregateFunction {
         match value {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
-            "AVG" => Some(Self::Avg),
-            "COUNT" => Some(Self::Count),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
-            "CORRELATION" => Some(Self::Correlation),
-            "APPROX_PERCENTILE_CONT" => Some(Self::ApproxPercentileCont),
-            "APPROX_PERCENTILE_CONT_WITH_WEIGHT" => {
-                Some(Self::ApproxPercentileContWithWeight)
-            }
             "GROUPING" => Some(Self::Grouping),
-            "BIT_AND" => Some(Self::BitAnd),
-            "BIT_OR" => Some(Self::BitOr),
-            "BIT_XOR" => Some(Self::BitXor),
-            "BOOL_AND" => Some(Self::BoolAnd),
-            "BOOL_OR" => Some(Self::BoolOr),
-            "REGR_SLOPE" => Some(Self::RegrSlope),
-            "REGR_INTERCEPT" => Some(Self::RegrIntercept),
-            "REGR_COUNT" => Some(Self::RegrCount),
-            "REGR_R2" => Some(Self::RegrR2),
-            "REGR_AVGX" => Some(Self::RegrAvgx),
-            "REGR_AVGY" => Some(Self::RegrAvgy),
-            "REGR_SXX" => Some(Self::RegrSxx),
-            "REGR_SYY" => Some(Self::RegrSyy),
-            "REGR_SXY" => Some(Self::RegrSxy),
-            "STRING_AGG" => Some(Self::StringAgg),
             "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
         }

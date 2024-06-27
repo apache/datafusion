@@ -156,9 +156,8 @@ pub use writer::plan_to_parquet;
 /// used to implement external indexes on top of parquet files and select only
 /// portions of the files.
 ///
-/// The `ParquetExec` will try and further reduce any provided
-/// `ParquetAccessPlan` further based on the contents of `ParquetMetadata` and
-/// other settings.
+/// The `ParquetExec` will try and reduce any provided `ParquetAccessPlan`
+/// further based on the contents of `ParquetMetadata` and other settings.
 ///
 /// ## Example of providing a ParquetAccessPlan
 ///
@@ -187,9 +186,9 @@ pub use writer::plan_to_parquet;
 /// let exec = ParquetExec::builder(file_scan_config).build();
 /// ```
 ///
-/// For a complete example, see the [`parquet_index_advanced` example]).
+/// For a complete example, see the [`advanced_parquet_index` example]).
 ///
-/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/parquet_index_advanced.rs
+/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_parquet_index.rs
 ///
 /// # Execution Overview
 ///
@@ -797,17 +796,15 @@ mod tests {
         ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
         StructArray,
     };
-
     use arrow::datatypes::{Field, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
     use arrow_schema::Fields;
-    use datafusion_common::{assert_contains, FileType, GetExt, ScalarValue, ToDFSchema};
-    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_common::{assert_contains, FileType, GetExt, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};
-    use datafusion_physical_expr::create_physical_expr;
+    use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::ExecutionPlanProperties;
 
     use chrono::{TimeZone, Utc};
-    use datafusion_physical_plan::ExecutionPlanProperties;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -2060,12 +2057,6 @@ mod tests {
         assert_eq!(allparts_count, 40);
 
         Ok(())
-    }
-
-    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-        let df_schema = schema.clone().to_dfschema().unwrap();
-        let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 
     #[tokio::test]

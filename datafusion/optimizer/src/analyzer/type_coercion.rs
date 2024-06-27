@@ -146,7 +146,7 @@ impl<'a> TypeCoercionRewriter<'a> {
             .map(|(lhs, rhs)| {
                 // coerce the arguments as though they were a single binary equality
                 // expression
-                let (lhs, rhs) = self.coerce_binary_op(lhs, Operator::Eq, rhs)?;
+                let (lhs, rhs) = self.coerce_binary_op(lhs, &Operator::Eq, rhs)?;
                 Ok((lhs, rhs))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -157,12 +157,12 @@ impl<'a> TypeCoercionRewriter<'a> {
     fn coerce_binary_op(
         &self,
         left: Expr,
-        op: Operator,
+        op: &Operator,
         right: Expr,
     ) -> Result<(Expr, Expr)> {
         let (left_type, right_type) = get_input_types(
             &left.get_type(self.schema)?,
-            &op,
+            op,
             &right.get_type(self.schema)?,
         )?;
         Ok((
@@ -265,7 +265,10 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                         "There isn't a common type to coerce {left_type} and {right_type} in {op_name} expression"
                     )
                 })?;
-                let expr = Box::new(expr.cast_to(&coerced_type, self.schema)?);
+                let expr = match left_type {
+                    DataType::Dictionary(_, inner) if *inner == DataType::Utf8 => expr,
+                    _ => Box::new(expr.cast_to(&coerced_type, self.schema)?),
+                };
                 let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
                 Ok(Transformed::yes(Expr::Like(Like::new(
                     negated,
@@ -276,7 +279,7 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 ))))
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let (left, right) = self.coerce_binary_op(*left, op, *right)?;
+                let (left, right) = self.coerce_binary_op(*left, &op, *right)?;
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(left),
                     op,
@@ -815,13 +818,14 @@ mod test {
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection};
+    use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
-        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction,
-        AggregateFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
-        ExprSchemable, Filter, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
-        Signature, SimpleAggregateUDF, Subquery, Volatility,
+        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
+        BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
+        Operator, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery,
+        Volatility,
     };
-    use datafusion_physical_expr::expressions::AvgAccumulator;
+    use datafusion_functions_aggregate::average::AvgAccumulator;
 
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
@@ -1003,31 +1007,29 @@ mod test {
     #[test]
     fn agg_function_case() -> Result<()> {
         let empty = empty();
-        let fun: AggregateFunction = AggregateFunction::Avg;
-        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun,
-            vec![lit(12i64)],
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+            avg_udaf(),
+            vec![lit(12f64)],
             false,
             None,
             None,
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
-        let expected = "Projection: AVG(CAST(Int64(12) AS Float64))\n  EmptyRelation";
+        let expected = "Projection: avg(Float64(12))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let empty = empty_with_type(DataType::Int32);
-        let fun: AggregateFunction = AggregateFunction::Avg;
-        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun,
-            vec![col("a")],
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+            avg_udaf(),
+            vec![cast(col("a"), DataType::Float64)],
             false,
             None,
             None,
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
-        let expected = "Projection: AVG(CAST(a AS Float64))\n  EmptyRelation";
+        let expected = "Projection: avg(CAST(a AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
@@ -1035,9 +1037,8 @@ mod test {
     #[test]
     fn agg_function_invalid_input_avg() -> Result<()> {
         let empty = empty();
-        let fun: AggregateFunction = AggregateFunction::Avg;
-        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun,
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+            avg_udaf(),
             vec![lit("1")],
             false,
             None,
@@ -1048,36 +1049,8 @@ mod test {
             .err()
             .unwrap()
             .strip_backtrace();
-        assert_eq!(
-            "Error during planning: No function matches the given name and argument types 'AVG(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tAVG(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)",
-            err
-        );
+        assert!(err.starts_with("Error during planning: Error during planning: Coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed."));
         Ok(())
-    }
-
-    #[test]
-    fn agg_function_invalid_input_percentile() {
-        let empty = empty();
-        let fun: AggregateFunction = AggregateFunction::ApproxPercentileCont;
-        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun,
-            vec![lit(0.95), lit(42.0), lit(100.0)],
-            false,
-            None,
-            None,
-            None,
-        ));
-
-        let err = Projection::try_new(vec![agg_expr], empty)
-            .err()
-            .unwrap()
-            .strip_backtrace();
-
-        let prefix = "Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT(Float64, Float64, Float64)'. You might need to add explicit type casts.\n\tCandidate functions:";
-        assert!(!err
-            .strip_prefix(prefix)
-            .unwrap()
-            .contains("APPROX_PERCENTILE_CONT(Float64, Float64, Float64)"));
     }
 
     #[test]

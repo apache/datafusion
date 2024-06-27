@@ -22,7 +22,7 @@ use std::fmt;
 
 use sqlparser::{
     ast::{
-        ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
+        ColumnDef, ColumnOptionDef, Expr, ObjectName, OrderByExpr, Query,
         Statement as SQLStatement, TableConstraint, Value,
     },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
@@ -323,6 +323,14 @@ impl<'a> DFParser<'a> {
         Ok(stmts)
     }
 
+    pub fn parse_sql_into_expr_with_dialect(
+        sql: &str,
+        dialect: &dyn Dialect,
+    ) -> Result<Expr, ParserError> {
+        let mut parser = DFParser::new_with_dialect(sql, dialect)?;
+        parser.parse_expr()
+    }
+
     /// Report an unexpected token
     fn expected<T>(
         &self,
@@ -365,6 +373,19 @@ impl<'a> DFParser<'a> {
                 )))
             }
         }
+    }
+
+    pub fn parse_expr(&mut self) -> Result<Expr, ParserError> {
+        if let Token::Word(w) = self.parser.peek_token().token {
+            match w.keyword {
+                Keyword::CREATE | Keyword::COPY | Keyword::EXPLAIN => {
+                    return parser_err!("Unsupported command in expression");
+                }
+                _ => {}
+            }
+        }
+
+        self.parser.parse_expr()
     }
 
     /// Parse a SQL `COPY TO` statement

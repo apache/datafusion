@@ -59,8 +59,8 @@ order by
 ----
 logical_plan
 01)Sort: numwait DESC NULLS FIRST, supplier.s_name ASC NULLS LAST
-02)--Projection: supplier.s_name, COUNT(*) AS numwait
-03)----Aggregate: groupBy=[[supplier.s_name]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]
+02)--Projection: supplier.s_name, count(*) AS numwait
+03)----Aggregate: groupBy=[[supplier.s_name]], aggr=[[count(Int64(1)) AS count(*)]]
 04)------Projection: supplier.s_name
 05)--------LeftAnti Join: l1.l_orderkey = __correlated_sq_2.l_orderkey Filter: __correlated_sq_2.l_suppkey != l1.l_suppkey
 06)----------LeftSemi Join: l1.l_orderkey = __correlated_sq_1.l_orderkey Filter: __correlated_sq_1.l_suppkey != l1.l_suppkey
@@ -92,11 +92,11 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [numwait@1 DESC,s_name@0 ASC NULLS LAST]
 02)--SortExec: expr=[numwait@1 DESC,s_name@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[s_name@0 as s_name, COUNT(*)@1 as numwait]
-04)------AggregateExec: mode=FinalPartitioned, gby=[s_name@0 as s_name], aggr=[COUNT(*)]
+03)----ProjectionExec: expr=[s_name@0 as s_name, count(*)@1 as numwait]
+04)------AggregateExec: mode=FinalPartitioned, gby=[s_name@0 as s_name], aggr=[count(*)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([s_name@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[s_name@0 as s_name], aggr=[COUNT(*)]
+07)------------AggregateExec: mode=Partial, gby=[s_name@0 as s_name], aggr=[count(*)]
 08)--------------CoalesceBatchesExec: target_batch_size=8192
 09)----------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(l_orderkey@1, l_orderkey@0)], filter=l_suppkey@1 != l_suppkey@0, projection=[s_name@0]
 10)------------------CoalesceBatchesExec: target_batch_size=8192

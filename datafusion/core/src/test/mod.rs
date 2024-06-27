@@ -399,6 +399,10 @@ impl DisplayAs for StatisticsExec {
 }
 
 impl ExecutionPlan for StatisticsExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

@@ -156,13 +156,18 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Case(case) => {
             let mut name = "CASE ".to_string();
             if let Some(e) = &case.expr {
-                let _ = write!(name, "{e} ");
+                let _ = write!(name, "{} ", create_physical_name(e, false)?);
             }
             for (w, t) in &case.when_then_expr {
-                let _ = write!(name, "WHEN {w} THEN {t} ");
+                let _ = write!(
+                    name,
+                    "WHEN {} THEN {} ",
+                    create_physical_name(w, false)?,
+                    create_physical_name(t, false)?
+                );
             }
             if let Some(e) = &case.else_expr {
-                let _ = write!(name, "ELSE {e} ");
+                let _ = write!(name, "ELSE {} ", create_physical_name(e, false)?);
             }
             name += "END";
             Ok(name)
@@ -1259,7 +1264,7 @@ impl DefaultPhysicalPlanner {
                 let join_filter = match filter {
                     Some(expr) => {
                         // Extract columns from filter expression and saved in a HashSet
-                        let cols = expr.to_columns()?;
+                        let cols = expr.column_refs();
 
                         // Collect left & right field indices, the field indices are sorted in ascending order
                         let left_field_indices = cols
@@ -1766,7 +1771,8 @@ pub fn create_window_expr_with_name(
             window_frame,
             null_treatment,
         }) => {
-            let args = create_physical_exprs(args, logical_schema, execution_props)?;
+            let physical_args =
+                create_physical_exprs(args, logical_schema, execution_props)?;
             let partition_by =
                 create_physical_exprs(partition_by, logical_schema, execution_props)?;
             let order_by =
@@ -1780,13 +1786,13 @@ pub fn create_window_expr_with_name(
             }
 
             let window_frame = Arc::new(window_frame.clone());
-            let ignore_nulls = null_treatment
-                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+            let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
             windows::create_window_expr(
                 fun,
                 name,
-                &args,
+                &physical_args,
+                args,
                 &partition_by,
                 &order_by,
                 window_frame,
@@ -1837,7 +1843,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             order_by,
             null_treatment,
         }) => {
-            let args =
+            let physical_args =
                 create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {
                 Some(e) => Some(create_physical_expr(
@@ -1867,7 +1873,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     let agg_expr = aggregates::create_aggregate_expr(
                         fun,
                         *distinct,
-                        &args,
+                        &physical_args,
                         &ordering_reqs,
                         physical_input_schema,
                         name,
@@ -1889,7 +1895,8 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         physical_sort_exprs.clone().unwrap_or(vec![]);
                     let agg_expr = udaf::create_aggregate_expr(
                         fun,
-                        &args,
+                        &physical_args,
+                        args,
                         &sort_exprs,
                         &ordering_reqs,
                         physical_input_schema,
@@ -1916,6 +1923,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
+        Expr::AggregateFunction(_) => (e.display_name().unwrap_or(physical_name(e)?), e),
         _ => (physical_name(e)?, e),
     };
 

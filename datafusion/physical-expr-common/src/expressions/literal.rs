@@ -21,8 +21,7 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
+use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 
 use arrow::{
     datatypes::{DataType, Schema},

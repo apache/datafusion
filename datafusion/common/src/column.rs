@@ -109,22 +109,29 @@ impl Column {
     /// `foo.BAR` would be parsed to a reference to relation `foo`, column name `bar` (lower case)
     /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
-        let flat_name: &str = &flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(flat_name, false))
+        let flat_name = flat_name.into();
+        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, false))
             .unwrap_or_else(|| Self {
                 relation: None,
-                name: flat_name.to_owned(),
+                name: flat_name,
             })
     }
 
     /// Deserialize a fully qualified name string into a column preserving column text case
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
-        let flat_name: &str = &flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(flat_name, true))
+        let flat_name = flat_name.into();
+        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, true))
             .unwrap_or_else(|| Self {
                 relation: None,
-                name: flat_name.to_owned(),
+                name: flat_name,
             })
+    }
+
+    /// return the column's name.
+    ///
+    /// Note: This ignores the relation and returns the column name only.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Serialize column into a flat name string

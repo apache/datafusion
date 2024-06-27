@@ -238,6 +238,8 @@ fn create_initial_plan(
 
             // check row group count matches the plan
             return Ok(access_plan.clone());
+        } else {
+            debug!("ParquetExec Ignoring unknown extension specified for {file_name}");
         }
     }
 

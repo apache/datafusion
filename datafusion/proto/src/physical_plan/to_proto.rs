@@ -23,12 +23,10 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    ApproxPercentileCont, ApproxPercentileContWithWeight, ArrayAgg, Avg, BinaryExpr,
-    BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr, CastExpr, Column, Correlation,
-    CumeDist, DistinctArrayAgg, DistinctBitXor, Grouping, InListExpr, IsNotNullExpr,
-    IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile,
-    OrderSensitiveArrayAgg, Rank, RankType, Regr, RegrType, RowNumber, StringAgg,
-    TryCastExpr, WindowShift,
+    ArrayAgg, BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, DistinctArrayAgg,
+    Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min, NegativeExpr,
+    NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank, RankType,
+    RowNumber, TryCastExpr, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -167,21 +165,28 @@ pub fn serialize_physical_window_expr(
     } else if let Some(plain_aggr_window_expr) =
         expr.downcast_ref::<PlainAggregateWindowExpr>()
     {
-        let AggrFn { inner, distinct } =
-            aggr_expr_to_aggr_fn(plain_aggr_window_expr.get_aggregate_expr().as_ref())?;
+        let aggr_expr = plain_aggr_window_expr.get_aggregate_expr();
+        if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                a.fun().name().to_string(),
+            )
+        } else {
+            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
+                plain_aggr_window_expr.get_aggregate_expr().as_ref(),
+            )?;
 
-        if distinct {
-            // TODO
-            return not_impl_err!(
-                "Distinct aggregate functions not supported in window expressions"
-            );
+            if distinct {
+                return not_impl_err!(
+                    "Distinct aggregate functions not supported in window expressions"
+                );
+            }
+
+            if !window_frame.start_bound.is_unbounded() {
+                return Err(DataFusionError::Internal(format!("Invalid PlainAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
+            }
+
+            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
         }
-
-        if !window_frame.start_bound.is_unbounded() {
-            return Err(DataFusionError::Internal(format!("Invalid PlainAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
-        }
-
-        physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
     } else if let Some(sliding_aggr_window_expr) =
         expr.downcast_ref::<SlidingAggregateWindowExpr>()
     {
@@ -242,19 +247,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
 
     let inner = if aggr_expr.downcast_ref::<Grouping>().is_some() {
         protobuf::AggregateFunction::Grouping
-    } else if aggr_expr.downcast_ref::<BitAnd>().is_some() {
-        protobuf::AggregateFunction::BitAnd
-    } else if aggr_expr.downcast_ref::<BitOr>().is_some() {
-        protobuf::AggregateFunction::BitOr
-    } else if aggr_expr.downcast_ref::<BitXor>().is_some() {
-        protobuf::AggregateFunction::BitXor
-    } else if aggr_expr.downcast_ref::<DistinctBitXor>().is_some() {
-        distinct = true;
-        protobuf::AggregateFunction::BitXor
-    } else if aggr_expr.downcast_ref::<BoolAnd>().is_some() {
-        protobuf::AggregateFunction::BoolAnd
-    } else if aggr_expr.downcast_ref::<BoolOr>().is_some() {
-        protobuf::AggregateFunction::BoolOr
     } else if aggr_expr.downcast_ref::<ArrayAgg>().is_some() {
         protobuf::AggregateFunction::ArrayAgg
     } else if aggr_expr.downcast_ref::<DistinctArrayAgg>().is_some() {
@@ -266,31 +258,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::Min
     } else if aggr_expr.downcast_ref::<Max>().is_some() {
         protobuf::AggregateFunction::Max
-    } else if aggr_expr.downcast_ref::<Avg>().is_some() {
-        protobuf::AggregateFunction::Avg
-    } else if aggr_expr.downcast_ref::<Correlation>().is_some() {
-        protobuf::AggregateFunction::Correlation
-    } else if let Some(regr_expr) = aggr_expr.downcast_ref::<Regr>() {
-        match regr_expr.get_regr_type() {
-            RegrType::Slope => protobuf::AggregateFunction::RegrSlope,
-            RegrType::Intercept => protobuf::AggregateFunction::RegrIntercept,
-            RegrType::Count => protobuf::AggregateFunction::RegrCount,
-            RegrType::R2 => protobuf::AggregateFunction::RegrR2,
-            RegrType::AvgX => protobuf::AggregateFunction::RegrAvgx,
-            RegrType::AvgY => protobuf::AggregateFunction::RegrAvgy,
-            RegrType::SXX => protobuf::AggregateFunction::RegrSxx,
-            RegrType::SYY => protobuf::AggregateFunction::RegrSyy,
-            RegrType::SXY => protobuf::AggregateFunction::RegrSxy,
-        }
-    } else if aggr_expr.downcast_ref::<ApproxPercentileCont>().is_some() {
-        protobuf::AggregateFunction::ApproxPercentileCont
-    } else if aggr_expr
-        .downcast_ref::<ApproxPercentileContWithWeight>()
-        .is_some()
-    {
-        protobuf::AggregateFunction::ApproxPercentileContWithWeight
-    } else if aggr_expr.downcast_ref::<StringAgg>().is_some() {
-        protobuf::AggregateFunction::StringAgg
     } else if aggr_expr.downcast_ref::<NthValueAgg>().is_some() {
         protobuf::AggregateFunction::NthValueAgg
     } else {

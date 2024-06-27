@@ -33,10 +33,11 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::FunctionRegistry;
-use datafusion::functions_aggregate::approx_median::approx_median;
+use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
-    covar_pop, covar_samp, first_value, median, stddev, stddev_pop, sum, var_pop,
-    var_sample,
+    approx_median, approx_percentile_cont, approx_percentile_cont_with_weight, count,
+    count_distinct, covar_pop, covar_samp, first_value, median, stddev, stddev_pop, sum,
+    var_pop, var_sample,
 };
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -53,11 +54,16 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    Accumulator, AggregateFunction, ColumnarValue, ExprSchemable, LogicalPlan, Operator,
-    PartitionEvaluator, ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
-    WindowUDFImpl,
+    Accumulator, AggregateExt, AggregateFunction, ColumnarValue, ExprSchemable,
+    LogicalPlan, Operator, PartitionEvaluator, ScalarUDF, ScalarUDFImpl, Signature,
+    TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
+use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::expr_fn::{
+    avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
+};
+use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -653,8 +659,10 @@ async fn roundtrip_expr_api() -> Result<()> {
         count_distinct(lit(1)),
         first_value(lit(1), None),
         first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
+        avg(lit(1.5)),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
+        corr(lit(1.5), lit(2.2)),
         sum(lit(1)),
         median(lit(2)),
         var_sample(lit(2.2)),
@@ -662,6 +670,14 @@ async fn roundtrip_expr_api() -> Result<()> {
         stddev(lit(2.2)),
         stddev_pop(lit(2.2)),
         approx_median(lit(2)),
+        approx_percentile_cont(lit(2), lit(0.5)),
+        approx_percentile_cont_with_weight(lit(2), lit(1), lit(0.5)),
+        bit_and(lit(2)),
+        bit_or(lit(2)),
+        bit_xor(lit(2)),
+        string_agg(col("a").cast_to(&DataType::Utf8, &schema)?, lit("|")),
+        bool_and(lit(true)),
+        bool_or(lit(true)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -968,7 +984,7 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt64(None),
         ScalarValue::Utf8(None),
         ScalarValue::LargeUtf8(None),
-        ScalarValue::List(ScalarValue::new_list(&[], &DataType::Boolean)),
+        ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Boolean)),
         ScalarValue::LargeList(ScalarValue::new_large_list(&[], &DataType::Boolean)),
         ScalarValue::Date32(None),
         ScalarValue::Boolean(Some(true)),
@@ -1060,7 +1076,7 @@ fn round_trip_scalar_values() {
             i64::MAX,
         ))),
         ScalarValue::IntervalMonthDayNano(None),
-        ScalarValue::List(ScalarValue::new_list(
+        ScalarValue::List(ScalarValue::new_list_nullable(
             &[
                 ScalarValue::Float32(Some(-213.1)),
                 ScalarValue::Float32(None),
@@ -1080,10 +1096,13 @@ fn round_trip_scalar_values() {
             ],
             &DataType::Float32,
         )),
-        ScalarValue::List(ScalarValue::new_list(
+        ScalarValue::List(ScalarValue::new_list_nullable(
             &[
-                ScalarValue::List(ScalarValue::new_list(&[], &DataType::Float32)),
-                ScalarValue::List(ScalarValue::new_list(
+                ScalarValue::List(ScalarValue::new_list_nullable(
+                    &[],
+                    &DataType::Float32,
+                )),
+                ScalarValue::List(ScalarValue::new_list_nullable(
                     &[
                         ScalarValue::Float32(Some(-213.1)),
                         ScalarValue::Float32(None),
@@ -1782,43 +1801,18 @@ fn roundtrip_similar_to() {
 
 #[test]
 fn roundtrip_count() {
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-        AggregateFunction::Count,
-        vec![col("bananas")],
-        false,
-        None,
-        None,
-        None,
-    ));
+    let test_expr = count(col("bananas"));
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
 }
 
 #[test]
 fn roundtrip_count_distinct() {
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-        AggregateFunction::Count,
-        vec![col("bananas")],
-        true,
-        None,
-        None,
-        None,
-    ));
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_approx_percentile_cont() {
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-        AggregateFunction::ApproxPercentileCont,
-        vec![col("bananas"), lit(0.42_f32)],
-        false,
-        None,
-        None,
-        None,
-    ));
-
+    let test_expr = count_udaf()
+        .call(vec![col("bananas")])
+        .distinct()
+        .build()
+        .unwrap();
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
 }
@@ -2175,7 +2169,16 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col1")],
         vec![col("col2")],
-        row_number_frame,
+        row_number_frame.clone(),
+        None,
+    ));
+
+    let text_expr7 = Expr::WindowFunction(expr::WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(avg_udaf()),
+        vec![col("col1")],
+        vec![],
+        vec![],
+        row_number_frame.clone(),
         None,
     ));
 
@@ -2186,5 +2189,6 @@ fn roundtrip_window() {
     roundtrip_expr_test(test_expr3, ctx.clone());
     roundtrip_expr_test(test_expr4, ctx.clone());
     roundtrip_expr_test(test_expr5, ctx.clone());
-    roundtrip_expr_test(test_expr6, ctx);
+    roundtrip_expr_test(test_expr6, ctx.clone());
+    roundtrip_expr_test(text_expr7, ctx);
 }

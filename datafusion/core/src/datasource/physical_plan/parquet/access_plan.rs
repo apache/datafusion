@@ -139,6 +139,11 @@ impl ParquetAccessPlan {
         self.set(idx, RowGroupAccess::Skip);
     }
 
+    /// scan the i-th row group
+    pub fn scan(&mut self, idx: usize) {
+        self.set(idx, RowGroupAccess::Scan);
+    }
+
     /// Return true if the i-th row group should be scanned
     pub fn should_scan(&self, idx: usize) -> bool {
         self.row_groups[idx].should_scan()
@@ -384,7 +389,7 @@ mod test {
         let access_plan = ParquetAccessPlan::new(vec![
             RowGroupAccess::Scan,
             RowGroupAccess::Selection(
-                // select / skip all 20 rows in row group 1
+                // specifies all 20 rows in row group 1
                 vec![
                     RowSelector::select(5),
                     RowSelector::skip(7),
@@ -463,7 +468,7 @@ mod test {
     fn test_invalid_too_few() {
         let access_plan = ParquetAccessPlan::new(vec![
             RowGroupAccess::Scan,
-            // select 12 rows, but row group 1 has 20
+            // specify only 12 rows in selection, but row group 1 has 20
             RowGroupAccess::Selection(
                 vec![RowSelector::select(5), RowSelector::skip(7)].into(),
             ),
@@ -484,7 +489,7 @@ mod test {
     fn test_invalid_too_many() {
         let access_plan = ParquetAccessPlan::new(vec![
             RowGroupAccess::Scan,
-            // select 22 rows, but row group 1 has only 20
+            // specify 22 rows in selection, but row group 1 has only 20
             RowGroupAccess::Selection(
                 vec![
                     RowSelector::select(10),

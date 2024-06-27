@@ -471,8 +471,10 @@ pub struct PruningPredicate {
     /// Original physical predicate from which this predicate expr is derived
     /// (required for serialization)
     orig_expr: Arc<dyn PhysicalExpr>,
-    /// [`LiteralGuarantee`]s that are used to try and prove a predicate can not
-    /// possibly evaluate to `true`.
+    /// [`LiteralGuarantee`]s used to try and prove a predicate can not possibly
+    /// evaluate to `true`.
+    ///
+    /// See [`PruningPredicate::literal_guarantees`] for more details.
     literal_guarantees: Vec<LiteralGuarantee>,
 }
 
@@ -595,6 +597,10 @@ impl PruningPredicate {
     }
 
     /// Returns a reference to the literal guarantees
+    ///
+    /// Note that **All** `LiteralGuarantee`s must be satisfied for the
+    /// expression to possibly be `true`. If any is not satisfied, the
+    /// expression is guaranteed to be `null` or `false`.
     pub fn literal_guarantees(&self) -> &[LiteralGuarantee] {
         &self.literal_guarantees
     }
@@ -981,8 +987,8 @@ impl<'a> PruningExpressionBuilder<'a> {
         })
     }
 
-    fn op(&self) -> Operator {
-        self.op
+    fn op(&self) -> &Operator {
+        &self.op
     }
 
     fn scalar_expr(&self) -> &Arc<dyn PhysicalExpr> {
@@ -1058,7 +1064,7 @@ fn rewrite_expr_to_prunable(
     scalar_expr: &PhysicalExprRef,
     schema: DFSchema,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
-    if !is_compare_op(op) {
+    if !is_compare_op(&op) {
         return plan_err!("rewrite_expr_to_prunable only support compare expression");
     }
 
@@ -1125,7 +1131,7 @@ fn rewrite_expr_to_prunable(
     }
 }
 
-fn is_compare_op(op: Operator) -> bool {
+fn is_compare_op(op: &Operator) -> bool {
     matches!(
         op,
         Operator::Eq
@@ -1352,11 +1358,13 @@ fn build_predicate_expression(
                 .map(|e| {
                     Arc::new(phys_expr::BinaryExpr::new(
                         in_list.expr().clone(),
-                        eq_op,
+                        eq_op.clone(),
                         e.clone(),
                     )) as _
                 })
-                .reduce(|a, b| Arc::new(phys_expr::BinaryExpr::new(a, re_op, b)) as _)
+                .reduce(|a, b| {
+                    Arc::new(phys_expr::BinaryExpr::new(a, re_op.clone(), b)) as _
+                })
                 .unwrap();
             return build_predicate_expression(&change_expr, schema, required_columns);
         } else {
@@ -1368,7 +1376,7 @@ fn build_predicate_expression(
         if let Some(bin_expr) = expr_any.downcast_ref::<phys_expr::BinaryExpr>() {
             (
                 bin_expr.left().clone(),
-                *bin_expr.op(),
+                bin_expr.op().clone(),
                 bin_expr.right().clone(),
             )
         } else {
@@ -1380,7 +1388,7 @@ fn build_predicate_expression(
         let left_expr = build_predicate_expression(&left, schema, required_columns);
         let right_expr = build_predicate_expression(&right, schema, required_columns);
         // simplify boolean expression if applicable
-        let expr = match (&left_expr, op, &right_expr) {
+        let expr = match (&left_expr, &op, &right_expr) {
             (left, Operator::And, _) if is_always_true(left) => right_expr,
             (_, Operator::And, right) if is_always_true(right) => left_expr,
             (left, Operator::Or, right)
@@ -1388,7 +1396,11 @@ fn build_predicate_expression(
             {
                 unhandled
             }
-            _ => Arc::new(phys_expr::BinaryExpr::new(left_expr, op, right_expr)),
+            _ => Arc::new(phys_expr::BinaryExpr::new(
+                left_expr,
+                op.clone(),
+                right_expr,
+            )),
         };
         return expr;
     }
@@ -1543,22 +1555,22 @@ pub(crate) enum StatisticsType {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::ops::{Not, Rem};
+
     use super::*;
     use crate::assert_batches_eq;
     use crate::logical_expr::{col, lit};
+
     use arrow::array::Decimal128Array;
     use arrow::{
         array::{BinaryArray, Int32Array, Int64Array, StringArray},
         datatypes::TimeUnit,
     };
     use arrow_array::UInt64Array;
-    use datafusion_common::ToDFSchema;
-    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::InList;
     use datafusion_expr::{cast, is_null, try_cast, Expr};
-    use datafusion_physical_expr::create_physical_expr;
-    use std::collections::HashMap;
-    use std::ops::{Not, Rem};
+    use datafusion_physical_expr::planner::logical2physical;
 
     #[derive(Debug, Default)]
     /// Mock statistic provider for tests
@@ -3863,11 +3875,5 @@ mod tests {
     ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
         build_predicate_expression(&expr, schema, required_columns)
-    }
-
-    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-        let df_schema = schema.clone().to_dfschema().unwrap();
-        let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 }

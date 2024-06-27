@@ -65,7 +65,11 @@ pub fn schema_add_window_field(
         .iter()
         .map(|e| e.clone().as_ref().data_type(schema))
         .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_type = window_fn.return_type(&data_types)?;
+    let nullability = args
+        .iter()
+        .map(|e| e.clone().as_ref().nullable(schema))
+        .collect::<Result<Vec<_>>>()?;
+    let window_expr_return_type = window_fn.return_type(&data_types, &nullability)?;
     let mut window_fields = schema
         .fields()
         .iter()
@@ -90,6 +94,7 @@ pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
+    logical_args: &[Expr],
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
@@ -144,6 +149,7 @@ pub fn create_window_expr(
             let aggregate = udaf::create_aggregate_expr(
                 fun.as_ref(),
                 args,
+                logical_args,
                 &sort_exprs,
                 order_by,
                 input_schema,
@@ -752,6 +758,7 @@ mod tests {
                 &WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 "count".to_owned(),
                 &[col("a", &schema)?],
+                &[],
                 &[],
                 &[],
                 Arc::new(WindowFrame::new(None)),
