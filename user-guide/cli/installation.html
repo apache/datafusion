@@ -561,8 +561,7 @@ instead.</p>
 that there is <code class="docutils literal notranslate"><span class="pre">.dockerignore</span></code> file in the root of the repository that may need to be deleted in order for
 this to work.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/apache/datafusion
-<span class="nb">cd</span><span class="w"> </span>arrow-datafusion
-git<span class="w"> </span>checkout<span class="w"> </span><span class="m">12</span>.0.0
+<span class="nb">cd</span><span class="w"> </span>datafusion
 docker<span class="w"> </span>build<span class="w"> </span>-f<span class="w"> </span>datafusion-cli/Dockerfile<span class="w"> </span>.<span class="w"> </span>--tag<span class="w"> </span>datafusion-cli
 docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>-v<span class="w"> </span><span class="k">$(</span>your_data_location<span class="k">)</span>:/data<span class="w"> </span>datafusion-cli
 </pre></div>
