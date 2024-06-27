@@ -440,7 +440,7 @@ where
                 .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &T::DATA_TYPE))
                 .collect::<Result<Vec<_>>>()?;
 
-            let arr = ScalarValue::new_list(&values, &T::DATA_TYPE);
+            let arr = ScalarValue::new_list_nullable(&values, &T::DATA_TYPE);
             vec![ScalarValue::List(arr)]
         };
         Ok(state_out)

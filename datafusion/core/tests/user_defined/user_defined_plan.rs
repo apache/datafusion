@@ -245,7 +245,8 @@ async fn normal_query() -> Result<()> {
 #[tokio::test]
 // Run the query using default planners, optimizer and custom analyzer rule
 async fn normal_query_with_analyzer() -> Result<()> {
-    let ctx = SessionContext::new().add_analyzer_rule(Arc::new(MyAnalyzerRule {}));
+    let ctx = SessionContext::new();
+    ctx.add_analyzer_rule(Arc::new(MyAnalyzerRule {}));
     run_and_compare_query_with_analyzer_rule(ctx, "MyAnalyzerRule").await
 }
 

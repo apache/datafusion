@@ -65,7 +65,11 @@ pub fn schema_add_window_field(
         .iter()
         .map(|e| e.clone().as_ref().data_type(schema))
         .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_type = window_fn.return_type(&data_types)?;
+    let nullability = args
+        .iter()
+        .map(|e| e.clone().as_ref().nullable(schema))
+        .collect::<Result<Vec<_>>>()?;
+    let window_expr_return_type = window_fn.return_type(&data_types, &nullability)?;
     let mut window_fields = schema
         .fields()
         .iter()
