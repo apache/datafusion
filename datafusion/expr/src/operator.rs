@@ -103,10 +103,6 @@ pub enum Operator {
 }
 
 impl Operator {
-    pub fn custom(op: impl CustomOperator + 'static) -> Self {
-        Operator::Custom(WrapCustomOperator(Arc::new(op)))
-    }
-
     /// If the operator can be negated, return the negated operator
     /// otherwise return `None`
     pub fn negate(&self) -> Option<Operator> {
@@ -169,8 +165,8 @@ impl Operator {
     ///
     /// For example, `Binary(a, >, b)` would be a comparison expression.
     pub fn is_comparison_operator(&self) -> bool {
-        if let Self::Custom(op) = self {
-            op.0.is_comparison_operator()
+        if let Self::Custom(WrapCustomOperator(op)) = self {
+            op.is_comparison_operator()
         } else {
             matches!(
                 self,
@@ -195,8 +191,8 @@ impl Operator {
     /// For example, `Binary(Binary(a, >, b), AND, Binary(a, <, b + 3))` would
     /// be a logical expression.
     pub fn is_logic_operator(&self) -> bool {
-        if let Self::Custom(op) = self {
-            op.0.is_logic_operator()
+        if let Self::Custom(WrapCustomOperator(op)) = self {
+            op.is_logic_operator()
         } else {
             matches!(self, Operator::And | Operator::Or)
         }
@@ -238,7 +234,7 @@ impl Operator {
             | Operator::BitwiseShiftRight
             | Operator::BitwiseShiftLeft
             | Operator::StringConcat => None,
-            Operator::Custom(op) => op.0.swap(),
+            Operator::Custom(WrapCustomOperator(op)) => op.swap(),
         }
     }
 
@@ -274,7 +270,7 @@ impl Operator {
             | Operator::StringConcat
             | Operator::AtArrow
             | Operator::ArrowAt => 0,
-            Operator::Custom(op) => op.0.precedence(),
+            Operator::Custom(WrapCustomOperator(op)) => op.precedence(),
         }
     }
 }
@@ -313,7 +309,7 @@ impl fmt::Display for Operator {
             Operator::StringConcat => write!(f, "||"),
             Operator::AtArrow => write!(f, "@>"),
             Operator::ArrowAt => write!(f, "<@"),
-            Operator::Custom(op) => write!(f, "{}", op.0),
+            Operator::Custom(WrapCustomOperator(op)) => write!(f, "{op}"),
         }
     }
 }
@@ -346,6 +342,7 @@ pub trait CustomOperator: fmt::Debug + fmt::Display + Send + Sync {
     fn negate(&self) -> Option<Operator> {
         None
     }
+
     /// Return true if the operator is a numerical operator.
     ///
     /// For example, `Binary(a, +, b)` would be a numerical expression.

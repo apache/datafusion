@@ -29,6 +29,7 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
+use crate::operator::WrapCustomOperator;
 use datafusion_common::{exec_datafusion_err, plan_datafusion_err, plan_err, Result};
 
 /// The type signature of an instantiation of binary operator expression such as
@@ -189,8 +190,8 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 )
             }
         }
-        Custom(op) => {
-            let (lhs, rhs, ret) = op.0.binary_signature(lhs, rhs)?;
+        Custom(WrapCustomOperator(op)) => {
+            let (lhs, rhs, ret) = op.binary_signature(lhs, rhs)?;
             Ok(Signature { lhs, rhs, ret })
         }
     }

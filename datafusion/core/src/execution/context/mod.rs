@@ -18,6 +18,7 @@
 //! [`SessionContext`] API for registering data sources and executing queries
 
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
@@ -1477,7 +1478,7 @@ impl SerializerRegistry for EmptySerializerRegistry {
 /// Describes which SQL statements can be run.
 ///
 /// See [`SessionContext::sql_with_options`] for more details.
-#[derive(Clone)]
+#[derive(Clone, Debug, Copy)]
 pub struct SQLOptions {
     /// See [`Self::with_allow_ddl`]
     allow_ddl: bool,
