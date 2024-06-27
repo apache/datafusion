@@ -410,23 +410,20 @@ pub fn build_row_filter(
 
 #[cfg(test)]
 mod test {
+    use super::*;
+    use crate::datasource::schema_adapter::DefaultSchemaAdapterFactory;
+    use crate::datasource::schema_adapter::SchemaAdapterFactory;
+
     use arrow::datatypes::Field;
     use arrow_schema::TimeUnit::Nanosecond;
+    use datafusion_expr::{cast, col, lit, Expr};
+    use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::metrics::{Count, Time};
+
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use rand::prelude::*;
-
-    use crate::datasource::schema_adapter::DefaultSchemaAdapterFactory;
-    use crate::datasource::schema_adapter::SchemaAdapterFactory;
-
-    use datafusion_common::ToDFSchema;
-    use datafusion_expr::execution_props::ExecutionProps;
-    use datafusion_expr::{cast, col, lit, Expr};
-    use datafusion_physical_expr::create_physical_expr;
-    use datafusion_physical_plan::metrics::{Count, Time};
-
-    use super::*;
 
     // We should ignore predicate that read non-primitive columns
     #[test]
@@ -589,11 +586,5 @@ mod test {
             let remapped: Vec<_> = remap.iter().map(|r| file_order[*r]).collect();
             assert_eq!(projection, remapped)
         }
-    }
-
-    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-        let df_schema = schema.clone().to_dfschema().unwrap();
-        let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 }
