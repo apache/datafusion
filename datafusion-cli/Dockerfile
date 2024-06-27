@@ -31,6 +31,8 @@ FROM debian:bookworm-slim
 
 COPY --from=builder /usr/src/datafusion/datafusion-cli/target/release/datafusion-cli /usr/local/bin
 
+RUN mkdir /data
+
 ENTRYPOINT ["datafusion-cli"]
 
 CMD ["--data-path", "/data"]
