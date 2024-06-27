@@ -402,6 +402,16 @@ impl SessionState {
         self
     }
 
+    // the add_optimizer_rule takes an owned reference
+    // it should probably be renamed to `with_optimizer_rule` to follow builder style
+    // and `add_optimizer_rule` that takes &mut self added instead of this
+    pub(crate) fn append_optimizer_rule(
+        &mut self,
+        optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
+    ) {
+        self.optimizer.rules.push(optimizer_rule);
+    }
+
     /// Add `physical_optimizer_rule` to the end of the list of
     /// [`PhysicalOptimizerRule`]s used to rewrite queries.
     pub fn add_physical_optimizer_rule(
@@ -807,8 +817,8 @@ impl SessionState {
     }
 
     /// Return catalog list
-    pub fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
-        self.catalog_list.clone()
+    pub fn catalog_list(&self) -> &Arc<dyn CatalogProviderList> {
+        &self.catalog_list
     }
 
     /// set the catalog list
@@ -834,9 +844,14 @@ impl SessionState {
         &self.window_functions
     }
 
+    /// Return reference to table_functions
+    pub fn table_functions(&self) -> &HashMap<String, Arc<TableFunction>> {
+        &self.table_functions
+    }
+
     /// Return [SerializerRegistry] for extensions
-    pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
-        self.serializer_registry.clone()
+    pub fn serializer_registry(&self) -> &Arc<dyn SerializerRegistry> {
+        &self.serializer_registry
     }
 
     /// Return version of the cargo package that produced this query
@@ -850,6 +865,15 @@ impl SessionState {
             name.to_owned(),
             Arc::new(TableFunction::new(name.to_owned(), fun)),
         );
+    }
+
+    /// Deregsiter a user defined table function
+    pub fn deregister_udtf(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
+        let udtf = self.table_functions.remove(name);
+        Ok(udtf.map(|x| x.function().clone()))
     }
 }
 

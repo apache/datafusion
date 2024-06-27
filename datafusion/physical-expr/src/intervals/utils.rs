@@ -63,7 +63,7 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
 }
 
 // This function returns the inverse operator of the given operator.
-pub fn get_inverse_op(op: Operator) -> Result<Operator> {
+pub fn get_inverse_op(op: &Operator) -> Result<Operator> {
     match op {
         Operator::Plus => Ok(Operator::Minus),
         Operator::Minus => Ok(Operator::Plus),

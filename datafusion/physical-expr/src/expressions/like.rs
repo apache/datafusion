@@ -20,11 +20,11 @@ use std::{any::Any, sync::Arc};
 
 use crate::{physical_expr::down_cast_any_ref, PhysicalExpr};
 
-use crate::expressions::datum::apply_cmp;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr_common::datum::apply_cmp;
 
 // Like expression
 #[derive(Debug, Hash)]

@@ -3781,3 +3781,33 @@ EXPLAIN SELECT * FROM (
 ) AS a RIGHT ANTI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
 logical_plan EmptyRelation
+
+# FULL OUTER join with empty left and empty right table
+query TT
+EXPLAIN SELECT * FROM (
+	SELECT 1 as a WHERE 1=0
+) AS a FULL JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
+----
+logical_plan EmptyRelation
+
+# Left ANTI join with empty right table 
+query TT
+EXPLAIN SELECT * FROM (
+	SELECT 1 as a
+) AS a LEFT ANTI JOIN (SELECT 1 AS a WHERE 1=0) as b ON a.a=b.a;
+----
+logical_plan
+01)SubqueryAlias: a
+02)--Projection: Int64(1) AS a
+03)----EmptyRelation
+
+# Right ANTI join with empty left table 
+query TT
+EXPLAIN SELECT * FROM (
+	SELECT 1 as a WHERE 1=0
+) AS a RIGHT ANTI JOIN (SELECT 1 AS a) as b ON a.a=b.a;
+----
+logical_plan
+01)SubqueryAlias: b
+02)--Projection: Int64(1) AS a
+03)----EmptyRelation
