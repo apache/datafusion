@@ -236,13 +236,14 @@ mod tests {
     fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
         let mut ctx = SessionContext::new();
         ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
-            ctx.state().catalog_list(),
+            ctx.state().catalog_list().clone(),
             ctx.state_weak_ref(),
         )));
 
-        let provider =
-            &DynamicFileCatalog::new(ctx.state().catalog_list(), ctx.state_weak_ref())
-                as &dyn CatalogProviderList;
+        let provider = &DynamicFileCatalog::new(
+            ctx.state().catalog_list().clone(),
+            ctx.state_weak_ref(),
+        ) as &dyn CatalogProviderList;
         let catalog = provider
             .catalog(provider.catalog_names().first().unwrap())
             .unwrap();

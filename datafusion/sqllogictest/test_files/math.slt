@@ -565,6 +565,21 @@ SELECT c1%0 FROM test_non_nullable_decimal
 statement ok
 drop table test_non_nullable_decimal 
 
+statement ok
+CREATE TABLE signed_integers(
+  a INT,
+  b INT,
+  c INT,
+  d INT,
+  e INT,
+  f INT
+) as VALUES
+  (-1, 100, -567, 1024, -4, 10),
+  (2, -1000, 123, -256, 5, -11),
+  (-3, 10000, -978, 2048, -6, 12),
+  (4, NULL, NULL, -512, NULL, NULL)
+;
+
 query II
 select gcd(20, 1000), lcm(20, 1000);
 ----
@@ -573,5 +588,68 @@ select gcd(20, 1000), lcm(20, 1000);
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(\-9223372036854775808, \-9223372036854775808\)
 select gcd(-9223372036854775808, -9223372036854775808);
 
+# gcd(i64::MIN, 0)
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(\-9223372036854775808, 0\)
+select gcd(-9223372036854775808, 0);
+
+# gcd(0, i64::MIN)
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(0, \-9223372036854775808\)
+select gcd(0, -9223372036854775808);
+
+# Test gcd with zero and negative values
+query III
+select gcd(0, 0), gcd(-100, 0), gcd(0, -100);
+----
+0 100 100
+
+
+## lcm
+
+# Basic cases
+query IIIII
+select lcm(0, 0), lcm(0, 2), lcm(3, 0), lcm(2, 3), lcm(15, 10);
+----
+0 0 0 6 30
+
+# Test lcm with negative numbers
+query IIIII
+select lcm(0, -2), lcm(-3, 0), lcm(-2, 3), lcm(15, -10), lcm(-15, -10)
+----
+0 0 6 30 30
+
+# Test lcm with Nulls
+query III
+select lcm(null, 64), lcm(16, null), lcm(null, null)
+----
+NULL NULL NULL
+
+# Test lcm with columns
+query III rowsort
+select lcm(a, b), lcm(c, d), lcm(e, f) from signed_integers;
+----
+100 580608 20
+1000 31488 55
+30000 1001472 12
+NULL NULL NULL
+
+# Result cannot fit in i64
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(\-9223372036854775808, \-9223372036854775808\)
 select lcm(-9223372036854775808, -9223372036854775808);
+
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(1, \-9223372036854775808\)
+select lcm(1, -9223372036854775808);
+
+# Overflow on multiplication
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(2, 9223372036854775803\)
+select lcm(2, 9223372036854775803);
+
+
+query error DataFusion error: Arrow error: Compute error: Overflow happened on: 2107754225 \^ 1221660777
+select power(2107754225, 1221660777);
+
+# factorial overflow
+query error DataFusion error: Arrow error: Compute error: Overflow happened on FACTORIAL\(350943270\)
+select FACTORIAL(350943270);
+
+statement ok
+drop table signed_integers

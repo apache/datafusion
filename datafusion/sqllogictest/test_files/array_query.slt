@@ -41,17 +41,68 @@ SELECT * FROM data;
 # Filtering
 ###########
 
-query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) == List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+query ??I rowsort
 SELECT * FROM data WHERE column1 = [1,2,3];
+----
+[1, 2, 3] NULL 1
+[1, 2, 3] [4, 5] 1
 
-query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) == List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
-SELECT * FROM data WHERE column1 = column2
-
-query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) != List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+query ??I
 SELECT * FROM data WHERE column1 != [1,2,3];
+----
+[2, 3] [2, 3] 1
 
-query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) != List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+query ??I
 SELECT * FROM data WHERE column1 != column2
+----
+[1, 2, 3] [4, 5] 1
+
+query ??I rowsort
+SELECT * FROM data WHERE column1 < [1,2,3,4];
+----
+[1, 2, 3] NULL 1
+[1, 2, 3] [4, 5] 1
+
+query ??I rowsort
+SELECT * FROM data WHERE column1 <= [2, 3];
+----
+[1, 2, 3] NULL 1
+[1, 2, 3] [4, 5] 1
+[2, 3] [2, 3] 1
+
+query ??I rowsort
+SELECT * FROM data WHERE column1 > [1,2];
+----
+[1, 2, 3] NULL 1
+[1, 2, 3] [4, 5] 1
+[2, 3] [2, 3] 1
+
+query ??I rowsort
+SELECT * FROM data WHERE column1 >= [1, 2, 3];
+----
+[1, 2, 3] NULL 1
+[1, 2, 3] [4, 5] 1
+[2, 3] [2, 3] 1
+
+# test with scalar null
+query ??I
+SELECT * FROM data WHERE column2 = null;
+----
+
+query ??I
+SELECT * FROM data WHERE null = column2;
+----
+
+query ??I rowsort
+SELECT * FROM data WHERE column2 is distinct from null;
+----
+[1, 2, 3] [4, 5] 1
+[2, 3] [2, 3] 1
+
+query ??I
+SELECT * FROM data WHERE column2 is not distinct from null;
+----
+[1, 2, 3] NULL 1
 
 ###########
 # Aggregates
@@ -158,3 +209,68 @@ SELECT * FROM data ORDER BY column1, column3, column2;
 
 statement ok
 drop table data
+
+
+# test filter column with all nulls
+statement ok
+create table data (a int) as values (null), (null), (null);
+
+query I
+select * from data where a = null;
+----
+
+query I
+select * from data where a is not distinct from null;
+----
+NULL
+NULL
+NULL
+
+statement ok
+drop table data;
+
+statement ok
+create table data (a int[][], b int) as values ([[1,2,3]], 1), ([[2,3], [4,5]], 2), (null, 3);
+
+query ?I
+select * from data;
+----
+[[1, 2, 3]] 1
+[[2, 3], [4, 5]] 2
+NULL 3
+
+query ?I
+select * from data where a = [[1,2,3]];
+----
+[[1, 2, 3]] 1
+
+query ?I
+select * from data where a > [[1,2,3]];
+----
+[[2, 3], [4, 5]] 2
+
+query ?I
+select * from data where a > [[1,2]];
+----
+[[1, 2, 3]] 1
+[[2, 3], [4, 5]] 2
+
+query ?I
+select * from data where a < [[2, 3]];
+----
+[[1, 2, 3]] 1
+
+# compare with null with eq results in null
+query ?I
+select * from data where a = null;
+----
+
+query ?I
+select * from data where a != null;
+----
+
+# compare with null with distinct results in true/false
+query ?I
+select * from data where a is not distinct from null;
+----
+NULL 3

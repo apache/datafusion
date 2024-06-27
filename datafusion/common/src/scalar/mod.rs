@@ -29,6 +29,7 @@ use std::iter::repeat;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::arrow_datafusion_err;
 use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
     as_fixed_size_binary_array, as_fixed_size_list_array,
@@ -1077,7 +1078,7 @@ impl ScalarValue {
             DataType::Float64 => ScalarValue::Float64(Some(10.0)),
             _ => {
                 return _not_impl_err!(
-                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
+                    "Can't create a ten scalar from data_type \"{datatype:?}\""
                 );
             }
         })
@@ -1168,6 +1169,13 @@ impl ScalarValue {
 
     /// Calculate arithmetic negation for a scalar value
     pub fn arithmetic_negate(&self) -> Result<Self> {
+        fn neg_checked_with_ctx<T: ArrowNativeTypeOp>(
+            v: T,
+            ctx: impl Fn() -> String,
+        ) -> Result<T> {
+            v.neg_checked()
+                .map_err(|e| arrow_datafusion_err!(e).context(ctx()))
+        }
         match self {
             ScalarValue::Int8(None)
             | ScalarValue::Int16(None)
@@ -1177,40 +1185,91 @@ impl ScalarValue {
             | ScalarValue::Float64(None) => Ok(self.clone()),
             ScalarValue::Float64(Some(v)) => Ok(ScalarValue::Float64(Some(-v))),
             ScalarValue::Float32(Some(v)) => Ok(ScalarValue::Float32(Some(-v))),
-            ScalarValue::Int8(Some(v)) => Ok(ScalarValue::Int8(Some(-v))),
-            ScalarValue::Int16(Some(v)) => Ok(ScalarValue::Int16(Some(-v))),
-            ScalarValue::Int32(Some(v)) => Ok(ScalarValue::Int32(Some(-v))),
-            ScalarValue::Int64(Some(v)) => Ok(ScalarValue::Int64(Some(-v))),
-            ScalarValue::IntervalYearMonth(Some(v)) => {
-                Ok(ScalarValue::IntervalYearMonth(Some(-v)))
-            }
+            ScalarValue::Int8(Some(v)) => Ok(ScalarValue::Int8(Some(v.neg_checked()?))),
+            ScalarValue::Int16(Some(v)) => Ok(ScalarValue::Int16(Some(v.neg_checked()?))),
+            ScalarValue::Int32(Some(v)) => Ok(ScalarValue::Int32(Some(v.neg_checked()?))),
+            ScalarValue::Int64(Some(v)) => Ok(ScalarValue::Int64(Some(v.neg_checked()?))),
+            ScalarValue::IntervalYearMonth(Some(v)) => Ok(
+                ScalarValue::IntervalYearMonth(Some(neg_checked_with_ctx(*v, || {
+                    format!("In negation of IntervalYearMonth({v})")
+                })?)),
+            ),
             ScalarValue::IntervalDayTime(Some(v)) => {
                 let (days, ms) = IntervalDayTimeType::to_parts(*v);
-                let val = IntervalDayTimeType::make_value(-days, -ms);
+                let val = IntervalDayTimeType::make_value(
+                    neg_checked_with_ctx(days, || {
+                        format!("In negation of days {days} in IntervalDayTime")
+                    })?,
+                    neg_checked_with_ctx(ms, || {
+                        format!("In negation of milliseconds {ms} in IntervalDayTime")
+                    })?,
+                );
                 Ok(ScalarValue::IntervalDayTime(Some(val)))
             }
             ScalarValue::IntervalMonthDayNano(Some(v)) => {
                 let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*v);
-                let val = IntervalMonthDayNanoType::make_value(-months, -days, -nanos);
+                let val = IntervalMonthDayNanoType::make_value(
+                    neg_checked_with_ctx(months, || {
+                        format!("In negation of months {months} of IntervalMonthDayNano")
+                    })?,
+                    neg_checked_with_ctx(days, || {
+                        format!("In negation of days {days} of IntervalMonthDayNano")
+                    })?,
+                    neg_checked_with_ctx(nanos, || {
+                        format!("In negation of nanos {nanos} of IntervalMonthDayNano")
+                    })?,
+                );
                 Ok(ScalarValue::IntervalMonthDayNano(Some(val)))
             }
             ScalarValue::Decimal128(Some(v), precision, scale) => {
-                Ok(ScalarValue::Decimal128(Some(-v), *precision, *scale))
+                Ok(ScalarValue::Decimal128(
+                    Some(neg_checked_with_ctx(*v, || {
+                        format!("In negation of Decimal128({v}, {precision}, {scale})")
+                    })?),
+                    *precision,
+                    *scale,
+                ))
             }
-            ScalarValue::Decimal256(Some(v), precision, scale) => Ok(
-                ScalarValue::Decimal256(Some(v.neg_wrapping()), *precision, *scale),
-            ),
+            ScalarValue::Decimal256(Some(v), precision, scale) => {
+                Ok(ScalarValue::Decimal256(
+                    Some(neg_checked_with_ctx(*v, || {
+                        format!("In negation of Decimal256({v}, {precision}, {scale})")
+                    })?),
+                    *precision,
+                    *scale,
+                ))
+            }
             ScalarValue::TimestampSecond(Some(v), tz) => {
-                Ok(ScalarValue::TimestampSecond(Some(-v), tz.clone()))
+                Ok(ScalarValue::TimestampSecond(
+                    Some(neg_checked_with_ctx(*v, || {
+                        format!("In negation of TimestampSecond({v})")
+                    })?),
+                    tz.clone(),
+                ))
             }
             ScalarValue::TimestampNanosecond(Some(v), tz) => {
-                Ok(ScalarValue::TimestampNanosecond(Some(-v), tz.clone()))
+                Ok(ScalarValue::TimestampNanosecond(
+                    Some(neg_checked_with_ctx(*v, || {
+                        format!("In negation of TimestampNanoSecond({v})")
+                    })?),
+                    tz.clone(),
+                ))
             }
             ScalarValue::TimestampMicrosecond(Some(v), tz) => {
-                Ok(ScalarValue::TimestampMicrosecond(Some(-v), tz.clone()))
+                Ok(ScalarValue::TimestampMicrosecond(
+                    Some(neg_checked_with_ctx(*v, || {
+                        format!("In negation of TimestampMicroSecond({v})")
+                    })?),
+                    tz.clone(),
+                ))
             }
             ScalarValue::TimestampMillisecond(Some(v), tz) => {
-                Ok(ScalarValue::TimestampMillisecond(Some(-v), tz.clone()))
+                Ok(ScalarValue::TimestampMillisecond(
+                    Some(neg_checked_with_ctx(*v, || {
+                        format!("In negation of TimestampMilliSecond({v})")
+                    })?),
+                    tz.clone(),
+                ))
             }
             value => _internal_err!(
                 "Can not run arithmetic negative on scalar value {value:?}"
@@ -1839,7 +1898,7 @@ impl ScalarValue {
     ///    ScalarValue::Int32(Some(2))
     /// ];
     ///
-    /// let result = ScalarValue::new_list(&scalars, &DataType::Int32);
+    /// let result = ScalarValue::new_list(&scalars, &DataType::Int32, true);
     ///
     /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
     ///     vec![
@@ -1848,13 +1907,25 @@ impl ScalarValue {
     ///
     /// assert_eq!(*result, expected);
     /// ```
-    pub fn new_list(values: &[ScalarValue], data_type: &DataType) -> Arc<ListArray> {
+    pub fn new_list(
+        values: &[ScalarValue],
+        data_type: &DataType,
+        nullable: bool,
+    ) -> Arc<ListArray> {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_list_array(values))
+        Arc::new(array_into_list_array(values, nullable))
+    }
+
+    /// Same as [`ScalarValue::new_list`] but with nullable set to true.
+    pub fn new_list_nullable(
+        values: &[ScalarValue],
+        data_type: &DataType,
+    ) -> Arc<ListArray> {
+        Self::new_list(values, data_type, true)
     }
 
     /// Converts `IntoIterator<Item = ScalarValue>` where each element has type corresponding to
@@ -1873,7 +1944,7 @@ impl ScalarValue {
     ///    ScalarValue::Int32(Some(2))
     /// ];
     ///
-    /// let result = ScalarValue::new_list_from_iter(scalars.into_iter(), &DataType::Int32);
+    /// let result = ScalarValue::new_list_from_iter(scalars.into_iter(), &DataType::Int32, true);
     ///
     /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
     ///     vec![
@@ -1885,13 +1956,14 @@ impl ScalarValue {
     pub fn new_list_from_iter(
         values: impl IntoIterator<Item = ScalarValue> + ExactSizeIterator,
         data_type: &DataType,
+        nullable: bool,
     ) -> Arc<ListArray> {
         let values = if values.len() == 0 {
             new_empty_array(data_type)
         } else {
             Self::iter_to_array(values).unwrap()
         };
-        Arc::new(array_into_list_array(values))
+        Arc::new(array_into_list_array(values, nullable))
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
@@ -2305,7 +2377,7 @@ impl ScalarValue {
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
-    /// use datafusion_common::utils::array_into_list_array;
+    /// use datafusion_common::utils::array_into_list_array_nullable;
     /// use std::sync::Arc;
     ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
@@ -2314,7 +2386,7 @@ impl ScalarValue {
     /// ]);
     ///
     /// // Wrap into another layer of list, we got nested array as [ [[1,2,3], [4,5]] ]
-    /// let list_arr = array_into_list_array(Arc::new(list_arr));
+    /// let list_arr = array_into_list_array_nullable(Arc::new(list_arr));
     ///
     /// // Convert the array into Scalar Values for each row, we got 1D arrays in this example
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
@@ -2400,11 +2472,12 @@ impl ScalarValue {
                 typed_cast!(array, index, LargeStringArray, LargeUtf8)?
             }
             DataType::Utf8View => typed_cast!(array, index, StringViewArray, Utf8View)?,
-            DataType::List(_) => {
+            DataType::List(field) => {
                 let list_array = array.as_list::<i32>();
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr = Arc::new(array_into_list_array(nested_array));
+                let arr =
+                    Arc::new(array_into_list_array(nested_array, field.is_nullable()));
 
                 ScalarValue::List(arr)
             }
@@ -3499,8 +3572,10 @@ mod tests {
     };
 
     use crate::assert_batches_eq;
+    use crate::utils::array_into_list_array_nullable;
     use arrow::buffer::OffsetBuffer;
     use arrow::compute::{is_null, kernels};
+    use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use arrow_buffer::Buffer;
     use arrow_schema::Fields;
@@ -3646,9 +3721,9 @@ mod tests {
             ScalarValue::from("data-fusion"),
         ];
 
-        let result = ScalarValue::new_list(scalars.as_slice(), &DataType::Utf8);
+        let result = ScalarValue::new_list_nullable(scalars.as_slice(), &DataType::Utf8);
 
-        let expected = array_into_list_array(Arc::new(StringArray::from(vec![
+        let expected = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
             "rust",
             "arrow",
             "data-fusion",
@@ -3860,10 +3935,12 @@ mod tests {
 
     #[test]
     fn iter_to_array_string_test() {
-        let arr1 =
-            array_into_list_array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
-        let arr2 =
-            array_into_list_array(Arc::new(StringArray::from(vec!["rust", "world"])));
+        let arr1 = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
+            "foo", "bar", "baz",
+        ])));
+        let arr2 = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
+            "rust", "world",
+        ])));
 
         let scalars = vec![
             ScalarValue::List(Arc::new(arr1)),
@@ -4270,7 +4347,7 @@ mod tests {
 
     #[test]
     fn scalar_list_null_to_array() {
-        let list_array = ScalarValue::new_list(&[], &DataType::UInt64);
+        let list_array = ScalarValue::new_list_nullable(&[], &DataType::UInt64);
 
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 0);
@@ -4291,7 +4368,7 @@ mod tests {
             ScalarValue::UInt64(None),
             ScalarValue::UInt64(Some(101)),
         ];
-        let list_array = ScalarValue::new_list(&values, &DataType::UInt64);
+        let list_array = ScalarValue::new_list_nullable(&values, &DataType::UInt64);
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 3);
 
@@ -5216,13 +5293,13 @@ mod tests {
         // Define list-of-structs scalars
 
         let nl0_array = ScalarValue::iter_to_array(vec![s0.clone(), s1.clone()]).unwrap();
-        let nl0 = ScalarValue::List(Arc::new(array_into_list_array(nl0_array)));
+        let nl0 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl0_array)));
 
         let nl1_array = ScalarValue::iter_to_array(vec![s2.clone()]).unwrap();
-        let nl1 = ScalarValue::List(Arc::new(array_into_list_array(nl1_array)));
+        let nl1 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl1_array)));
 
         let nl2_array = ScalarValue::iter_to_array(vec![s1.clone()]).unwrap();
-        let nl2 = ScalarValue::List(Arc::new(array_into_list_array(nl2_array)));
+        let nl2 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl2_array)));
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
@@ -5492,6 +5569,89 @@ mod tests {
         let value = ScalarValue::Boolean(None);
         assert!(value.arithmetic_negate().is_err());
         Ok(())
+    }
+
+    #[test]
+    #[allow(arithmetic_overflow)] // we want to test them
+    fn test_scalar_negative_overflows() -> Result<()> {
+        macro_rules! test_overflow_on_value {
+            ($($val:expr),* $(,)?) => {$(
+                {
+                    let value: ScalarValue = $val;
+                    let err = value.arithmetic_negate().expect_err("Should receive overflow error on negating {value:?}");
+                    let root_err = err.find_root();
+                    match  root_err{
+                        DataFusionError::ArrowError(
+                            ArrowError::ComputeError(_),
+                            _,
+                        ) => {}
+                        _ => return Err(err),
+                    };
+                }
+            )*};
+        }
+        test_overflow_on_value!(
+            // the integers
+            i8::MIN.into(),
+            i16::MIN.into(),
+            i32::MIN.into(),
+            i64::MIN.into(),
+            // for decimals, only value needs to be tested
+            ScalarValue::try_new_decimal128(i128::MIN, 10, 5)?,
+            ScalarValue::Decimal256(Some(i256::MIN), 20, 5),
+            // interval, check all possible values
+            ScalarValue::IntervalYearMonth(Some(i32::MIN)),
+            ScalarValue::new_interval_dt(i32::MIN, 999),
+            ScalarValue::new_interval_dt(1, i32::MIN),
+            ScalarValue::new_interval_mdn(i32::MIN, 15, 123_456),
+            ScalarValue::new_interval_mdn(12, i32::MIN, 123_456),
+            ScalarValue::new_interval_mdn(12, 15, i64::MIN),
+            // tz doesn't matter when negating
+            ScalarValue::TimestampSecond(Some(i64::MIN), None),
+            ScalarValue::TimestampMillisecond(Some(i64::MIN), None),
+            ScalarValue::TimestampMicrosecond(Some(i64::MIN), None),
+            ScalarValue::TimestampNanosecond(Some(i64::MIN), None),
+        );
+
+        let float_cases = [
+            (
+                ScalarValue::Float16(Some(f16::MIN)),
+                ScalarValue::Float16(Some(f16::MAX)),
+            ),
+            (
+                ScalarValue::Float16(Some(f16::MAX)),
+                ScalarValue::Float16(Some(f16::MIN)),
+            ),
+            (f32::MIN.into(), f32::MAX.into()),
+            (f32::MAX.into(), f32::MIN.into()),
+            (f64::MIN.into(), f64::MAX.into()),
+            (f64::MAX.into(), f64::MIN.into()),
+        ];
+        // skip float 16 because they aren't supported
+        for (test, expected) in float_cases.into_iter().skip(2) {
+            assert_eq!(test.arithmetic_negate()?, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "Can not run arithmetic negative on scalar value Float16")]
+    fn f16_test_overflow() {
+        // TODO: if negate supports f16, add these cases to `test_scalar_negative_overflows` test case
+        let cases = [
+            (
+                ScalarValue::Float16(Some(f16::MIN)),
+                ScalarValue::Float16(Some(f16::MAX)),
+            ),
+            (
+                ScalarValue::Float16(Some(f16::MAX)),
+                ScalarValue::Float16(Some(f16::MIN)),
+            ),
+        ];
+
+        for (test, expected) in cases {
+            assert_eq!(test.arithmetic_negate().unwrap(), expected);
+        }
     }
 
     macro_rules! expect_operation_error {
@@ -6008,7 +6168,7 @@ mod tests {
     #[test]
     fn test_build_timestamp_millisecond_list() {
         let values = vec![ScalarValue::TimestampMillisecond(Some(1), None)];
-        let arr = ScalarValue::new_list(
+        let arr = ScalarValue::new_list_nullable(
             &values,
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         );
@@ -6019,7 +6179,7 @@ mod tests {
     fn test_newlist_timestamp_zone() {
         let s: &'static str = "UTC";
         let values = vec![ScalarValue::TimestampMillisecond(Some(1), Some(s.into()))];
-        let arr = ScalarValue::new_list(
+        let arr = ScalarValue::new_list_nullable(
             &values,
             &DataType::Timestamp(TimeUnit::Millisecond, Some(s.into())),
         );

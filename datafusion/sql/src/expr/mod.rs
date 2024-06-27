@@ -17,6 +17,7 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
+use datafusion_common::utils::list_ndims;
 use sqlparser::ast::{CastKind, Expr as SQLExpr, Subscript, TrimWhereField, Value};
 
 use datafusion_common::{
@@ -86,13 +87,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 StackEntry::Operator(op) => {
                     let right = eval_stack.pop().unwrap();
                     let left = eval_stack.pop().unwrap();
-
-                    let expr = Expr::BinaryExpr(BinaryExpr::new(
-                        Box::new(left),
-                        op,
-                        Box::new(right),
-                    ));
-
+                    let expr = self.build_logical_expr(op, left, right, schema)?;
                     eval_stack.push(expr);
                 }
             }
@@ -101,6 +96,69 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         assert_eq!(1, eval_stack.len());
         let expr = eval_stack.pop().unwrap();
         Ok(expr)
+    }
+
+    fn build_logical_expr(
+        &self,
+        op: Operator,
+        left: Expr,
+        right: Expr,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        // Rewrite string concat operator to function based on types
+        // if we get list || list then we rewrite it to array_concat()
+        // if we get list || non-list then we rewrite it to array_append()
+        // if we get non-list || list then we rewrite it to array_prepend()
+        // if we get string || string then we rewrite it to concat()
+        if op == Operator::StringConcat {
+            let left_type = left.get_type(schema)?;
+            let right_type = right.get_type(schema)?;
+            let left_list_ndims = list_ndims(&left_type);
+            let right_list_ndims = list_ndims(&right_type);
+
+            // We determine the target function to rewrite based on the list n-dimension, the check is not exact but sufficient.
+            // The exact validity check is handled in the actual function, so even if there is 3d list appended with 1d list, it is also fine to rewrite.
+            if left_list_ndims + right_list_ndims == 0 {
+                // TODO: concat function ignore null, but string concat takes null into consideration
+                // we can rewrite it to concat if we can configure the behaviour of concat function to the one like `string concat operator`
+            } else if left_list_ndims == right_list_ndims {
+                if let Some(udf) = self.context_provider.get_function_meta("array_concat")
+                {
+                    return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        udf,
+                        vec![left, right],
+                    )));
+                } else {
+                    return internal_err!("array_concat not found");
+                }
+            } else if left_list_ndims > right_list_ndims {
+                if let Some(udf) = self.context_provider.get_function_meta("array_append")
+                {
+                    return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        udf,
+                        vec![left, right],
+                    )));
+                } else {
+                    return internal_err!("array_append not found");
+                }
+            } else if left_list_ndims < right_list_ndims {
+                if let Some(udf) =
+                    self.context_provider.get_function_meta("array_prepend")
+                {
+                    return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        udf,
+                        vec![left, right],
+                    )));
+                } else {
+                    return internal_err!("array_append not found");
+                }
+            }
+        }
+        Ok(Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            op,
+            Box::new(right),
+        )))
     }
 
     /// Generate a relational expression from a SQL expression

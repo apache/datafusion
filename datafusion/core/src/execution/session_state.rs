@@ -402,6 +402,16 @@ impl SessionState {
         self
     }
 
+    // the add_optimizer_rule takes an owned reference
+    // it should probably be renamed to `with_optimizer_rule` to follow builder style
+    // and `add_optimizer_rule` that takes &mut self added instead of this
+    pub(crate) fn append_optimizer_rule(
+        &mut self,
+        optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
+    ) {
+        self.optimizer.rules.push(optimizer_rule);
+    }
+
     /// Add `physical_optimizer_rule` to the end of the list of
     /// [`PhysicalOptimizerRule`]s used to rewrite queries.
     pub fn add_physical_optimizer_rule(
@@ -807,8 +817,8 @@ impl SessionState {
     }
 
     /// Return catalog list
-    pub fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
-        self.catalog_list.clone()
+    pub fn catalog_list(&self) -> &Arc<dyn CatalogProviderList> {
+        &self.catalog_list
     }
 
     /// set the catalog list
@@ -840,8 +850,8 @@ impl SessionState {
     }
 
     /// Return [SerializerRegistry] for extensions
-    pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
-        self.serializer_registry.clone()
+    pub fn serializer_registry(&self) -> &Arc<dyn SerializerRegistry> {
+        &self.serializer_registry
     }
 
     /// Return version of the cargo package that produced this query

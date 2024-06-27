@@ -21,7 +21,6 @@
 mod binary;
 mod case;
 mod column;
-mod datum;
 mod in_list;
 mod is_not_null;
 mod is_null;
