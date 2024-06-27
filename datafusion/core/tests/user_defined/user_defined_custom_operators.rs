@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
 use arrow_array::RecordBatch;
+use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::Transformed;
-use datafusion::common::{DFSchema, assert_batches_eq};
+use datafusion::common::{assert_batches_eq, DFSchema};
 use datafusion::error::Result;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr_rewriter::FunctionRewrite;
