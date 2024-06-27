@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::Operator;
+use crate::{Operator, WrapCustomOperator};
 
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
@@ -29,7 +29,6 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
-use crate::operator::WrapCustomOperator;
 use datafusion_common::{exec_datafusion_err, plan_datafusion_err, plan_err, Result};
 
 /// The type signature of an instantiation of binary operator expression such as
