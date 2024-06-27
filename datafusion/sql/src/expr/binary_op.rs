@@ -23,7 +23,7 @@ use sqlparser::ast::BinaryOperator;
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn parse_sql_binary_op(&self, op: BinaryOperator) -> Result<Operator> {
         for parse_custom_op in &self.options.parse_custom_operator {
-            if let Some(op) = parse_custom_op.parse(&op)? {
+            if let Some(op) = parse_custom_op.op_from_ast(&op)? {
                 return Ok(op);
             }
         }

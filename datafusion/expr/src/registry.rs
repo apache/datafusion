@@ -18,7 +18,9 @@
 //! FunctionRegistry trait
 
 use crate::expr_rewriter::FunctionRewrite;
-use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
+use crate::{
+    AggregateUDF, ParseCustomOperator, ScalarUDF, UserDefinedLogicalNode, WindowUDF,
+};
 use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
@@ -107,6 +109,21 @@ pub trait FunctionRegistry {
         _rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
     ) -> Result<()> {
         not_impl_err!("Registering FunctionRewrite")
+    }
+
+    /// Registers a new [`ParseCustomOperator`] with the registry.
+    ///
+    /// `ParseCustomOperator` is used to parse custom operators from SQL,
+    /// e.g. `->>` or `?`.
+    fn register_parse_custom_operator(
+        &mut self,
+        _parse_custom_operator: Arc<dyn ParseCustomOperator>,
+    ) -> Result<()> {
+        not_impl_err!("Registering ParseCustomOperator")
+    }
+
+    fn parse_custom_operators(&self) -> Vec<Arc<dyn ParseCustomOperator>> {
+        vec![]
     }
 }
 

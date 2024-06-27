@@ -56,8 +56,8 @@ use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
 use datafusion_expr::{
-    AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ScalarUDF, TableSource,
-    WindowUDF,
+    AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ParseCustomOperator,
+    ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
@@ -67,9 +67,7 @@ use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
-use datafusion_sql::planner::{
-    ContextProvider, ParseCustomOperator, ParserOptions, PlannerContext, SqlToRel,
-};
+use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
 use std::collections::hash_map::Entry;
@@ -578,7 +576,7 @@ impl SessionState {
         ParserOptions {
             parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
             enable_ident_normalization: sql_parser_options.enable_ident_normalization,
-            parse_custom_operator: self.parse_custom_operators.clone(),
+            parse_custom_operator: self.parse_custom_operators(),
         }
     }
 
@@ -881,19 +879,6 @@ impl SessionState {
         let udtf = self.table_functions.remove(name);
         Ok(udtf.map(|x| x.function().clone()))
     }
-
-    /// Registers a new [`ParseCustomOperator`] with the registry.
-    ///
-    /// `ParseCustomOperator` is used to parse custom operators from SQL,
-    /// e.g. `->>` or `?`.
-    pub fn register_parse_custom_operator(
-        &mut self,
-        parse_custom_operator: Arc<dyn ParseCustomOperator>,
-    ) -> datafusion_common::Result<()> {
-        // TODO moved into FunctionRegistry? it would involve adding datafusion_sql as a dep of datafusion-expr
-        self.parse_custom_operators.push(parse_custom_operator);
-        Ok(())
-    }
 }
 
 struct SessionContextProvider<'a> {
@@ -1092,6 +1077,18 @@ impl FunctionRegistry for SessionState {
     ) -> datafusion_common::Result<()> {
         self.analyzer.add_function_rewrite(rewrite);
         Ok(())
+    }
+
+    fn register_parse_custom_operator(
+        &mut self,
+        parse_custom_operator: Arc<dyn ParseCustomOperator>,
+    ) -> datafusion_common::Result<()> {
+        self.parse_custom_operators.push(parse_custom_operator);
+        Ok(())
+    }
+
+    fn parse_custom_operators(&self) -> Vec<Arc<dyn ParseCustomOperator>> {
+        self.parse_custom_operators.clone()
     }
 }
 

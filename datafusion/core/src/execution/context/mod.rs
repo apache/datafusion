@@ -60,7 +60,7 @@ use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
-    Expr, UserDefinedLogicalNode, WindowUDF,
+    Expr, ParseCustomOperator, UserDefinedLogicalNode, WindowUDF,
 };
 
 // backwards compatibility
@@ -76,7 +76,6 @@ pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
-use datafusion_sql::planner::ParseCustomOperator;
 
 mod avro;
 mod csv;
@@ -1354,19 +1353,6 @@ impl SessionContext {
             .write()
             .register_table_options_extension(extension)
     }
-
-    /// Registers a new [`ParseCustomOperator`] with the registry.
-    ///
-    /// `ParseCustomOperator` is used to parse custom operators from SQL,
-    /// e.g. `->>` or `?`.
-    pub fn register_parse_custom_operator(
-        &mut self,
-        parse_custom_operator: Arc<dyn ParseCustomOperator>,
-    ) -> Result<()> {
-        self.state
-            .write()
-            .register_parse_custom_operator(parse_custom_operator)
-    }
 }
 
 impl FunctionRegistry for SessionContext {
@@ -1403,6 +1389,19 @@ impl FunctionRegistry for SessionContext {
         rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
     ) -> Result<()> {
         self.state.write().register_function_rewrite(rewrite)
+    }
+
+    fn register_parse_custom_operator(
+        &mut self,
+        parse_custom_operator: Arc<dyn ParseCustomOperator>,
+    ) -> Result<()> {
+        self.state
+            .write()
+            .register_parse_custom_operator(parse_custom_operator)
+    }
+
+    fn parse_custom_operators(&self) -> Vec<Arc<dyn ParseCustomOperator>> {
+        todo!();
     }
 }
 

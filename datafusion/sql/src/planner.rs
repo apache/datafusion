@@ -18,13 +18,13 @@
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{fmt, vec};
+use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
 };
-use datafusion_expr::{Operator, WindowUDF};
+use datafusion_expr::{ParseCustomOperator, WindowUDF};
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
@@ -90,16 +90,6 @@ pub trait ContextProvider {
 
     /// Get all user defined window function names
     fn udwf_names(&self) -> Vec<String>;
-}
-
-pub trait ParseCustomOperator: fmt::Debug + Send + Sync {
-    /// Return a human readable name for this parser
-    fn name(&self) -> &str;
-
-    /// potentially parse a custom operator.
-    ///
-    /// Return `None` if the operator is not recognized
-    fn parse(&self, op: &sqlparser::ast::BinaryOperator) -> Result<Option<Operator>>;
 }
 
 /// SQL parser options

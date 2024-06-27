@@ -241,7 +241,10 @@ pub fn parse_physical_expr(
                 input_schema,
                 codec,
             )?,
-            logical_plan::from_proto::from_proto_binary_op(&binary_expr.op)?,
+            logical_plan::from_proto::from_proto_binary_op(
+                &binary_expr.op,
+                &registry.parse_custom_operators(),
+            )?,
             parse_required_physical_expr(
                 binary_expr.r.as_deref(),
                 registry,

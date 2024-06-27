@@ -31,8 +31,8 @@ use datafusion_expr::{
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr,
     GroupingSet,
     GroupingSet::GroupingSets,
-    JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    JoinConstraint, JoinType, Like, Operator, ParseCustomOperator, TryCast, WindowFrame,
+    WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_proto_common::{from_proto::FromOptionalField, FromProtoError as Error};
 
@@ -252,7 +252,10 @@ pub fn parse_expr(
 
     match expr_type {
         ExprType::BinaryExpr(binary_expr) => {
-            let op = from_proto_binary_op(&binary_expr.op)?;
+            let op = from_proto_binary_op(
+                &binary_expr.op,
+                &registry.parse_custom_operators(),
+            )?;
             let operands = parse_exprs(&binary_expr.operands, registry, codec)?;
 
             if operands.len() < 2 {
@@ -676,7 +679,16 @@ fn parse_escape_char(s: &str) -> Result<Option<char>> {
     }
 }
 
-pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
+pub fn from_proto_binary_op(
+    op: &str,
+    parse_custom_operator: &[Arc<dyn ParseCustomOperator>],
+) -> Result<Operator, Error> {
+    for parse_custom_op in parse_custom_operator {
+        if let Some(op) = parse_custom_op.op_from_name(op)? {
+            return Ok(op);
+        }
+    }
+
     match op {
         "And" => Ok(Operator::And),
         "Or" => Ok(Operator::Or),
