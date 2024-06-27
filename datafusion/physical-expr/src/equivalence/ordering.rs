@@ -556,8 +556,7 @@ mod tests {
 
             let constants = constants
                 .into_iter()
-                .map(|expr| ConstExpr::new(expr.clone()).with_across_partitions(true))
-                .collect::<Vec<_>>();
+                .map(|expr| ConstExpr::new(expr.clone()).with_across_partitions(true));
             eq_properties = eq_properties.add_constants(constants);
 
             let reqs = convert_to_sort_exprs(&reqs);

@@ -196,8 +196,7 @@ fn calculate_union_eq_properties(
             })
             .collect::<Vec<_>>();
     }
-    eq_properties = eq_properties.add_constants(meet_constants);
-    eq_properties
+    eq_properties.add_constants(meet_constants)
 }
 
 impl DisplayAs for UnionExec {

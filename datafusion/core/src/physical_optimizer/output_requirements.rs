@@ -248,7 +248,7 @@ fn require_top_ordering_helper(
     if children.len() != 1 {
         Ok((plan, false))
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        // In the case of constant columns, output ordering of SortExec would give an emtpy set.
+        // In case of constant columns, output ordering of SortExec would give an empty set.
         // Therefore; we check the sort expression field of the SortExec to assign the requirements.
         let req_ordering = sort_exec.expr();
         let req_dist = sort_exec.required_input_distribution()[0].clone();

@@ -19,6 +19,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use super::ordering::collapse_lex_ordering;
+use crate::equivalence::class::const_exprs_contains;
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
@@ -38,7 +39,6 @@ use datafusion_physical_expr_common::expressions::column::Column;
 use datafusion_physical_expr_common::expressions::CastExpr;
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
-use crate::equivalence::class::const_exprs_contains;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
@@ -175,9 +175,9 @@ impl EquivalenceProperties {
     }
 
     /// Removes constant expressions that may change across partitions.
-    /// (Should be used when different partitions are fused)
+    /// This method should be used when different partitions are fused.
     pub fn clear_per_partition_constants(&mut self) {
-        self.constants.retain(|elem| elem.across_partitions());
+        self.constants.retain(|item| item.across_partitions());
     }
 
     /// Extends this `EquivalenceProperties` by adding the orderings inside the
@@ -357,8 +357,7 @@ impl EquivalenceProperties {
         constant_exprs.extend(
             self.constants
                 .iter()
-                .map(|const_expr| const_expr.expr().clone())
-                .collect::<Vec<_>>(),
+                .map(|const_expr| const_expr.expr().clone()),
         );
         let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
         // Prune redundant sections in the requirement:
@@ -1352,10 +1351,16 @@ pub fn join_equivalence_properties(
         on,
     ));
 
-    let left_constants = left.constants().to_vec();
-    let right_constants = right.constants().to_vec();
-    let left_oeq_class = left.oeq_class;
-    let mut right_oeq_class = right.oeq_class;
+    let EquivalenceProperties {
+        constants: left_constants,
+        oeq_class: left_oeq_class,
+        ..
+    } = left;
+    let EquivalenceProperties {
+        constants: right_constants,
+        oeq_class: mut right_oeq_class,
+        ..
+    } = right;
     match maintains_input_order {
         [true, false] => {
             // In this special case, right side ordering can be prefixed with
