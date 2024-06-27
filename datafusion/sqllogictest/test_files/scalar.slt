@@ -493,41 +493,6 @@ select gcd(a, b), gcd(c, d), gcd(e, f) from signed_integers;
 2 1 1
 NULL NULL NULL
 
-## lcm
-
-# lcm scalar function
-query III rowsort
-select lcm(0, 0), lcm(2, 3), lcm(15, 10);
-----
-0 6 30
-
-# lcm scalar nulls
-query I rowsort
-select lcm(null, 64);
-----
-NULL
-
-# lcm scalar nulls #1
-query I rowsort
-select lcm(2, null);
-----
-NULL
-
-# lcm scalar nulls #2
-query I rowsort
-select lcm(null, null);
-----
-NULL
-
-# lcm with columns
-query III rowsort
-select lcm(a, b), lcm(c, d), lcm(e, f) from signed_integers;
-----
-100 580608 20
-1000 31488 55
-30000 1001472 12
-NULL NULL NULL
-
 ## ln
 
 # ln scalar function
