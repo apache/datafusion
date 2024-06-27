@@ -56,8 +56,7 @@ this to work.
 
 ```bash
 git clone https://github.com/apache/datafusion
-cd arrow-datafusion
-git checkout 12.0.0
+cd datafusion
 docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
 docker run -it -v $(your_data_location):/data datafusion-cli
 ```
