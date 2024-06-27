@@ -24,7 +24,7 @@ use datafusion::{
     },
     prelude::SessionContext,
 };
-use datafusion_common::not_impl_err;
+use datafusion_common::{not_impl_err, TableReference};
 
 use super::LogicalExtensionCodec;
 
@@ -53,6 +53,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &datafusion::prelude::SessionContext,
     ) -> datafusion_common::Result<
@@ -63,6 +64,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
@@ -127,6 +129,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &datafusion::prelude::SessionContext,
     ) -> datafusion_common::Result<
@@ -137,6 +140,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
@@ -201,6 +205,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &datafusion::prelude::SessionContext,
     ) -> datafusion_common::Result<
@@ -211,6 +216,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
@@ -275,6 +281,7 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &datafusion::prelude::SessionContext,
     ) -> datafusion_common::Result<
@@ -285,6 +292,7 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
@@ -349,6 +357,7 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _cts: &datafusion::prelude::SessionContext,
     ) -> datafusion_common::Result<
@@ -359,6 +368,7 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
