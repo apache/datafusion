@@ -25,6 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
+use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
@@ -64,16 +65,16 @@ fn subquery_filter_with_cast() -> Result<()> {
     // regression test for https://github.com/apache/datafusion/issues/3760
     let sql = "SELECT col_int32 FROM test \
     WHERE col_int32 > (\
-      SELECT AVG(col_int32) FROM test \
+      SELECT avg(col_int32) FROM test \
       WHERE col_utf8 BETWEEN '2002-05-08' \
         AND (cast('2002-05-08' as date) + interval '5 days')\
     )";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_int32\
-    \n  Inner Join:  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.AVG(test.col_int32)\
+    \n  Inner Join:  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.avg(test.col_int32)\
     \n    TableScan: test projection=[col_int32]\
     \n    SubqueryAlias: __scalar_sq_1\
-    \n      Aggregate: groupBy=[[]], aggr=[[AVG(CAST(test.col_int32 AS Float64))]]\
+    \n      Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]\
     \n        Projection: test.col_int32\
     \n          Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
     \n            TableScan: test projection=[col_int32, col_utf8]";
@@ -187,7 +188,7 @@ fn between_date32_plus_interval() -> Result<()> {
     WHERE col_date32 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n  Projection: \
         \n    Filter: test.col_date32 >= Date32(\"1998-03-18\") AND test.col_date32 <= Date32(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date32]";
@@ -201,7 +202,7 @@ fn between_date64_plus_interval() -> Result<()> {
     WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n  Projection: \
         \n    Filter: test.col_date64 >= Date64(\"1998-03-18\") AND test.col_date64 <= Date64(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date64]";
@@ -257,8 +258,8 @@ fn join_keys_in_subquery_alias_1() {
 fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
-    let expected = "Projection: test.col_int32 + test.col_uint32 AS c, COUNT(*)\
-    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]\
+    let expected = "Projection: test.col_int32 + test.col_uint32 AS c, count(*)\
+    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(Int64(1)) AS count(*)]]\
     \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
@@ -326,7 +327,8 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let statement = &ast[0];
     let context_provider = MyContextProvider::default()
         .with_udaf(sum_udaf())
-        .with_udaf(count_udaf());
+        .with_udaf(count_udaf())
+        .with_udaf(avg_udaf());
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 

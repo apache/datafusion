@@ -105,8 +105,8 @@ impl ScalarUDF {
     }
 
     /// Return the underlying [`ScalarUDFImpl`] trait object for this function
-    pub fn inner(&self) -> Arc<dyn ScalarUDFImpl> {
-        self.inner.clone()
+    pub fn inner(&self) -> &Arc<dyn ScalarUDFImpl> {
+        &self.inner
     }
 
     /// Adds additional names that can be used to invoke this function, in

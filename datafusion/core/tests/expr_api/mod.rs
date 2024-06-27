@@ -30,6 +30,7 @@ use sqlparser::ast::NullTreatment;
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
 use std::sync::{Arc, OnceLock};
 
+mod parse_sql_expr;
 mod simplification;
 
 #[test]

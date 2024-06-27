@@ -68,7 +68,7 @@ use crate::utils::log_plan;
 /// `OptimizerRule`s.
 ///
 /// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
-/// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_optimizer_rule
+/// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_optimizer_rule
 
 pub trait OptimizerRule {
     /// Try and rewrite `plan` to an optimized form, returning None if the plan
@@ -77,11 +77,17 @@ pub trait OptimizerRule {
     /// Note this API will be deprecated in the future as it requires `clone`ing
     /// the input plan, which can be expensive. OptimizerRules should implement
     /// [`Self::rewrite`] instead.
+    #[deprecated(
+        since = "40.0.0",
+        note = "please implement supports_rewrite and rewrite instead"
+    )]
     fn try_optimize(
         &self,
-        plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>>;
+        _plan: &LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        internal_err!("Should have called rewrite")
+    }
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
@@ -96,7 +102,7 @@ pub trait OptimizerRule {
 
     /// Does this rule support rewriting owned plans (rather than by reference)?
     fn supports_rewrite(&self) -> bool {
-        false
+        true
     }
 
     /// Try to rewrite `plan` to an optimized form, returning `Transformed::yes`
@@ -332,6 +338,7 @@ fn optimize_plan_node(
         return rule.rewrite(plan, config);
     }
 
+    #[allow(deprecated)]
     rule.try_optimize(&plan, config).map(|maybe_plan| {
         match maybe_plan {
             Some(new_plan) => {
@@ -483,7 +490,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use datafusion_common::tree_node::Transformed;
-    use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
+    use datafusion_common::{plan_err, DFSchema, DFSchemaRef, DataFusionError, Result};
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
 
@@ -662,16 +669,20 @@ mod tests {
     struct BadRule {}
 
     impl OptimizerRule for BadRule {
-        fn try_optimize(
-            &self,
-            _: &LogicalPlan,
-            _: &dyn OptimizerConfig,
-        ) -> Result<Option<LogicalPlan>> {
-            plan_err!("rule failed")
-        }
-
         fn name(&self) -> &str {
             "bad rule"
+        }
+
+        fn supports_rewrite(&self) -> bool {
+            true
+        }
+
+        fn rewrite(
+            &self,
+            _plan: LogicalPlan,
+            _config: &dyn OptimizerConfig,
+        ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
+            plan_err!("rule failed")
         }
     }
 
@@ -679,14 +690,6 @@ mod tests {
     struct GetTableScanRule {}
 
     impl OptimizerRule for GetTableScanRule {
-        fn try_optimize(
-            &self,
-            _: &LogicalPlan,
-            _: &dyn OptimizerConfig,
-        ) -> Result<Option<LogicalPlan>> {
-            unreachable!()
-        }
-
         fn name(&self) -> &str {
             "get table_scan rule"
         }
@@ -724,14 +727,6 @@ mod tests {
     }
 
     impl OptimizerRule for RotateProjectionRule {
-        fn try_optimize(
-            &self,
-            _plan: &LogicalPlan,
-            _: &dyn OptimizerConfig,
-        ) -> Result<Option<LogicalPlan>> {
-            unreachable!()
-        }
-
         fn name(&self) -> &str {
             "rotate_projection"
         }

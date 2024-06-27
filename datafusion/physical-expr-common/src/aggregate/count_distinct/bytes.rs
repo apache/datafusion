@@ -20,7 +20,7 @@
 use crate::binary_map::{ArrowBytesSet, OutputType};
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::array_into_list_array;
+use datafusion_common::utils::array_into_list_array_nullable;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
 use std::fmt::Debug;
@@ -47,7 +47,7 @@ impl<O: OffsetSizeTrait> Accumulator for BytesDistinctCountAccumulator<O> {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         let set = self.0.take();
         let arr = set.into_state();
-        let list = Arc::new(array_into_list_array(arr));
+        let list = Arc::new(array_into_list_array_nullable(arr));
         Ok(vec![ScalarValue::List(list)])
     }
 

@@ -1528,154 +1528,154 @@ e e 1323
 query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY CUBE (a.c1, b.c1) ORDER BY a.c1, b.c1
 ----
-a    a    1260
-a    b    1140
-a    c    1260
-a    d    1080
-a    e    1260
-a    NULL 6000
-b    a    1302
-b    b    1178
-b    c    1302
-b    d    1116
-b    e    1302
-b    NULL 6200
-c    a    1176
-c    b    1064
-c    c    1176
-c    d    1008
-c    e    1176
-c    NULL 5600
-d    a    924
-d    b    836
-d    c    924
-d    d    792
-d    e    924
-d    NULL 4400
-e    a    1323
-e    b    1197
-e    c    1323
-e    d    1134
-e    e    1323
-e    NULL 6300
-NULL a    5985
-NULL b    5415
-NULL c    5985
-NULL d    5130
-NULL e    5985
+a a 1260
+a b 1140
+a c 1260
+a d 1080
+a e 1260
+a NULL 6000
+b a 1302
+b b 1178
+b c 1302
+b d 1116
+b e 1302
+b NULL 6200
+c a 1176
+c b 1064
+c c 1176
+c d 1008
+c e 1176
+c NULL 5600
+d a 924
+d b 836
+d c 924
+d d 792
+d e 924
+d NULL 4400
+e a 1323
+e b 1197
+e c 1323
+e d 1134
+e e 1323
+e NULL 6300
+NULL a 5985
+NULL b 5415
+NULL c 5985
+NULL d 5130
+NULL e 5985
 NULL NULL 28500
 
 # csv_query_cube_distinct_count
 query TII
 SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY CUBE (c1,c2) ORDER BY c1,c2
 ----
-a    1    5
-a    2    3
-a    3    5
-a    4    4
-a    5    3
-a    NULL 19
-b    1    3
-b    2    4
-b    3    2
-b    4    5
-b    5    5
-b    NULL 17
-c    1    4
-c    2    7
-c    3    4
-c    4    4
-c    5    2
-c    NULL 21
-d    1    7
-d    2    3
-d    3    3
-d    4    3
-d    5    2
-d    NULL 18
-e    1    3
-e    2    4
-e    3    4
-e    4    7
-e    5    2
-e    NULL 18
-NULL 1    22
-NULL 2    20
-NULL 3    17
-NULL 4    23
-NULL 5    14
+a 1 5
+a 2 3
+a 3 5
+a 4 4
+a 5 3
+a NULL 19
+b 1 3
+b 2 4
+b 3 2
+b 4 5
+b 5 5
+b NULL 17
+c 1 4
+c 2 7
+c 3 4
+c 4 4
+c 5 2
+c NULL 21
+d 1 7
+d 2 3
+d 3 3
+d 4 3
+d 5 2
+d NULL 18
+e 1 3
+e 2 4
+e 3 4
+e 4 7
+e 5 2
+e NULL 18
+NULL 1 22
+NULL 2 20
+NULL 3 17
+NULL 4 23
+NULL 5 14
 NULL NULL 80
 
 # csv_query_rollup_distinct_count
 query TII
 SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY ROLLUP (c1,c2) ORDER BY c1,c2
 ----
-a    1    5
-a    2    3
-a    3    5
-a    4    4
-a    5    3
-a    NULL 19
-b    1    3
-b    2    4
-b    3    2
-b    4    5
-b    5    5
-b    NULL 17
-c    1    4
-c    2    7
-c    3    4
-c    4    4
-c    5    2
-c    NULL 21
-d    1    7
-d    2    3
-d    3    3
-d    4    3
-d    5    2
-d    NULL 18
-e    1    3
-e    2    4
-e    3    4
-e    4    7
-e    5    2
-e    NULL 18
+a 1 5
+a 2 3
+a 3 5
+a 4 4
+a 5 3
+a NULL 19
+b 1 3
+b 2 4
+b 3 2
+b 4 5
+b 5 5
+b NULL 17
+c 1 4
+c 2 7
+c 3 4
+c 4 4
+c 5 2
+c NULL 21
+d 1 7
+d 2 3
+d 3 3
+d 4 3
+d 5 2
+d NULL 18
+e 1 3
+e 2 4
+e 3 4
+e 4 7
+e 5 2
+e NULL 18
 NULL NULL 80
 
 # csv_query_rollup_sum_crossjoin
 query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY ROLLUP (a.c1, b.c1) ORDER BY a.c1, b.c1
 ----
-a    a    1260
-a    b    1140
-a    c    1260
-a    d    1080
-a    e    1260
-a    NULL 6000
-b    a    1302
-b    b    1178
-b    c    1302
-b    d    1116
-b    e    1302
-b    NULL 6200
-c    a    1176
-c    b    1064
-c    c    1176
-c    d    1008
-c    e    1176
-c    NULL 5600
-d    a    924
-d    b    836
-d    c    924
-d    d    792
-d    e    924
-d    NULL 4400
-e    a    1323
-e    b    1197
-e    c    1323
-e    d    1134
-e    e    1323
-e    NULL 6300
+a a 1260
+a b 1140
+a c 1260
+a d 1080
+a e 1260
+a NULL 6000
+b a 1302
+b b 1178
+b c 1302
+b d 1116
+b e 1302
+b NULL 6200
+c a 1176
+c b 1064
+c c 1176
+c d 1008
+c e 1176
+c NULL 5600
+d a 924
+d b 836
+d c 924
+d d 792
+d e 924
+d NULL 4400
+e a 1323
+e b 1197
+e c 1323
+e d 1134
+e e 1323
+e NULL 6300
 NULL NULL 28500
 
 # query_count_without_from
@@ -1785,30 +1785,39 @@ select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' unio
 ----
 00:00:00 00:00:02
 
-# aggregate_decimal_min
-query RT
-select min(c1), arrow_typeof(min(c1)) from d_table
+# aggregate Interval(MonthDayNano) min/max
+query T??
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (interval '1 month'),
+  (interval '2 months'),
+  (interval '2 month 15 days'),
+  (interval '-2 month')
 ----
--100.009 Decimal128(10, 3)
+Interval(MonthDayNano) 0 years -2 mons 0 days 0 hours 0 mins 0.000000000 secs 0 years 2 mons 15 days 0 hours 0 mins 0.000000000 secs
 
-# aggregate_decimal_max
-query RT
-select max(c1), arrow_typeof(max(c1)) from d_table
+# aggregate Interval(DayTime) min/max
+query T??
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (arrow_cast('60 minutes', 'Interval(DayTime)')),
+  (arrow_cast('-3 minutes', 'Interval(DayTime)')),
+  (arrow_cast('30 minutes', 'Interval(DayTime)'));
 ----
-110.009 Decimal128(10, 3)
+Interval(DayTime) 0 years 0 mons 0 days 0 hours -3 mins 0.000 secs 0 years 0 mons 0 days 1 hours 0 mins 0.000 secs
 
-# aggregate_decimal_sum
-query RT
-select sum(c1), arrow_typeof(sum(c1)) from d_table
+# aggregate Interval(YearMonth) min/max
+query T??
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (arrow_cast('-1 year', 'Interval(YearMonth)')),
+  (arrow_cast('13 months', 'Interval(YearMonth)')),
+  (arrow_cast('1 year', 'Interval(YearMonth)'));
 ----
-100 Decimal128(20, 3)
-
-# aggregate_decimal_avg
-query RT
-select avg(c1), arrow_typeof(avg(c1)) from d_table
-----
-5 Decimal128(14, 7)
-
+Interval(YearMonth) -1 years 0 mons 0 days 0 hours 0 mins 0.00 secs 1 years 1 mons 0 days 0 hours 0 mins 0.00 secs
 
 # aggregate
 query II
@@ -3681,10 +3690,10 @@ X 2 2 2 2
 Y 1 1 1 1
 
 # aggregate_timestamps_avg
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
 
 # aggregate_duration_array_agg
@@ -3781,10 +3790,10 @@ Y 2021-01-01 2021-01-01T00:00:00
 
 
 # aggregate_timestamps_avg
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
+query error
 SELECT avg(date32), avg(date64) FROM t
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, avg(date32), avg(date64) FROM t GROUP BY tag ORDER BY tag;
 
 
@@ -3879,10 +3888,10 @@ B 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28
 
 
 # aggregate_times_avg
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
 
 statement ok
@@ -4316,7 +4325,7 @@ select avg(distinct x_dict) from value_dict;
 ----
 3
 
-statement error DataFusion error: This feature is not implemented: AVG\(DISTINCT\) aggregations are not available
+query error
 select avg(x_dict), avg(distinct x_dict) from value_dict;
 
 query I

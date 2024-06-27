@@ -37,20 +37,12 @@ pub enum AggregateFunction {
     Min,
     /// Maximum
     Max,
-    /// Average
-    Avg,
     /// Aggregation into an array
     ArrayAgg,
     /// N'th value in a group according to some ordering
     NthValue,
-    /// Correlation
-    Correlation,
     /// Grouping
     Grouping,
-    /// Bool And
-    BoolAnd,
-    /// Bool Or
-    BoolOr,
 }
 
 impl AggregateFunction {
@@ -59,13 +51,9 @@ impl AggregateFunction {
         match self {
             Min => "MIN",
             Max => "MAX",
-            Avg => "AVG",
             ArrayAgg => "ARRAY_AGG",
             NthValue => "NTH_VALUE",
-            Correlation => "CORR",
             Grouping => "GROUPING",
-            BoolAnd => "BOOL_AND",
-            BoolOr => "BOOL_OR",
         }
     }
 }
@@ -81,16 +69,10 @@ impl FromStr for AggregateFunction {
     fn from_str(name: &str) -> Result<AggregateFunction> {
         Ok(match name {
             // general
-            "avg" => AggregateFunction::Avg,
-            "bool_and" => AggregateFunction::BoolAnd,
-            "bool_or" => AggregateFunction::BoolOr,
             "max" => AggregateFunction::Max,
-            "mean" => AggregateFunction::Avg,
             "min" => AggregateFunction::Min,
             "array_agg" => AggregateFunction::ArrayAgg,
             "nth_value" => AggregateFunction::NthValue,
-            // statistical
-            "corr" => AggregateFunction::Correlation,
             // other
             "grouping" => AggregateFunction::Grouping,
             _ => {
@@ -104,7 +86,11 @@ impl AggregateFunction {
     /// Returns the datatype of the aggregate function given its argument types
     ///
     /// This is used to get the returned data type for aggregate expr.
-    pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
+    pub fn return_type(
+        &self,
+        input_expr_types: &[DataType],
+        input_expr_nullable: &[bool],
+    ) -> Result<DataType> {
         // Note that this function *must* return the same type that the respective physical expression returns
         // or the execution panics.
 
@@ -128,35 +114,26 @@ impl AggregateFunction {
                 // The coerced_data_types is same with input_types.
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
-                Ok(DataType::Boolean)
-            }
-            AggregateFunction::Correlation => {
-                correlation_return_type(&coerced_data_types[0])
-            }
-            AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
             AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
                 "item",
                 coerced_data_types[0].clone(),
-                true,
+                input_expr_nullable[0],
             )))),
             AggregateFunction::Grouping => Ok(DataType::Int32),
             AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
         }
     }
-}
 
-/// Returns the internal sum datatype of the avg aggregate function.
-pub fn sum_type_of_avg(input_expr_types: &[DataType]) -> Result<DataType> {
-    // Note that this function *must* return the same type that the respective physical expression returns
-    // or the execution panics.
-    let fun = AggregateFunction::Avg;
-    let coerced_data_types = crate::type_coercion::aggregates::coerce_types(
-        &fun,
-        input_expr_types,
-        &fun.signature(),
-    )?;
-    avg_sum_type(&coerced_data_types[0])
+    /// Returns if the return type of the aggregate function is nullable given its argument
+    /// nullability
+    pub fn nullable(&self) -> Result<bool> {
+        match self {
+            AggregateFunction::Max | AggregateFunction::Min => Ok(true),
+            AggregateFunction::ArrayAgg => Ok(false),
+            AggregateFunction::Grouping => Ok(true),
+            AggregateFunction::NthValue => Ok(true),
+        }
+    }
 }
 
 impl AggregateFunction {
@@ -179,17 +156,7 @@ impl AggregateFunction {
                     .collect::<Vec<_>>();
                 Signature::uniform(1, valid, Volatility::Immutable)
             }
-            AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
-                Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
-            }
-
-            AggregateFunction::Avg => {
-                Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
-            }
             AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
-            AggregateFunction::Correlation => {
-                Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
-            }
         }
     }
 }
