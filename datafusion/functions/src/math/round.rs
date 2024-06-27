@@ -21,6 +21,7 @@ use std::sync::Arc;
 use crate::utils::make_scalar_function;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array, Int32Array};
+use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Float32, Float64, Int32};
 use datafusion_common::{
@@ -134,14 +135,15 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                 )) as ArrayRef)
             }
-            ColumnarValue::Array(_) => {
-                let ColumnarValue::Array(decimal_places) =
-                    decimal_places.cast_to(&Int32, None).map_err(|e| {
-                        exec_datafusion_err!("Invalid values for decimal places: {e}")
-                    })?
-                else {
-                    panic!("Unexpected result of ColumnarValue::Array.cast")
+            ColumnarValue::Array(decimal_places) => {
+                let options = CastOptions {
+                    safe: false, // raise error if the cast is not possible
+                    ..Default::default()
                 };
+                let decimal_places = cast_with_options(&decimal_places, &Int32, &options)
+                    .map_err(|e| {
+                        exec_datafusion_err!("Invalid values for decimal places: {e}")
+                    })?;
                 Ok(Arc::new(make_function_inputs2!(
                     &args[0],
                     decimal_places,

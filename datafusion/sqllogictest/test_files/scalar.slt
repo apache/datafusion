@@ -848,6 +848,16 @@ select round(a), round(b), round(c) from small_floats;
 0 0 1
 1 0 0
 
+# round with too large
+#  max Int32 is 2147483647
+query error DataFusion error: Execution error: Invalid values for decimal places: Cast error: Can't cast value 2147483648 to type Int32
+select round(3.14, 2147483648);
+
+# with array
+query error DataFusion error: Execution error: Invalid values for decimal places: Cast error: Can't cast value 2147483649 to type Int32
+select round(column1, column2) from values (3.14, 2), (3.14, 3), (3.14, 2147483649);
+
+
 ## signum
 
 # signum scalar function
