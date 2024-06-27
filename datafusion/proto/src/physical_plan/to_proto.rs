@@ -25,7 +25,7 @@ use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     ArrayAgg, BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, DistinctArrayAgg,
     InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr,
-    NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank, RankType, RowNumber,
+    NthValue, Ntile, OrderSensitiveArrayAgg, Rank, RankType, RowNumber,
     TryCastExpr, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
@@ -255,8 +255,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::Min
     } else if aggr_expr.downcast_ref::<Max>().is_some() {
         protobuf::AggregateFunction::Max
-    } else if aggr_expr.downcast_ref::<NthValueAgg>().is_some() {
-        protobuf::AggregateFunction::NthValueAgg
     } else {
         return not_impl_err!("Aggregate function not supported: {expr:?}");
     };
