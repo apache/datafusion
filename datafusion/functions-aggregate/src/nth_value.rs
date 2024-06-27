@@ -29,15 +29,14 @@ use arrow_schema::{DataType, Field, Fields, SortOptions};
 use datafusion_common::utils::{
     array_into_list_array_nullable, compare_rows, get_row_at_idx,
 };
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Expr, ReversedUDAF, Signature, Volatility,
 };
 use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, PhysicalSortExpr,
+    limited_convert_logical_sort_exprs_to_physical, LexOrdering, PhysicalSortExpr,
 };
 
 #[derive(Debug)]
@@ -78,9 +77,34 @@ impl AggregateUDFImpl for NthValue {
 
     fn accumulator(
         &self,
-        _acc_args: AccumulatorArgs,
+        acc_args: AccumulatorArgs,
     ) -> datafusion_common::Result<Box<dyn Accumulator>> {
-        todo!()
+        let n = match &acc_args.input_exprs[1] {
+            Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value.clone()),
+            _ => not_impl_err!(
+                "{} not supported for n: {}",
+                self.name(),
+                acc_args.input_exprs[1]
+            ),
+        }?;
+
+        let ordering_req = limited_convert_logical_sort_exprs_to_physical(
+            acc_args.sort_exprs,
+            acc_args.schema,
+        )?;
+
+        let ordering_dtypes = ordering_req
+            .iter()
+            .map(|e| e.expr.data_type(acc_args.schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        NthValueAccumulator::try_new(
+            n,
+            acc_args.input_type,
+            &ordering_dtypes,
+            ordering_req,
+        )
+        .map(|acc| Box::new(acc) as _)
     }
 
     fn state_fields(
