@@ -20,8 +20,8 @@ use std::any::Any;
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    ArrowTimestampType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+    ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 
 use datafusion_common::{exec_err, Result, ScalarType};
@@ -143,8 +143,8 @@ impl ScalarUDFImpl for ToTimestampFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, None))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -166,6 +166,9 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 .cast_to(&Timestamp(Nanosecond, None), None),
             DataType::Null | DataType::Float64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
+            }
+            DataType::Timestamp(_, Some(tz)) => {
+                args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
@@ -193,8 +196,8 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Second, None))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(return_type_for(&arg_types[0], Second))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -213,6 +216,9 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Second, None), None)
+            }
+            DataType::Timestamp(_, Some(tz)) => {
+                args[0].cast_to(&Timestamp(Second, Some(tz)), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds")
@@ -240,8 +246,8 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Millisecond, None))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(return_type_for(&arg_types[0], Millisecond))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -260,6 +266,9 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Millisecond, None), None)
+            }
+            DataType::Timestamp(_, Some(tz)) => {
+                args[0].cast_to(&Timestamp(Millisecond, Some(tz)), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampMillisecondType>(args, "to_timestamp_millis")
@@ -287,8 +296,8 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Microsecond, None))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(return_type_for(&arg_types[0], Microsecond))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -307,6 +316,9 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Microsecond, None), None)
+            }
+            DataType::Timestamp(_, Some(tz)) => {
+                args[0].cast_to(&Timestamp(Microsecond, Some(tz)), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampMicrosecondType>(args, "to_timestamp_micros")
@@ -334,8 +346,8 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, None))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -355,6 +367,9 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
             }
+            DataType::Timestamp(_, Some(tz)) => {
+                args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
+            }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp_nanos")
             }
@@ -365,6 +380,15 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
                 )
             }
         }
+    }
+}
+
+/// Returns the return type for the to_timestamp_* function, preserving
+/// the timezone if it exists.
+fn return_type_for(arg: &DataType, unit: TimeUnit) -> DataType {
+    match arg {
+        Timestamp(_, Some(tz)) => Timestamp(unit, Some(tz.clone())),
+        _ => Timestamp(unit, None),
     }
 }
 
@@ -741,6 +765,103 @@ mod tests {
     }
 
     #[test]
+    fn test_tz() {
+        let udfs: Vec<Box<dyn ScalarUDFImpl>> = vec![
+            Box::new(ToTimestampFunc::new()),
+            Box::new(ToTimestampSecondsFunc::new()),
+            Box::new(ToTimestampMillisFunc::new()),
+            Box::new(ToTimestampNanosFunc::new()),
+            Box::new(ToTimestampSecondsFunc::new()),
+        ];
+
+        let mut nanos_builder = TimestampNanosecondArray::builder(2);
+        let mut millis_builder = TimestampMillisecondArray::builder(2);
+        let mut micros_builder = TimestampMicrosecondArray::builder(2);
+        let mut sec_builder = TimestampSecondArray::builder(2);
+
+        nanos_builder.append_value(1599572549190850000);
+        millis_builder.append_value(1599572549190);
+        micros_builder.append_value(1599572549190850);
+        sec_builder.append_value(1599572549);
+
+        let nanos_timestamps =
+            Arc::new(nanos_builder.finish().with_timezone("UTC")) as ArrayRef;
+        let millis_timestamps =
+            Arc::new(millis_builder.finish().with_timezone("UTC")) as ArrayRef;
+        let micros_timestamps =
+            Arc::new(micros_builder.finish().with_timezone("UTC")) as ArrayRef;
+        let sec_timestamps =
+            Arc::new(sec_builder.finish().with_timezone("UTC")) as ArrayRef;
+
+        let arrays = &[
+            ColumnarValue::Array(nanos_timestamps.clone()),
+            ColumnarValue::Array(millis_timestamps.clone()),
+            ColumnarValue::Array(micros_timestamps.clone()),
+            ColumnarValue::Array(sec_timestamps.clone()),
+        ];
+
+        for udf in &udfs {
+            for array in arrays {
+                let rt = udf.return_type(&[array.data_type()]).unwrap();
+                assert!(matches!(rt, DataType::Timestamp(_, Some(_))));
+
+                let res = udf
+                    .invoke(&[array.clone()])
+                    .expect("that to_timestamp parsed values without error");
+                let array = match res {
+                    ColumnarValue::Array(res) => res,
+                    _ => panic!("Expected a columnar array"),
+                };
+                let ty = array.data_type();
+                assert!(matches!(ty, DataType::Timestamp(_, Some(_))));
+            }
+        }
+
+        let mut nanos_builder = TimestampNanosecondArray::builder(2);
+        let mut millis_builder = TimestampMillisecondArray::builder(2);
+        let mut micros_builder = TimestampMicrosecondArray::builder(2);
+        let mut sec_builder = TimestampSecondArray::builder(2);
+        let mut i64_builder = Int64Array::builder(2);
+
+        nanos_builder.append_value(1599572549190850000);
+        millis_builder.append_value(1599572549190);
+        micros_builder.append_value(1599572549190850);
+        sec_builder.append_value(1599572549);
+        i64_builder.append_value(1599572549);
+
+        let nanos_timestamps = Arc::new(nanos_builder.finish()) as ArrayRef;
+        let millis_timestamps = Arc::new(millis_builder.finish()) as ArrayRef;
+        let micros_timestamps = Arc::new(micros_builder.finish()) as ArrayRef;
+        let sec_timestamps = Arc::new(sec_builder.finish()) as ArrayRef;
+        let i64_timestamps = Arc::new(i64_builder.finish()) as ArrayRef;
+
+        let arrays = &[
+            ColumnarValue::Array(nanos_timestamps.clone()),
+            ColumnarValue::Array(millis_timestamps.clone()),
+            ColumnarValue::Array(micros_timestamps.clone()),
+            ColumnarValue::Array(sec_timestamps.clone()),
+            ColumnarValue::Array(i64_timestamps.clone()),
+        ];
+
+        for udf in &udfs {
+            for array in arrays {
+                let rt = udf.return_type(&[array.data_type()]).unwrap();
+                assert!(matches!(rt, DataType::Timestamp(_, None)));
+
+                let res = udf
+                    .invoke(&[array.clone()])
+                    .expect("that to_timestamp parsed values without error");
+                let array = match res {
+                    ColumnarValue::Array(res) => res,
+                    _ => panic!("Expected a columnar array"),
+                };
+                let ty = array.data_type();
+                assert!(matches!(ty, DataType::Timestamp(_, None)));
+            }
+        }
+    }
+
+    #[test]
     fn test_to_timestamp_arg_validation() {
         let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
         date_string_builder.append_value("2020-09-08T13:42:29.19085Z");
@@ -811,6 +932,11 @@ mod tests {
                 .expect("that to_timestamp with format args parsed values without error");
             if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
                 assert_eq!(parsed_array.len(), 1);
+                assert!(matches!(
+                    parsed_array.data_type(),
+                    DataType::Timestamp(_, None)
+                ));
+
                 match time_unit {
                     Nanosecond => {
                         assert_eq!(nanos_expected_timestamps, parsed_array.as_ref())

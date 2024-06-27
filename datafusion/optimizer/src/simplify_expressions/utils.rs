@@ -69,8 +69,8 @@ pub static POWS_OF_TEN: [i128; 38] = [
 /// expressions. Such as: (A AND B) AND C
 pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == search_op => {
-            expr_contains(left, needle, search_op)
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &search_op => {
+            expr_contains(left, needle, search_op.clone())
                 || expr_contains(right, needle, search_op)
         }
         _ => expr == needle,
@@ -88,7 +88,7 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
     ) -> Expr {
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if *op == Operator::BitwiseXor =>
+                if op == &Operator::BitwiseXor =>
             {
                 let left_expr = recursive_delete_xor_in_expr(left, needle, xor_counter);
                 let right_expr = recursive_delete_xor_in_expr(right, needle, xor_counter);
@@ -102,7 +102,7 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
 
                 Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(left_expr),
-                    *op,
+                    op.clone(),
                     Box::new(right_expr),
                 ))
             }

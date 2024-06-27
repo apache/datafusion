@@ -15,13 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::util::display::array_value_to_string;
 use core::fmt;
+use std::sync::Arc;
 use std::{fmt::Display, vec};
 
-use arrow_array::{
-    Date32Array, Date64Array, TimestampMillisecondArray, TimestampNanosecondArray,
+use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
+use arrow::util::display::array_value_to_string;
+use arrow_array::types::{
+    ArrowTemporalType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
 };
+use arrow_array::{Date32Array, Date64Array, PrimitiveArray};
 use arrow_schema::DataType;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
@@ -649,11 +654,65 @@ impl Unparser<'_> {
         }
     }
 
-    fn timestamp_string_to_sql(&self, ts: String) -> Result<ast::Expr> {
+    fn handle_timestamp<T: ArrowTemporalType>(
+        &self,
+        v: &ScalarValue,
+        tz: &Option<Arc<str>>,
+    ) -> Result<ast::Expr>
+    where
+        i64: From<T::Native>,
+    {
+        let ts = if let Some(tz) = tz {
+            v.to_array()?
+                .as_any()
+                .downcast_ref::<PrimitiveArray<T>>()
+                .ok_or(internal_datafusion_err!(
+                    "Failed to downcast type {v:?} to arrow array"
+                ))?
+                .value_as_datetime_with_tz(0, tz.parse()?)
+                .ok_or(internal_datafusion_err!(
+                    "Unable to convert {v:?} to DateTime"
+                ))?
+                .to_string()
+        } else {
+            v.to_array()?
+                .as_any()
+                .downcast_ref::<PrimitiveArray<T>>()
+                .ok_or(internal_datafusion_err!(
+                    "Failed to downcast type {v:?} to arrow array"
+                ))?
+                .value_as_datetime(0)
+                .ok_or(internal_datafusion_err!(
+                    "Unable to convert {v:?} to DateTime"
+                ))?
+                .to_string()
+        };
         Ok(ast::Expr::Cast {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::Value(SingleQuotedString(ts))),
             data_type: ast::DataType::Timestamp(None, TimezoneInfo::None),
+            format: None,
+        })
+    }
+
+    fn handle_time<T: ArrowTemporalType>(&self, v: &ScalarValue) -> Result<ast::Expr>
+    where
+        i64: From<T::Native>,
+    {
+        let time = v
+            .to_array()?
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .ok_or(internal_datafusion_err!(
+                "Failed to downcast type {v:?} to arrow array"
+            ))?
+            .value_as_time(0)
+            .ok_or(internal_datafusion_err!("Unable to convert {v:?} to Time"))?
+            .to_string();
+        Ok(ast::Expr::Cast {
+            kind: ast::CastKind::Cast,
+            expr: Box::new(ast::Expr::Value(SingleQuotedString(time))),
+            data_type: ast::DataType::Time(None, TimezoneInfo::None),
             format: None,
         })
     }
@@ -679,12 +738,18 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
             }
             ScalarValue::Float64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Decimal128(Some(_), ..) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::Decimal128(Some(value), precision, scale) => {
+                Ok(ast::Expr::Value(ast::Value::Number(
+                    Decimal128Type::format_decimal(*value, *precision, *scale),
+                    false,
+                )))
             }
             ScalarValue::Decimal128(None, ..) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Decimal256(Some(_), ..) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::Decimal256(Some(value), precision, scale) => {
+                Ok(ast::Expr::Value(ast::Value::Number(
+                    Decimal256Type::format_decimal(*value, *precision, *scale),
+                    false,
+                )))
             }
             ScalarValue::Decimal256(None, ..) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Int8(Some(i)) => {
@@ -794,91 +859,45 @@ impl Unparser<'_> {
             }
             ScalarValue::Date64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Time32Second(Some(_t)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+                self.handle_time::<Time32SecondType>(v)
             }
             ScalarValue::Time32Second(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Time32Millisecond(Some(_t)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+                self.handle_time::<Time32MillisecondType>(v)
             }
             ScalarValue::Time32Millisecond(None) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
             ScalarValue::Time64Microsecond(Some(_t)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+                self.handle_time::<Time64MicrosecondType>(v)
             }
             ScalarValue::Time64Microsecond(None) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
             ScalarValue::Time64Nanosecond(Some(_t)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+                self.handle_time::<Time64NanosecondType>(v)
             }
             ScalarValue::Time64Nanosecond(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::TimestampSecond(Some(_ts), _) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::TimestampSecond(Some(_ts), tz) => {
+                self.handle_timestamp::<TimestampSecondType>(v, tz)
             }
             ScalarValue::TimestampSecond(None, _) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
             ScalarValue::TimestampMillisecond(Some(_ts), tz) => {
-                let result = if let Some(tz) = tz {
-                    v.to_array()?
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .ok_or(internal_datafusion_err!(
-                            "Unable to downcast to TimestampMillisecond from TimestampMillisecond scalar"
-                        ))?
-                        .value_as_datetime_with_tz(0, tz.parse()?)
-                        .ok_or(internal_datafusion_err!(
-                            "Unable to convert TimestampMillisecond to DateTime"
-                        ))?.to_string()
-                } else {
-                    v.to_array()?
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .ok_or(internal_datafusion_err!(
-                            "Unable to downcast to TimestampMillisecond from TimestampMillisecond scalar"
-                        ))?
-                        .value_as_datetime(0)
-                        .ok_or(internal_datafusion_err!(
-                            "Unable to convert TimestampMillisecond to NaiveDateTime"
-                        ))?.to_string()
-                };
-                self.timestamp_string_to_sql(result)
+                self.handle_timestamp::<TimestampMillisecondType>(v, tz)
             }
             ScalarValue::TimestampMillisecond(None, _) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
-            ScalarValue::TimestampMicrosecond(Some(_ts), _) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::TimestampMicrosecond(Some(_ts), tz) => {
+                self.handle_timestamp::<TimestampMicrosecondType>(v, tz)
             }
             ScalarValue::TimestampMicrosecond(None, _) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
             ScalarValue::TimestampNanosecond(Some(_ts), tz) => {
-                let result = if let Some(tz) = tz {
-                    v.to_array()?
-                        .as_any()
-                        .downcast_ref::<TimestampNanosecondArray>()
-                        .ok_or(internal_datafusion_err!(
-                            "Unable to downcast to TimestampNanosecond from TimestampNanosecond scalar"
-                        ))?
-                        .value_as_datetime_with_tz(0, tz.parse()?)
-                        .ok_or(internal_datafusion_err!(
-                            "Unable to convert TimestampNanosecond to DateTime"
-                        ))?.to_string()
-                } else {
-                    v.to_array()?
-                        .as_any()
-                        .downcast_ref::<TimestampNanosecondArray>()
-                        .ok_or(internal_datafusion_err!(
-                            "Unable to downcast to TimestampNanosecond from TimestampNanosecond scalar"
-                        ))?
-                        .value_as_datetime(0)
-                        .ok_or(internal_datafusion_err!(
-                            "Unable to convert TimestampNanosecond to NaiveDateTime"
-                        ))?.to_string()
-                };
-                self.timestamp_string_to_sql(result)
+                self.handle_timestamp::<TimestampNanosecondType>(v, tz)
             }
             ScalarValue::TimestampNanosecond(None, _) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
@@ -1015,11 +1034,18 @@ impl Unparser<'_> {
             DataType::Dictionary(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Decimal128(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            DataType::Decimal256(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            DataType::Decimal128(precision, scale)
+            | DataType::Decimal256(precision, scale) => {
+                let mut new_precision = *precision as u64;
+                let mut new_scale = *scale as u64;
+                if *scale < 0 {
+                    new_precision = (*precision as i16 - *scale as i16) as u64;
+                    new_scale = 0
+                }
+
+                Ok(ast::DataType::Decimal(
+                    ast::ExactNumberInfo::PrecisionAndScale(new_precision, new_scale),
+                ))
             }
             DataType::Map(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
@@ -1038,6 +1064,7 @@ mod tests {
 
     use arrow::datatypes::{Field, Schema};
     use arrow_schema::DataType::Int8;
+
     use datafusion_common::TableReference;
     use datafusion_expr::{
         case, col, cube, exists, grouping_set, interval_datetime_lit,
@@ -1206,6 +1233,17 @@ mod tests {
                 r#"CAST('1969-12-31' AS DATE)"#,
             ),
             (
+                Expr::Literal(ScalarValue::TimestampSecond(Some(10001), None)),
+                r#"CAST('1970-01-01 02:46:41' AS TIMESTAMP)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::TimestampSecond(
+                    Some(10001),
+                    Some("+08:00".into()),
+                )),
+                r#"CAST('1970-01-01 10:46:41 +08:00' AS TIMESTAMP)"#,
+            ),
+            (
                 Expr::Literal(ScalarValue::TimestampMillisecond(Some(10001), None)),
                 r#"CAST('1970-01-01 00:00:10.001' AS TIMESTAMP)"#,
             ),
@@ -1217,6 +1255,17 @@ mod tests {
                 r#"CAST('1970-01-01 08:00:10.001 +08:00' AS TIMESTAMP)"#,
             ),
             (
+                Expr::Literal(ScalarValue::TimestampMicrosecond(Some(10001), None)),
+                r#"CAST('1970-01-01 00:00:00.010001' AS TIMESTAMP)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::TimestampMicrosecond(
+                    Some(10001),
+                    Some("+08:00".into()),
+                )),
+                r#"CAST('1970-01-01 08:00:00.010001 +08:00' AS TIMESTAMP)"#,
+            ),
+            (
                 Expr::Literal(ScalarValue::TimestampNanosecond(Some(10001), None)),
                 r#"CAST('1970-01-01 00:00:00.000010001' AS TIMESTAMP)"#,
             ),
@@ -1226,6 +1275,22 @@ mod tests {
                     Some("+08:00".into()),
                 )),
                 r#"CAST('1970-01-01 08:00:00.000010001 +08:00' AS TIMESTAMP)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Time32Second(Some(10001))),
+                r#"CAST('02:46:41' AS TIME)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Time32Millisecond(Some(10001))),
+                r#"CAST('00:00:10.001' AS TIME)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Time64Microsecond(Some(10001))),
+                r#"CAST('00:00:00.010001' AS TIME)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Time64Nanosecond(Some(10001))),
+                r#"CAST('00:00:00.000010001' AS TIME)"#,
             ),
             (sum(col("a")), r#"sum(a)"#),
             (
@@ -1396,6 +1461,29 @@ mod tests {
             (
                 interval_year_month_lit("1.5 YEAR 1 MONTH"),
                 r#"INTERVAL '1 YEARS 7 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
+            ),
+            (
+                (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal128(
+                    Some(100123),
+                    28,
+                    3,
+                ))),
+                r#"((a + b) > 100.123)"#,
+            ),
+            (
+                (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal256(
+                    Some(100123.into()),
+                    28,
+                    3,
+                ))),
+                r#"((a + b) > 100.123)"#,
+            ),
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(col("a")),
+                    data_type: DataType::Decimal128(10, -2),
+                }),
+                r#"CAST(a AS DECIMAL(12,0))"#,
             ),
         ];
 

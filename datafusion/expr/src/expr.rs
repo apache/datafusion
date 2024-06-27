@@ -19,7 +19,8 @@
 
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
+use std::mem;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -307,7 +308,7 @@ pub enum Expr {
     ///
     /// This expr has to be resolved to a list of columns before translating logical
     /// plan into physical plan.
-    Wildcard { qualifier: Option<String> },
+    Wildcard { qualifier: Option<TableReference> },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
@@ -708,10 +709,14 @@ pub enum WindowFunctionDefinition {
 
 impl WindowFunctionDefinition {
     /// Returns the datatype of the window function
-    pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
+    pub fn return_type(
+        &self,
+        input_expr_types: &[DataType],
+        input_expr_nullable: &[bool],
+    ) -> Result<DataType> {
         match self {
             WindowFunctionDefinition::AggregateFunction(fun) => {
-                fun.return_type(input_expr_types)
+                fun.return_type(input_expr_types, input_expr_nullable)
             }
             WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
                 fun.return_type(input_expr_types)
@@ -1328,6 +1333,7 @@ impl Expr {
     }
 
     /// Return all referenced columns of this expression.
+    #[deprecated(since = "40.0.0", note = "use Expr::column_refs instead")]
     pub fn to_columns(&self) -> Result<HashSet<Column>> {
         let mut using_columns = HashSet::new();
         expr_to_columns(self, &mut using_columns)?;
@@ -1460,6 +1466,176 @@ impl Expr {
             | Expr::Sort(..)
             | Expr::Placeholder(..) => false,
         }
+    }
+
+    /// Hashes the direct content of an `Expr` without recursing into its children.
+    ///
+    /// This method is useful to incrementally compute hashes, such as  in
+    /// `CommonSubexprEliminate` which builds a deep hash of a node and its descendants
+    /// during the bottom-up phase of the first traversal and so avoid computing the hash
+    /// of the node and then the hash of its descendants separately.
+    ///
+    /// If a node doesn't have any children then this method is similar to `.hash()`, but
+    /// not necessarily returns the same value.
+    ///
+    /// As it is pretty easy to forget changing this method when `Expr` changes the
+    /// implementation doesn't use wildcard patterns (`..`, `_`) to catch changes
+    /// compile time.
+    pub fn hash_node<H: Hasher>(&self, hasher: &mut H) {
+        mem::discriminant(self).hash(hasher);
+        match self {
+            Expr::Alias(Alias {
+                expr: _expr,
+                relation,
+                name,
+            }) => {
+                relation.hash(hasher);
+                name.hash(hasher);
+            }
+            Expr::Column(column) => {
+                column.hash(hasher);
+            }
+            Expr::ScalarVariable(data_type, name) => {
+                data_type.hash(hasher);
+                name.hash(hasher);
+            }
+            Expr::Literal(scalar_value) => {
+                scalar_value.hash(hasher);
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left: _left,
+                op,
+                right: _right,
+            }) => {
+                op.hash(hasher);
+            }
+            Expr::Like(Like {
+                negated,
+                expr: _expr,
+                pattern: _pattern,
+                escape_char,
+                case_insensitive,
+            })
+            | Expr::SimilarTo(Like {
+                negated,
+                expr: _expr,
+                pattern: _pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
+                negated.hash(hasher);
+                escape_char.hash(hasher);
+                case_insensitive.hash(hasher);
+            }
+            Expr::Not(_expr)
+            | Expr::IsNotNull(_expr)
+            | Expr::IsNull(_expr)
+            | Expr::IsTrue(_expr)
+            | Expr::IsFalse(_expr)
+            | Expr::IsUnknown(_expr)
+            | Expr::IsNotTrue(_expr)
+            | Expr::IsNotFalse(_expr)
+            | Expr::IsNotUnknown(_expr)
+            | Expr::Negative(_expr) => {}
+            Expr::Between(Between {
+                expr: _expr,
+                negated,
+                low: _low,
+                high: _high,
+            }) => {
+                negated.hash(hasher);
+            }
+            Expr::Case(Case {
+                expr: _expr,
+                when_then_expr: _when_then_expr,
+                else_expr: _else_expr,
+            }) => {}
+            Expr::Cast(Cast {
+                expr: _expr,
+                data_type,
+            })
+            | Expr::TryCast(TryCast {
+                expr: _expr,
+                data_type,
+            }) => {
+                data_type.hash(hasher);
+            }
+            Expr::Sort(Sort {
+                expr: _expr,
+                asc,
+                nulls_first,
+            }) => {
+                asc.hash(hasher);
+                nulls_first.hash(hasher);
+            }
+            Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
+                func.hash(hasher);
+            }
+            Expr::AggregateFunction(AggregateFunction {
+                func_def,
+                args: _args,
+                distinct,
+                filter: _filter,
+                order_by: _order_by,
+                null_treatment,
+            }) => {
+                func_def.hash(hasher);
+                distinct.hash(hasher);
+                null_treatment.hash(hasher);
+            }
+            Expr::WindowFunction(WindowFunction {
+                fun,
+                args: _args,
+                partition_by: _partition_by,
+                order_by: _order_by,
+                window_frame,
+                null_treatment,
+            }) => {
+                fun.hash(hasher);
+                window_frame.hash(hasher);
+                null_treatment.hash(hasher);
+            }
+            Expr::InList(InList {
+                expr: _expr,
+                list: _list,
+                negated,
+            }) => {
+                negated.hash(hasher);
+            }
+            Expr::Exists(Exists { subquery, negated }) => {
+                subquery.hash(hasher);
+                negated.hash(hasher);
+            }
+            Expr::InSubquery(InSubquery {
+                expr: _expr,
+                subquery,
+                negated,
+            }) => {
+                subquery.hash(hasher);
+                negated.hash(hasher);
+            }
+            Expr::ScalarSubquery(subquery) => {
+                subquery.hash(hasher);
+            }
+            Expr::Wildcard { qualifier } => {
+                qualifier.hash(hasher);
+            }
+            Expr::GroupingSet(grouping_set) => {
+                mem::discriminant(grouping_set).hash(hasher);
+                match grouping_set {
+                    GroupingSet::Rollup(_exprs) | GroupingSet::Cube(_exprs) => {}
+                    GroupingSet::GroupingSets(_exprs) => {}
+                }
+            }
+            Expr::Placeholder(place_holder) => {
+                place_holder.hash(hasher);
+            }
+            Expr::OuterReferenceColumn(data_type, column) => {
+                data_type.hash(hasher);
+                column.hash(hasher);
+            }
+            Expr::Unnest(Unnest { expr: _expr }) => {}
+        };
     }
 }
 
@@ -2180,10 +2356,10 @@ mod test {
     #[test]
     fn test_first_value_return_type() -> Result<()> {
         let fun = find_df_window_func("first_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::UInt64])?;
+        let observed = fun.return_type(&[DataType::UInt64], &[true])?;
         assert_eq!(DataType::UInt64, observed);
 
         Ok(())
@@ -2192,10 +2368,10 @@ mod test {
     #[test]
     fn test_last_value_return_type() -> Result<()> {
         let fun = find_df_window_func("last_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2204,10 +2380,10 @@ mod test {
     #[test]
     fn test_lead_return_type() -> Result<()> {
         let fun = find_df_window_func("lead").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2216,10 +2392,10 @@ mod test {
     #[test]
     fn test_lag_return_type() -> Result<()> {
         let fun = find_df_window_func("lag").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2228,10 +2404,12 @@ mod test {
     #[test]
     fn test_nth_value_return_type() -> Result<()> {
         let fun = find_df_window_func("nth_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8, DataType::UInt64])?;
+        let observed =
+            fun.return_type(&[DataType::Utf8, DataType::UInt64], &[true, true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64, DataType::UInt64])?;
+        let observed =
+            fun.return_type(&[DataType::Float64, DataType::UInt64], &[true, true])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2240,7 +2418,7 @@ mod test {
     #[test]
     fn test_percent_rank_return_type() -> Result<()> {
         let fun = find_df_window_func("percent_rank").unwrap();
-        let observed = fun.return_type(&[])?;
+        let observed = fun.return_type(&[], &[])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2249,7 +2427,7 @@ mod test {
     #[test]
     fn test_cume_dist_return_type() -> Result<()> {
         let fun = find_df_window_func("cume_dist").unwrap();
-        let observed = fun.return_type(&[])?;
+        let observed = fun.return_type(&[], &[])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2258,7 +2436,7 @@ mod test {
     #[test]
     fn test_ntile_return_type() -> Result<()> {
         let fun = find_df_window_func("ntile").unwrap();
-        let observed = fun.return_type(&[DataType::Int16])?;
+        let observed = fun.return_type(&[DataType::Int16], &[true])?;
         assert_eq!(DataType::UInt64, observed);
 
         Ok(())

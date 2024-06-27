@@ -90,6 +90,21 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_deregister_udtf() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    ctx.register_udtf("read_csv", Arc::new(SimpleCsvTableFunc {}));
+
+    assert!(ctx.state().table_functions().contains_key("read_csv"));
+
+    ctx.deregister_udtf("read_csv");
+
+    assert!(!ctx.state().table_functions().contains_key("read_csv"));
+
+    Ok(())
+}
+
 struct SimpleCsvTable {
     schema: SchemaRef,
     exprs: Vec<Expr>,
