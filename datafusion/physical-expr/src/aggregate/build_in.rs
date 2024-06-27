@@ -172,7 +172,7 @@ mod tests {
                         Field::new_list(
                             "c1",
                             Field::new("item", data_type.clone(), true),
-                            true,
+                            false,
                         ),
                         result_agg_phy_exprs.field().unwrap()
                     );
@@ -192,7 +192,7 @@ mod tests {
                         Field::new_list(
                             "c1",
                             Field::new("item", data_type.clone(), true),
-                            true,
+                            false,
                         ),
                         result_agg_phy_exprs.field().unwrap()
                     );
@@ -253,20 +253,20 @@ mod tests {
 
     #[test]
     fn test_min_max() -> Result<()> {
-        let observed = AggregateFunction::Min.return_type(&[DataType::Utf8])?;
+        let observed = AggregateFunction::Min.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = AggregateFunction::Max.return_type(&[DataType::Int32])?;
+        let observed = AggregateFunction::Max.return_type(&[DataType::Int32], &[true])?;
         assert_eq!(DataType::Int32, observed);
 
         // test decimal for min
-        let observed =
-            AggregateFunction::Min.return_type(&[DataType::Decimal128(10, 6)])?;
+        let observed = AggregateFunction::Min
+            .return_type(&[DataType::Decimal128(10, 6)], &[true])?;
         assert_eq!(DataType::Decimal128(10, 6), observed);
 
         // test decimal for max
-        let observed =
-            AggregateFunction::Max.return_type(&[DataType::Decimal128(28, 13)])?;
+        let observed = AggregateFunction::Max
+            .return_type(&[DataType::Decimal128(28, 13)], &[true])?;
         assert_eq!(DataType::Decimal128(28, 13), observed);
 
         Ok(())
