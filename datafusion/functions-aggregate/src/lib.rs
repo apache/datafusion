@@ -74,6 +74,7 @@ pub mod average;
 pub mod bit_and_or_xor;
 pub mod bool_and_or;
 pub mod grouping;
+pub mod nth_value;
 pub mod string_agg;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
