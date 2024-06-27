@@ -52,13 +52,15 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
     UInt64Array,
 };
+use arrow::buffer::NullBuffer;
 use arrow::compute::kernels::cmp::{eq, not_distinct};
 use arrow::compute::{and, concat_batches, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
-use arrow_schema::ArrowError;
+use arrow_ord::ord::make_comparator;
+use arrow_schema::{ArrowError, SortOptions};
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
@@ -1210,6 +1212,16 @@ fn eq_dyn_null(
     right: &dyn Array,
     null_equals_null: bool,
 ) -> Result<BooleanArray, ArrowError> {
+    // Nested datatypes cannot use the underlying not_distinct function and must use a special
+    // implementation
+    // <https://github.com/apache/datafusion/issues/10749>
+    if left.data_type().is_nested() && null_equals_null {
+        let cmp = make_comparator(left, right, SortOptions::default())?;
+        let len = left.len().min(right.len());
+        let values = (0..len).map(|i| cmp(i, i).is_eq()).collect();
+        let nulls = NullBuffer::union(left.nulls(), right.nulls());
+        return Ok(BooleanArray::new(values, nulls));
+    }
     match (left.data_type(), right.data_type()) {
         _ if null_equals_null => not_distinct(&left, &right),
         _ => eq(&left, &right),
