@@ -28,8 +28,14 @@ use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
-/// GROUPING aggregate expression
-/// Returns the amount of non-null values of the given expression.
+make_udaf_expr_and_func!(
+    Grouping,
+    grouping,
+    expression,
+    "Returns 1 if the data is aggregated across the specified column or 0 for not aggregated in the result set.",
+    grouping_udaf
+);
+
 pub struct Grouping {
     signature: Signature,
 }
