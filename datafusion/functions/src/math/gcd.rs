@@ -93,7 +93,7 @@ fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 /// Computes gcd of two unsigned integers using Binary GCD algorithm.
-fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
+pub(super) fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
     if a == 0 {
         return b;
     }

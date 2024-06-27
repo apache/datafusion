@@ -1181,7 +1181,7 @@ async fn test_dates_32_diff_rg_sizes() {
         // row counts are [13, 7]
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
         column_name: "date32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1324,7 +1324,7 @@ async fn test_dates_64_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
         column_name: "date64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }

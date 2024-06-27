@@ -91,8 +91,8 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
         Ok(Field::new_list(
             &self.name,
             // This should be the same as return type of AggregateFunction::ArrayAgg
-            Field::new("item", self.input_data_type.clone(), true),
-            self.nullable,
+            Field::new("item", self.input_data_type.clone(), self.nullable),
+            false,
         ))
     }
 
@@ -102,6 +102,7 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
             &self.order_by_data_types,
             self.ordering_req.clone(),
             self.reverse,
+            self.nullable,
         )
         .map(|acc| Box::new(acc) as _)
     }
@@ -109,14 +110,18 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn state_fields(&self) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
-            Field::new("item", self.input_data_type.clone(), true),
-            self.nullable, // This should be the same as field()
+            Field::new("item", self.input_data_type.clone(), self.nullable),
+            false, // This should be the same as field()
         )];
         let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
         fields.push(Field::new_list(
             format_state_name(&self.name, "array_agg_orderings"),
-            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
-            self.nullable,
+            Field::new(
+                "item",
+                DataType::Struct(Fields::from(orderings)),
+                self.nullable,
+            ),
+            false,
         ));
         Ok(fields)
     }
@@ -181,6 +186,8 @@ pub(crate) struct OrderSensitiveArrayAggAccumulator {
     ordering_req: LexOrdering,
     /// Whether the aggregation is running in reverse.
     reverse: bool,
+    /// Whether the input expr is nullable
+    nullable: bool,
 }
 
 impl OrderSensitiveArrayAggAccumulator {
@@ -191,6 +198,7 @@ impl OrderSensitiveArrayAggAccumulator {
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
         reverse: bool,
+        nullable: bool,
     ) -> Result<Self> {
         let mut datatypes = vec![datatype.clone()];
         datatypes.extend(ordering_dtypes.iter().cloned());
@@ -200,6 +208,7 @@ impl OrderSensitiveArrayAggAccumulator {
             datatypes,
             ordering_req,
             reverse,
+            nullable,
         })
     }
 }
@@ -302,9 +311,17 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let values = self.values.clone();
         let array = if self.reverse {
-            ScalarValue::new_list_from_iter(values.into_iter().rev(), &self.datatypes[0])
+            ScalarValue::new_list_from_iter(
+                values.into_iter().rev(),
+                &self.datatypes[0],
+                self.nullable,
+            )
         } else {
-            ScalarValue::new_list_from_iter(values.into_iter(), &self.datatypes[0])
+            ScalarValue::new_list_from_iter(
+                values.into_iter(),
+                &self.datatypes[0],
+                self.nullable,
+            )
         };
         Ok(ScalarValue::List(array))
     }
@@ -362,6 +379,7 @@ impl OrderSensitiveArrayAggAccumulator {
         )?;
         Ok(ScalarValue::List(Arc::new(array_into_list_array(
             Arc::new(ordering_array),
+            self.nullable,
         ))))
     }
 }

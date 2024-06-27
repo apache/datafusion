@@ -86,7 +86,11 @@ impl AggregateFunction {
     /// Returns the datatype of the aggregate function given its argument types
     ///
     /// This is used to get the returned data type for aggregate expr.
-    pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
+    pub fn return_type(
+        &self,
+        input_expr_types: &[DataType],
+        input_expr_nullable: &[bool],
+    ) -> Result<DataType> {
         // Note that this function *must* return the same type that the respective physical expression returns
         // or the execution panics.
 
@@ -113,10 +117,21 @@ impl AggregateFunction {
             AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
                 "item",
                 coerced_data_types[0].clone(),
-                true,
+                input_expr_nullable[0],
             )))),
             AggregateFunction::Grouping => Ok(DataType::Int32),
             AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
+        }
+    }
+
+    /// Returns if the return type of the aggregate function is nullable given its argument
+    /// nullability
+    pub fn nullable(&self) -> Result<bool> {
+        match self {
+            AggregateFunction::Max | AggregateFunction::Min => Ok(true),
+            AggregateFunction::ArrayAgg => Ok(false),
+            AggregateFunction::Grouping => Ok(true),
+            AggregateFunction::NthValue => Ok(true),
         }
     }
 }

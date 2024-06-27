@@ -815,6 +815,20 @@ macro_rules! get_data_page_statistics {
                         TimeUnit::Nanosecond => Arc::new(TimestampNanosecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
                     })
                 },
+                Some(DataType::Date32) => Ok(Arc::new(Date32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Date64) => Ok(
+                    Arc::new(
+                        Date64Array::from([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter()
+                                .filter_map(|x| {
+                                    x.and_then(|x| i64::try_from(x).ok())
+                                })
+                                .map(|x| x * 24 * 60 * 60 * 1000)
+                            }).flatten().collect::<Vec<_>>()
+                        )
+                    )
+                ),
                 Some(DataType::Decimal128(precision, scale)) => Ok(Arc::new(
                     Decimal128Array::from_iter([<$stat_type_prefix Decimal128DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
                 Some(DataType::Decimal256(precision, scale)) => Ok(Arc::new(
