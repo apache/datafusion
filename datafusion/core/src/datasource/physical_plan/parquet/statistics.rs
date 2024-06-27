@@ -33,7 +33,7 @@ use arrow_array::{
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 use half::f16;
-use parquet::data_type::FixedLenByteArray;
+use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
 use parquet::file::page_index::index::{Index, PageIndex};
 use parquet::file::statistics::Statistics as ParquetStatistics;
@@ -713,6 +713,18 @@ get_decimal_page_stats_iterator!(
     i256,
     from_bytes_to_i256
 );
+make_data_page_stats_iterator!(
+    MinByteArrayDataPageStatsIterator,
+    |x: &PageIndex<ByteArray>| { x.min.clone() },
+    Index::BYTE_ARRAY,
+    ByteArray
+);
+make_data_page_stats_iterator!(
+    MaxByteArrayDataPageStatsIterator,
+    |x: &PageIndex<ByteArray>| { x.max.clone() },
+    Index::BYTE_ARRAY,
+    ByteArray
+);
 
 macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
@@ -806,6 +818,34 @@ macro_rules! get_data_page_statistics {
                 )),
                 Some(DataType::Float32) => Ok(Arc::new(Float32Array::from_iter([<$stat_type_prefix Float32DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter([<$stat_type_prefix Float64DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Binary) => Ok(Arc::new(BinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::LargeBinary) => Ok(Arc::new(LargeBinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Utf8) => Ok(Arc::new(StringArray::from(
+                    [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
+                        x.into_iter().filter_map(|x| {
+                        x.and_then(|x| {
+                            let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
+                            if res.is_none() {
+                                log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                            }
+                            res
+                        })
+                    })
+                    }).flatten().collect::<Vec<_>>(),
+                ))),
+                Some(DataType::LargeUtf8) => Ok(Arc::new(LargeStringArray::from(
+                    [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
+                        x.into_iter().filter_map(|x| {
+                            x.and_then(|x| {
+                                let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
+                                if res.is_none() {
+                                    log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
+                                }
+                                res
+                            })
+                    })
+                    }).flatten().collect::<Vec<_>>(),
+                ))),
                 Some(DataType::Timestamp(unit, timezone)) => {
                     let iter = [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten();
                     Ok(match unit {
@@ -945,6 +985,11 @@ where
             .map(|x| x.null_count.map(|x| x as u64))
             .collect::<Vec<_>>(),
         Index::FIXED_LEN_BYTE_ARRAY(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::BYTE_ARRAY(native_index) => native_index
             .indexes
             .iter()
             .map(|x| x.null_count.map(|x| x as u64))
