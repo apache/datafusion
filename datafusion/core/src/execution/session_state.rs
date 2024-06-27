@@ -67,7 +67,9 @@ use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
-use datafusion_sql::planner::{ContextProvider, ParseCustomOperator, ParserOptions, PlannerContext, SqlToRel};
+use datafusion_sql::planner::{
+    ContextProvider, ParseCustomOperator, ParserOptions, PlannerContext, SqlToRel,
+};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
 use std::collections::hash_map::Entry;
@@ -91,6 +93,8 @@ pub struct SessionState {
     session_id: String,
     /// Responsible for analyzing and rewrite a logical plan before optimization
     analyzer: Analyzer,
+    /// Provides support for parsing custom SQL operators, e.g. `->>` or `?`
+    parse_custom_operators: Vec<Arc<dyn ParseCustomOperator>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
@@ -221,6 +225,7 @@ impl SessionState {
         let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
+            parse_custom_operators: vec![],
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
@@ -543,8 +548,7 @@ impl SessionState {
     /// Convert an AST Statement into a LogicalPlan
     pub async fn statement_to_plan(
         &self,
-        statement: datafusion_sql::parser::Statement,
-        parse_custom_operator: Option<ParseCustomOperator>,
+        statement: Statement,
     ) -> datafusion_common::Result<LogicalPlan> {
         let references = self.resolve_table_references(&statement)?;
 
@@ -564,17 +568,17 @@ impl SessionState {
             }
         }
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options(parse_custom_operator));
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.statement_to_plan(statement)
     }
 
-    fn get_parser_options(&self, parse_custom_operator: Option<ParseCustomOperator>) -> ParserOptions {
+    fn get_parser_options(&self) -> ParserOptions {
         let sql_parser_options = &self.config.options().sql_parser;
 
         ParserOptions {
             parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
             enable_ident_normalization: sql_parser_options.enable_ident_normalization,
-            parse_custom_operator,
+            parse_custom_operator: self.parse_custom_operators.clone(),
         }
     }
 
@@ -593,11 +597,10 @@ impl SessionState {
     pub async fn create_logical_plan(
         &self,
         sql: &str,
-        parse_custom_operator: Option<ParseCustomOperator>,
     ) -> datafusion_common::Result<LogicalPlan> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
         let statement = self.sql_to_statement(sql, dialect)?;
-        let plan = self.statement_to_plan(statement, parse_custom_operator).await?;
+        let plan = self.statement_to_plan(statement).await?;
         Ok(plan)
     }
 
@@ -618,7 +621,7 @@ impl SessionState {
             tables: HashMap::new(),
         };
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options(None));
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
 
         query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
     }
@@ -877,6 +880,19 @@ impl SessionState {
     ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
         let udtf = self.table_functions.remove(name);
         Ok(udtf.map(|x| x.function().clone()))
+    }
+
+    /// Registers a new [`ParseCustomOperator`] with the registry.
+    ///
+    /// `ParseCustomOperator` is used to parse custom operators from SQL,
+    /// e.g. `->>` or `?`.
+    pub fn register_parse_custom_operator(
+        &mut self,
+        parse_custom_operator: Arc<dyn ParseCustomOperator>,
+    ) -> datafusion_common::Result<()> {
+        // TODO moved into FunctionRegistry? it would involve adding datafusion_sql as a dep of datafusion-expr
+        self.parse_custom_operators.push(parse_custom_operator);
+        Ok(())
     }
 }
 

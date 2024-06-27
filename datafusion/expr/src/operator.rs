@@ -21,9 +21,9 @@ use crate::expr_fn::binary_expr;
 use crate::Expr;
 use crate::Like;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops;
 use std::ops::Not;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -99,12 +99,12 @@ pub enum Operator {
     /// Arrow at, like `<@`
     ArrowAt,
     /// Custom operator
-    Custom(CustomOperatorWrapper),
+    Custom(WrapCustomOperator),
 }
 
 impl Operator {
-    pub fn custom(op: Arc<dyn CustomOperator>) -> Self {
-        Operator::Custom(CustomOperatorWrapper(op))
+    pub fn custom(op: impl CustomOperator + 'static) -> Self {
+        Operator::Custom(WrapCustomOperator(Arc::new(op)))
     }
 
     /// If the operator can be negated, return the negated operator
@@ -318,12 +318,22 @@ impl fmt::Display for Operator {
     }
 }
 
+impl<T: CustomOperator + 'static> From<T> for Operator {
+    fn from(op: T) -> Self {
+        Operator::Custom(WrapCustomOperator(Arc::new(op)))
+    }
+}
+
 pub trait CustomOperator: fmt::Debug + fmt::Display + Send + Sync {
     /// Use in `datafusion/expr/src/type_coercion/binary.rs::Signature`, but the struct there isn't public,
     /// hence returning a tuple.
     ///
     /// Returns `(lhs_type, rhs_type, return_type)`
-    fn binary_signature(&self, lhs: &DataType, rhs: &DataType) -> Result<(DataType, DataType, DataType)>;
+    fn binary_signature(
+        &self,
+        lhs: &DataType,
+        rhs: &DataType,
+    ) -> Result<(DataType, DataType, DataType)>;
 
     /// Used by unparse to convert the operator back to SQL
     fn op_to_sql(&self) -> Result<sqlparser::ast::BinaryOperator>;
@@ -373,28 +383,31 @@ pub trait CustomOperator: fmt::Debug + fmt::Display + Send + Sync {
     }
 }
 
-/// This is a somewhat hacky workaround for https://github.com/rust-lang/rust/issues/31740
-/// and generally for the complexity of deriving common traits for a trait object.
+/// Wraps a [`CustomOperator`] and implements traits required by [`Operator`].
 ///
-/// This assumes that the String representation of the operator is unique.
+/// This uses [`CustomOperator::name`] for equality, partial equality, ordering, and hashing; and therefore assumes
+/// it is unique for each custom operator.
+///
+/// See <https://github.com/rust-lang/rust/issues/31740> details on why dyn traits can't implement
+/// `PartialEq` and friends.
 #[derive(Debug, Clone)]
-pub struct CustomOperatorWrapper(pub Arc<dyn CustomOperator>);
+pub struct WrapCustomOperator(pub Arc<dyn CustomOperator>);
 
-impl Eq for CustomOperatorWrapper {}
+impl Eq for WrapCustomOperator {}
 
-impl PartialEq for CustomOperatorWrapper {
+impl PartialEq for WrapCustomOperator {
     fn eq(&self, rhs: &Self) -> bool {
         self.0.name() == rhs.0.name()
     }
 }
 
-impl PartialOrd for CustomOperatorWrapper {
+impl PartialOrd for WrapCustomOperator {
     fn partial_cmp(&self, rhs: &Self) -> Option<std::cmp::Ordering> {
         self.0.name().partial_cmp(rhs.0.name())
     }
 }
 
-impl Hash for CustomOperatorWrapper {
+impl Hash for WrapCustomOperator {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.name().hash(state)
     }

@@ -22,6 +22,12 @@ use sqlparser::ast::BinaryOperator;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn parse_sql_binary_op(&self, op: BinaryOperator) -> Result<Operator> {
+        for parse_custom_op in &self.options.parse_custom_operator {
+            if let Some(op) = parse_custom_op.parse(&op)? {
+                return Ok(op);
+            }
+        }
+
         match op {
             BinaryOperator::Gt => Ok(Operator::Gt),
             BinaryOperator::GtEq => Ok(Operator::GtEq),
@@ -53,13 +59,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
             BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
             BinaryOperator::AtArrow => Ok(Operator::AtArrow),
-            _ => {
-                if let Some(parse_custom_op) = &self.options.parse_custom_operator {
-                    parse_custom_op(op).map(Operator::custom)
-                } else {
-                    not_impl_err!("Unsupported SQL binary operator {op:?}")
-                }
-            },
+            _ => not_impl_err!("Unsupported SQL binary operator {op:?}"),
         }
     }
 }

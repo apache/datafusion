@@ -24,7 +24,7 @@ use arrow_schema::*;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
 };
-use datafusion_expr::{WindowUDF, CustomOperator};
+use datafusion_expr::{Operator, WindowUDF};
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
@@ -92,27 +92,22 @@ pub trait ContextProvider {
     fn udwf_names(&self) -> Vec<String>;
 }
 
-// pub trait ParseCustomOperator: fmt::Debug + Send + Sync {
-//     fn parse(&self, op: sqlparser::ast::BinaryOperator) -> Result<Arc<dyn CustomOperator>>;
-// }
+pub trait ParseCustomOperator: fmt::Debug + Send + Sync {
+    /// Return a human readable name for this parser
+    fn name(&self) -> &str;
 
-pub type ParseCustomOperator = Arc<dyn Fn(sqlparser::ast::BinaryOperator) -> Result<Arc<dyn CustomOperator>> + Send + Sync>;
+    /// potentially parse a custom operator.
+    ///
+    /// Return `None` if the operator is not recognized
+    fn parse(&self, op: &sqlparser::ast::BinaryOperator) -> Result<Option<Operator>>;
+}
 
 /// SQL parser options
+#[derive(Debug)]
 pub struct ParserOptions {
     pub parse_float_as_decimal: bool,
     pub enable_ident_normalization: bool,
-    pub parse_custom_operator: Option<ParseCustomOperator>,
-}
-
-impl fmt::Debug for ParserOptions {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("ParserOptions")
-            .field("parse_float_as_decimal", &self.parse_float_as_decimal)
-            .field("enable_ident_normalization", &self.enable_ident_normalization)
-            .field("parse_custom_operator", &self.parse_custom_operator.is_some())
-            .finish()
-    }
+    pub parse_custom_operator: Vec<Arc<dyn ParseCustomOperator>>,
 }
 
 impl Default for ParserOptions {
@@ -120,7 +115,7 @@ impl Default for ParserOptions {
         Self {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
-            parse_custom_operator: None,
+            parse_custom_operator: vec![],
         }
     }
 }

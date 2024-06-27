@@ -61,7 +61,6 @@ use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
-use datafusion_sql::planner::ParseCustomOperator;
 
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
@@ -76,6 +75,7 @@ pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
+use datafusion_sql::planner::ParseCustomOperator;
 
 mod avro;
 mod csv;
@@ -488,7 +488,7 @@ impl SessionContext {
         sql: &str,
         options: SQLOptions,
     ) -> Result<DataFrame> {
-        let plan = self.state().create_logical_plan(sql, options.parse_custom_operator.clone()).await?;
+        let plan = self.state().create_logical_plan(sql).await?;
         options.verify_plan(&plan)?;
 
         self.execute_logical_plan(plan).await
@@ -1353,6 +1353,19 @@ impl SessionContext {
             .write()
             .register_table_options_extension(extension)
     }
+
+    /// Registers a new [`ParseCustomOperator`] with the registry.
+    ///
+    /// `ParseCustomOperator` is used to parse custom operators from SQL,
+    /// e.g. `->>` or `?`.
+    pub fn register_parse_custom_operator(
+        &mut self,
+        parse_custom_operator: Arc<dyn ParseCustomOperator>,
+    ) -> Result<()> {
+        self.state
+            .write()
+            .register_parse_custom_operator(parse_custom_operator)
+    }
 }
 
 impl FunctionRegistry for SessionContext {
@@ -1472,8 +1485,6 @@ pub struct SQLOptions {
     allow_dml: bool,
     /// See [`Self::with_allow_statements`]
     allow_statements: bool,
-    /// Custom SQL operator parser
-    parse_custom_operator: Option<ParseCustomOperator>,
 }
 
 impl Default for SQLOptions {
@@ -1482,7 +1493,6 @@ impl Default for SQLOptions {
             allow_ddl: true,
             allow_dml: true,
             allow_statements: true,
-            parse_custom_operator: None,
         }
     }
 }
@@ -1508,12 +1518,6 @@ impl SQLOptions {
     /// Should Statements such as (e.g. `SET VARIABLE and `BEGIN TRANSACTION` ...`) be run?. Defaults to `true`
     pub fn with_allow_statements(mut self, allow: bool) -> Self {
         self.allow_statements = allow;
-        self
-    }
-
-    /// Set the custom SQL operator parser
-    pub fn with_parse_custom_operator(mut self, parse_custom_operator: Option<ParseCustomOperator>) -> Self {
-        self.parse_custom_operator = parse_custom_operator;
         self
     }
 

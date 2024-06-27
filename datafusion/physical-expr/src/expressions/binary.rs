@@ -638,7 +638,9 @@ impl BinaryExpr {
             AtArrow | ArrowAt => {
                 unreachable!("ArrowAt and AtArrow should be rewritten to function")
             }
-            Custom(_) => internal_err!("Custom operator should be rewritten to functions"),
+            Custom(_) => {
+                internal_err!("Custom operator should be rewritten to functions")
+            }
         }
     }
 }
