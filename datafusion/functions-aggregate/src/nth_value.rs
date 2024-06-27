@@ -82,7 +82,7 @@ impl AggregateUDFImpl for NthValue {
     fn accumulator(
         &self,
         acc_args: AccumulatorArgs,
-    ) -> datafusion_common::Result<Box<dyn Accumulator>> {
+    ) -> Result<Box<dyn Accumulator>> {
         let n = match &acc_args.input_exprs[1] {
             Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value.clone()),
             _ => not_impl_err!(
