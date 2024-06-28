@@ -580,11 +580,46 @@ CREATE TABLE signed_integers(
   (4, NULL, NULL, -512, NULL, NULL)
 ;
 
-query II
-select gcd(20, 1000), lcm(20, 1000);
-----
-20 1000
 
+## gcd
+
+# gcd scalar function
+query IIIIII rowsort
+select gcd(0, 0), gcd(2, 0), gcd(0, 2), gcd(2, 3), gcd(15, 10), gcd(20, 1000)
+----
+0 2 2 1 5 20
+
+# gcd with negative values
+query IIIII
+select gcd(-100, 0), gcd(0, -100), gcd(-2, 3), gcd(15, -10), gcd(-20, -1000)
+----
+100 100 1 5 20
+
+# gcd scalar nulls
+query III
+select gcd(null, 64), gcd(2, null), gcd(null, null);
+----
+NULL NULL NULL
+
+# scalar maxes and/or negative 1
+query III
+select 
+  gcd(9223372036854775807, -9223372036854775808), -- i64::MIN, i64::MAX
+  gcd(9223372036854775807, -1), -- i64::MAX, -1
+  gcd(-9223372036854775808, -1); -- i64::MIN, -1
+----
+1 1 1
+
+# gcd with columns and expresions
+query II rowsort
+select gcd(a, b), gcd(c*d + 1, abs(e)) + f from signed_integers;
+----
+1 11
+1 13
+2 -10
+NULL NULL
+
+# gcd(i64::MIN, i64::MIN)
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(\-9223372036854775808, \-9223372036854775808\)
 select gcd(-9223372036854775808, -9223372036854775808);
 
@@ -596,20 +631,14 @@ select gcd(-9223372036854775808, 0);
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(0, \-9223372036854775808\)
 select gcd(0, -9223372036854775808);
 
-# Test gcd with zero and negative values
-query III
-select gcd(0, 0), gcd(-100, 0), gcd(0, -100);
-----
-0 100 100
-
 
 ## lcm
 
 # Basic cases
-query IIIII
-select lcm(0, 0), lcm(0, 2), lcm(3, 0), lcm(2, 3), lcm(15, 10);
+query IIIIII
+select lcm(0, 0), lcm(0, 2), lcm(3, 0), lcm(2, 3), lcm(15, 10), lcm(20, 1000)
 ----
-0 0 0 6 30
+0 0 0 6 30 1000
 
 # Test lcm with negative numbers
 query IIIII
