@@ -309,6 +309,8 @@ config_namespace! {
         /// Currently experimental
         pub split_file_groups_by_statistics: bool, default = false
 
+        /// Should Datafusion keep the columns used for partition_by in the output RecordBatches
+        pub keep_partition_by_columns: bool, default = false
     }
 }
 
@@ -1292,6 +1294,10 @@ impl TableOptions {
 
         if prefix == "format" {
             return ConfigField::set(self, key, value);
+        }
+
+        if prefix == "execution" {
+            return Ok(());
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
