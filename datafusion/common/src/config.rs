@@ -208,7 +208,7 @@ config_namespace! {
         /// type with a specified length. This can be useful for enforcing certain schema
         /// constraints or maintaining compatibility with systems that do not support
         /// length-specified `Varchar` types.
-        pub error_on_varchar_with_length: bool, default = false
+        pub support_varchar_with_length: bool, default = true
 
     }
 }

@@ -80,7 +80,7 @@ p2e1
 p2m1e1
 
 statement ok
-set datafusion.sql_parser.error_on_varchar_with_length = true;
+set datafusion.sql_parser.support_varchar_with_length = false;
 
 # could not process due to config setting
 query error
@@ -96,7 +96,7 @@ query error
 SELECT s::VARCHAR(2) FROM vals
 
 statement ok
-set datafusion.sql_parser.error_on_varchar_with_length = false;
+set datafusion.sql_parser.support_varchar_with_length = true;
 
 # could be done when we diable this setting
 query T

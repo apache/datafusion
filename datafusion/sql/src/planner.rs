@@ -97,7 +97,7 @@ pub trait ContextProvider {
 pub struct ParserOptions {
     pub parse_float_as_decimal: bool,
     pub enable_ident_normalization: bool,
-    pub error_on_varchar_with_length: bool,
+    pub support_varchar_with_length: bool,
 }
 
 impl Default for ParserOptions {
@@ -105,7 +105,7 @@ impl Default for ParserOptions {
         Self {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
-            error_on_varchar_with_length: false,
+            support_varchar_with_length: true,
         }
     }
 }
@@ -401,8 +401,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(DataType::UInt32)
             }
             SQLDataType::Varchar(length) => {
-                match (length, self.options.error_on_varchar_with_length) {
-                    (Some(_), true) => plan_err!("does not support Varchar with length, please set corresponding parameter"),
+                match (length, self.options.support_varchar_with_length) {
+                    (Some(_), false) => plan_err!("does not support Varchar with length, please set `support_varchar_with_length` to be true"),
                     _ => Ok(DataType::Utf8),
                 }
             }
