@@ -204,6 +204,11 @@ config_namespace! {
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
         pub dialect: String, default = "generic".to_string()
 
+        /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
+        /// ignore the length. If false, error if a `VARCHAR` with a length is
+        /// specified. The Arrow type system does not have a notion of maximum
+        /// string length and thus DataFusion can not enforce such limits.
+        pub support_varchar_with_length: bool, default = true
     }
 }
 
@@ -303,6 +308,7 @@ config_namespace! {
         /// statistics into the same file groups.
         /// Currently experimental
         pub split_file_groups_by_statistics: bool, default = false
+
     }
 }
 

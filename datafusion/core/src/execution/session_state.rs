@@ -615,6 +615,7 @@ impl SessionState {
         ParserOptions {
             parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
             enable_ident_normalization: sql_parser_options.enable_ident_normalization,
+            support_varchar_with_length: sql_parser_options.support_varchar_with_length,
         }
     }
 
