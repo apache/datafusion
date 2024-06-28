@@ -17,10 +17,11 @@
 
 //! This file contains several examples of how to run SQL queries using DataFusion
 //!
-//! * [`parquet`]: run SQL query against a single Parquet file
-//! * [`parquet_multi_files`]: run SQL query against a table backed by multiple Parquet files
-//! * [`regexp`]: regular expression functions to manipulate strings
-//! * [`to_char`]: to_char function to convert strings to date, time, timestamp and durations
+//! * [`parquet_demo`]: run SQL query against a single Parquet file
+//! * [`parquet_multi_files_demo`]: run SQL query against a table backed by multiple Parquet files
+//! * [`regexp_demo`]: regular expression functions to manipulate strings
+//! * [`to_char_demo`]: to_char function to convert strings to date, time, timestamp and durations
+//! * [`to_timestamp_demo`]: to_timestamp function to convert strings to timestamps
 
 use arrow::array::{Date32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
@@ -35,16 +36,17 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    parquet().await?;
-    parquet_multi_files().await?;
-    regexp().await?;
-    to_char().await?;
+    parquet_demo().await?;
+    parquet_multi_files_demo().await?;
+    regexp_demo().await?;
+    to_char_demo().await?;
+    to_timestamp_demo().await?;
     Ok(())
 }
 
 /// This example demonstrates executing a simple query against an Arrow data
 /// source (Parquet) and fetching results
-async fn parquet() -> Result<()> {
+async fn parquet_demo() -> Result<()> {
     // create local session context
     let ctx = SessionContext::new();
 
@@ -79,7 +81,7 @@ async fn parquet() -> Result<()> {
 /// The query is run twice, once showing how to used `register_listing_table`
 /// with an absolute path, and once registering an ObjectStore to use a relative
 /// path.
-async fn parquet_multi_files() -> Result<()> {
+async fn parquet_multi_files_demo() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
@@ -167,7 +169,7 @@ async fn parquet_multi_files() -> Result<()> {
 ///
 /// Supported flags can be found at
 /// https://docs.rs/regex/latest/regex/#grouping-and-flags
-async fn regexp() -> Result<()> {
+async fn regexp_demo() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_csv(
         "examples",
@@ -486,7 +488,7 @@ async fn regexp() -> Result<()> {
 ///
 /// This function accepts date, time, timestamp and duration values
 /// in the first argument and string values for the second
-async fn to_char() -> Result<()> {
+async fn to_char_demo() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("values", DataType::Date32, false),
         Field::new("patterns", DataType::Utf8, false),
@@ -671,3 +673,96 @@ async fn to_char() -> Result<()> {
 
     Ok(())
 }
+
+
+/// This example demonstrates how to use the to_timestamp series
+/// of functions in the DataFrame API as well as via sql.
+async fn to_timestamp_demo() -> Result<()> {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(vec![
+                "2020-09-08T13:42:29Z",
+                "2020-09-08T13:42:29.190855-05:00",
+                "2020-08-09 12:13:29",
+                "2020-01-02",
+            ])),
+            Arc::new(StringArray::from(vec![
+                "2020-09-08T13:42:29Z",
+                "2020-09-08T13:42:29.190855-05:00",
+                "08-09-2020 13/42/29",
+                "09-27-2020 13:42:29-05:30",
+            ])),
+        ],
+    )?;
+
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    ctx.register_batch("t", batch)?;
+    // use sql to convert col 'a' to timestamp using the default parsing
+    let df = ctx.sql("select to_timestamp(a) from t").await?;
+
+    // print the results
+    df.show().await?;
+
+    // use sql to convert col 'b' to timestamp using a list of chrono formats to try
+    let df = ctx.sql("select to_timestamp(b, '%+', '%d-%m-%Y %H/%M/%S', '%m-%d-%Y %H:%M:%S%#z') from t").await?;
+
+    // print the results
+    df.show().await?;
+
+    // use sql to convert a static string to a timestamp using a list of chrono formats to try
+    // note that one of the formats is invalid ('%q') but since DataFusion will try all the
+    // formats until it encounters one that parses the timestamp expression successfully
+    // no error will be returned
+    let df = ctx.sql("select to_timestamp_micros('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z')").await?;
+
+    // print the results
+    df.show().await?;
+
+    // casting a string to TIMESTAMP will also work for RFC3339 timestamps
+    let df = ctx
+        .sql("select to_timestamp_millis(TIMESTAMP '2022-08-03T14:38:50Z')")
+        .await?;
+
+    // print the results
+    df.show().await?;
+
+    // unix timestamps (in seconds) are also supported
+    let df = ctx.sql("select to_timestamp(1926632005)").await?;
+
+    // print the results
+    df.show().await?;
+
+    // use sql to convert a static string to a timestamp using a non-matching chrono format to try
+    let result = ctx
+        .sql("select to_timestamp_nanos('01-14-2023 01/01/30', '%d-%m-%Y %H:%M:%S')")
+        .await?
+        .collect()
+        .await;
+
+    let expected = "Execution error: Error parsing timestamp from '01-14-2023 01/01/30' using format '%d-%m-%Y %H:%M:%S': input is out of range";
+    assert_contains!(result.unwrap_err().to_string(), expected);
+
+    // note that using arrays for the chrono formats is not supported
+    let result = ctx
+        .sql("SELECT to_timestamp('2022-08-03T14:38:50+05:30', make_array('%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+'))")
+        .await?
+        .collect()
+        .await;
+
+    let expected = "to_timestamp function unsupported data type at index 1: List";
+    assert_contains!(result.unwrap_err().to_string(), expected);
+
+    Ok(())
+}
+

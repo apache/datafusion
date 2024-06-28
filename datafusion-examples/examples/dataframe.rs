@@ -15,17 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! This file contains several examples of how to run queries using DataFusion's
+//! DataFrame API:
+//!
+//! * [`parquet`]: query a single Parquet file
+//! * [`to_date_demo`]: use the `to_date` function to convert dates to strings
+
+
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use std::fs::File;
 use std::io::Write;
+use std::sync::Arc;
+use arrow::array::{RecordBatch, StringArray};
 use tempfile::tempdir;
+use datafusion_common::assert_contains;
 
-/// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
-/// fetching results, using the DataFrame trait
 #[tokio::main]
 async fn main() -> Result<()> {
+    parquet().await?;
+    to_date_demo().await?;
+    to_timestamp_demo().await?;
+
+    Ok(())
+}
+
+
+/// This example demonstrates executing a simple query against an Arrow data
+/// source (Parquet) and fetching results, using the DataFrame trait
+
+async fn parquet() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
@@ -108,4 +128,99 @@ async fn example_read_csv_file_with_schema(file_path: &str) -> DataFrame {
     };
     // Register a lazy DataFrame by using the context and option provider
     ctx.read_csv(file_path, csv_read_option).await.unwrap()
+}
+
+
+/// This example demonstrates how to use the to_date series
+/// of functions in the DataFrame API
+async fn to_date_demo() -> Result<()> {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(StringArray::from(vec![
+            "2020-09-08T13:42:29Z",
+            "2020-09-08T13:42:29.190855-05:00",
+            "2020-08-09 12:13:29",
+            "2020-01-02",
+        ]))],
+    )?;
+
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    ctx.register_batch("t", batch)?;
+    let df = ctx.table("t").await?;
+
+    // use to_date function to convert col 'a' to timestamp type using the default parsing
+    let df = df.with_column("a", to_date(vec![col("a")]))?;
+
+    let df = df.select_columns(&["a"])?;
+
+    // print the results
+    df.show().await?;
+
+    Ok(())
+}
+
+
+
+/// This example demonstrates how to use the to_timestamp series
+/// of functions in the DataFrame API
+async fn to_timestamp_demo() -> Result<()> {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(vec![
+                "2020-09-08T13:42:29Z",
+                "2020-09-08T13:42:29.190855-05:00",
+                "2020-08-09 12:13:29",
+                "2020-01-02",
+            ])),
+            Arc::new(StringArray::from(vec![
+                "2020-09-08T13:42:29Z",
+                "2020-09-08T13:42:29.190855-05:00",
+                "08-09-2020 13/42/29",
+                "09-27-2020 13:42:29-05:30",
+            ])),
+        ],
+    )?;
+
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    ctx.register_batch("t", batch)?;
+    let df = ctx.table("t").await?;
+
+    // use to_timestamp function to convert col 'a' to timestamp type using the default parsing
+    let df = df.with_column("a", to_timestamp(vec![col("a")]))?;
+    // use to_timestamp_seconds function to convert col 'b' to timestamp(Seconds) type using a list
+    // of chrono formats (https://docs.rs/chrono/latest/chrono/format/strftime/index.html) to try
+    let df = df.with_column(
+        "b",
+        to_timestamp_seconds(vec![
+            col("b"),
+            lit("%+"),
+            lit("%d-%m-%Y %H/%M/%S"),
+            lit("%m-%d-%Y %H:%M:%S%#z"),
+        ]),
+    )?;
+
+    let df = df.select_columns(&["a", "b"])?;
+
+    // print the results
+    df.show().await?;
+
+    Ok(())
 }
