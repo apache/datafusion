@@ -24,20 +24,11 @@ use std::{any::Any, sync::Arc};
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
-#[cfg(feature = "parquet")]
-use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::{
     create_ordering, get_statistics_with_limit, TableProvider, TableType,
 };
 use crate::datasource::{
-    file_format::{
-        arrow::ArrowFormat,
-        avro::AvroFormat,
-        csv::CsvFormat,
-        file_compression_type::{FileCompressionType, FileTypeExt},
-        json::JsonFormat,
-        FileFormat,
-    },
+    file_format::{file_compression_type::FileCompressionType, FileFormat},
     listing::ListingTableUrl,
     physical_plan::{FileScanConfig, FileSinkConfig},
 };
@@ -51,7 +42,8 @@ use crate::{
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, Constraints, FileType, SchemaExt, ToDFSchema,
+    config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
+    SchemaExt, ToDFSchema,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -119,9 +111,7 @@ impl ListingTableConfig {
         }
     }
 
-    fn infer_file_type(path: &str) -> Result<(FileType, String)> {
-        let err_msg = format!("Unable to infer file type from path: {path}");
-
+    fn infer_file_extension(path: &str) -> Result<String> {
         let mut exts = path.rsplit('.');
 
         let mut splitted = exts.next().unwrap_or("");
@@ -133,14 +123,7 @@ impl ListingTableConfig {
             splitted = exts.next().unwrap_or("");
         }
 
-        let file_type = FileType::from_str(splitted)
-            .map_err(|_| DataFusionError::Internal(err_msg.to_owned()))?;
-
-        let ext = file_type
-            .get_ext_with_compression(file_compression_type.to_owned())
-            .map_err(|_| DataFusionError::Internal(err_msg))?;
-
-        Ok((file_type, ext))
+        Ok(splitted.to_string())
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
@@ -161,25 +144,15 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let (file_type, file_extension) =
-            ListingTableConfig::infer_file_type(file.location.as_ref())?;
+        let file_extension =
+            ListingTableConfig::infer_file_extension(file.location.as_ref())?;
 
-        let mut table_options = state.default_table_options();
-        table_options.set_file_format(file_type.clone());
-        let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::CSV => {
-                Arc::new(CsvFormat::default().with_options(table_options.csv))
-            }
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => {
-                Arc::new(ParquetFormat::default().with_options(table_options.parquet))
-            }
-            FileType::AVRO => Arc::new(AvroFormat),
-            FileType::JSON => {
-                Arc::new(JsonFormat::default().with_options(table_options.json))
-            }
-            FileType::ARROW => Arc::new(ArrowFormat),
-        };
+        let file_format = state
+            .get_file_format_factory(&file_extension)
+            .ok_or(config_datafusion_err!(
+                "No file_format found with extension {file_extension}"
+            ))?
+            .create(state, &HashMap::new())?;
 
         let listing_options = ListingOptions::new(file_format)
             .with_file_extension(file_extension)
@@ -1060,6 +1033,10 @@ impl ListingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::file_format::avro::AvroFormat;
+    use crate::datasource::file_format::csv::CsvFormat;
+    use crate::datasource::file_format::json::JsonFormat;
+    use crate::datasource::file_format::parquet::ParquetFormat;
     #[cfg(feature = "parquet")]
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
@@ -1073,7 +1050,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_schema::SortOptions;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{assert_contains, GetExt, ScalarValue};
+    use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::ExecutionPlanProperties;
@@ -1104,6 +1081,8 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn load_table_stats_by_default() -> Result<()> {
+        use crate::datasource::file_format::parquet::ParquetFormat;
+
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
         let table_path = ListingTableUrl::parse(filename).unwrap();
@@ -1128,6 +1107,8 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn load_table_stats_when_no_stats() -> Result<()> {
+        use crate::datasource::file_format::parquet::ParquetFormat;
+
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
         let table_path = ListingTableUrl::parse(filename).unwrap();
@@ -1162,7 +1143,10 @@ mod tests {
         let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let schema = options.infer_schema(&state, &table_path).await.unwrap();
 
-        use crate::physical_plan::expressions::col as physical_col;
+        use crate::{
+            datasource::file_format::parquet::ParquetFormat,
+            physical_plan::expressions::col as physical_col,
+        };
         use std::ops::Add;
 
         // (file_sort_order, expected_result)
@@ -1253,7 +1237,7 @@ mod tests {
         register_test_store(&ctx, &[(&path, 100)]);
 
         let opt = ListingOptions::new(Arc::new(AvroFormat {}))
-            .with_file_extension(FileType::AVRO.get_ext())
+            .with_file_extension(AvroFormat.get_ext())
             .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
             .with_target_partitions(4);
 
@@ -1516,7 +1500,7 @@ mod tests {
             "10".into(),
         );
         helper_test_append_new_files_to_table(
-            FileType::JSON,
+            JsonFormat::default().get_ext(),
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
             2,
@@ -1534,7 +1518,7 @@ mod tests {
             "10".into(),
         );
         helper_test_append_new_files_to_table(
-            FileType::CSV,
+            CsvFormat::default().get_ext(),
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
             2,
@@ -1552,7 +1536,7 @@ mod tests {
             "10".into(),
         );
         helper_test_append_new_files_to_table(
-            FileType::PARQUET,
+            ParquetFormat::default().get_ext(),
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
             2,
@@ -1570,7 +1554,7 @@ mod tests {
             "20".into(),
         );
         helper_test_append_new_files_to_table(
-            FileType::PARQUET,
+            ParquetFormat::default().get_ext(),
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
             1,
@@ -1756,7 +1740,7 @@ mod tests {
         );
         config_map.insert("datafusion.execution.batch_size".into(), "1".into());
         helper_test_append_new_files_to_table(
-            FileType::PARQUET,
+            ParquetFormat::default().get_ext(),
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
             2,
@@ -1774,7 +1758,7 @@ mod tests {
             "zstd".into(),
         );
         let e = helper_test_append_new_files_to_table(
-            FileType::PARQUET,
+            ParquetFormat::default().get_ext(),
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
             2,
@@ -1787,7 +1771,7 @@ mod tests {
     }
 
     async fn helper_test_append_new_files_to_table(
-        file_type: FileType,
+        file_type_ext: String,
         file_compression_type: FileCompressionType,
         session_config_map: Option<HashMap<String, String>>,
         expected_n_files_per_insert: usize,
@@ -1824,8 +1808,8 @@ mod tests {
 
         // Register appropriate table depending on file_type we want to test
         let tmp_dir = TempDir::new()?;
-        match file_type {
-            FileType::CSV => {
+        match file_type_ext.as_str() {
+            "csv" => {
                 session_ctx
                     .register_csv(
                         "t",
@@ -1836,7 +1820,7 @@ mod tests {
                     )
                     .await?;
             }
-            FileType::JSON => {
+            "json" => {
                 session_ctx
                     .register_json(
                         "t",
@@ -1847,7 +1831,7 @@ mod tests {
                     )
                     .await?;
             }
-            FileType::PARQUET => {
+            "parquet" => {
                 session_ctx
                     .register_parquet(
                         "t",
@@ -1856,7 +1840,7 @@ mod tests {
                     )
                     .await?;
             }
-            FileType::AVRO => {
+            "avro" => {
                 session_ctx
                     .register_avro(
                         "t",
@@ -1865,7 +1849,7 @@ mod tests {
                     )
                     .await?;
             }
-            FileType::ARROW => {
+            "arrow" => {
                 session_ctx
                     .register_arrow(
                         "t",
@@ -1874,6 +1858,7 @@ mod tests {
                     )
                     .await?;
             }
+            _ => panic!("Unrecognized file extension {file_type_ext}"),
         }
 
         // Create and register the source table with the provided schema and inserted data

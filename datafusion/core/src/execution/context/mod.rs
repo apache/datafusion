@@ -28,7 +28,7 @@ use crate::{
     catalog::{CatalogProvider, CatalogProviderList, MemoryCatalogProvider},
     dataframe::DataFrame,
     datasource::{
-        function::TableFunctionImpl,
+        function::{TableFunction, TableFunctionImpl},
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
         provider::TableProviderFactory,
     },
@@ -52,7 +52,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    exec_err, not_impl_err, plan_err,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, SchemaReference, TableReference,
 };
@@ -75,7 +75,7 @@ use url::Url;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_optimizer::AnalyzerRule;
+use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 
 mod avro;
 mod csv;
@@ -332,13 +332,21 @@ impl SessionContext {
         self
     }
 
-    /// Adds an analyzer rule to the `SessionState` in the current `SessionContext`.
-    pub fn add_analyzer_rule(
-        self,
-        analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    ) -> Self {
+    /// Adds an optimizer rule to the end of the existing rules.
+    ///
+    /// See [`SessionState`] for more control of when the rule is applied.
+    pub fn add_optimizer_rule(
+        &self,
+        optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
+    ) {
+        self.state.write().append_optimizer_rule(optimizer_rule);
+    }
+
+    /// Adds an analyzer rule to the end of the existing rules.
+    ///
+    /// See [`SessionState`] for more control of when the rule is applied.
+    pub fn add_analyzer_rule(&self, analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>) {
         self.state.write().add_analyzer_rule(analyzer_rule);
-        self
     }
 
     /// Registers an [`ObjectStore`] to be used with a specific URL prefix.
@@ -928,6 +936,7 @@ impl SessionContext {
         dropped |= self.state.write().deregister_udf(&stmt.name)?.is_some();
         dropped |= self.state.write().deregister_udaf(&stmt.name)?.is_some();
         dropped |= self.state.write().deregister_udwf(&stmt.name)?.is_some();
+        dropped |= self.state.write().deregister_udtf(&stmt.name)?.is_some();
 
         // DROP FUNCTION IF EXISTS drops the specified function only if that
         // function exists and in this way, it avoids error. While the DROP FUNCTION
@@ -1006,6 +1015,11 @@ impl SessionContext {
     /// Deregisters a UDWF within this context.
     pub fn deregister_udwf(&self, name: &str) {
         self.state.write().deregister_udwf(name).ok();
+    }
+
+    /// Deregisters a UDTF within this context.
+    pub fn deregister_udtf(&self, name: &str) {
+        self.state.write().deregister_udtf(name).ok();
     }
 
     /// Creates a [`DataFrame`] for reading a data source.
@@ -1266,6 +1280,20 @@ impl SessionContext {
         Ok(DataFrame::new(self.state(), plan))
     }
 
+    /// Retrieves a [`TableFunction`] reference by name.
+    ///
+    /// Returns an error if no table function has been registered with the provided name.
+    ///
+    /// [`register_udtf`]: SessionContext::register_udtf
+    pub fn table_function(&self, name: &str) -> Result<Arc<TableFunction>> {
+        self.state
+            .read()
+            .table_functions()
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("Table function '{name}' not found"))
+    }
+
     /// Return a [`TableProvider`] for the specified table.
     pub async fn table_provider<'a>(
         &self,
@@ -1301,6 +1329,11 @@ impl SessionContext {
         let mut state = self.state.read().clone();
         state.execution_props_mut().start_execution();
         state
+    }
+
+    /// Get reference to [`SessionState`]
+    pub fn state_ref(&self) -> Arc<RwLock<SessionState>> {
+        self.state.clone()
     }
 
     /// Get weak reference to [`SessionState`]
@@ -1831,7 +1864,7 @@ mod tests {
 
         let catalog_list_weak = {
             let state = ctx.state.read();
-            Arc::downgrade(&state.catalog_list())
+            Arc::downgrade(state.catalog_list())
         };
 
         drop(ctx);

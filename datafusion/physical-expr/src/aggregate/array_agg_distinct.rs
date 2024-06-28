@@ -74,22 +74,23 @@ impl AggregateExpr for DistinctArrayAgg {
         Ok(Field::new_list(
             &self.name,
             // This should be the same as return type of AggregateFunction::ArrayAgg
-            Field::new("item", self.input_data_type.clone(), true),
-            self.nullable,
+            Field::new("item", self.input_data_type.clone(), self.nullable),
+            false,
         ))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(DistinctArrayAggAccumulator::try_new(
             &self.input_data_type,
+            self.nullable,
         )?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "distinct_array_agg"),
-            Field::new("item", self.input_data_type.clone(), true),
-            self.nullable,
+            Field::new("item", self.input_data_type.clone(), self.nullable),
+            false,
         )])
     }
 
@@ -119,13 +120,15 @@ impl PartialEq<dyn Any> for DistinctArrayAgg {
 struct DistinctArrayAggAccumulator {
     values: HashSet<ScalarValue>,
     datatype: DataType,
+    nullable: bool,
 }
 
 impl DistinctArrayAggAccumulator {
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
+    pub fn try_new(datatype: &DataType, nullable: bool) -> Result<Self> {
         Ok(Self {
             values: HashSet::new(),
             datatype: datatype.clone(),
+            nullable,
         })
     }
 }
@@ -162,7 +165,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let values: Vec<ScalarValue> = self.values.iter().cloned().collect();
-        let arr = ScalarValue::new_list(&values, &self.datatype);
+        let arr = ScalarValue::new_list(&values, &self.datatype, self.nullable);
         Ok(ScalarValue::List(arr))
     }
 

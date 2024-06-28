@@ -2536,10 +2536,10 @@ impl serde::Serialize for CopyToNode {
         if !self.output_url.is_empty() {
             len += 1;
         }
-        if !self.partition_by.is_empty() {
+        if !self.file_type.is_empty() {
             len += 1;
         }
-        if self.format_options.is_some() {
+        if !self.partition_by.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.CopyToNode", len)?;
@@ -2549,27 +2549,12 @@ impl serde::Serialize for CopyToNode {
         if !self.output_url.is_empty() {
             struct_ser.serialize_field("outputUrl", &self.output_url)?;
         }
+        if !self.file_type.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("fileType", pbjson::private::base64::encode(&self.file_type).as_str())?;
+        }
         if !self.partition_by.is_empty() {
             struct_ser.serialize_field("partitionBy", &self.partition_by)?;
-        }
-        if let Some(v) = self.format_options.as_ref() {
-            match v {
-                copy_to_node::FormatOptions::Csv(v) => {
-                    struct_ser.serialize_field("csv", v)?;
-                }
-                copy_to_node::FormatOptions::Json(v) => {
-                    struct_ser.serialize_field("json", v)?;
-                }
-                copy_to_node::FormatOptions::Parquet(v) => {
-                    struct_ser.serialize_field("parquet", v)?;
-                }
-                copy_to_node::FormatOptions::Avro(v) => {
-                    struct_ser.serialize_field("avro", v)?;
-                }
-                copy_to_node::FormatOptions::Arrow(v) => {
-                    struct_ser.serialize_field("arrow", v)?;
-                }
-            }
         }
         struct_ser.end()
     }
@@ -2584,25 +2569,18 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
             "input",
             "output_url",
             "outputUrl",
+            "file_type",
+            "fileType",
             "partition_by",
             "partitionBy",
-            "csv",
-            "json",
-            "parquet",
-            "avro",
-            "arrow",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
             OutputUrl,
+            FileType,
             PartitionBy,
-            Csv,
-            Json,
-            Parquet,
-            Avro,
-            Arrow,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2626,12 +2604,8 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "outputUrl" | "output_url" => Ok(GeneratedField::OutputUrl),
+                            "fileType" | "file_type" => Ok(GeneratedField::FileType),
                             "partitionBy" | "partition_by" => Ok(GeneratedField::PartitionBy),
-                            "csv" => Ok(GeneratedField::Csv),
-                            "json" => Ok(GeneratedField::Json),
-                            "parquet" => Ok(GeneratedField::Parquet),
-                            "avro" => Ok(GeneratedField::Avro),
-                            "arrow" => Ok(GeneratedField::Arrow),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2653,8 +2627,8 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
             {
                 let mut input__ = None;
                 let mut output_url__ = None;
+                let mut file_type__ = None;
                 let mut partition_by__ = None;
-                let mut format_options__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -2669,54 +2643,27 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                             }
                             output_url__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::FileType => {
+                            if file_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fileType"));
+                            }
+                            file_type__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::PartitionBy => {
                             if partition_by__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("partitionBy"));
                             }
                             partition_by__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::Csv => {
-                            if format_options__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("csv"));
-                            }
-                            format_options__ = map_.next_value::<::std::option::Option<_>>()?.map(copy_to_node::FormatOptions::Csv)
-;
-                        }
-                        GeneratedField::Json => {
-                            if format_options__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("json"));
-                            }
-                            format_options__ = map_.next_value::<::std::option::Option<_>>()?.map(copy_to_node::FormatOptions::Json)
-;
-                        }
-                        GeneratedField::Parquet => {
-                            if format_options__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("parquet"));
-                            }
-                            format_options__ = map_.next_value::<::std::option::Option<_>>()?.map(copy_to_node::FormatOptions::Parquet)
-;
-                        }
-                        GeneratedField::Avro => {
-                            if format_options__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("avro"));
-                            }
-                            format_options__ = map_.next_value::<::std::option::Option<_>>()?.map(copy_to_node::FormatOptions::Avro)
-;
-                        }
-                        GeneratedField::Arrow => {
-                            if format_options__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("arrow"));
-                            }
-                            format_options__ = map_.next_value::<::std::option::Option<_>>()?.map(copy_to_node::FormatOptions::Arrow)
-;
-                        }
                     }
                 }
                 Ok(CopyToNode {
                     input: input__,
                     output_url: output_url__.unwrap_or_default(),
+                    file_type: file_type__.unwrap_or_default(),
                     partition_by: partition_by__.unwrap_or_default(),
-                    format_options: format_options__,
                 })
             }
         }
@@ -19961,12 +19908,12 @@ impl serde::Serialize for Wildcard {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.qualifier.is_empty() {
+        if self.qualifier.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.Wildcard", len)?;
-        if !self.qualifier.is_empty() {
-            struct_ser.serialize_field("qualifier", &self.qualifier)?;
+        if let Some(v) = self.qualifier.as_ref() {
+            struct_ser.serialize_field("qualifier", v)?;
         }
         struct_ser.end()
     }
@@ -20032,12 +19979,12 @@ impl<'de> serde::Deserialize<'de> for Wildcard {
                             if qualifier__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("qualifier"));
                             }
-                            qualifier__ = Some(map_.next_value()?);
+                            qualifier__ = map_.next_value()?;
                         }
                     }
                 }
                 Ok(Wildcard {
-                    qualifier: qualifier__.unwrap_or_default(),
+                    qualifier: qualifier__,
                 })
             }
         }

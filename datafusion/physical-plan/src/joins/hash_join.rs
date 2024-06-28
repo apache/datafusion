@@ -73,6 +73,8 @@ use datafusion_physical_expr::expressions::UnKnownColumn;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
+use datafusion_expr::Operator;
+use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -1210,6 +1212,12 @@ fn eq_dyn_null(
     right: &dyn Array,
     null_equals_null: bool,
 ) -> Result<BooleanArray, ArrowError> {
+    // Nested datatypes cannot use the underlying not_distinct function and must use a special
+    // implementation
+    // <https://github.com/apache/datafusion/issues/10749>
+    if left.data_type().is_nested() && null_equals_null {
+        return Ok(compare_op_for_nested(&Operator::Eq, &left, &right)?);
+    }
     match (left.data_type(), right.data_type()) {
         _ if null_equals_null => not_distinct(&left, &right),
         _ => eq(&left, &right),

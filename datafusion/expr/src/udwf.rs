@@ -108,8 +108,8 @@ impl WindowUDF {
     }
 
     /// Return the underlying [`WindowUDFImpl`] trait object for this function
-    pub fn inner(&self) -> Arc<dyn WindowUDFImpl> {
-        self.inner.clone()
+    pub fn inner(&self) -> &Arc<dyn WindowUDFImpl> {
+        &self.inner
     }
 
     /// Adds additional names that can be used to invoke this function, in

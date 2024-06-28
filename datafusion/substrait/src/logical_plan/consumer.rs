@@ -250,14 +250,14 @@ pub async fn from_substrait_plan(
                         match plan {
                             // If the last node of the plan produces expressions, bake the renames into those expressions.
                             // This isn't necessary for correctness, but helps with roundtrip tests.
-                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), renamed_schema)?, p.input)?)),
+                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), &renamed_schema)?, p.input)?)),
                             LogicalPlan::Aggregate(a) => {
-                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), renamed_schema)?;
+                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), &renamed_schema)?;
                                 Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, a.group_expr, new_aggr_exprs)?))
                             },
                             // There are probably more plans where we could bake things in, can add them later as needed.
                             // Otherwise, add a new Project to handle the renaming.
-                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), renamed_schema)?, Arc::new(plan))?))
+                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), &renamed_schema)?, Arc::new(plan))?))
                         }
                     }
                 },
@@ -308,34 +308,46 @@ pub fn extract_projection(
     }
 }
 
+/// Ensure the expressions have the right name(s) according to the new schema.
+/// This includes the top-level (column) name, which will be renamed through aliasing if needed,
+/// as well as nested names (if the expression produces any struct types), which will be renamed
+/// through casting if needed.
 fn rename_expressions(
     exprs: impl IntoIterator<Item = Expr>,
     input_schema: &DFSchema,
-    new_schema: DFSchemaRef,
+    new_schema: &DFSchema,
 ) -> Result<Vec<Expr>> {
     exprs
         .into_iter()
         .zip(new_schema.fields())
         .map(|(old_expr, new_field)| {
-            if &old_expr.get_type(input_schema)? == new_field.data_type() {
-                // Alias column if needed
-                old_expr.alias_if_changed(new_field.name().into())
-            } else {
-                // Use Cast to rename inner struct fields + alias column if needed
+            // Check if type (i.e. nested struct field names) match, use Cast to rename if needed
+            let new_expr = if &old_expr.get_type(input_schema)? != new_field.data_type() {
                 Expr::Cast(Cast::new(
                     Box::new(old_expr),
                     new_field.data_type().to_owned(),
                 ))
-                .alias_if_changed(new_field.name().into())
+            } else {
+                old_expr
+            };
+            // Alias column if needed to fix the top-level name
+            match &new_expr {
+                // If expr is a column reference, alias_if_changed would cause an aliasing if the old expr has a qualifier
+                Expr::Column(c) if &c.name == new_field.name() => Ok(new_expr),
+                _ => new_expr.alias_if_changed(new_field.name().to_owned()),
             }
         })
         .collect()
 }
 
+/// Produce a version of the given schema with names matching the given list of names.
+/// Substrait doesn't deal with column (incl. nested struct field) names within the schema,
+/// but it does give us the list of expected names at the end of the plan, so we use this
+/// to rename the schema to match the expected names.
 fn make_renamed_schema(
     schema: &DFSchemaRef,
     dfs_names: &Vec<String>,
-) -> Result<DFSchemaRef> {
+) -> Result<DFSchema> {
     fn rename_inner_fields(
         dtype: &DataType,
         dfs_names: &Vec<String>,
@@ -401,10 +413,10 @@ fn make_renamed_schema(
             dfs_names.len());
     }
 
-    Ok(Arc::new(DFSchema::from_field_specific_qualified_schema(
+    DFSchema::from_field_specific_qualified_schema(
         qualifiers,
         &Arc::new(Schema::new(fields)),
-    )?))
+    )
 }
 
 /// Convert Substrait Rel to DataFusion DataFrame
@@ -594,6 +606,8 @@ pub async fn from_substrait_rel(
             let right = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, join.right.as_ref().unwrap(), extensions).await?,
             );
+            let (left, right) = requalify_sides_if_needed(left, right)?;
+
             let join_type = from_substrait_jointype(join.r#type)?;
             // The join condition expression needs full input schema and not the output schema from join since we lose columns from
             // certain join types such as semi and anti joins
@@ -627,13 +641,15 @@ pub async fn from_substrait_rel(
             }
         }
         Some(RelType::Cross(cross)) => {
-            let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
+            let left = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, cross.left.as_ref().unwrap(), extensions).await?,
             );
-            let right =
+            let right = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, cross.right.as_ref().unwrap(), extensions)
-                    .await?;
-            left.cross_join(right)?.build()
+                    .await?,
+            );
+            let (left, right) = requalify_sides_if_needed(left, right)?;
+            left.cross_join(right.build()?)?.build()
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
@@ -843,6 +859,34 @@ pub async fn from_substrait_rel(
             }))
         }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
+    }
+}
+
+/// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
+/// conflict with the columns from the other.  
+/// Substrait doesn't currently allow specifying aliases, neither for columns nor for tables. For
+/// Substrait the names don't matter since it only refers to columns by indices, however DataFusion
+/// requires columns to be uniquely identifiable, in some places (see e.g. DFSchema::check_names).
+fn requalify_sides_if_needed(
+    left: LogicalPlanBuilder,
+    right: LogicalPlanBuilder,
+) -> Result<(LogicalPlanBuilder, LogicalPlanBuilder)> {
+    let left_cols = left.schema().columns();
+    let right_cols = right.schema().columns();
+    if left_cols.iter().any(|l| {
+        right_cols.iter().any(|r| {
+            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
+        })
+    }) {
+        // These names have no connection to the original plan, but they'll make the columns
+        // (mostly) unique. There may be cases where this still causes duplicates, if either left
+        // or right side itself contains duplicate names with different qualifiers.
+        Ok((
+            left.alias(TableReference::bare("left"))?,
+            right.alias(TableReference::bare("right"))?,
+        ))
+    } else {
+        Ok((left, right))
     }
 }
 
@@ -1405,6 +1449,36 @@ fn from_substrait_type(
                     )?,
                 }
             }
+            r#type::Kind::Map(map) => {
+                let key_type = map.key.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("Map type must have key type")
+                })?;
+                let value_type = map.value.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("Map type must have value type")
+                })?;
+                let key_field = Arc::new(Field::new(
+                    "key",
+                    from_substrait_type(key_type, dfs_names, name_idx)?,
+                    false,
+                ));
+                let value_field = Arc::new(Field::new(
+                    "value",
+                    from_substrait_type(value_type, dfs_names, name_idx)?,
+                    true,
+                ));
+                match map.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
+                        Ok(DataType::Map(Arc::new(Field::new_struct(
+                            "entries",
+                            [key_field, value_field],
+                            false, // The inner map field is always non-nullable (Arrow #1697),
+                        )), false))
+                    },
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    )?,
+                }
+            }
             r#type::Kind::Decimal(d) => match d.type_variation_reference {
                 DECIMAL_128_TYPE_VARIATION_REF => {
                     Ok(DataType::Decimal128(d.precision as u8, d.scale as i8))
@@ -1686,7 +1760,7 @@ fn from_substrait_literal(
             let element_type = elements[0].data_type();
             match lit.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::List(
-                    ScalarValue::new_list(elements.as_slice(), &element_type),
+                    ScalarValue::new_list_nullable(elements.as_slice(), &element_type),
                 ),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
                     ScalarValue::new_large_list(elements.as_slice(), &element_type),
@@ -1704,7 +1778,7 @@ fn from_substrait_literal(
             )?;
             match lit.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
-                    ScalarValue::List(ScalarValue::new_list(&[], &element_type))
+                    ScalarValue::List(ScalarValue::new_list_nullable(&[], &element_type))
                 }
                 LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
                     ScalarValue::new_large_list(&[], &element_type),

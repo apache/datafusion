@@ -20,7 +20,6 @@ mod kernels;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::expressions::datum::{apply, apply_cmp};
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
@@ -40,6 +39,7 @@ use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
+use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
@@ -265,6 +265,13 @@ impl PhysicalExpr for BinaryExpr {
         let schema = batch.schema();
         let input_schema = schema.as_ref();
 
+        if left_data_type.is_nested() {
+            if right_data_type != left_data_type {
+                return internal_err!("type mismatch");
+            }
+            return apply_cmp_for_nested(&self.op, &lhs, &rhs);
+        }
+
         match self.op {
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
             Operator::Minus => return apply(&lhs, &rhs, sub_wrapping),
@@ -322,7 +329,7 @@ impl PhysicalExpr for BinaryExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(BinaryExpr::new(
             children[0].clone(),
-            self.op,
+            self.op.clone(),
             children[1].clone(),
         )))
     }
