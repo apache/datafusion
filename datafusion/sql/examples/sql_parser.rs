@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! This example shows how to use (only) the DataFusion SQL parser
+//! to create a logical plan. It does not require the DataFusion
+//! Execution engine or physical plans.
+
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
