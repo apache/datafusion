@@ -2752,7 +2752,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 schema: DFSchemaRef::new(
-                    DFSchema::from_unqualifed_fields(
+                    DFSchema::from_unqualified_fields(
                         vec![Field::new("a", DataType::Int32, false)].into(),
                         HashMap::new(),
                     )

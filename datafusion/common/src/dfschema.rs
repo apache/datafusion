@@ -98,7 +98,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// use arrow::datatypes::Field;
 /// use std::collections::HashMap;
 ///
-/// let df_schema = DFSchema::from_unqualifed_fields(vec![
+/// let df_schema = DFSchema::from_unqualified_fields(vec![
 ///    Field::new("c1", arrow::datatypes::DataType::Int32, false),
 /// ].into(),HashMap::new()).unwrap();
 /// let schema = Schema::from(df_schema);
@@ -159,7 +159,7 @@ impl DFSchema {
     }
 
     /// Create a new `DFSchema` from a list of Arrow [Field]s
-    pub fn from_unqualifed_fields(
+    pub fn from_unqualified_fields(
         fields: Fields,
         metadata: HashMap<String, String>,
     ) -> Result<Self> {
