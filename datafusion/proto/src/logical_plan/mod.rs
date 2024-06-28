@@ -33,6 +33,9 @@ use crate::protobuf::{proto_error, FromProtoError, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::{
+    file_type_to_format, format_as_file_type, FileFormatFactory,
+};
 use datafusion::{
     datasource::{
         file_format::{avro::AvroFormat, csv::CsvFormat, FileFormat},
@@ -43,6 +46,7 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
+use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     context, internal_datafusion_err, internal_err, not_impl_err, DataFusionError,
     Result, TableReference,
@@ -64,6 +68,7 @@ use prost::Message;
 
 use self::to_proto::serialize_expr;
 
+pub mod file_formats;
 pub mod from_proto;
 pub mod to_proto;
 
@@ -104,15 +109,33 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
     fn try_decode_table_provider(
         &self,
         buf: &[u8],
+        table_ref: &TableReference,
         schema: SchemaRef,
         ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>>;
 
     fn try_encode_table_provider(
         &self,
+        table_ref: &TableReference,
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<()>;
+
+    fn try_decode_file_format(
+        &self,
+        _buf: &[u8],
+        _ctx: &SessionContext,
+    ) -> Result<Arc<dyn FileFormatFactory>> {
+        not_impl_err!("LogicalExtensionCodec is not provided for file format")
+    }
+
+    fn try_encode_file_format(
+        &self,
+        _buf: &[u8],
+        _node: Arc<dyn FileFormatFactory>,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         not_impl_err!("LogicalExtensionCodec is not provided for scalar function {name}")
@@ -143,6 +166,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -151,6 +175,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -424,14 +449,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(|expr| from_proto::parse_expr(expr, ctx, extension_codec))
                     .collect::<Result<Vec<_>, _>>()?;
-                let provider = extension_codec.try_decode_table_provider(
-                    &scan.custom_table_data,
-                    schema,
-                    ctx,
-                )?;
 
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "CustomScan")?;
+
+                let provider = extension_codec.try_decode_table_provider(
+                    &scan.custom_table_data,
+                    &table_name,
+                    schema,
+                    ctx,
+                )?;
 
                 LogicalPlanBuilder::scan_with_filters(
                     table_name,
@@ -829,12 +856,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: LogicalPlan =
                     into_logical_plan!(copy.input, ctx, extension_codec)?;
 
+                let file_type: Arc<dyn FileType> = format_as_file_type(
+                    extension_codec.try_decode_file_format(&copy.file_type, ctx)?,
+                );
+
                 Ok(datafusion_expr::LogicalPlan::Copy(
                     datafusion_expr::dml::CopyTo {
                         input: Arc::new(input),
                         output_url: copy.output_url.clone(),
                         partition_by: copy.partition_by.clone(),
-                        format_options: convert_required!(copy.format_options)?,
+                        file_type,
                         options: Default::default(),
                     },
                 ))
@@ -1023,7 +1054,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 } else {
                     let mut bytes = vec![];
                     extension_codec
-                        .try_encode_table_provider(provider, &mut bytes)
+                        .try_encode_table_provider(table_name, provider, &mut bytes)
                         .map_err(|e| context!("Error serializing custom table", e))?;
                     let scan = CustomScan(CustomTableScanNode {
                         table_name: Some(table_name.clone().into()),
@@ -1609,7 +1640,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Copy(dml::CopyTo {
                 input,
                 output_url,
-                format_options,
+                file_type,
                 partition_by,
                 ..
             }) => {
@@ -1618,12 +1649,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec,
                 )?;
 
+                let buf = Vec::new();
+                extension_codec
+                    .try_encode_file_format(&buf, file_type_to_format(file_type)?)?;
+
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CopyTo(Box::new(
                         protobuf::CopyToNode {
                             input: Some(Box::new(input)),
                             output_url: output_url.to_string(),
-                            format_options: Some(format_options.try_into()?),
+                            file_type: buf,
                             partition_by: partition_by.clone(),
                         },
                     ))),

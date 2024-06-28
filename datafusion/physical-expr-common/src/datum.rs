@@ -87,7 +87,7 @@ pub fn apply_cmp_for_nested(
 }
 
 /// Compare on nested type List, Struct, and so on
-fn compare_op_for_nested(
+pub fn compare_op_for_nested(
     op: &Operator,
     lhs: &dyn Datum,
     rhs: &dyn Datum,

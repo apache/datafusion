@@ -22,13 +22,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
 
-use crate::datasource::file_format::arrow::ArrowFormat;
-use crate::datasource::file_format::avro::AvroFormat;
-use crate::datasource::file_format::csv::CsvFormat;
-use crate::datasource::file_format::json::JsonFormat;
-#[cfg(feature = "parquet")]
-use crate::datasource::file_format::parquet::ParquetFormat;
-use crate::datasource::file_format::FileFormat;
+use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::source_as_provider;
@@ -74,11 +68,10 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
-use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
-    FileType, ScalarValue,
+    ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -764,7 +757,7 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Copy(CopyTo {
                 input,
                 output_url,
-                format_options,
+                file_type,
                 partition_by,
                 options: source_option_tuples,
             }) => {
@@ -791,32 +784,9 @@ impl DefaultPhysicalPlanner {
                     table_partition_cols,
                     overwrite: false,
                 };
-                let mut table_options = session_state.default_table_options();
-                let sink_format: Arc<dyn FileFormat> = match format_options {
-                    FormatOptions::CSV(options) => {
-                        table_options.csv = options.clone();
-                        table_options.set_file_format(FileType::CSV);
-                        table_options.alter_with_string_hash_map(source_option_tuples)?;
-                        Arc::new(CsvFormat::default().with_options(table_options.csv))
-                    }
-                    FormatOptions::JSON(options) => {
-                        table_options.json = options.clone();
-                        table_options.set_file_format(FileType::JSON);
-                        table_options.alter_with_string_hash_map(source_option_tuples)?;
-                        Arc::new(JsonFormat::default().with_options(table_options.json))
-                    }
-                    #[cfg(feature = "parquet")]
-                    FormatOptions::PARQUET(options) => {
-                        table_options.parquet = options.clone();
-                        table_options.set_file_format(FileType::PARQUET);
-                        table_options.alter_with_string_hash_map(source_option_tuples)?;
-                        Arc::new(
-                            ParquetFormat::default().with_options(table_options.parquet),
-                        )
-                    }
-                    FormatOptions::AVRO => Arc::new(AvroFormat {}),
-                    FormatOptions::ARROW => Arc::new(ArrowFormat {}),
-                };
+
+                let sink_format = file_type_to_format(file_type)?
+                    .create(session_state, source_option_tuples)?;
 
                 sink_format
                     .create_writer_physical_plan(input_exec, session_state, config, None)
