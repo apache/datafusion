@@ -106,6 +106,7 @@ pub mod expr_fn {
     pub use super::first_last::last_value;
     pub use super::grouping::grouping;
     pub use super::median::median;
+    pub use super::nth_value::nth_value;
     pub use super::regr::regr_avgx;
     pub use super::regr::regr_avgy;
     pub use super::regr::regr_count;
@@ -158,6 +159,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         bool_and_or::bool_or_udaf(),
         average::avg_udaf(),
         grouping::grouping_udaf(),
+        nth_value::nth_value_udaf(),
     ]
 }
 

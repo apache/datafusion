@@ -40,6 +40,13 @@ use datafusion_physical_expr_common::sort_expr::{
     limited_convert_logical_sort_exprs_to_physical, LexOrdering, PhysicalSortExpr,
 };
 
+make_udaf_expr_and_func!(
+    NthValueAgg,
+    nth_value,
+    "Returns the nth value in a group of values.",
+    nth_value_udaf
+);
+
 /// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
