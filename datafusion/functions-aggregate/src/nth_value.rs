@@ -72,7 +72,7 @@ impl NthValueAgg {
 
 impl Default for NthValueAgg {
     fn default() -> Self {
-       Self::new(1, true)
+        Self::new(1, true)
     }
 }
 

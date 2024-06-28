@@ -38,7 +38,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
-use datafusion::physical_expr::expressions::{Max};
+use datafusion::physical_expr::expressions::Max;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -364,18 +364,15 @@ fn rountrip_aggregate() -> Result<()> {
         )?],
         // NTH_VALUE
         vec![udaf::create_aggregate_expr(
-           &AggregateUDF::new_from_impl(NthValueAgg::default()),
-           &[
-               col("b", &schema)?,
-               lit(ScalarValue::UInt64(Some(1))),
-           ],
-           &[],
-           &[],
-           &[],
-           &schema,
-           "NTH_VALUE(b, 1)",
-           false,
-           false,
+            &AggregateUDF::new_from_impl(NthValueAgg::default()),
+            &[col("b", &schema)?, lit(ScalarValue::UInt64(Some(1)))],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "NTH_VALUE(b, 1)",
+            false,
+            false,
         )?],
         // STRING_AGG
         vec![udaf::create_aggregate_expr(
