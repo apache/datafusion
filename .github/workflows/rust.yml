@@ -178,6 +178,10 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
+    env:
+      # avoid debug symbols at all (without this compiling
+      # the examples fills up the disk)
+      RUSTFLAGS: "-C debuginfo=0 -C incremental=false"
     steps:
       - uses: actions/checkout@v4
         with:
