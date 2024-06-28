@@ -132,10 +132,7 @@ fn scalar_function_type_from_str(
     ctx: &SessionContext,
     name: &str,
 ) -> Result<ScalarFunctionType> {
-    let s = ctx.state();
-    let name = substrait_fun_name(name);
-
-    if let Some(func) = s.scalar_functions().get(name) {
+    if let Some(func) = ctx.state().scalar_functions().get(name) {
         return Ok(ScalarFunctionType::Udf(func.to_owned()));
     }
 
@@ -1141,6 +1138,7 @@ pub async fn from_substrait_rex(
                     f.function_reference
                 );
             };
+            let fn_name = substrait_fun_name(fn_name);
 
             let args =
                 from_substrait_func_args(ctx, &f.arguments, input_schema, extensions)
@@ -1197,6 +1195,7 @@ pub async fn from_substrait_rex(
                     window.function_reference
                 );
             };
+            let fn_name = substrait_fun_name(fn_name);
 
             // check udaf first, then built-in functions
             let fun = match ctx.udaf(fn_name) {
