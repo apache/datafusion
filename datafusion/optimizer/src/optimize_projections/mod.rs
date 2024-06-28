@@ -810,6 +810,8 @@ mod tests {
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
     };
+    use datafusion_common::logical_type::field::LogicalField;
+    use datafusion_common::logical_type::LogicalType;
     use datafusion_expr::AggregateExt;
     use datafusion_expr::{
         binary_expr, build_join_schema,
@@ -1172,7 +1174,7 @@ mod tests {
     fn test_try_cast() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![try_cast(col("a"), DataType::Float64)])?
+            .project(vec![try_cast(col("a"), LogicalType::Float64)])?
             .build()?;
 
         let expected = "Projection: TRY_CAST(test.a AS Float64)\
@@ -1544,15 +1546,15 @@ mod tests {
                 vec![
                     (
                         Some("test".into()),
-                        Arc::new(Field::new("a", DataType::UInt32, false))
+                        Arc::new(LogicalField::new("a", LogicalType::UInt32, false))
                     ),
                     (
                         Some("test".into()),
-                        Arc::new(Field::new("b", DataType::UInt32, false))
+                        Arc::new(LogicalField::new("b", LogicalType::UInt32, false))
                     ),
                     (
                         Some("test2".into()),
-                        Arc::new(Field::new("c1", DataType::UInt32, true))
+                        Arc::new(LogicalField::new("c1", LogicalType::UInt32, true))
                     ),
                 ],
                 HashMap::new()
@@ -1596,15 +1598,15 @@ mod tests {
                 vec![
                     (
                         Some("test".into()),
-                        Arc::new(Field::new("a", DataType::UInt32, false))
+                        Arc::new(LogicalField::new("a", LogicalType::UInt32, false))
                     ),
                     (
                         Some("test".into()),
-                        Arc::new(Field::new("b", DataType::UInt32, false))
+                        Arc::new(LogicalField::new("b", LogicalType::UInt32, false))
                     ),
                     (
                         Some("test2".into()),
-                        Arc::new(Field::new("c1", DataType::UInt32, true))
+                        Arc::new(LogicalField::new("c1", LogicalType::UInt32, true))
                     ),
                 ],
                 HashMap::new()
@@ -1646,15 +1648,15 @@ mod tests {
                 vec![
                     (
                         Some("test".into()),
-                        Arc::new(Field::new("a", DataType::UInt32, false))
+                        Arc::new(LogicalField::new("a", LogicalType::UInt32, false))
                     ),
                     (
                         Some("test".into()),
-                        Arc::new(Field::new("b", DataType::UInt32, false))
+                        Arc::new(LogicalField::new("b", LogicalType::UInt32, false))
                     ),
                     (
                         Some("test2".into()),
-                        Arc::new(Field::new("a", DataType::UInt32, true))
+                        Arc::new(LogicalField::new("a", LogicalType::UInt32, true))
                     ),
                 ],
                 HashMap::new()
@@ -1671,7 +1673,7 @@ mod tests {
         let projection = LogicalPlanBuilder::from(table_scan)
             .project(vec![Expr::Cast(Cast::new(
                 Box::new(col("c")),
-                DataType::Float64,
+                LogicalType::Float64,
             ))])?
             .build()?;
 

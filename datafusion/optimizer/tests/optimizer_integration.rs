@@ -23,6 +23,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
+use datafusion_common::logical_type::LogicalType;
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_functions_aggregate::average::avg_udaf;
@@ -399,7 +400,7 @@ impl ContextProvider for MyContextProvider {
         self.udafs.get(name).cloned()
     }
 
-    fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+    fn get_variable_type(&self, _variable_names: &[String]) -> Option<LogicalType> {
         None
     }
 

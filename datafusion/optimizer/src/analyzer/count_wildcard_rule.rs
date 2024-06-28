@@ -98,7 +98,6 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 mod tests {
     use super::*;
     use crate::test::*;
-    use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
@@ -108,7 +107,7 @@ mod tests {
     };
     use datafusion_functions_aggregate::count::count_udaf;
     use std::sync::Arc;
-
+    use datafusion_common::logical_type::LogicalType;
     use datafusion_functions_aggregate::expr_fn::{count, sum};
 
     fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
@@ -192,7 +191,7 @@ mod tests {
             .filter(
                 scalar_subquery(Arc::new(
                     LogicalPlanBuilder::from(table_scan_t2)
-                        .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
+                        .filter(out_ref_col(LogicalType::UInt32, "t1.a").eq(col("t2.a")))?
                         .aggregate(
                             Vec::<Expr>::new(),
                             vec![count(lit(COUNT_STAR_EXPANSION))],

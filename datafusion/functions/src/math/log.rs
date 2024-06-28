@@ -28,6 +28,7 @@ use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
     ScalarValue,
 };
+use datafusion_common::logical_type::extension::ExtensionType;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
@@ -158,6 +159,7 @@ impl ScalarUDFImpl for LogFunc {
         Ok(ColumnarValue::Array(arr))
     }
 
+    // TODO(@notfilippo): avoid converting to physical type
     /// Simplify the `log` function by the relevant rules:
     /// 1. Log(a, 1) ===> 0
     /// 2. Log(a, Power(a, b)) ===> b
@@ -182,13 +184,13 @@ impl ScalarUDFImpl for LogFunc {
         let base = if let Some(base) = args.pop() {
             base
         } else {
-            lit(ScalarValue::new_ten(&number_datatype)?)
+            lit(ScalarValue::new_ten(&number_datatype.physical_type())?)
         };
 
         match number {
-            Expr::Literal(value) if value == ScalarValue::new_one(&number_datatype)? => {
+            Expr::Literal(value) if value == ScalarValue::new_one(&number_datatype.physical_type())? => {
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
-                    &info.get_data_type(&base)?,
+                    &info.get_data_type(&base)?.physical_type(),
                 )?)))
             }
             Expr::ScalarFunction(ScalarFunction { func, mut args })
@@ -200,7 +202,7 @@ impl ScalarUDFImpl for LogFunc {
             number => {
                 if number == base {
                     Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
-                        &number_datatype,
+                        &number_datatype.physical_type(),
                     )?)))
                 } else {
                     let args = match num_args {

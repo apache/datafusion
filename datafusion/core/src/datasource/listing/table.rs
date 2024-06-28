@@ -55,6 +55,7 @@ use async_trait::async_trait;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
+use datafusion_common::logical_type::schema::LogicalSchema;
 
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
@@ -787,7 +788,7 @@ impl TableProvider for ListingTable {
 
         let filters = if let Some(expr) = conjunction(filters.to_vec()) {
             // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
-            let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
+            let table_df_schema = LogicalSchema::from(self.table_schema.as_ref().clone()).to_dfschema()?;
             let filters =
                 create_physical_expr(&expr, &table_df_schema, state.execution_props())?;
             Some(filters)
@@ -1879,7 +1880,7 @@ mod tests {
         // Therefore, we will have 8 partitions in the final plan.
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema.as_ref().clone().into(), false)?.build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

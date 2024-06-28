@@ -39,6 +39,8 @@ use datafusion_expr::{
 use datafusion_functions_array::range::range_udf;
 use parking_lot::Mutex;
 use sqlparser::ast::Ident;
+use datafusion_common::logical_type::extension::ExtensionType;
+use datafusion_common::logical_type::LogicalType;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -518,14 +520,14 @@ impl ScalarUDFImpl for CastToI64UDF {
         // SimplifyInfo so we have to replicate some of the casting logic here.
 
         let source_type = info.get_data_type(&arg)?;
-        let new_expr = if source_type == DataType::Int64 {
+        let new_expr = if source_type == LogicalType::Int64 {
             // the argument's data type is already the correct type
             arg
         } else {
             // need to use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
                 expr: Box::new(arg),
-                data_type: DataType::Int64,
+                data_type: LogicalType::Int64,
             })
         };
         // return the newly written argument to DataFusion
@@ -645,7 +647,7 @@ impl ScalarUDFImpl for TakeUDF {
             );
         };
 
-        arg_exprs.get(take_idx).unwrap().get_type(schema)
+        arg_exprs.get(take_idx).unwrap().get_type(schema).map(|t| t.physical_type())
     }
 
     // The actual implementation
@@ -687,8 +689,8 @@ async fn verify_udf_return_type() -> Result<()> {
     // The output schema should be
     // * type of column smallint_col (int32)
     // * type of column double_col (float64)
-    assert_eq!(schema.field(0).data_type(), &DataType::Int32);
-    assert_eq!(schema.field(1).data_type(), &DataType::Float64);
+    assert_eq!(schema.field(0).data_type(), &LogicalType::Int32);
+    assert_eq!(schema.field(1).data_type(), &LogicalType::Float64);
 
     let expected = [
         "+-------+-------+",
@@ -835,13 +837,16 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                 .expect("Expression has to be defined!"),
             return_type: definition
                 .return_type
-                .expect("Return type has to be defined!"),
+                .expect("Return type has to be defined!")
+                .physical_type(),
+            // TODO(@notfilippo): avoid conversion to physical type
             signature: Signature::exact(
                 definition
                     .args
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|a| a.data_type)
+                    // TODO(@notfilippo): avoid conversion to physical type
+                    .map(|a| a.data_type.physical_type())
                     .collect(),
                 definition
                     .params
@@ -990,10 +995,10 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
                 value: "name".into(),
                 quote_style: None,
             }),
-            data_type: DataType::Utf8,
+            data_type: LogicalType::Utf8,
             default_expr: None,
         }]),
-        return_type: Some(DataType::Int32),
+        return_type: Some(LogicalType::Int32),
         params: CreateFunctionBody {
             language: Some(Ident {
                 value: "plrust".into(),

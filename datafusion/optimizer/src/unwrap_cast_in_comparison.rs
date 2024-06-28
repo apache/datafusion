@@ -26,11 +26,12 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::utils::NamePreserver;
 use arrow::datatypes::{
-    DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
+    TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
+use datafusion_common::logical_type::LogicalType;
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan, Operator};
@@ -104,7 +105,7 @@ impl OptimizerRule for UnwrapCastInComparison {
         if let LogicalPlan::TableScan(ts) = &plan {
             let source_schema = DFSchema::try_from_qualified_schema(
                 ts.table_name.clone(),
-                &ts.source.schema(),
+                &ts.source.schema().as_ref().clone().into(),
             )?;
             schema.merge(&source_schema);
         }
@@ -275,46 +276,39 @@ fn is_comparison_op(op: &Operator) -> bool {
 }
 
 /// Returns true if [UnwrapCastExprRewriter] supports this data type
-fn is_supported_type(data_type: &DataType) -> bool {
+fn is_supported_type(data_type: &LogicalType) -> bool {
     is_supported_numeric_type(data_type)
         || is_supported_string_type(data_type)
-        || is_supported_dictionary_type(data_type)
 }
 
 /// Returns true if [[UnwrapCastExprRewriter]] suppors this numeric type
-fn is_supported_numeric_type(data_type: &DataType) -> bool {
+fn is_supported_numeric_type(data_type: &LogicalType) -> bool {
     matches!(
         data_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Decimal128(_, _)
-            | DataType::Timestamp(_, _)
+        LogicalType::UInt8
+            | LogicalType::UInt16
+            | LogicalType::UInt32
+            | LogicalType::UInt64
+            | LogicalType::Int8
+            | LogicalType::Int16
+            | LogicalType::Int32
+            | LogicalType::Int64
+            | LogicalType::Decimal128(_, _)
+            | LogicalType::Timestamp(_, _)
     )
 }
 
 /// Returns true if [UnwrapCastExprRewriter] supports casting this value as a string
-fn is_supported_string_type(data_type: &DataType) -> bool {
-    matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
-}
-
-/// Returns true if [UnwrapCastExprRewriter] supports casting this value as a dictionary
-fn is_supported_dictionary_type(data_type: &DataType) -> bool {
-    matches!(data_type,
-                    DataType::Dictionary(_, inner) if is_supported_type(inner))
+fn is_supported_string_type(data_type: &LogicalType) -> bool {
+    matches!(data_type, LogicalType::Utf8 | LogicalType::LargeUtf8)
 }
 
 /// Convert a literal value from one data type to another
 fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
-    target_type: &DataType,
+    target_type: &LogicalType,
 ) -> Option<ScalarValue> {
-    let lit_data_type = lit_value.data_type();
+    let lit_data_type = lit_value.data_type().into();
     if !is_supported_type(&lit_data_type) || !is_supported_type(target_type) {
         return None;
     }
@@ -324,15 +318,14 @@ fn try_cast_literal_to_type(
     }
     try_cast_numeric_literal(lit_value, target_type)
         .or_else(|| try_cast_string_literal(lit_value, target_type))
-        .or_else(|| try_cast_dictionary(lit_value, target_type))
 }
 
 /// Convert a numeric value from one numeric data type to another
 fn try_cast_numeric_literal(
     lit_value: &ScalarValue,
-    target_type: &DataType,
+    target_type: &LogicalType,
 ) -> Option<ScalarValue> {
-    let lit_data_type = lit_value.data_type();
+    let lit_data_type = lit_value.data_type().into();
     if !is_supported_numeric_type(&lit_data_type)
         || !is_supported_numeric_type(target_type)
     {
@@ -340,29 +333,29 @@ fn try_cast_numeric_literal(
     }
 
     let mul = match target_type {
-        DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64 => 1_i128,
-        DataType::Timestamp(_, _) => 1_i128,
-        DataType::Decimal128(_, scale) => 10_i128.pow(*scale as u32),
+        LogicalType::UInt8
+        | LogicalType::UInt16
+        | LogicalType::UInt32
+        | LogicalType::UInt64
+        | LogicalType::Int8
+        | LogicalType::Int16
+        | LogicalType::Int32
+        | LogicalType::Int64 => 1_i128,
+        LogicalType::Timestamp(_, _) => 1_i128,
+        LogicalType::Decimal128(_, scale) => 10_i128.pow(*scale as u32),
         _ => return None,
     };
     let (target_min, target_max) = match target_type {
-        DataType::UInt8 => (u8::MIN as i128, u8::MAX as i128),
-        DataType::UInt16 => (u16::MIN as i128, u16::MAX as i128),
-        DataType::UInt32 => (u32::MIN as i128, u32::MAX as i128),
-        DataType::UInt64 => (u64::MIN as i128, u64::MAX as i128),
-        DataType::Int8 => (i8::MIN as i128, i8::MAX as i128),
-        DataType::Int16 => (i16::MIN as i128, i16::MAX as i128),
-        DataType::Int32 => (i32::MIN as i128, i32::MAX as i128),
-        DataType::Int64 => (i64::MIN as i128, i64::MAX as i128),
-        DataType::Timestamp(_, _) => (i64::MIN as i128, i64::MAX as i128),
-        DataType::Decimal128(precision, _) => (
+        LogicalType::UInt8 => (u8::MIN as i128, u8::MAX as i128),
+        LogicalType::UInt16 => (u16::MIN as i128, u16::MAX as i128),
+        LogicalType::UInt32 => (u32::MIN as i128, u32::MAX as i128),
+        LogicalType::UInt64 => (u64::MIN as i128, u64::MAX as i128),
+        LogicalType::Int8 => (i8::MIN as i128, i8::MAX as i128),
+        LogicalType::Int16 => (i16::MIN as i128, i16::MAX as i128),
+        LogicalType::Int32 => (i32::MIN as i128, i32::MAX as i128),
+        LogicalType::Int64 => (i64::MIN as i128, i64::MAX as i128),
+        LogicalType::Timestamp(_, _) => (i64::MIN as i128, i64::MAX as i128),
+        LogicalType::Decimal128(precision, _) => (
             // Different precision for decimal128 can store different range of value.
             // For example, the precision is 3, the max of value is `999` and the min
             // value is `-999`
@@ -413,47 +406,47 @@ fn try_cast_numeric_literal(
                 // the value casted from lit to the target type is in the range of target type.
                 // return the target type of scalar value
                 let result_scalar = match target_type {
-                    DataType::Int8 => ScalarValue::Int8(Some(value as i8)),
-                    DataType::Int16 => ScalarValue::Int16(Some(value as i16)),
-                    DataType::Int32 => ScalarValue::Int32(Some(value as i32)),
-                    DataType::Int64 => ScalarValue::Int64(Some(value as i64)),
-                    DataType::UInt8 => ScalarValue::UInt8(Some(value as u8)),
-                    DataType::UInt16 => ScalarValue::UInt16(Some(value as u16)),
-                    DataType::UInt32 => ScalarValue::UInt32(Some(value as u32)),
-                    DataType::UInt64 => ScalarValue::UInt64(Some(value as u64)),
-                    DataType::Timestamp(TimeUnit::Second, tz) => {
+                    LogicalType::Int8 => ScalarValue::Int8(Some(value as i8)),
+                    LogicalType::Int16 => ScalarValue::Int16(Some(value as i16)),
+                    LogicalType::Int32 => ScalarValue::Int32(Some(value as i32)),
+                    LogicalType::Int64 => ScalarValue::Int64(Some(value as i64)),
+                    LogicalType::UInt8 => ScalarValue::UInt8(Some(value as u8)),
+                    LogicalType::UInt16 => ScalarValue::UInt16(Some(value as u16)),
+                    LogicalType::UInt32 => ScalarValue::UInt32(Some(value as u32)),
+                    LogicalType::UInt64 => ScalarValue::UInt64(Some(value as u64)),
+                    LogicalType::Timestamp(TimeUnit::Second, tz) => {
                         let value = cast_between_timestamp(
                             lit_data_type,
-                            DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                            LogicalType::Timestamp(TimeUnit::Second, tz.clone()),
                             value,
                         );
                         ScalarValue::TimestampSecond(value, tz.clone())
                     }
-                    DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                    LogicalType::Timestamp(TimeUnit::Millisecond, tz) => {
                         let value = cast_between_timestamp(
                             lit_data_type,
-                            DataType::Timestamp(TimeUnit::Millisecond, tz.clone()),
+                            LogicalType::Timestamp(TimeUnit::Millisecond, tz.clone()),
                             value,
                         );
                         ScalarValue::TimestampMillisecond(value, tz.clone())
                     }
-                    DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                    LogicalType::Timestamp(TimeUnit::Microsecond, tz) => {
                         let value = cast_between_timestamp(
                             lit_data_type,
-                            DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
+                            LogicalType::Timestamp(TimeUnit::Microsecond, tz.clone()),
                             value,
                         );
                         ScalarValue::TimestampMicrosecond(value, tz.clone())
                     }
-                    DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                    LogicalType::Timestamp(TimeUnit::Nanosecond, tz) => {
                         let value = cast_between_timestamp(
                             lit_data_type,
-                            DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
+                            LogicalType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
                             value,
                         );
                         ScalarValue::TimestampNanosecond(value, tz.clone())
                     }
-                    DataType::Decimal128(p, s) => {
+                    LogicalType::Decimal128(p, s) => {
                         ScalarValue::Decimal128(Some(value), *p, *s)
                     }
                     _ => {
@@ -470,62 +463,36 @@ fn try_cast_numeric_literal(
 
 fn try_cast_string_literal(
     lit_value: &ScalarValue,
-    target_type: &DataType,
+    target_type: &LogicalType,
 ) -> Option<ScalarValue> {
     let string_value = match lit_value {
         ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) => s.clone(),
         _ => return None,
     };
     let scalar_value = match target_type {
-        DataType::Utf8 => ScalarValue::Utf8(string_value),
-        DataType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),
+        LogicalType::Utf8 => ScalarValue::Utf8(string_value),
+        LogicalType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),
         _ => return None,
     };
     Some(scalar_value)
 }
 
-/// Attempt to cast to/from a dictionary type by wrapping/unwrapping the dictionary
-fn try_cast_dictionary(
-    lit_value: &ScalarValue,
-    target_type: &DataType,
-) -> Option<ScalarValue> {
-    let lit_value_type = lit_value.data_type();
-    let result_scalar = match (lit_value, target_type) {
-        // Unwrap dictionary when inner type matches target type
-        (ScalarValue::Dictionary(_, inner_value), _)
-            if inner_value.data_type() == *target_type =>
-        {
-            (**inner_value).clone()
-        }
-        // Wrap type when target type is dictionary
-        (_, DataType::Dictionary(index_type, inner_type))
-            if **inner_type == lit_value_type =>
-        {
-            ScalarValue::Dictionary(index_type.clone(), Box::new(lit_value.clone()))
-        }
-        _ => {
-            return None;
-        }
-    };
-    Some(result_scalar)
-}
-
 /// Cast a timestamp value from one unit to another
-fn cast_between_timestamp(from: DataType, to: DataType, value: i128) -> Option<i64> {
+fn cast_between_timestamp(from: LogicalType, to: LogicalType, value: i128) -> Option<i64> {
     let value = value as i64;
     let from_scale = match from {
-        DataType::Timestamp(TimeUnit::Second, _) => 1,
-        DataType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
-        DataType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
+        LogicalType::Timestamp(TimeUnit::Second, _) => 1,
+        LogicalType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
+        LogicalType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
+        LogicalType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
         _ => return Some(value),
     };
 
     let to_scale = match to {
-        DataType::Timestamp(TimeUnit::Second, _) => 1,
-        DataType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
-        DataType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
+        LogicalType::Timestamp(TimeUnit::Second, _) => 1,
+        LogicalType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
+        LogicalType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
+        LogicalType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
         _ => return Some(value),
     };
 
@@ -543,7 +510,8 @@ mod tests {
     use super::*;
 
     use arrow::compute::{cast_with_options, CastOptions};
-    use arrow::datatypes::Field;
+    use datafusion_common::logical_type::extension::ExtensionType;
+    use datafusion_common::logical_type::field::LogicalField;
     use datafusion_common::tree_node::TransformedResult;
     use datafusion_expr::{cast, col, in_list, try_cast};
 
@@ -551,7 +519,7 @@ mod tests {
     fn test_not_unwrap_cast_comparison() {
         let schema = expr_test_schema();
         // cast(INT32(c1), INT64) > INT64(c2)
-        let c1_gt_c2 = cast(col("c1"), DataType::Int64).gt(col("c2"));
+        let c1_gt_c2 = cast(col("c1"), LogicalType::Int64).gt(col("c2"));
         assert_eq!(optimize_test(c1_gt_c2.clone(), &schema), c1_gt_c2);
 
         // INT32(c1) < INT32(16), the type is same
@@ -559,7 +527,7 @@ mod tests {
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // the 99999999999 is not within the range of MAX(int32) and MIN(int32), we don't cast the lit(99999999999) to int32 type
-        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(99999999999i64));
+        let expr_lt = cast(col("c1"), LogicalType::Int64).lt(lit(99999999999i64));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
     }
 
@@ -568,25 +536,25 @@ mod tests {
         let schema = expr_test_schema();
         // cast(c1, INT64) < INT64(16) -> INT32(c1) < cast(INT32(16))
         // the 16 is within the range of MAX(int32) and MIN(int32), we can cast the 16 to int32(16)
-        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64));
+        let expr_lt = cast(col("c1"), LogicalType::Int64).lt(lit(16i64));
         let expected = col("c1").lt(lit(16i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
-        let expr_lt = try_cast(col("c1"), DataType::Int64).lt(lit(16i64));
+        let expr_lt = try_cast(col("c1"), LogicalType::Int64).lt(lit(16i64));
         let expected = col("c1").lt(lit(16i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // cast(c2, INT32) = INT32(16) => INT64(c2) = INT64(16)
-        let c2_eq_lit = cast(col("c2"), DataType::Int32).eq(lit(16i32));
+        let c2_eq_lit = cast(col("c2"), LogicalType::Int32).eq(lit(16i32));
         let expected = col("c2").eq(lit(16i64));
         assert_eq!(optimize_test(c2_eq_lit, &schema), expected);
 
         // cast(c1, INT64) < INT64(NULL) => INT32(c1) < INT32(NULL)
-        let c1_lt_lit_null = cast(col("c1"), DataType::Int64).lt(null_i64());
+        let c1_lt_lit_null = cast(col("c1"), LogicalType::Int64).lt(null_i64());
         let expected = col("c1").lt(null_i32());
         assert_eq!(optimize_test(c1_lt_lit_null, &schema), expected);
 
         // cast(INT8(NULL), INT32) < INT32(12) => INT8(NULL) < INT8(12)
-        let lit_lt_lit = cast(null_i8(), DataType::Int32).lt(lit(12i32));
+        let lit_lt_lit = cast(null_i8(), LogicalType::Int32).lt(lit(12i32));
         let expected = null_i8().lt(lit(12i8));
         assert_eq!(optimize_test(lit_lt_lit, &schema), expected);
     }
@@ -595,47 +563,8 @@ mod tests {
     fn test_unwrap_cast_comparison_unsigned() {
         // "cast(c6, UINT64) = 0u64 => c6 = 0u32
         let schema = expr_test_schema();
-        let expr_input = cast(col("c6"), DataType::UInt64).eq(lit(0u64));
+        let expr_input = cast(col("c6"), LogicalType::UInt64).eq(lit(0u64));
         let expected = col("c6").eq(lit(0u32));
-        assert_eq!(optimize_test(expr_input, &schema), expected);
-    }
-
-    #[test]
-    fn test_unwrap_cast_comparison_string() {
-        let schema = expr_test_schema();
-        let dict = ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::from("value")),
-        );
-
-        // cast(str1 as Dictionary<Int32, Utf8>) = arrow_cast('value', 'Dictionary<Int32, Utf8>') => str1 = Utf8('value1')
-        let expr_input = cast(col("str1"), dict.data_type()).eq(lit(dict.clone()));
-        let expected = col("str1").eq(lit("value"));
-        assert_eq!(optimize_test(expr_input, &schema), expected);
-
-        // cast(tag as Utf8) = Utf8('value') => tag = arrow_cast('value', 'Dictionary<Int32, Utf8>')
-        let expr_input = cast(col("tag"), DataType::Utf8).eq(lit("value"));
-        let expected = col("tag").eq(lit(dict.clone()));
-        assert_eq!(optimize_test(expr_input, &schema), expected);
-
-        // Verify reversed argument order
-        // arrow_cast('value', 'Dictionary<Int32, Utf8>') = cast(str1 as Dictionary<Int32, Utf8>) => Utf8('value1') = str1
-        let expr_input = lit(dict.clone()).eq(cast(col("str1"), dict.data_type()));
-        let expected = lit("value").eq(col("str1"));
-        assert_eq!(optimize_test(expr_input, &schema), expected);
-    }
-
-    #[test]
-    fn test_unwrap_cast_comparison_large_string() {
-        let schema = expr_test_schema();
-        // cast(largestr as Dictionary<Int32, LargeUtf8>) = arrow_cast('value', 'Dictionary<Int32, LargeUtf8>') => str1 = LargeUtf8('value1')
-        let dict = ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::LargeUtf8(Some("value".to_owned()))),
-        );
-        let expr_input = cast(col("largestr"), dict.data_type()).eq(lit(dict.clone()));
-        let expected =
-            col("largestr").eq(lit(ScalarValue::LargeUtf8(Some("value".to_owned()))));
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
@@ -644,28 +573,28 @@ mod tests {
         let schema = expr_test_schema();
         // integer to decimal: value is out of the bounds of the decimal
         // cast(c3, INT64) = INT64(100000000000000000)
-        let expr_eq = cast(col("c3"), DataType::Int64).eq(lit(100000000000000000i64));
+        let expr_eq = cast(col("c3"), LogicalType::Int64).eq(lit(100000000000000000i64));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // cast(c4, INT64) = INT64(1000) will overflow the i128
-        let expr_eq = cast(col("c4"), DataType::Int64).eq(lit(1000i64));
+        let expr_eq = cast(col("c4"), LogicalType::Int64).eq(lit(1000i64));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // decimal to decimal: value will lose the scale when convert to the target data type
         // c3 = DECIMAL(12340,20,4)
         let expr_eq =
-            cast(col("c3"), DataType::Decimal128(20, 4)).eq(lit_decimal(12340, 20, 4));
+            cast(col("c3"), LogicalType::Decimal128(20, 4)).eq(lit_decimal(12340, 20, 4));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // decimal to integer
         // c1 = DECIMAL(123, 10, 1): value will lose the scale when convert to the target data type
         let expr_eq =
-            cast(col("c1"), DataType::Decimal128(10, 1)).eq(lit_decimal(123, 10, 1));
+            cast(col("c1"), LogicalType::Decimal128(10, 1)).eq(lit_decimal(123, 10, 1));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
 
         // c1 = DECIMAL(1230, 10, 2): value will lose the scale when convert to the target data type
         let expr_eq =
-            cast(col("c1"), DataType::Decimal128(10, 2)).eq(lit_decimal(1230, 10, 2));
+            cast(col("c1"), LogicalType::Decimal128(10, 2)).eq(lit_decimal(1230, 10, 2));
         assert_eq!(optimize_test(expr_eq.clone(), &schema), expr_eq);
     }
 
@@ -674,32 +603,32 @@ mod tests {
         let schema = expr_test_schema();
         // integer to decimal
         // c3 < INT64(16) -> c3 < (CAST(INT64(16) AS DECIMAL(18,2));
-        let expr_lt = try_cast(col("c3"), DataType::Int64).lt(lit(16i64));
+        let expr_lt = try_cast(col("c3"), LogicalType::Int64).lt(lit(16i64));
         let expected = col("c3").lt(lit_decimal(1600, 18, 2));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // c3 < INT64(NULL)
-        let c1_lt_lit_null = cast(col("c3"), DataType::Int64).lt(null_i64());
+        let c1_lt_lit_null = cast(col("c3"), LogicalType::Int64).lt(null_i64());
         let expected = col("c3").lt(null_decimal(18, 2));
         assert_eq!(optimize_test(c1_lt_lit_null, &schema), expected);
 
         // decimal to decimal
         // c3 < Decimal(123,10,0) -> c3 < CAST(DECIMAL(123,10,0) AS DECIMAL(18,2)) -> c3 < DECIMAL(12300,18,2)
         let expr_lt =
-            cast(col("c3"), DataType::Decimal128(10, 0)).lt(lit_decimal(123, 10, 0));
+            cast(col("c3"), LogicalType::Decimal128(10, 0)).lt(lit_decimal(123, 10, 0));
         let expected = col("c3").lt(lit_decimal(12300, 18, 2));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // c3 < Decimal(1230,10,3) -> c3 < CAST(DECIMAL(1230,10,3) AS DECIMAL(18,2)) -> c3 < DECIMAL(123,18,2)
         let expr_lt =
-            cast(col("c3"), DataType::Decimal128(10, 3)).lt(lit_decimal(1230, 10, 3));
+            cast(col("c3"), LogicalType::Decimal128(10, 3)).lt(lit_decimal(1230, 10, 3));
         let expected = col("c3").lt(lit_decimal(123, 18, 2));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // decimal to integer
         // c1 < Decimal(12300, 10, 2) -> c1 < CAST(DECIMAL(12300,10,2) AS INT32) -> c1 < INT32(123)
         let expr_lt =
-            cast(col("c1"), DataType::Decimal128(10, 2)).lt(lit_decimal(12300, 10, 2));
+            cast(col("c1"), LogicalType::Decimal128(10, 2)).lt(lit_decimal(12300, 10, 2));
         let expected = col("c1").lt(lit(123i32));
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
@@ -710,21 +639,21 @@ mod tests {
         // internal left type is not supported
         // FLOAT32(C5) in ...
         let expr_lt =
-            cast(col("c5"), DataType::Int64).in_list(vec![lit(12i64), lit(12i64)], false);
+            cast(col("c5"), LogicalType::Int64).in_list(vec![lit(12i64), lit(12i64)], false);
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // cast(INT32(C1), Float32) in (FLOAT32(1.23), Float32(12), Float32(12))
-        let expr_lt = cast(col("c1"), DataType::Float32)
+        let expr_lt = cast(col("c1"), LogicalType::Float32)
             .in_list(vec![lit(12.0f32), lit(12.0f32), lit(1.23f32)], false);
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // INT32(C1) in (INT64(99999999999), INT64(12))
-        let expr_lt = cast(col("c1"), DataType::Int64)
+        let expr_lt = cast(col("c1"), LogicalType::Int64)
             .in_list(vec![lit(12i32), lit(99999999999i64)], false);
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
 
         // DECIMAL(C3) in (INT64(12), INT32(12), DECIMAL(128,12,3))
-        let expr_lt = cast(col("c3"), DataType::Decimal128(12, 3)).in_list(
+        let expr_lt = cast(col("c3"), LogicalType::Decimal128(12, 3)).in_list(
             vec![
                 lit_decimal(12, 12, 3),
                 lit_decimal(12, 12, 3),
@@ -740,19 +669,19 @@ mod tests {
         let schema = expr_test_schema();
         // INT32(C1) IN (INT32(12),INT64(24)) -> INT32(C1) IN (INT32(12),INT32(24))
         let expr_lt =
-            cast(col("c1"), DataType::Int64).in_list(vec![lit(12i64), lit(24i64)], false);
+            cast(col("c1"), LogicalType::Int64).in_list(vec![lit(12i64), lit(24i64)], false);
         let expected = col("c1").in_list(vec![lit(12i32), lit(24i32)], false);
         assert_eq!(optimize_test(expr_lt, &schema), expected);
         // INT32(C2) IN (INT64(NULL),INT64(24)) -> INT32(C1) IN (INT32(12),INT32(24))
         let expr_lt =
-            cast(col("c2"), DataType::Int32).in_list(vec![null_i32(), lit(14i32)], false);
+            cast(col("c2"), LogicalType::Int32).in_list(vec![null_i32(), lit(14i32)], false);
         let expected = col("c2").in_list(vec![null_i64(), lit(14i64)], false);
 
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // decimal test case
         // c3 is decimal(18,2)
-        let expr_lt = cast(col("c3"), DataType::Decimal128(19, 3)).in_list(
+        let expr_lt = cast(col("c3"), LogicalType::Decimal128(19, 3)).in_list(
             vec![
                 lit_decimal(12000, 19, 3),
                 lit_decimal(24000, 19, 3),
@@ -773,7 +702,7 @@ mod tests {
         assert_eq!(optimize_test(expr_lt, &schema), expected);
 
         // cast(INT32(12), INT64) IN (.....)
-        let expr_lt = cast(lit(12i32), DataType::Int64)
+        let expr_lt = cast(lit(12i32), LogicalType::Int64)
             .in_list(vec![lit(13i64), lit(12i64)], false);
         let expected = lit(12i32).in_list(vec![lit(13i32), lit(12i32)], false);
         assert_eq!(optimize_test(expr_lt, &schema), expected);
@@ -784,7 +713,7 @@ mod tests {
         let schema = expr_test_schema();
         // c1 < INT64(16) -> c1 < cast(INT32(16))
         // the 16 is within the range of MAX(int32) and MIN(int32), we can cast the 16 to int32(16)
-        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64)).alias("x");
+        let expr_lt = cast(col("c1"), LogicalType::Int64).lt(lit(16i64)).alias("x");
         let expected = col("c1").lt(lit(16i32)).alias("x");
         assert_eq!(optimize_test(expr_lt, &schema), expected);
     }
@@ -794,9 +723,9 @@ mod tests {
         let schema = expr_test_schema();
         // c1 < INT64(16) OR c1 > INT64(32) -> c1 < INT32(16) OR c1 > INT32(32)
         // the 16 and 32 are within the range of MAX(int32) and MIN(int32), we can cast them to int32
-        let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(16i64)).or(cast(
+        let expr_lt = cast(col("c1"), LogicalType::Int64).lt(lit(16i64)).or(cast(
             col("c1"),
-            DataType::Int64,
+            LogicalType::Int64,
         )
         .gt(lit(32i64)));
         let expected = col("c1").lt(lit(16i32)).or(col("c1").gt(lit(32i32)));
@@ -809,12 +738,12 @@ mod tests {
         // but the type of c6 is uint32
         // the rewriter will not throw error and just return the original expr
         let schema = expr_test_schema();
-        let expr_input = cast(col("c6"), DataType::Float64).eq(lit(0f64));
+        let expr_input = cast(col("c6"), LogicalType::Float64).eq(lit(0f64));
         assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
 
         // inlist for unsupported data type
         let expr_input =
-            in_list(cast(col("c6"), DataType::Float64), vec![lit(0f64)], false);
+            in_list(cast(col("c6"), LogicalType::Float64), vec![lit(0f64)], false);
         assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
     }
 
@@ -841,17 +770,16 @@ mod tests {
         Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![
-                    Field::new("c1", DataType::Int32, false),
-                    Field::new("c2", DataType::Int64, false),
-                    Field::new("c3", DataType::Decimal128(18, 2), false),
-                    Field::new("c4", DataType::Decimal128(38, 37), false),
-                    Field::new("c5", DataType::Float32, false),
-                    Field::new("c6", DataType::UInt32, false),
-                    Field::new("ts_nano_none", timestamp_nano_none_type(), false),
-                    Field::new("ts_nano_utf", timestamp_nano_utc_type(), false),
-                    Field::new("str1", DataType::Utf8, false),
-                    Field::new("largestr", DataType::LargeUtf8, false),
-                    Field::new("tag", dictionary_tag_type(), false),
+                    LogicalField::new("c1", LogicalType::Int32, false),
+                    LogicalField::new("c2", LogicalType::Int64, false),
+                    LogicalField::new("c3", LogicalType::Decimal128(18, 2), false),
+                    LogicalField::new("c4", LogicalType::Decimal128(38, 37), false),
+                    LogicalField::new("c5", LogicalType::Float32, false),
+                    LogicalField::new("c6", LogicalType::UInt32, false),
+                    LogicalField::new("ts_nano_none", timestamp_nano_none_type(), false),
+                    LogicalField::new("ts_nano_utf", timestamp_nano_utc_type(), false),
+                    LogicalField::new("str1", LogicalType::Utf8, false),
+                    LogicalField::new("largestr", LogicalType::LargeUtf8, false),
                 ]
                 .into(),
                 HashMap::new(),
@@ -889,19 +817,14 @@ mod tests {
         lit(ScalarValue::Decimal128(None, precision, scale))
     }
 
-    fn timestamp_nano_none_type() -> DataType {
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
+    fn timestamp_nano_none_type() -> LogicalType {
+        LogicalType::Timestamp(TimeUnit::Nanosecond, None)
     }
 
     // this is the type that now() returns
-    fn timestamp_nano_utc_type() -> DataType {
+    fn timestamp_nano_utc_type() -> LogicalType {
         let utc = Some("+0:00".into());
-        DataType::Timestamp(TimeUnit::Nanosecond, utc)
-    }
-
-    // a dictonary type for storing string tags
-    fn dictionary_tag_type() -> DataType {
-        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        LogicalType::Timestamp(TimeUnit::Nanosecond, utc)
     }
 
     #[test]
@@ -926,7 +849,7 @@ mod tests {
             for s2 in &scalars {
                 let expected_value = ExpectedCast::Value(s2.clone());
 
-                expect_cast(s1.clone(), s2.data_type(), expected_value);
+                expect_cast(s1.clone(), s2.data_type().into(), expected_value);
             }
         }
     }
@@ -951,28 +874,28 @@ mod tests {
             for s2 in &scalars {
                 let expected_value = ExpectedCast::Value(s2.clone());
 
-                expect_cast(s1.clone(), s2.data_type(), expected_value);
+                expect_cast(s1.clone(), s2.data_type().into(), expected_value);
             }
         }
 
         let max_i32 = ScalarValue::Int32(Some(i32::MAX));
         expect_cast(
             max_i32,
-            DataType::UInt64,
+            LogicalType::UInt64,
             ExpectedCast::Value(ScalarValue::UInt64(Some(i32::MAX as u64))),
         );
 
         let min_i32 = ScalarValue::Int32(Some(i32::MIN));
         expect_cast(
             min_i32,
-            DataType::Int64,
+            LogicalType::Int64,
             ExpectedCast::Value(ScalarValue::Int64(Some(i32::MIN as i64))),
         );
 
         let max_i64 = ScalarValue::Int64(Some(i64::MAX));
         expect_cast(
             max_i64,
-            DataType::UInt64,
+            LogicalType::UInt64,
             ExpectedCast::Value(ScalarValue::UInt64(Some(i64::MAX as u64))),
         );
     }
@@ -984,28 +907,28 @@ mod tests {
         let max_i64 = ScalarValue::Int64(Some(i64::MAX));
         let max_u64 = ScalarValue::UInt64(Some(u64::MAX));
 
-        expect_cast(max_i64.clone(), DataType::Int8, ExpectedCast::NoValue);
+        expect_cast(max_i64.clone(), LogicalType::Int8, ExpectedCast::NoValue);
 
-        expect_cast(max_i64.clone(), DataType::Int16, ExpectedCast::NoValue);
+        expect_cast(max_i64.clone(), LogicalType::Int16, ExpectedCast::NoValue);
 
-        expect_cast(max_i64, DataType::Int32, ExpectedCast::NoValue);
+        expect_cast(max_i64, LogicalType::Int32, ExpectedCast::NoValue);
 
-        expect_cast(max_u64, DataType::Int64, ExpectedCast::NoValue);
+        expect_cast(max_u64, LogicalType::Int64, ExpectedCast::NoValue);
 
-        expect_cast(min_i64, DataType::UInt64, ExpectedCast::NoValue);
+        expect_cast(min_i64, LogicalType::UInt64, ExpectedCast::NoValue);
 
-        expect_cast(min_i32, DataType::UInt64, ExpectedCast::NoValue);
+        expect_cast(min_i32, LogicalType::UInt64, ExpectedCast::NoValue);
 
         // decimal out of range
         expect_cast(
             ScalarValue::Decimal128(Some(99999999999999999999999999999999999900), 38, 0),
-            DataType::Int64,
+            LogicalType::Int64,
             ExpectedCast::NoValue,
         );
 
         expect_cast(
             ScalarValue::Decimal128(Some(-9999999999999999999999999999999999), 37, 1),
-            DataType::Int64,
+            LogicalType::Int64,
             ExpectedCast::NoValue,
         );
     }
@@ -1014,19 +937,19 @@ mod tests {
     fn test_try_decimal_cast_in_range() {
         expect_cast(
             ScalarValue::Decimal128(Some(12300), 5, 2),
-            DataType::Decimal128(3, 0),
+            LogicalType::Decimal128(3, 0),
             ExpectedCast::Value(ScalarValue::Decimal128(Some(123), 3, 0)),
         );
 
         expect_cast(
             ScalarValue::Decimal128(Some(12300), 5, 2),
-            DataType::Decimal128(8, 0),
+            LogicalType::Decimal128(8, 0),
             ExpectedCast::Value(ScalarValue::Decimal128(Some(123), 8, 0)),
         );
 
         expect_cast(
             ScalarValue::Decimal128(Some(12300), 5, 2),
-            DataType::Decimal128(8, 5),
+            LogicalType::Decimal128(8, 5),
             ExpectedCast::Value(ScalarValue::Decimal128(Some(12300000), 8, 5)),
         );
     }
@@ -1036,14 +959,14 @@ mod tests {
         // decimal would lose precision
         expect_cast(
             ScalarValue::Decimal128(Some(12345), 5, 2),
-            DataType::Decimal128(3, 0),
+            LogicalType::Decimal128(3, 0),
             ExpectedCast::NoValue,
         );
 
         // decimal would lose precision
         expect_cast(
             ScalarValue::Decimal128(Some(12300), 5, 2),
-            DataType::Decimal128(2, 0),
+            LogicalType::Decimal128(2, 0),
             ExpectedCast::NoValue,
         );
     }
@@ -1084,11 +1007,11 @@ mod tests {
             // so double check it here
             assert_eq!(lit_tz_none, lit_tz_utc);
 
-            // e.g. DataType::Timestamp(_, None)
-            let dt_tz_none = lit_tz_none.data_type();
+            // e.g. LogicalType::Timestamp(_, None)
+            let dt_tz_none: LogicalType = lit_tz_none.data_type().into();
 
-            // e.g. DataType::Timestamp(_, Some(utc))
-            let dt_tz_utc = lit_tz_utc.data_type();
+            // e.g. LogicalType::Timestamp(_, Some(utc))
+            let dt_tz_utc: LogicalType = lit_tz_utc.data_type().into();
 
             // None <--> None
             expect_cast(
@@ -1121,7 +1044,7 @@ mod tests {
             // timestamp to int64
             expect_cast(
                 lit_tz_utc.clone(),
-                DataType::Int64,
+                LogicalType::Int64,
                 ExpectedCast::Value(ScalarValue::Int64(Some(12345))),
             );
 
@@ -1142,7 +1065,7 @@ mod tests {
             // timestamp to string (not supported yet)
             expect_cast(
                 lit_tz_utc.clone(),
-                DataType::LargeUtf8,
+                LogicalType::LargeUtf8,
                 ExpectedCast::NoValue,
             );
         }
@@ -1153,7 +1076,7 @@ mod tests {
         // int64 to list
         expect_cast(
             ScalarValue::Int64(Some(12345)),
-            DataType::List(Arc::new(Field::new("f", DataType::Int32, true))),
+            LogicalType::new_list(LogicalType::Int32, true),
             ExpectedCast::NoValue,
         );
     }
@@ -1171,7 +1094,7 @@ mod tests {
     /// casting is consistent with the Arrow kernels
     fn expect_cast(
         literal: ScalarValue,
-        target_type: DataType,
+        target_type: LogicalType,
         expected_result: ExpectedCast,
     ) {
         let actual_value = try_cast_literal_to_type(&literal, &target_type);
@@ -1199,7 +1122,7 @@ mod tests {
                     .expect("Failed to convert to array of size");
                 let cast_array = cast_with_options(
                     &literal_array,
-                    &target_type,
+                    &target_type.physical_type(),
                     &CastOptions::default(),
                 )
                 .expect("Expected to be cast array with arrow cast kernel");
@@ -1212,9 +1135,9 @@ mod tests {
                 // Verify that for timestamp types the timezones are the same
                 // (ScalarValue::cmp doesn't account for timezones);
                 if let (
-                    DataType::Timestamp(left_unit, left_tz),
-                    DataType::Timestamp(right_unit, right_tz),
-                ) = (actual_value.data_type(), expected_value.data_type())
+                    LogicalType::Timestamp(left_unit, left_tz),
+                    LogicalType::Timestamp(right_unit, right_tz),
+                ) = (actual_value.data_type().into(), expected_value.data_type().into())
                 {
                     assert_eq!(left_unit, right_unit);
                     assert_eq!(left_tz, right_tz);
@@ -1234,7 +1157,7 @@ mod tests {
         // same timestamp
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampNanosecond(Some(123456), None),
-            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &LogicalType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
 
@@ -1246,7 +1169,7 @@ mod tests {
         // TimestampNanosecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampNanosecond(Some(123456), None),
-            &DataType::Timestamp(TimeUnit::Microsecond, None),
+            &LogicalType::Timestamp(TimeUnit::Microsecond, None),
         )
         .unwrap();
 
@@ -1258,7 +1181,7 @@ mod tests {
         // TimestampNanosecond to TimestampMillisecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampNanosecond(Some(123456), None),
-            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            &LogicalType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
 
@@ -1267,7 +1190,7 @@ mod tests {
         // TimestampNanosecond to TimestampSecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampNanosecond(Some(123456), None),
-            &DataType::Timestamp(TimeUnit::Second, None),
+            &LogicalType::Timestamp(TimeUnit::Second, None),
         )
         .unwrap();
 
@@ -1276,7 +1199,7 @@ mod tests {
         // TimestampMicrosecond to TimestampNanosecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampMicrosecond(Some(123), None),
-            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &LogicalType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
 
@@ -1288,7 +1211,7 @@ mod tests {
         // TimestampMicrosecond to TimestampMillisecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampMicrosecond(Some(123), None),
-            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            &LogicalType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
 
@@ -1297,7 +1220,7 @@ mod tests {
         // TimestampMicrosecond to TimestampSecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampMicrosecond(Some(123456789), None),
-            &DataType::Timestamp(TimeUnit::Second, None),
+            &LogicalType::Timestamp(TimeUnit::Second, None),
         )
         .unwrap();
         assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(123), None));
@@ -1305,7 +1228,7 @@ mod tests {
         // TimestampMillisecond to TimestampNanosecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampMillisecond(Some(123), None),
-            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &LogicalType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
         assert_eq!(
@@ -1316,7 +1239,7 @@ mod tests {
         // TimestampMillisecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampMillisecond(Some(123), None),
-            &DataType::Timestamp(TimeUnit::Microsecond, None),
+            &LogicalType::Timestamp(TimeUnit::Microsecond, None),
         )
         .unwrap();
         assert_eq!(
@@ -1326,7 +1249,7 @@ mod tests {
         // TimestampMillisecond to TimestampSecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampMillisecond(Some(123456789), None),
-            &DataType::Timestamp(TimeUnit::Second, None),
+            &LogicalType::Timestamp(TimeUnit::Second, None),
         )
         .unwrap();
         assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(123456), None));
@@ -1334,7 +1257,7 @@ mod tests {
         // TimestampSecond to TimestampNanosecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampSecond(Some(123), None),
-            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &LogicalType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
         assert_eq!(
@@ -1345,7 +1268,7 @@ mod tests {
         // TimestampSecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampSecond(Some(123), None),
-            &DataType::Timestamp(TimeUnit::Microsecond, None),
+            &LogicalType::Timestamp(TimeUnit::Microsecond, None),
         )
         .unwrap();
         assert_eq!(
@@ -1356,7 +1279,7 @@ mod tests {
         // TimestampSecond to TimestampMillisecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampSecond(Some(123), None),
-            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            &LogicalType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
         assert_eq!(
@@ -1367,7 +1290,7 @@ mod tests {
         // overflow
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampSecond(Some(i64::MAX), None),
-            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            &LogicalType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
         assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(None, None));
@@ -1384,33 +1307,8 @@ mod tests {
             for s2 in &scalars {
                 let expected_value = ExpectedCast::Value(s2.clone());
 
-                expect_cast(s1.clone(), s2.data_type(), expected_value);
+                expect_cast(s1.clone(), s2.data_type().into(), expected_value);
             }
-        }
-    }
-    #[test]
-    fn test_try_cast_to_dictionary_type() {
-        fn dictionary_type(t: DataType) -> DataType {
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(t))
-        }
-        fn dictionary_value(value: ScalarValue) -> ScalarValue {
-            ScalarValue::Dictionary(Box::new(DataType::Int32), Box::new(value))
-        }
-        let scalars = vec![
-            ScalarValue::from("string"),
-            ScalarValue::LargeUtf8(Some("string".to_owned())),
-        ];
-        for s in &scalars {
-            expect_cast(
-                s.clone(),
-                dictionary_type(s.data_type()),
-                ExpectedCast::Value(dictionary_value(s.clone())),
-            );
-            expect_cast(
-                dictionary_value(s.clone()),
-                s.data_type(),
-                ExpectedCast::Value(s.clone()),
-            )
         }
     }
 }

@@ -2243,6 +2243,8 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
+    use datafusion_common::logical_type::field::LogicalField;
+    use datafusion_common::logical_type::LogicalType;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
@@ -2485,12 +2487,11 @@ mod tests {
         let expected_error: &str = "Error during planning: \
             Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
             LogicalPlan schema: \
-            DFSchema { inner: Schema { fields: \
-                [Field { name: \"a\", \
+            DFSchema { inner: LogicalSchema { fields: \
+                [LogicalField { name: \"a\", \
                 data_type: Int32, \
                 nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, metadata: {} }], \
+                metadata: {} }], \
                 metadata: {} }, field_qualifiers: [None], \
                 functional_dependencies: FunctionalDependencies { deps: [] } }, \
             ExecutionPlan schema: Schema { fields: \
@@ -2764,7 +2765,7 @@ mod tests {
             Self {
                 schema: DFSchemaRef::new(
                     DFSchema::from_unqualified_fields(
-                        vec![Field::new("a", DataType::Int32, false)].into(),
+                        vec![LogicalField::new("a", LogicalType::Int32, false)].into(),
                         HashMap::new(),
                     )
                     .unwrap(),

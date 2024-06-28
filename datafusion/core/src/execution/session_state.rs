@@ -42,7 +42,7 @@ use crate::physical_optimizer::optimizer::PhysicalOptimizer;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use crate::{functions, functions_aggregate};
-use arrow_schema::{DataType, SchemaRef};
+use arrow_schema::{SchemaRef};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_common::alias::AliasGenerator;
@@ -84,6 +84,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
+use datafusion_common::logical_type::LogicalType;
 
 /// Execution context for registering data sources and executing queries.
 /// See [`SessionContext`] for a higher level API.
@@ -1002,7 +1003,7 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         self.state.window_functions().get(name).cloned()
     }
 
-    fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
+    fn get_variable_type(&self, variable_names: &[String]) -> Option<LogicalType> {
         if variable_names.is_empty() {
             return None;
         }
@@ -1219,7 +1220,7 @@ impl<'a> SessionSimplifyProvider<'a> {
 
 impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
     fn is_boolean_type(&self, expr: &Expr) -> datafusion_common::Result<bool> {
-        Ok(expr.get_type(self.df_schema)? == DataType::Boolean)
+        Ok(expr.get_type(self.df_schema)? == LogicalType::Boolean)
     }
 
     fn nullable(&self, expr: &Expr) -> datafusion_common::Result<bool> {
@@ -1230,7 +1231,7 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
         self.state.execution_props()
     }
 
-    fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
+    fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<LogicalType> {
         expr.get_type(self.df_schema)
     }
 }

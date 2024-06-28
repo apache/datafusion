@@ -1094,6 +1094,8 @@ mod test {
     use std::iter;
 
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::logical_type::field::LogicalField;
+    use datafusion_common::logical_type::LogicalType;
     use datafusion_expr::expr::AggregateFunction;
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
@@ -1644,9 +1646,9 @@ mod test {
         let plan = table_scan(Some("table"), &schema, None)
             .unwrap()
             .filter(
-                cast(col("a"), DataType::Int64)
+                cast(col("a"), LogicalType::Int64)
                     .lt(lit(1_i64))
-                    .and(cast(col("a"), DataType::Int64).not_eq(lit(1_i64))),
+                    .and(cast(col("a"), LogicalType::Int64).not_eq(lit(1_i64))),
             )
             .unwrap()
             .build()
@@ -1704,9 +1706,9 @@ mod test {
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
         let schema = DFSchema::from_unqualified_fields(
             vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-                Field::new("c", DataType::Int32, false),
+                LogicalField::new("a", LogicalType::Int32, false),
+                LogicalField::new("b", LogicalType::Int32, false),
+                LogicalField::new("c", LogicalType::Int32, false),
             ]
             .into(),
             HashMap::default(),
@@ -1723,8 +1725,8 @@ mod test {
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
         let schema = DFSchema::from_unqualified_fields(
             vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
+                LogicalField::new("a", LogicalType::Int32, false),
+                LogicalField::new("b", LogicalType::Int32, false),
             ]
             .into(),
             HashMap::default(),
@@ -1791,7 +1793,7 @@ mod test {
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
         let schema = DFSchema::from_unqualified_fields(
-            vec![Field::new("a", DataType::Int32, false)].into(),
+            vec![LogicalField::new("a", LogicalType::Int32, false)].into(),
             HashMap::default(),
         )?;
         extract_expressions(&col("a"), &schema, &mut result)?;

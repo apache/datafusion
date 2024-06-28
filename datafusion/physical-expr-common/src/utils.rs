@@ -22,6 +22,7 @@ use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::Schema;
 
 use datafusion_common::{exec_err, Result};
+use datafusion_common::logical_type::extension::ExtensionType;
 use datafusion_expr::expr::Alias;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::Expr;
@@ -127,7 +128,7 @@ pub fn limited_convert_logical_expr_to_physical_expr(
                 cast_expr.expr.as_ref(),
                 schema,
             )?,
-            cast_expr.data_type.clone(),
+            cast_expr.data_type.physical_type(),
             None,
         ))),
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
