@@ -49,8 +49,8 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -272,14 +272,14 @@ impl LogicalPlanBuilder {
     pub fn copy_to(
         input: LogicalPlan,
         output_url: String,
-        format_options: FormatOptions,
+        file_type: Arc<dyn FileType>,
         options: HashMap<String, String>,
         partition_by: Vec<String>,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
-            format_options,
+            file_type,
             options,
             partition_by,
         })))

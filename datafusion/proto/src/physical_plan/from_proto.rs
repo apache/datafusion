@@ -41,14 +41,13 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
-use datafusion_common::config::FormatOptions;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_proto_common::common::proto_error;
 
 use crate::convert_required;
 use crate::logical_plan::{self};
+use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
-use crate::protobuf::{self, copy_to_node};
 
 use super::PhysicalExtensionCodec;
 
@@ -650,25 +649,6 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
             overwrite: conf.overwrite,
-        })
-    }
-}
-
-impl TryFrom<&copy_to_node::FormatOptions> for FormatOptions {
-    type Error = DataFusionError;
-    fn try_from(value: &copy_to_node::FormatOptions) -> Result<Self, Self::Error> {
-        Ok(match value {
-            copy_to_node::FormatOptions::Csv(options) => {
-                FormatOptions::CSV(options.try_into()?)
-            }
-            copy_to_node::FormatOptions::Json(options) => {
-                FormatOptions::JSON(options.try_into()?)
-            }
-            copy_to_node::FormatOptions::Parquet(options) => {
-                FormatOptions::PARQUET(options.try_into()?)
-            }
-            copy_to_node::FormatOptions::Avro(_) => FormatOptions::AVRO,
-            copy_to_node::FormatOptions::Arrow(_) => FormatOptions::ARROW,
         })
     }
 }

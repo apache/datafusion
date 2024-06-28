@@ -20,10 +20,10 @@ use std::sync::Arc;
 
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::{FileType, GetExt};
 
 use object_store::aws::AmazonS3Builder;
 use url::Url;
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
     let path = format!("s3://{bucket_name}/test_data/");
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions::new(Arc::new(file_format))
-        .with_file_extension(FileType::PARQUET.get_ext());
+        .with_file_extension(ParquetFormat::default().get_ext());
     ctx.register_listing_table("test", &path, listing_options, None, None)
         .await?;
 
@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
 
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions::new(Arc::new(file_format))
-        .with_file_extension(FileType::PARQUET.get_ext());
+        .with_file_extension(ParquetFormat::default().get_ext());
     ctx.register_listing_table("test2", &out_path, listing_options, None, None)
         .await?;
 

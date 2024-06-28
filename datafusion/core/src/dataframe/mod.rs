@@ -26,6 +26,9 @@ use std::sync::Arc;
 
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
+use crate::datasource::file_format::csv::CsvFormatFactory;
+use crate::datasource::file_format::format_as_file_type;
+use crate::datasource::file_format::json::JsonFormatFactory;
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
@@ -44,7 +47,7 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::{Schema, SchemaRef};
-use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions};
+use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
@@ -1329,13 +1332,19 @@ impl DataFrame {
                 "Overwrites are not implemented for DataFrame::write_csv.".to_owned(),
             ));
         }
-        let props = writer_options
-            .unwrap_or_else(|| self.session_state.default_table_options().csv);
+
+        let format = if let Some(csv_opts) = writer_options {
+            Arc::new(CsvFormatFactory::new_with_options(csv_opts))
+        } else {
+            Arc::new(CsvFormatFactory::new())
+        };
+
+        let file_type = format_as_file_type(format);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FormatOptions::CSV(props),
+            file_type,
             HashMap::new(),
             options.partition_by,
         )?
@@ -1384,13 +1393,18 @@ impl DataFrame {
             ));
         }
 
-        let props = writer_options
-            .unwrap_or_else(|| self.session_state.default_table_options().json);
+        let format = if let Some(json_opts) = writer_options {
+            Arc::new(JsonFormatFactory::new_with_options(json_opts))
+        } else {
+            Arc::new(JsonFormatFactory::new())
+        };
+
+        let file_type = format_as_file_type(format);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FormatOptions::JSON(props),
+            file_type,
             Default::default(),
             options.partition_by,
         )?

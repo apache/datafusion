@@ -18,13 +18,14 @@
 //! [`JsonFormat`]: Line delimited JSON [`FileFormat`] abstractions
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::BufReader;
 use std::sync::Arc;
 
 use super::write::orchestration::stateless_multipart_put;
-use super::{FileFormat, FileScanConfig};
+use super::{FileFormat, FileFormatFactory, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::FileGroupDisplay;
@@ -41,9 +42,9 @@ use arrow::datatypes::SchemaRef;
 use arrow::json;
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use arrow_array::RecordBatch;
-use datafusion_common::config::JsonOptions;
+use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::not_impl_err;
+use datafusion_common::{not_impl_err, GetExt, DEFAULT_JSON_EXTENSION};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
@@ -52,6 +53,63 @@ use datafusion_physical_plan::ExecutionPlan;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+
+#[derive(Default)]
+/// Factory struct used to create [JsonFormat]
+pub struct JsonFormatFactory {
+    options: Option<JsonOptions>,
+}
+
+impl JsonFormatFactory {
+    /// Creates an instance of [JsonFormatFactory]
+    pub fn new() -> Self {
+        Self { options: None }
+    }
+
+    /// Creates an instance of [JsonFormatFactory] with customized default options
+    pub fn new_with_options(options: JsonOptions) -> Self {
+        Self {
+            options: Some(options),
+        }
+    }
+}
+
+impl FileFormatFactory for JsonFormatFactory {
+    fn create(
+        &self,
+        state: &SessionState,
+        format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        let json_options = match &self.options {
+            None => {
+                let mut table_options = state.default_table_options();
+                table_options.set_config_format(ConfigFileType::JSON);
+                table_options.alter_with_string_hash_map(format_options)?;
+                table_options.json
+            }
+            Some(json_options) => {
+                let mut json_options = json_options.clone();
+                for (k, v) in format_options {
+                    json_options.set(k, v)?;
+                }
+                json_options
+            }
+        };
+
+        Ok(Arc::new(JsonFormat::default().with_options(json_options)))
+    }
+
+    fn default(&self) -> Arc<dyn FileFormat> {
+        Arc::new(JsonFormat::default())
+    }
+}
+
+impl GetExt for JsonFormatFactory {
+    fn get_ext(&self) -> String {
+        // Removes the dot, i.e. ".parquet" -> "parquet"
+        DEFAULT_JSON_EXTENSION[1..].to_string()
+    }
+}
 
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug, Default)]
@@ -93,6 +151,18 @@ impl JsonFormat {
 impl FileFormat for JsonFormat {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn get_ext(&self) -> String {
+        JsonFormatFactory::new().get_ext()
+    }
+
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
+        let ext = self.get_ext();
+        Ok(format!("{}{}", ext, file_compression_type.get_ext()))
     }
 
     async fn infer_schema(

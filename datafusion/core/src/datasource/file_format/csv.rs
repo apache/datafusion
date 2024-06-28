@@ -18,12 +18,12 @@
 //! [`CsvFormat`], Comma Separated Value (CSV) [`FileFormat`] abstractions
 
 use std::any::Any;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use super::write::orchestration::stateless_multipart_put;
-use super::FileFormat;
+use super::{FileFormat, FileFormatFactory};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
@@ -40,9 +40,11 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
-use datafusion_common::config::CsvOptions;
+use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError};
+use datafusion_common::{
+    exec_err, not_impl_err, DataFusionError, GetExt, DEFAULT_CSV_EXTENSION,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
@@ -52,6 +54,63 @@ use bytes::{Buf, Bytes};
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
+
+#[derive(Default)]
+/// Factory struct used to create [CsvFormatFactory]
+pub struct CsvFormatFactory {
+    options: Option<CsvOptions>,
+}
+
+impl CsvFormatFactory {
+    /// Creates an instance of [CsvFormatFactory]
+    pub fn new() -> Self {
+        Self { options: None }
+    }
+
+    /// Creates an instance of [CsvFormatFactory] with customized default options
+    pub fn new_with_options(options: CsvOptions) -> Self {
+        Self {
+            options: Some(options),
+        }
+    }
+}
+
+impl FileFormatFactory for CsvFormatFactory {
+    fn create(
+        &self,
+        state: &SessionState,
+        format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        let csv_options = match &self.options {
+            None => {
+                let mut table_options = state.default_table_options();
+                table_options.set_config_format(ConfigFileType::CSV);
+                table_options.alter_with_string_hash_map(format_options)?;
+                table_options.csv
+            }
+            Some(csv_options) => {
+                let mut csv_options = csv_options.clone();
+                for (k, v) in format_options {
+                    csv_options.set(k, v)?;
+                }
+                csv_options
+            }
+        };
+
+        Ok(Arc::new(CsvFormat::default().with_options(csv_options)))
+    }
+
+    fn default(&self) -> Arc<dyn FileFormat> {
+        Arc::new(CsvFormat::default())
+    }
+}
+
+impl GetExt for CsvFormatFactory {
+    fn get_ext(&self) -> String {
+        // Removes the dot, i.e. ".parquet" -> "parquet"
+        DEFAULT_CSV_EXTENSION[1..].to_string()
+    }
+}
 
 /// Character Separated Value `FileFormat` implementation.
 #[derive(Debug, Default)]
@@ -204,6 +263,18 @@ impl CsvFormat {
 impl FileFormat for CsvFormat {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn get_ext(&self) -> String {
+        CsvFormatFactory::new().get_ext()
+    }
+
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
+        let ext = self.get_ext();
+        Ok(format!("{}{}", ext, file_compression_type.get_ext()))
     }
 
     async fn infer_schema(
@@ -558,7 +629,6 @@ mod tests {
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{FileType, GetExt};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::{col, lit};
 
@@ -1060,9 +1130,9 @@ mod tests {
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
         let ctx = SessionContext::new_with_config(config);
-        let file_format = CsvFormat::default().with_has_header(false);
-        let listing_options = ListingOptions::new(Arc::new(file_format))
-            .with_file_extension(FileType::CSV.get_ext());
+        let file_format = Arc::new(CsvFormat::default().with_has_header(false));
+        let listing_options = ListingOptions::new(file_format.clone())
+            .with_file_extension(file_format.get_ext());
         ctx.register_listing_table(
             "empty",
             "tests/data/empty_files/all_empty/",
@@ -1113,9 +1183,9 @@ mod tests {
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
         let ctx = SessionContext::new_with_config(config);
-        let file_format = CsvFormat::default().with_has_header(false);
-        let listing_options = ListingOptions::new(Arc::new(file_format))
-            .with_file_extension(FileType::CSV.get_ext());
+        let file_format = Arc::new(CsvFormat::default().with_has_header(false));
+        let listing_options = ListingOptions::new(file_format.clone())
+            .with_file_extension(file_format.get_ext());
         ctx.register_listing_table(
             "empty",
             "tests/data/empty_files/some_empty",

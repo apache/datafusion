@@ -17,11 +17,8 @@
 
 //! File type abstraction
 
-use std::fmt::{self, Display};
-use std::str::FromStr;
-
-use crate::config::FormatOptions;
-use crate::error::{DataFusionError, Result};
+use std::any::Any;
+use std::fmt::Display;
 
 /// The default file extension of arrow files
 pub const DEFAULT_ARROW_EXTENSION: &str = ".arrow";
@@ -40,107 +37,10 @@ pub trait GetExt {
     fn get_ext(&self) -> String;
 }
 
-/// Readable file type
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum FileType {
-    /// Apache Arrow file
-    ARROW,
-    /// Apache Avro file
-    AVRO,
-    /// Apache Parquet file
-    #[cfg(feature = "parquet")]
-    PARQUET,
-    /// CSV file
-    CSV,
-    /// JSON file
-    JSON,
-}
-
-impl From<&FormatOptions> for FileType {
-    fn from(value: &FormatOptions) -> Self {
-        match value {
-            FormatOptions::CSV(_) => FileType::CSV,
-            FormatOptions::JSON(_) => FileType::JSON,
-            #[cfg(feature = "parquet")]
-            FormatOptions::PARQUET(_) => FileType::PARQUET,
-            FormatOptions::AVRO => FileType::AVRO,
-            FormatOptions::ARROW => FileType::ARROW,
-        }
-    }
-}
-
-impl GetExt for FileType {
-    fn get_ext(&self) -> String {
-        match self {
-            FileType::ARROW => DEFAULT_ARROW_EXTENSION.to_owned(),
-            FileType::AVRO => DEFAULT_AVRO_EXTENSION.to_owned(),
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => DEFAULT_PARQUET_EXTENSION.to_owned(),
-            FileType::CSV => DEFAULT_CSV_EXTENSION.to_owned(),
-            FileType::JSON => DEFAULT_JSON_EXTENSION.to_owned(),
-        }
-    }
-}
-
-impl Display for FileType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let out = match self {
-            FileType::CSV => "csv",
-            FileType::JSON => "json",
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => "parquet",
-            FileType::AVRO => "avro",
-            FileType::ARROW => "arrow",
-        };
-        write!(f, "{}", out)
-    }
-}
-
-impl FromStr for FileType {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        let s = s.to_uppercase();
-        match s.as_str() {
-            "ARROW" => Ok(FileType::ARROW),
-            "AVRO" => Ok(FileType::AVRO),
-            #[cfg(feature = "parquet")]
-            "PARQUET" => Ok(FileType::PARQUET),
-            "CSV" => Ok(FileType::CSV),
-            "JSON" | "NDJSON" => Ok(FileType::JSON),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown FileType: {s}"
-            ))),
-        }
-    }
-}
-
-#[cfg(test)]
-#[cfg(feature = "parquet")]
-mod tests {
-    use std::str::FromStr;
-
-    use crate::error::DataFusionError;
-    use crate::FileType;
-
-    #[test]
-    fn from_str() {
-        for (ext, file_type) in [
-            ("csv", FileType::CSV),
-            ("CSV", FileType::CSV),
-            ("json", FileType::JSON),
-            ("JSON", FileType::JSON),
-            ("avro", FileType::AVRO),
-            ("AVRO", FileType::AVRO),
-            ("parquet", FileType::PARQUET),
-            ("PARQUET", FileType::PARQUET),
-        ] {
-            assert_eq!(FileType::from_str(ext).unwrap(), file_type);
-        }
-
-        assert!(matches!(
-            FileType::from_str("Unknown"),
-            Err(DataFusionError::NotImplemented(_))
-        ));
-    }
+/// Defines the functionality needed for logical planning for
+/// a type of file which will be read or written to storage.
+pub trait FileType: GetExt + Display + Send + Sync {
+    /// Returns the table source as [`Any`] so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
 }
