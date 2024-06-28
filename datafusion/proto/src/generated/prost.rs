@@ -1128,6 +1128,8 @@ pub struct FileSinkConfig {
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(bool, tag = "8")]
     pub overwrite: bool,
+    #[prost(bool, tag = "9")]
+    pub keep_partition_by_columns: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

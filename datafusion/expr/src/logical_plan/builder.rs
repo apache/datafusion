@@ -279,9 +279,9 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
+            partition_by,
             file_type,
             options,
-            partition_by,
         })))
     }
 
