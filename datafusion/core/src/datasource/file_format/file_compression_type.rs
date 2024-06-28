@@ -22,7 +22,7 @@ use std::str::FromStr;
 use crate::error::{DataFusionError, Result};
 
 use datafusion_common::parsers::CompressionTypeVariant::{self, *};
-use datafusion_common::{FileType, GetExt};
+use datafusion_common::GetExt;
 
 #[cfg(feature = "compression")]
 use async_compression::tokio::bufread::{
@@ -111,6 +111,11 @@ impl FileCompressionType {
     pub const UNCOMPRESSED: Self = Self {
         variant: UNCOMPRESSED,
     };
+
+    /// Read only access to self.variant
+    pub fn get_variant(&self) -> &CompressionTypeVariant {
+        &self.variant
+    }
 
     /// The file is compressed or not
     pub const fn is_compressed(&self) -> bool {
@@ -245,89 +250,15 @@ pub trait FileTypeExt {
     fn get_ext_with_compression(&self, c: FileCompressionType) -> Result<String>;
 }
 
-impl FileTypeExt for FileType {
-    fn get_ext_with_compression(&self, c: FileCompressionType) -> Result<String> {
-        let ext = self.get_ext();
-
-        match self {
-            FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
-            FileType::AVRO | FileType::ARROW => match c.variant {
-                UNCOMPRESSED => Ok(ext),
-                _ => Err(DataFusionError::Internal(
-                    "FileCompressionType can be specified for CSV/JSON FileType.".into(),
-                )),
-            },
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => match c.variant {
-                UNCOMPRESSED => Ok(ext),
-                _ => Err(DataFusionError::Internal(
-                    "FileCompressionType can be specified for CSV/JSON FileType.".into(),
-                )),
-            },
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
-    use crate::datasource::file_format::file_compression_type::{
-        FileCompressionType, FileTypeExt,
-    };
+    use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::error::DataFusionError;
-
-    use datafusion_common::file_options::file_type::FileType;
 
     use bytes::Bytes;
     use futures::StreamExt;
-
-    #[test]
-    fn get_ext_with_compression() {
-        for (file_type, compression, extension) in [
-            (FileType::CSV, FileCompressionType::UNCOMPRESSED, ".csv"),
-            (FileType::CSV, FileCompressionType::GZIP, ".csv.gz"),
-            (FileType::CSV, FileCompressionType::XZ, ".csv.xz"),
-            (FileType::CSV, FileCompressionType::BZIP2, ".csv.bz2"),
-            (FileType::CSV, FileCompressionType::ZSTD, ".csv.zst"),
-            (FileType::JSON, FileCompressionType::UNCOMPRESSED, ".json"),
-            (FileType::JSON, FileCompressionType::GZIP, ".json.gz"),
-            (FileType::JSON, FileCompressionType::XZ, ".json.xz"),
-            (FileType::JSON, FileCompressionType::BZIP2, ".json.bz2"),
-            (FileType::JSON, FileCompressionType::ZSTD, ".json.zst"),
-        ] {
-            assert_eq!(
-                file_type.get_ext_with_compression(compression).unwrap(),
-                extension
-            );
-        }
-
-        let mut ty_ext_tuple = vec![];
-        ty_ext_tuple.push((FileType::AVRO, ".avro"));
-        #[cfg(feature = "parquet")]
-        ty_ext_tuple.push((FileType::PARQUET, ".parquet"));
-
-        // Cannot specify compression for these file types
-        for (file_type, extension) in ty_ext_tuple {
-            assert_eq!(
-                file_type
-                    .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
-                    .unwrap(),
-                extension
-            );
-            for compression in [
-                FileCompressionType::GZIP,
-                FileCompressionType::XZ,
-                FileCompressionType::BZIP2,
-                FileCompressionType::ZSTD,
-            ] {
-                assert!(matches!(
-                    file_type.get_ext_with_compression(compression),
-                    Err(DataFusionError::Internal(_))
-                ));
-            }
-        }
-    }
 
     #[test]
     fn from_str() {

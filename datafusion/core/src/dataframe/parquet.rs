@@ -15,11 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use crate::datasource::file_format::{
+    format_as_file_type, parquet::ParquetFormatFactory,
+};
+
 use super::{
     DataFrame, DataFrameWriteOptions, DataFusionError, LogicalPlanBuilder, RecordBatch,
 };
 
-use datafusion_common::config::{FormatOptions, TableParquetOptions};
+use datafusion_common::config::TableParquetOptions;
 
 impl DataFrame {
     /// Execute the `DataFrame` and write the results to Parquet file(s).
@@ -57,13 +63,18 @@ impl DataFrame {
             ));
         }
 
-        let props = writer_options
-            .unwrap_or_else(|| self.session_state.default_table_options().parquet);
+        let format = if let Some(parquet_opts) = writer_options {
+            Arc::new(ParquetFormatFactory::new_with_options(parquet_opts))
+        } else {
+            Arc::new(ParquetFormatFactory::new())
+        };
+
+        let file_type = format_as_file_type(format);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FormatOptions::PARQUET(props),
+            file_type,
             Default::default(),
             options.partition_by,
         )?

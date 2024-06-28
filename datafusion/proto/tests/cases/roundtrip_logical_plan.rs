@@ -26,6 +26,13 @@ use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
+use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
+use datafusion::datasource::file_format::csv::CsvFormatFactory;
+use datafusion::datasource::file_format::format_as_file_type;
+use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+use datafusion_proto::logical_plan::file_formats::{
+    ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, ParquetLogicalExtensionCodec,
+};
 use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
@@ -41,11 +48,11 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
-use datafusion_common::config::{FormatOptions, TableOptions};
+use datafusion_common::config::TableOptions;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
-    DataFusionError, FileType, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -127,6 +134,9 @@ pub struct TestTableProto {
     /// URL of the table root
     #[prost(string, tag = "1")]
     pub url: String,
+    /// Qualified table name
+    #[prost(string, tag = "2")]
+    pub table_name: String,
 }
 
 #[derive(Debug)]
@@ -149,12 +159,14 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
     fn try_decode_table_provider(
         &self,
         buf: &[u8],
+        table_ref: &TableReference,
         schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
         let msg = TestTableProto::decode(buf).map_err(|_| {
             DataFusionError::Internal("Error decoding test table".to_string())
         })?;
+        assert_eq!(msg.table_name, table_ref.to_string());
         let provider = TestTableProvider {
             url: msg.url,
             schema,
@@ -164,6 +176,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
 
     fn try_encode_table_provider(
         &self,
+        table_ref: &TableReference,
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -174,6 +187,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             .expect("Can't encode non-test tables");
         let msg = TestTableProto {
             url: table.url.clone(),
+            table_name: table_ref.to_string(),
         };
         msg.encode(buf).map_err(|_| {
             DataFusionError::Internal("Error encoding test table".to_string())
@@ -326,20 +340,20 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let ctx = SessionContext::new();
 
     let input = create_csv_scan(&ctx).await?;
-    let mut table_options = ctx.copied_table_options();
-    table_options.set_file_format(FileType::CSV);
-    table_options.set("format.delimiter", ";")?;
+    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        format_options: FormatOptions::CSV(table_options.csv.clone()),
+        file_type,
         options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = CsvLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     Ok(())
@@ -364,26 +378,27 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     parquet_format.global.dictionary_page_size_limit = 444;
     parquet_format.global.max_row_group_size = 555;
 
+    let file_type = format_as_file_type(Arc::new(ParquetFormatFactory::new()));
+
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
-        format_options: FormatOptions::PARQUET(parquet_format.clone()),
+        file_type,
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = ParquetLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.parquet", copy_to.output_url);
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
-            assert_eq!(
-                copy_to.format_options,
-                FormatOptions::PARQUET(parquet_format)
-            );
+            assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());
         }
         _ => panic!(),
     }
@@ -396,22 +411,26 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
 
     let input = create_csv_scan(&ctx).await?;
 
+    let file_type = format_as_file_type(Arc::new(ArrowFormatFactory::new()));
+
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.arrow".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        format_options: FormatOptions::ARROW,
+        file_type,
         options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = ArrowLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.arrow", copy_to.output_url);
-            assert_eq!(FormatOptions::ARROW, copy_to.format_options);
+            assert_eq!("arrow".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
         }
         _ => panic!(),
@@ -437,22 +456,26 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     csv_format.time_format = Some("HH:mm:ss".to_string());
     csv_format.null_value = Some("NIL".to_string());
 
+    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
+
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        format_options: FormatOptions::CSV(csv_format.clone()),
+        file_type,
         options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = CsvLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.csv", copy_to.output_url);
-            assert_eq!(FormatOptions::CSV(csv_format), copy_to.format_options);
+            assert_eq!("csv".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
         }
         _ => panic!(),
@@ -850,6 +873,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -858,6 +882,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -927,6 +952,7 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -935,6 +961,7 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -984,7 +1011,7 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt64(None),
         ScalarValue::Utf8(None),
         ScalarValue::LargeUtf8(None),
-        ScalarValue::List(ScalarValue::new_list(&[], &DataType::Boolean)),
+        ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Boolean)),
         ScalarValue::LargeList(ScalarValue::new_large_list(&[], &DataType::Boolean)),
         ScalarValue::Date32(None),
         ScalarValue::Boolean(Some(true)),
@@ -1076,7 +1103,7 @@ fn round_trip_scalar_values() {
             i64::MAX,
         ))),
         ScalarValue::IntervalMonthDayNano(None),
-        ScalarValue::List(ScalarValue::new_list(
+        ScalarValue::List(ScalarValue::new_list_nullable(
             &[
                 ScalarValue::Float32(Some(-213.1)),
                 ScalarValue::Float32(None),
@@ -1096,10 +1123,13 @@ fn round_trip_scalar_values() {
             ],
             &DataType::Float32,
         )),
-        ScalarValue::List(ScalarValue::new_list(
+        ScalarValue::List(ScalarValue::new_list_nullable(
             &[
-                ScalarValue::List(ScalarValue::new_list(&[], &DataType::Float32)),
-                ScalarValue::List(ScalarValue::new_list(
+                ScalarValue::List(ScalarValue::new_list_nullable(
+                    &[],
+                    &DataType::Float32,
+                )),
+                ScalarValue::List(ScalarValue::new_list_nullable(
                     &[
                         ScalarValue::Float32(Some(-213.1)),
                         ScalarValue::Float32(None),
