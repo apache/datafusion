@@ -17,16 +17,22 @@
 
 //! This file contains several examples of how to run SQL queries using DataFusion
 //!
-//! * [`parquet`]: demonstrates how to run a simple SQL query against a Parquet file
+//! * [`parquet`]: run SQL query against a single Parquet file
+//! * [`parquet_multi_files`]: run SQL query against a table backed by multiple Parquet files
 
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use object_store::local::LocalFileSystem;
+use std::path::Path;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    parquet().await;
+    parquet().await?;
+    parquet_multi_files().await?;
     Ok(())
-
 }
 
 /// This example demonstrates executing a simple query against an Arrow data
@@ -56,6 +62,92 @@ async fn parquet() -> Result<()> {
 
     // print the results
     df.show().await?;
+
+    Ok(())
+}
+
+/// This example demonstrates executing a simple query against an Arrow data
+/// source (a directory with multiple Parquet files) and fetching results.
+///
+/// The query is run twice, once showing how to used `register_listing_table`
+/// with an absolute path, and once registering an ObjectStore to use a relative
+/// path.
+async fn parquet_multi_files() -> Result<()> {
+    // create local execution context
+    let ctx = SessionContext::new();
+
+    let test_data = datafusion::test_util::parquet_test_data();
+
+    // Configure listing options
+    let file_format = ParquetFormat::default().with_enable_pruning(true);
+    let listing_options = ListingOptions::new(Arc::new(file_format))
+        // This is a workaround for this example since `test_data` contains
+        // many different parquet different files,
+        // in practice use FileType::PARQUET.get_ext().
+        .with_file_extension("alltypes_plain.parquet");
+
+    // First example were we use an absolute path, which requires no additional setup.
+    ctx.register_listing_table(
+        "my_table",
+        &format!("file://{test_data}/"),
+        listing_options.clone(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT * \
+        FROM my_table \
+        LIMIT 1",
+        )
+        .await?;
+
+    // print the results
+    df.show().await?;
+
+    // Second example were we temporarily move into the test data's parent directory and
+    // simulate a relative path, this requires registering an ObjectStore.
+    let cur_dir = std::env::current_dir()?;
+
+    let test_data_path = Path::new(&test_data);
+    let test_data_path_parent = test_data_path.parent().unwrap();
+
+    std::env::set_current_dir(test_data_path_parent)?;
+
+    let local_fs = Arc::new(LocalFileSystem::default());
+
+    let u = url::Url::parse("file://./").unwrap();
+    ctx.register_object_store(&u, local_fs);
+
+    // Register a listing table - this will use all files in the directory as data sources
+    // for the query
+    ctx.register_listing_table(
+        "relative_table",
+        "./data",
+        listing_options.clone(),
+        None,
+        None,
+    )
+    .await?;
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT * \
+        FROM relative_table \
+        LIMIT 1",
+        )
+        .await?;
+
+    // print the results
+    df.show().await?;
+
+    // Reset the current directory
+    std::env::set_current_dir(cur_dir)?;
 
     Ok(())
 }
