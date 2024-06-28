@@ -29,11 +29,12 @@ use arrow_schema::{DataType, Field, Fields, SortOptions};
 use datafusion_common::utils::{
     array_into_list_array_nullable, compare_rows, get_row_at_idx,
 };
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDF, AggregateUDFImpl, ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDF, AggregateUDFImpl, Expr, ReversedUDAF, Signature,
+    Volatility,
 };
 use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
 use datafusion_physical_expr_common::sort_expr::{
@@ -53,26 +54,28 @@ make_udaf_expr_and_func!(
 #[derive(Debug)]
 pub struct NthValueAgg {
     signature: Signature,
-    /// The `N` value.
-    n: i64,
     /// If the input expression can have `NULL`s
-    nullable: bool,
+    input_nullable: bool,
 }
 
 impl NthValueAgg {
     /// Create a new `NthValueAgg` aggregate function
-    pub fn new(n: i64, nullable: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            n,
-            nullable,
+            input_nullable: false,
         }
+    }
+
+    pub fn with_input_nullable(mut self, input_nullable: bool) -> Self {
+        self.input_nullable = input_nullable;
+        self
     }
 }
 
 impl Default for NthValueAgg {
     fn default() -> Self {
-        Self::new(1, true)
+        Self::new()
     }
 }
 
@@ -94,6 +97,15 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let n = match acc_args.input_exprs[1] {
+            Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
+            _ => not_impl_err!(
+                "{} not supported for n: {}",
+                self.name(),
+                &acc_args.input_exprs[1]
+            ),
+        }?;
+
         let ordering_req = limited_convert_logical_sort_exprs_to_physical(
             acc_args.sort_exprs,
             acc_args.schema,
@@ -105,7 +117,7 @@ impl AggregateUDFImpl for NthValueAgg {
             .collect::<Result<Vec<_>>>()?;
 
         NthValueAccumulator::try_new(
-            self.n,
+            n,
             acc_args.input_type,
             &ordering_dtypes,
             ordering_req,
@@ -116,14 +128,14 @@ impl AggregateUDFImpl for NthValueAgg {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new_list(
             format_state_name(self.name(), "nth_value"),
-            Field::new("item", args.input_type.clone(), self.nullable),
+            Field::new("item", args.input_type.clone(), self.input_nullable),
             false,
         )];
         let orderings = args.ordering_fields.to_vec();
         fields.push(Field::new_list(
             format_state_name(self.name(), "nth_value_orderings"),
             Field::new("item", DataType::Struct(Fields::from(orderings)), true),
-            self.nullable,
+            self.input_nullable,
         ));
         Ok(fields)
     }
@@ -133,7 +145,8 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
-        let nth_value = AggregateUDF::from(Self::new(-self.n, self.nullable));
+        let nth_value =
+            AggregateUDF::from(Self::new().with_input_nullable(self.input_nullable));
 
         ReversedUDAF::Reversed(Arc::from(nth_value))
     }
@@ -141,6 +154,7 @@ impl AggregateUDFImpl for NthValueAgg {
 
 #[derive(Debug)]
 pub struct NthValueAccumulator {
+    /// The `N` value.
     n: i64,
     /// Stores entries in the `NTH_VALUE` result.
     values: VecDeque<ScalarValue>,
