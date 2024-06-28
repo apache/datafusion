@@ -1161,7 +1161,7 @@ mod tests {
         let mut min =
             MinAccumulator::try_new(&DataType::Interval(IntervalUnit::YearMonth))
                 .unwrap();
-        min.update_batch(&[b.clone()]).unwrap();
+        min.update_batch(&[Arc::clone(&b)]).unwrap();
         let min_res = min.evaluate().unwrap();
         assert_eq!(
             min_res,
@@ -1173,7 +1173,7 @@ mod tests {
         let mut max =
             MaxAccumulator::try_new(&DataType::Interval(IntervalUnit::YearMonth))
                 .unwrap();
-        max.update_batch(&[b.clone()]).unwrap();
+        max.update_batch(&[Arc::clone(&b)]).unwrap();
         let max_res = max.evaluate().unwrap();
         assert_eq!(
             max_res,
@@ -1194,7 +1194,7 @@ mod tests {
 
         let mut min =
             MinAccumulator::try_new(&DataType::Interval(IntervalUnit::DayTime)).unwrap();
-        min.update_batch(&[b.clone()]).unwrap();
+        min.update_batch(&[Arc::clone(&b)]).unwrap();
         let min_res = min.evaluate().unwrap();
         assert_eq!(
             min_res,
@@ -1203,7 +1203,7 @@ mod tests {
 
         let mut max =
             MaxAccumulator::try_new(&DataType::Interval(IntervalUnit::DayTime)).unwrap();
-        max.update_batch(&[b.clone()]).unwrap();
+        max.update_batch(&[Arc::clone(&b)]).unwrap();
         let max_res = max.evaluate().unwrap();
         assert_eq!(
             max_res,
@@ -1223,7 +1223,7 @@ mod tests {
         let mut min =
             MinAccumulator::try_new(&DataType::Interval(IntervalUnit::MonthDayNano))
                 .unwrap();
-        min.update_batch(&[b.clone()]).unwrap();
+        min.update_batch(&[Arc::clone(&b)]).unwrap();
         let min_res = min.evaluate().unwrap();
         assert_eq!(
             min_res,
@@ -1235,7 +1235,7 @@ mod tests {
         let mut max =
             MaxAccumulator::try_new(&DataType::Interval(IntervalUnit::MonthDayNano))
                 .unwrap();
-        max.update_batch(&[b.clone()]).unwrap();
+        max.update_batch(&[Arc::clone(&b)]).unwrap();
         let max_res = max.evaluate().unwrap();
         assert_eq!(
             max_res,

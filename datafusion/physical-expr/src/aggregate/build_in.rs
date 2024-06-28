@@ -325,7 +325,7 @@ mod tests {
         input_exprs
             .iter()
             .zip(coerced_types)
-            .map(|(expr, coerced_type)| try_cast(expr.clone(), schema, coerced_type))
+            .map(|(expr, coerced_type)| try_cast(Arc::clone(expr), schema, coerced_type))
             .collect::<Result<Vec<_>>>()
     }
 }

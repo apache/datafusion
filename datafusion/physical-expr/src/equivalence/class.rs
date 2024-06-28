@@ -603,9 +603,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
 
-        let cls1 = EquivalenceClass::new(vec![lit_true.clone(), lit_false.clone()]);
-        let cls2 = EquivalenceClass::new(vec![lit_true.clone(), col_b_expr.clone()]);
-        let cls3 = EquivalenceClass::new(vec![lit2.clone(), lit1.clone()]);
+        let cls1 =
+            EquivalenceClass::new(vec![Arc::clone(&lit_true), Arc::clone(&lit_false)]);
+        let cls2 =
+            EquivalenceClass::new(vec![Arc::clone(&lit_true), Arc::clone(&col_b_expr)]);
+        let cls3 = EquivalenceClass::new(vec![Arc::clone(&lit2), Arc::clone(&lit1)]);
 
         // lit_true is common
         assert!(cls1.contains_any(&cls2));

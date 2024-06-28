@@ -1263,7 +1263,7 @@ mod tests {
         let arrow_schema_ref = Arc::new(arrow_schema.clone());
 
         let df_schema = DFSchema {
-            inner: arrow_schema_ref.clone(),
+            inner: Arc::clone(&arrow_schema_ref),
             field_qualifiers: vec![None; arrow_schema_ref.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };
@@ -1271,7 +1271,7 @@ mod tests {
 
         {
             let arrow_schema = arrow_schema.clone();
-            let arrow_schema_ref = arrow_schema_ref.clone();
+            let arrow_schema_ref = Arc::clone(&arrow_schema_ref);
 
             assert_eq!(df_schema, arrow_schema.to_dfschema().unwrap());
             assert_eq!(df_schema, arrow_schema_ref.to_dfschema().unwrap());
@@ -1279,7 +1279,7 @@ mod tests {
 
         {
             let arrow_schema = arrow_schema.clone();
-            let arrow_schema_ref = arrow_schema_ref.clone();
+            let arrow_schema_ref = Arc::clone(&arrow_schema_ref);
 
             assert_eq!(df_schema_ref, arrow_schema.to_dfschema_ref().unwrap());
             assert_eq!(df_schema_ref, arrow_schema_ref.to_dfschema_ref().unwrap());
@@ -1309,7 +1309,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a_field, b_field]));
 
         let df_schema = DFSchema {
-            inner: schema.clone(),
+            inner: Arc::clone(&schema),
             field_qualifiers: vec![None; schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };

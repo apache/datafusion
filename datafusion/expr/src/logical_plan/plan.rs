@@ -3385,7 +3385,7 @@ digraph {
             vec![col("a")],
             Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
-                schema: empty_schema.clone(),
+                schema: Arc::clone(&empty_schema),
             })),
             empty_schema,
         );
@@ -3500,9 +3500,9 @@ digraph {
         );
         let scan = Arc::new(LogicalPlan::TableScan(TableScan {
             table_name: TableReference::bare("tab"),
-            source: source.clone(),
+            source: Arc::clone(&source) as Arc<dyn TableSource>,
             projection: None,
-            projected_schema: schema.clone(),
+            projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
         }));
@@ -3532,7 +3532,7 @@ digraph {
             table_name: TableReference::bare("tab"),
             source,
             projection: None,
-            projected_schema: unique_schema.clone(),
+            projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
         }));

@@ -379,7 +379,7 @@ pub(crate) mod tests {
     }
 
     fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> Result<PhysicalExprDummyNode> {
-        let expr = node.expr.clone();
+        let expr = Arc::clone(&node.expr);
         let dummy_property = if expr.as_any().is::<BinaryExpr>() {
             "Binary"
         } else if expr.as_any().is::<Column>() {
