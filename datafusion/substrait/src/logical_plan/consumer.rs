@@ -1191,21 +1191,25 @@ pub async fn from_substrait_rex(
             None => substrait_err!("Cast expression without output type is not allowed"),
         },
         Some(RexType::WindowFunction(window)) => {
-            let fun = match extensions.get(&window.function_reference) {
-                Some(function_name) => {
-                    // check udaf
-                    match ctx.udaf(function_name) {
-                        Ok(udaf) => {
-                            Ok(Some(WindowFunctionDefinition::AggregateUDF(udaf)))
-                        }
-                        Err(_) => Ok(find_df_window_func(function_name)),
-                    }
-                }
-                None => not_impl_err!(
-                    "Window function not found: function anchor = {:?}",
-                    &window.function_reference
-                ),
+            let Some(fn_name) = extensions.get(&window.function_reference) else {
+                return plan_err!(
+                    "Window function not found: function reference = {:?}",
+                    window.function_reference
+                );
             };
+
+            // check udaf first, then built-in functions
+            let fun = match ctx.udaf(fn_name) {
+                Ok(udaf) => Ok(WindowFunctionDefinition::AggregateUDF(udaf)),
+                Err(_) => find_df_window_func(fn_name).ok_or_else(|| {
+                    not_impl_err!(
+                        "Window function {} is not supported: function anchor = {:?}",
+                        fn_name,
+                        window.function_reference
+                    )
+                }),
+            }?;
+
             let order_by =
                 from_substrait_sorts(ctx, &window.sorts, input_schema, extensions)
                     .await?;
@@ -1219,7 +1223,7 @@ pub async fn from_substrait_rex(
                 WindowFrameUnits::Range
             };
             Ok(Arc::new(Expr::WindowFunction(expr::WindowFunction {
-                fun: fun?.unwrap(),
+                fun,
                 args: from_substrait_func_args(
                     ctx,
                     &window.arguments,
