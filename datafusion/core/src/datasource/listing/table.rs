@@ -771,10 +771,9 @@ impl TableProvider for ListingTable {
         let (mut partitioned_file_lists, statistics) =
             self.list_files_for_scan(state, filters, limit).await?;
 
-        let projected_schema = project_schema(&self.schema(), projection)?;
-
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
+            let projected_schema = project_schema(&self.schema(), projection)?;
             return Ok(Arc::new(EmptyExec::new(projected_schema)));
         }
 
