@@ -22,7 +22,7 @@ mod avro;
 mod csv;
 mod file_groups;
 mod file_scan_config;
-mod file_stream;
+pub mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
@@ -164,7 +164,7 @@ impl<'a> DisplayAs for FileGroupsDisplay<'a> {
 /// [file1, file2,...]
 /// ```
 #[derive(Debug)]
-pub(crate) struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
+pub struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
 
 impl<'a> DisplayAs for FileGroupDisplay<'a> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
