@@ -29,6 +29,7 @@ fn main() -> Result<(), String> {
     let descriptor_path = proto_dir.join("proto/proto_descriptor.bin");
 
     prost_build::Config::new()
+        .protoc_arg("--experimental_allow_proto3_optional")
         .file_descriptor_set_path(&descriptor_path)
         .out_dir(out_dir)
         .compile_well_known_types()
