@@ -15,13 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! This file contains several examples of how to run SQL queries using DataFusion
+//!
+//! * [`parquet`]: demonstrates how to run a simple SQL query against a Parquet file
+
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
-/// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
-/// fetching results
 #[tokio::main]
 async fn main() -> Result<()> {
+    parquet().await;
+    Ok(())
+
+}
+
+/// This example demonstrates executing a simple query against an Arrow data
+/// source (Parquet) and fetching results
+async fn parquet() -> Result<()> {
     // create local session context
     let ctx = SessionContext::new();
 
