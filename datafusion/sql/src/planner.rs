@@ -31,6 +31,7 @@ use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
+use crate::expr::ArrayFunctionPlanner;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::TableReference;
 use datafusion_common::{
@@ -236,11 +237,28 @@ impl PlannerContext {
     }
 }
 
+/// This trait allows users to customize the behavior of the SQL planner
+pub trait UserDefinedPlanner {
+    /// Plan the binary operation between two expressions, return None if not possible
+    /// TODO make an API that avoids the need to clone the expressions
+    fn plan_binary_op(
+        &self,
+        _op: sqlparser::ast::BinaryOperator,
+        _left: Expr,
+        _right: Expr,
+        _schema: &DFSchema,
+    ) -> Result<Option<Expr>> {
+        Ok(None)
+    }
+}
+
 /// SQL query planner
 pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
     pub(crate) normalizer: IdentNormalizer,
+    /// user defined planner extensions
+    pub(crate) planners: Vec<Arc<dyn UserDefinedPlanner>>,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -249,14 +267,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Self::new_with_options(context_provider, ParserOptions::default())
     }
 
+    /// add an user defined planner
+    pub fn with_user_defined_planner(
+        mut self,
+        planner: Arc<dyn UserDefinedPlanner>,
+    ) -> Self {
+        self.planners.push(planner);
+        self
+    }
+
     /// Create a new query planner
     pub fn new_with_options(context_provider: &'a S, options: ParserOptions) -> Self {
         let normalize = options.enable_ident_normalization;
+        let array_planner =
+            Arc::new(ArrayFunctionPlanner::try_new(context_provider).unwrap()) as _;
+
         SqlToRel {
             context_provider,
             options,
             normalizer: IdentNormalizer::new(normalize),
+            planners: vec![],
         }
+        // todo put this somewhere else
+        .with_user_defined_planner(array_planner)
     }
 
     pub fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {

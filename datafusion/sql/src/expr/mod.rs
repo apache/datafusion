@@ -19,6 +19,7 @@ use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use datafusion_common::utils::list_ndims;
 use sqlparser::ast::{CastKind, Expr as SQLExpr, Subscript, TrimWhereField, Value};
+use std::sync::Arc;
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
@@ -28,10 +29,10 @@ use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     lit, AggregateFunction, Between, BinaryExpr, Cast, Expr, ExprSchemable,
-    GetFieldAccess, Like, Literal, Operator, TryCast,
+    GetFieldAccess, Like, Literal, Operator, ScalarUDF, TryCast,
 };
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel, UserDefinedPlanner};
 
 mod binary_op;
 mod function;
@@ -52,7 +53,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         enum StackEntry {
             SQLExpr(Box<SQLExpr>),
-            Operator(Operator),
+            Operator(sqlparser::ast::BinaryOperator),
         }
 
         // Virtual stack machine to convert SQLExpr to Expr
@@ -69,7 +70,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         SQLExpr::BinaryOp { left, op, right } => {
                             // Note the order that we push the entries to the stack
                             // is important. We want to visit the left node first.
-                            let op = self.parse_sql_binary_op(op)?;
                             stack.push(StackEntry::Operator(op));
                             stack.push(StackEntry::SQLExpr(right));
                             stack.push(StackEntry::SQLExpr(left));
@@ -100,63 +100,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn build_logical_expr(
         &self,
-        op: Operator,
+        op: sqlparser::ast::BinaryOperator,
         left: Expr,
         right: Expr,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        // Rewrite string concat operator to function based on types
-        // if we get list || list then we rewrite it to array_concat()
-        // if we get list || non-list then we rewrite it to array_append()
-        // if we get non-list || list then we rewrite it to array_prepend()
-        // if we get string || string then we rewrite it to concat()
-        if op == Operator::StringConcat {
-            let left_type = left.get_type(schema)?;
-            let right_type = right.get_type(schema)?;
-            let left_list_ndims = list_ndims(&left_type);
-            let right_list_ndims = list_ndims(&right_type);
-
-            // We determine the target function to rewrite based on the list n-dimension, the check is not exact but sufficient.
-            // The exact validity check is handled in the actual function, so even if there is 3d list appended with 1d list, it is also fine to rewrite.
-            if left_list_ndims + right_list_ndims == 0 {
-                // TODO: concat function ignore null, but string concat takes null into consideration
-                // we can rewrite it to concat if we can configure the behaviour of concat function to the one like `string concat operator`
-            } else if left_list_ndims == right_list_ndims {
-                if let Some(udf) = self.context_provider.get_function_meta("array_concat")
-                {
-                    return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![left, right],
-                    )));
-                } else {
-                    return internal_err!("array_concat not found");
-                }
-            } else if left_list_ndims > right_list_ndims {
-                if let Some(udf) = self.context_provider.get_function_meta("array_append")
-                {
-                    return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![left, right],
-                    )));
-                } else {
-                    return internal_err!("array_append not found");
-                }
-            } else if left_list_ndims < right_list_ndims {
-                if let Some(udf) =
-                    self.context_provider.get_function_meta("array_prepend")
-                {
-                    return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![left, right],
-                    )));
-                } else {
-                    return internal_err!("array_append not found");
-                }
+        // try extension planers
+        for planner in self.planners.iter() {
+            if let Some(expr) =
+                planner.plan_binary_op(op.clone(), left.clone(), right.clone(), schema)?
+            {
+                return Ok(expr);
             }
         }
+
+        // by default, convert to datafusion operator
+
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
-            op,
+            self.parse_sql_binary_op(op)?,
             Box::new(right),
         )))
     }
@@ -1014,6 +976,71 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
         }
+    }
+}
+
+pub struct ArrayFunctionPlanner {
+    array_concat: Arc<ScalarUDF>,
+    array_append: Arc<ScalarUDF>,
+    array_prepend: Arc<ScalarUDF>,
+}
+
+impl ArrayFunctionPlanner {
+    pub fn try_new(context_provider: &dyn ContextProvider) -> Result<Self> {
+        let Some(array_concat) = context_provider.get_function_meta("array_concat")
+        else {
+            return internal_err!("array_concat not found");
+        };
+        let Some(array_append) = context_provider.get_function_meta("array_append")
+        else {
+            return internal_err!("array_append not found");
+        };
+        let Some(array_prepend) = context_provider.get_function_meta("array_prepend")
+        else {
+            return internal_err!("array_prepend not found");
+        };
+
+        Ok(Self {
+            array_concat,
+            array_append,
+            array_prepend,
+        })
+    }
+}
+impl UserDefinedPlanner for ArrayFunctionPlanner {
+    fn plan_binary_op(
+        &self,
+        op: sqlparser::ast::BinaryOperator,
+        left: Expr,
+        right: Expr,
+        schema: &DFSchema,
+    ) -> Result<Option<Expr>> {
+        // Rewrite string concat operator to function based on types
+        // if we get list || list then we rewrite it to array_concat()
+        // if we get list || non-list then we rewrite it to array_append()
+        // if we get non-list || list then we rewrite it to array_prepend()
+        // if we get string || string then we rewrite it to concat()
+        if op == sqlparser::ast::BinaryOperator::StringConcat {
+            let left_type = left.get_type(schema)?;
+            let right_type = right.get_type(schema)?;
+            let left_list_ndims = list_ndims(&left_type);
+            let right_list_ndims = list_ndims(&right_type);
+
+            // We determine the target function to rewrite based on the list n-dimension, the check is not exact but sufficient.
+            // The exact validity check is handled in the actual function, so even if there is 3d list appended with 1d list, it is also fine to rewrite.
+            if left_list_ndims + right_list_ndims == 0 {
+                // TODO: concat function ignore null, but string concat takes null into consideration
+                // we can rewrite it to concat if we can configure the behaviour of concat function to the one like `string concat operator`
+            } else if left_list_ndims == right_list_ndims {
+                return Ok(Some(self.array_concat.call(vec![left, right])));
+            } else if left_list_ndims > right_list_ndims {
+                return Ok(Some(self.array_append.call(vec![left, right])));
+            } else if left_list_ndims < right_list_ndims {
+                return Ok(Some(self.array_prepend.call(vec![left, right])));
+            }
+        }
+
+        Ok(None)
     }
 }
 
