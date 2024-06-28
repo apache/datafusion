@@ -65,7 +65,9 @@ use datafusion_expr::{
 
 use prost::bytes::BufMut;
 use prost::Message;
-
+use datafusion_common::logical_type::extension::ExtensionType;
+use datafusion_common::logical_type::LogicalType;
+use datafusion_proto_common::ArrowType;
 use self::to_proto::serialize_expr;
 
 pub mod file_formats;
@@ -836,10 +838,10 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Prepare(prepare) => {
                 let input: LogicalPlan =
                     into_logical_plan!(prepare.input, ctx, extension_codec)?;
-                let data_types: Vec<DataType> = prepare
+                let data_types: Vec<LogicalType> = prepare
                     .data_types
                     .iter()
-                    .map(DataType::try_from)
+                    .map(|t| DataType::try_from(t).map(|t| t.into()))
                     .collect::<Result<_, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .prepare(prepare.name.clone(), data_types)?
@@ -1560,8 +1562,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             name: name.clone(),
                             data_types: data_types
                                 .iter()
-                                .map(|t| t.try_into())
-                                .collect::<Result<Vec<_>, _>>()?,
+                                .map(|t| (&t.physical_type()).try_into())
+                                .collect::<Result<Vec<ArrowType>, _>>()?,
                             input: Some(Box::new(input)),
                         },
                     ))),

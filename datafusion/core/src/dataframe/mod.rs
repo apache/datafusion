@@ -58,6 +58,8 @@ use datafusion_expr::{
 use datafusion_functions_aggregate::expr_fn::{avg, count, median, stddev, sum};
 
 use async_trait::async_trait;
+use datafusion_common::logical_type::extension::ExtensionType;
+use datafusion_common::logical_type::LogicalType;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -666,7 +668,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| {
-                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
+                        !matches!(f.data_type(), LogicalType::Binary | LogicalType::Boolean)
                     })
                     .map(|f| min(col(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
@@ -677,7 +679,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| {
-                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
+                        !matches!(f.data_type(), LogicalType::Binary | LogicalType::Boolean)
                     })
                     .map(|f| max(col(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
@@ -1285,7 +1287,7 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::insert_into(
             self.plan,
             table_name.to_owned(),
-            &arrow_schema,
+            &arrow_schema.into(),
             write_options.overwrite,
         )?
         .build()?;
@@ -1695,6 +1697,7 @@ mod tests {
 
     use arrow::array::{self, Int32Array};
     use datafusion_common::{Constraint, Constraints};
+    use datafusion_common::logical_type::LogicalType;
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
         array_agg, cast, create_udf, expr, lit, BuiltInWindowFunction,
@@ -2362,7 +2365,7 @@ mod tests {
         let field = df.schema().field(0);
         // There are two columns named 'c', one from the input of the aggregate and the other from the output.
         // Select should return the column from the output of the aggregate, which is a list.
-        assert!(matches!(field.data_type(), DataType::List(_)));
+        assert!(matches!(field.data_type(), LogicalType::List(_)));
 
         Ok(())
     }
@@ -3169,7 +3172,7 @@ mod tests {
             .await?
             .select_columns(&["c2", "c3"])?
             .limit(0, Some(1))?
-            .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
+            .with_column("sum", cast(col("c2") + col("c3"), LogicalType::Int64))?;
 
         let df_results = df.clone().collect().await?;
         df.clone().show().await?;
@@ -3271,7 +3274,7 @@ mod tests {
             .await?
             .select_columns(&["c2", "c3"])?
             .limit(0, Some(1))?
-            .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
+            .with_column("sum", cast(col("c2") + col("c3"), LogicalType::Int64))?;
 
         let cached_df = df.clone().cache().await?;
 

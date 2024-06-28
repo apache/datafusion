@@ -28,7 +28,7 @@ use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -39,6 +39,9 @@ use datafusion_common::{
 };
 
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::schema::LogicalSchema;
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
@@ -429,7 +432,7 @@ pub fn expand_qualified_wildcard(
         return plan_err!("Invalid qualifier {qualifier}");
     }
 
-    let qualified_schema = Arc::new(Schema::new(fields_with_qualified));
+    let qualified_schema = Arc::new(LogicalSchema::new(fields_with_qualified));
     let qualified_dfschema =
         DFSchema::try_from_qualified_schema(qualifier.clone(), &qualified_schema)?
             .with_functional_dependencies(projected_func_dependencies)?;
@@ -727,7 +730,7 @@ pub fn from_plan(
 pub fn exprlist_to_fields<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
-) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
+) -> Result<Vec<(Option<TableReference>, Arc<LogicalField>)>> {
     // look for exact match in plan's output schema
     let input_schema = &plan.schema();
     exprs
@@ -830,40 +833,35 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
 /// can this data type be used in hash join equal conditions??
 /// data types here come from function 'equal_rows', if more data types are supported
 /// in equal_rows(hash join), add those data types here to generate join logical plan.
-pub fn can_hash(data_type: &DataType) -> bool {
+pub fn can_hash(data_type: &LogicalType) -> bool {
     match data_type {
-        DataType::Null => true,
-        DataType::Boolean => true,
-        DataType::Int8 => true,
-        DataType::Int16 => true,
-        DataType::Int32 => true,
-        DataType::Int64 => true,
-        DataType::UInt8 => true,
-        DataType::UInt16 => true,
-        DataType::UInt32 => true,
-        DataType::UInt64 => true,
-        DataType::Float32 => true,
-        DataType::Float64 => true,
-        DataType::Timestamp(time_unit, _) => match time_unit {
+        LogicalType::Null => true,
+        LogicalType::Boolean => true,
+        LogicalType::Int8 => true,
+        LogicalType::Int16 => true,
+        LogicalType::Int32 => true,
+        LogicalType::Int64 => true,
+        LogicalType::UInt8 => true,
+        LogicalType::UInt16 => true,
+        LogicalType::UInt32 => true,
+        LogicalType::UInt64 => true,
+        LogicalType::Float32 => true,
+        LogicalType::Float64 => true,
+        LogicalType::Timestamp(time_unit, _) => match time_unit {
             TimeUnit::Second => true,
             TimeUnit::Millisecond => true,
             TimeUnit::Microsecond => true,
             TimeUnit::Nanosecond => true,
         },
-        DataType::Utf8 => true,
-        DataType::LargeUtf8 => true,
-        DataType::Decimal128(_, _) => true,
-        DataType::Date32 => true,
-        DataType::Date64 => true,
-        DataType::FixedSizeBinary(_) => true,
-        DataType::Dictionary(key_type, value_type)
-            if *value_type.as_ref() == DataType::Utf8 =>
-        {
-            DataType::is_dictionary_key_type(key_type)
-        }
-        DataType::List(_) => true,
-        DataType::LargeList(_) => true,
-        DataType::FixedSizeList(_, _) => true,
+        LogicalType::Utf8 => true,
+        LogicalType::LargeUtf8 => true,
+        LogicalType::Decimal128(_, _) => true,
+        LogicalType::Date32 => true,
+        LogicalType::Date64 => true,
+        LogicalType::FixedSizeBinary(_) => true,
+        LogicalType::List(_) => true,
+        LogicalType::LargeList(_) => true,
+        LogicalType::FixedSizeList(_, _) => true,
         _ => false,
     }
 }
@@ -1249,6 +1247,7 @@ impl AggregateOrderSensitivity {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::logical_type::LogicalType;
     use super::*;
     use crate::{
         col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup,
@@ -1703,11 +1702,11 @@ mod tests {
     fn test_collect_expr() -> Result<()> {
         let mut accum: HashSet<Column> = HashSet::new();
         expr_to_columns(
-            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
+            &Expr::Cast(Cast::new(Box::new(col("a")), LogicalType::Float64)),
             &mut accum,
         )?;
         expr_to_columns(
-            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
+            &Expr::Cast(Cast::new(Box::new(col("a")), LogicalType::Float64)),
             &mut accum,
         )?;
         assert_eq!(1, accum.len());

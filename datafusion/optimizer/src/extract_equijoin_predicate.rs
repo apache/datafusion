@@ -156,11 +156,11 @@ fn split_eq_and_noneq_join_predicate(
 mod tests {
     use super::*;
     use crate::test::*;
-    use arrow::datatypes::DataType;
     use datafusion_expr::{
         col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType,
     };
     use std::sync::Arc;
+    use datafusion_common::logical_type::LogicalType;
 
     fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(
@@ -362,8 +362,8 @@ mod tests {
 
         // filter: t1.a + CAST(Int64(1), UInt32) = t2.a + CAST(Int64(2), UInt32) as t1.a + 1 = t2.a + 2
         let filter = Expr::eq(
-            col("t1.a") + lit(1i64).cast_to(&DataType::UInt32, &t1_schema)?,
-            col("t2.a") + lit(2i32).cast_to(&DataType::UInt32, &t2_schema)?,
+            col("t1.a") + lit(1i64).cast_to(&LogicalType::UInt32, &t1_schema)?,
+            col("t2.a") + lit(2i32).cast_to(&LogicalType::UInt32, &t2_schema)?,
         )
         .alias("t1.a + 1 = t2.a + 2");
         let plan = LogicalPlanBuilder::from(t1)

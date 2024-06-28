@@ -27,7 +27,6 @@ use arrow_array::types::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_array::{Date32Array, Date64Array, PrimitiveArray};
-use arrow_schema::DataType;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
     self, Expr as AstExpr, Function, FunctionArg, Ident, Interval, TimezoneInfo,
@@ -38,6 +37,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
     ScalarValue,
 };
+use datafusion_common::logical_type::LogicalType;
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
@@ -957,85 +957,67 @@ impl Unparser<'_> {
         }
     }
 
-    fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
+    fn arrow_dtype_to_ast_dtype(&self, data_type: &LogicalType) -> Result<ast::DataType> {
         match data_type {
-            DataType::Null => {
+            LogicalType::Null => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Boolean => Ok(ast::DataType::Bool),
-            DataType::Int8 => Ok(ast::DataType::TinyInt(None)),
-            DataType::Int16 => Ok(ast::DataType::SmallInt(None)),
-            DataType::Int32 => Ok(ast::DataType::Integer(None)),
-            DataType::Int64 => Ok(ast::DataType::BigInt(None)),
-            DataType::UInt8 => Ok(ast::DataType::UnsignedTinyInt(None)),
-            DataType::UInt16 => Ok(ast::DataType::UnsignedSmallInt(None)),
-            DataType::UInt32 => Ok(ast::DataType::UnsignedInteger(None)),
-            DataType::UInt64 => Ok(ast::DataType::UnsignedBigInt(None)),
-            DataType::Float16 => {
+            LogicalType::Boolean => Ok(ast::DataType::Bool),
+            LogicalType::Int8 => Ok(ast::DataType::TinyInt(None)),
+            LogicalType::Int16 => Ok(ast::DataType::SmallInt(None)),
+            LogicalType::Int32 => Ok(ast::DataType::Integer(None)),
+            LogicalType::Int64 => Ok(ast::DataType::BigInt(None)),
+            LogicalType::UInt8 => Ok(ast::DataType::UnsignedTinyInt(None)),
+            LogicalType::UInt16 => Ok(ast::DataType::UnsignedSmallInt(None)),
+            LogicalType::UInt32 => Ok(ast::DataType::UnsignedInteger(None)),
+            LogicalType::UInt64 => Ok(ast::DataType::UnsignedBigInt(None)),
+            LogicalType::Float16 => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Float32 => Ok(ast::DataType::Float(None)),
-            DataType::Float64 => Ok(ast::DataType::Double),
-            DataType::Timestamp(_, _) => {
+            LogicalType::Float32 => Ok(ast::DataType::Float(None)),
+            LogicalType::Float64 => Ok(ast::DataType::Double),
+            LogicalType::Timestamp(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Date32 => Ok(ast::DataType::Date),
-            DataType::Date64 => Ok(ast::DataType::Datetime(None)),
-            DataType::Time32(_) => {
+            LogicalType::Date32 => Ok(ast::DataType::Date),
+            LogicalType::Date64 => Ok(ast::DataType::Datetime(None)),
+            LogicalType::Time32(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Time64(_) => {
+            LogicalType::Time64(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Duration(_) => {
+            LogicalType::Duration(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Interval(_) => {
+            LogicalType::Interval(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Binary => {
+            LogicalType::Binary => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::FixedSizeBinary(_) => {
+            LogicalType::FixedSizeBinary(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::LargeBinary => {
+            LogicalType::LargeBinary => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::BinaryView => {
+            LogicalType::Utf8 => Ok(ast::DataType::Varchar(None)),
+            LogicalType::LargeUtf8 => Ok(ast::DataType::Text),
+            LogicalType::List(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Utf8 => Ok(ast::DataType::Varchar(None)),
-            DataType::LargeUtf8 => Ok(ast::DataType::Text),
-            DataType::Utf8View => {
+            LogicalType::FixedSizeList(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::List(_) => {
+            LogicalType::LargeList(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::FixedSizeList(_, _) => {
+            LogicalType::Struct(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::LargeList(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            DataType::ListView(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            DataType::LargeListView(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            DataType::Struct(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            DataType::Union(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            DataType::Dictionary(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            DataType::Decimal128(precision, scale)
-            | DataType::Decimal256(precision, scale) => {
+            LogicalType::Decimal128(precision, scale)
+            | LogicalType::Decimal256(precision, scale) => {
                 let mut new_precision = *precision as u64;
                 let mut new_scale = *scale as u64;
                 if *scale < 0 {
@@ -1047,10 +1029,10 @@ impl Unparser<'_> {
                     ast::ExactNumberInfo::PrecisionAndScale(new_precision, new_scale),
                 ))
             }
-            DataType::Map(_, _) => {
+            LogicalType::Map(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::RunEndEncoded(_, _) => {
+            LogicalType::Extension(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
         }
@@ -1063,8 +1045,7 @@ mod tests {
     use std::{any::Any, sync::Arc, vec};
 
     use arrow::datatypes::{Field, Schema};
-    use arrow_schema::DataType::Int8;
-
+    use arrow_schema::DataType;
     use datafusion_common::TableReference;
     use datafusion_expr::{
         case, col, cube, exists, grouping_set, interval_datetime_lit,
@@ -1153,14 +1134,14 @@ mod tests {
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: DataType::Date64,
+                    data_type: LogicalType::Date64,
                 }),
                 r#"CAST(a AS DATETIME)"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: DataType::UInt32,
+                    data_type: LogicalType::UInt32,
                 }),
                 r#"CAST(a AS INTEGER UNSIGNED)"#,
             ),
@@ -1386,27 +1367,27 @@ mod tests {
                 r#"NOT EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
             ),
             (
-                try_cast(col("a"), DataType::Date64),
+                try_cast(col("a"), LogicalType::Date64),
                 r#"TRY_CAST(a AS DATETIME)"#,
             ),
             (
-                try_cast(col("a"), DataType::UInt32),
+                try_cast(col("a"), LogicalType::UInt32),
                 r#"TRY_CAST(a AS INTEGER UNSIGNED)"#,
             ),
             (
-                Expr::ScalarVariable(Int8, vec![String::from("@a")]),
+                Expr::ScalarVariable(LogicalType::Int8, vec![String::from("@a")]),
                 r#"@a"#,
             ),
             (
                 Expr::ScalarVariable(
-                    Int8,
+                    LogicalType::Int8,
                     vec![String::from("@root"), String::from("foo")],
                 ),
                 r#"@root.foo"#,
             ),
             (col("x").eq(placeholder("$1")), r#"(x = $1)"#),
             (
-                out_ref_col(DataType::Int32, "t.a").gt(lit(1)),
+                out_ref_col(LogicalType::Int32, "t.a").gt(lit(1)),
                 r#"(t.a > 1)"#,
             ),
             (
@@ -1481,7 +1462,7 @@ mod tests {
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: DataType::Decimal128(10, -2),
+                    data_type: LogicalType::Decimal128(10, -2),
                 }),
                 r#"CAST(a AS DECIMAL(12,0))"#,
             ),

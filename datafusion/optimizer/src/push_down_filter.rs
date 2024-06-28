@@ -1149,7 +1149,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use async_trait::async_trait;
-
+    use datafusion_common::logical_type::schema::LogicalSchema;
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
@@ -2387,7 +2387,7 @@ mod tests {
             table_name: "test".into(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
+               LogicalSchema::from((*test_provider.schema()).clone()),
             )?),
             projection: None,
             source: Arc::new(test_provider),
@@ -2459,7 +2459,7 @@ mod tests {
             table_name: "test".into(),
             filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
             projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
+                LogicalSchema::from((*test_provider.schema()).clone()),
             )?),
             projection: Some(vec![0]),
             source: Arc::new(test_provider),
@@ -2488,7 +2488,7 @@ mod tests {
             table_name: "test".into(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
+                LogicalSchema::from((*test_provider.schema()).clone()),
             )?),
             projection: Some(vec![0]),
             source: Arc::new(test_provider),

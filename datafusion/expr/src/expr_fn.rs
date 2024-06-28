@@ -40,6 +40,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Not;
 use std::sync::Arc;
+use datafusion_common::logical_type::LogicalType;
 
 /// Create a column expression based on a qualified or unqualified column name. Will
 /// normalize unquoted identifiers according to SQL rules (identifiers will become lowercase).
@@ -62,7 +63,7 @@ pub fn col(ident: impl Into<Column>) -> Expr {
 
 /// Create an out reference column which hold a reference that has been resolved to a field
 /// outside of the current plan.
-pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
+pub fn out_ref_col(dt: LogicalType, ident: impl Into<Column>) -> Expr {
     Expr::OuterReferenceColumn(dt, ident.into())
 }
 
@@ -308,12 +309,12 @@ pub fn rollup(exprs: Vec<Expr>) -> Expr {
 }
 
 /// Create a cast expression
-pub fn cast(expr: Expr, data_type: DataType) -> Expr {
+pub fn cast(expr: Expr, data_type: LogicalType) -> Expr {
     Expr::Cast(Cast::new(Box::new(expr), data_type))
 }
 
 /// Create a try cast expression
-pub fn try_cast(expr: Expr, data_type: DataType) -> Expr {
+pub fn try_cast(expr: Expr, data_type: LogicalType) -> Expr {
     Expr::TryCast(TryCast::new(Box::new(expr), data_type))
 }
 

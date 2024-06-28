@@ -37,6 +37,9 @@ use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use std::sync::Arc;
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::schema::LogicalSchema;
 
 /// In order to simplify expressions, DataFusion must have information
 /// about the expressions.
@@ -56,7 +59,7 @@ impl SimplifyInfo for MyInfo {
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
         Ok(matches!(
             expr.get_type(self.schema.as_ref())?,
-            DataType::Boolean
+            LogicalType::Boolean
         ))
     }
 
@@ -68,7 +71,7 @@ impl SimplifyInfo for MyInfo {
         &self.execution_props
     }
 
-    fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
+    fn get_data_type(&self, expr: &Expr) -> Result<LogicalType> {
         expr.get_type(self.schema.as_ref())
     }
 }
@@ -88,10 +91,10 @@ impl From<DFSchemaRef> for MyInfo {
 /// b: Int32
 /// s: Utf8
 fn schema() -> DFSchemaRef {
-    Schema::new(vec![
-        Field::new("a", DataType::Int32, true),
-        Field::new("b", DataType::Int32, false),
-        Field::new("s", DataType::Utf8, false),
+    LogicalSchema::new(vec![
+        LogicalField::new("a", LogicalType::Int32, true),
+        LogicalField::new("b", LogicalType::Int32, false),
+        LogicalField::new("s", LogicalType::Utf8, false),
     ])
     .to_dfschema_ref()
     .unwrap()
@@ -190,7 +193,7 @@ fn make_udf_add(volatility: Volatility) -> Arc<ScalarUDF> {
 }
 
 fn cast_to_int64_expr(expr: Expr) -> Expr {
-    Expr::Cast(Cast::new(expr.into(), DataType::Int64))
+    Expr::Cast(Cast::new(expr.into(), LogicalType::Int64))
 }
 
 fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
@@ -281,7 +284,7 @@ fn select_date_plus_interval() -> Result<()> {
     let schema = table_scan.schema();
 
     let date_plus_interval_expr = to_timestamp_expr(ts_string)
-        .cast_to(&DataType::Date32, schema)?
+        .cast_to(&LogicalType::Date32, schema)?
         + Expr::Literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
             days: 123,
             milliseconds: 0,
@@ -483,15 +486,15 @@ fn multiple_now() -> Result<()> {
 // ------------------------------
 
 fn expr_test_schema() -> DFSchemaRef {
-    Schema::new(vec![
-        Field::new("c1", DataType::Utf8, true),
-        Field::new("c2", DataType::Boolean, true),
-        Field::new("c3", DataType::Int64, true),
-        Field::new("c4", DataType::UInt32, true),
-        Field::new("c1_non_null", DataType::Utf8, false),
-        Field::new("c2_non_null", DataType::Boolean, false),
-        Field::new("c3_non_null", DataType::Int64, false),
-        Field::new("c4_non_null", DataType::UInt32, false),
+    LogicalSchema::new(vec![
+        LogicalField::new("c1", LogicalType::Utf8, true),
+        LogicalField::new("c2", LogicalType::Boolean, true),
+        LogicalField::new("c3", LogicalType::Int64, true),
+        LogicalField::new("c4", LogicalType::UInt32, true),
+        LogicalField::new("c1_non_null", LogicalType::Utf8, false),
+        LogicalField::new("c2_non_null", LogicalType::Boolean, false),
+        LogicalField::new("c3_non_null", LogicalType::Int64, false),
+        LogicalField::new("c4_non_null", LogicalType::UInt32, false),
     ])
     .to_dfschema_ref()
     .unwrap()
@@ -688,8 +691,8 @@ fn test_simplify_concat() {
 #[test]
 fn test_simplify_cycles() {
     // cast(now() as int64) < cast(to_timestamp(0) as int64) + i64::MAX
-    let expr = cast(now(), DataType::Int64)
-        .lt(cast(to_timestamp(vec![lit(0)]), DataType::Int64) + lit(i64::MAX));
+    let expr = cast(now(), LogicalType::Int64)
+        .lt(cast(to_timestamp(vec![lit(0)]), LogicalType::Int64) + lit(i64::MAX));
     let expected = lit(true);
     test_simplify_with_cycle_count(expr, expected, 3);
 }
