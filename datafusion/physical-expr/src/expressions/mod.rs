@@ -54,7 +54,6 @@ pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use column::UnKnownColumn;
 pub use datafusion_expr::utils::format_state_name;
-pub use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
 pub use datafusion_physical_expr_common::expressions::column::{col, Column};
 pub use datafusion_physical_expr_common::expressions::literal::{lit, Literal};
 pub use datafusion_physical_expr_common::expressions::{cast, CastExpr};
