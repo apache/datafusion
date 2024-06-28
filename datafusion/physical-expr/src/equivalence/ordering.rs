@@ -309,7 +309,7 @@ mod tests {
             &DFSchema::empty(),
         )?;
         let a_plus_b = Arc::new(BinaryExpr::new(
-            Arc::clone(&col_a),
+            Arc::clone(col_a),
             Operator::Plus,
             col_b.clone(),
         )) as Arc<dyn PhysicalExpr>;

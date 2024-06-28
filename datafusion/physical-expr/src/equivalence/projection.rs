@@ -148,24 +148,24 @@ mod tests {
         let col_e = &col("e", &schema)?;
         let col_ts = &col("ts", &schema)?;
         let a_plus_b = Arc::new(BinaryExpr::new(
-            Arc::clone(&col_a),
+            Arc::clone(col_a),
             Operator::Plus,
-            Arc::clone(&col_b),
+            Arc::clone(col_b),
         )) as Arc<dyn PhysicalExpr>;
         let b_plus_d = Arc::new(BinaryExpr::new(
-            Arc::clone(&col_b),
+            Arc::clone(col_b),
             Operator::Plus,
-            Arc::clone(&col_d),
+            Arc::clone(col_d),
         )) as Arc<dyn PhysicalExpr>;
         let b_plus_e = Arc::new(BinaryExpr::new(
-            Arc::clone(&col_b),
+            Arc::clone(col_b),
             Operator::Plus,
-            Arc::clone(&col_e),
+            Arc::clone(col_e),
         )) as Arc<dyn PhysicalExpr>;
         let c_plus_d = Arc::new(BinaryExpr::new(
-            Arc::clone(&col_c),
+            Arc::clone(col_c),
             Operator::Plus,
-            Arc::clone(&col_d),
+            Arc::clone(col_d),
         )) as Arc<dyn PhysicalExpr>;
 
         let option_asc = SortOptions {

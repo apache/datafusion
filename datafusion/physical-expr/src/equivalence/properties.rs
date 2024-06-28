@@ -1773,11 +1773,11 @@ mod tests {
             result,
             vec![
                 PhysicalSortExpr {
-                    expr: Arc::clone(&col_b),
+                    expr: Arc::clone(col_b),
                     options: sort_options_not
                 },
                 PhysicalSortExpr {
-                    expr: Arc::clone(&col_a),
+                    expr: Arc::clone(col_a),
                     options: sort_options
                 }
             ]
@@ -1838,11 +1838,11 @@ mod tests {
         // [b ASC], [d ASC]
         eq_properties.add_new_orderings(vec![
             vec![PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
+                expr: Arc::clone(col_b),
                 options: option_asc,
             }],
             vec![PhysicalSortExpr {
-                expr: Arc::clone(&col_d),
+                expr: Arc::clone(col_d),
                 options: option_asc,
             }],
         ]);
@@ -1851,22 +1851,22 @@ mod tests {
             // d + b
             (
                 Arc::new(BinaryExpr::new(
-                    Arc::clone(&col_d),
+                    Arc::clone(col_d),
                     Operator::Plus,
-                    Arc::clone(&col_b),
+                    Arc::clone(col_b),
                 )) as Arc<dyn PhysicalExpr>,
                 SortProperties::Ordered(option_asc),
             ),
             // b
-            (Arc::clone(&col_b), SortProperties::Ordered(option_asc)),
+            (Arc::clone(col_b), SortProperties::Ordered(option_asc)),
             // a
-            (Arc::clone(&col_a), SortProperties::Ordered(option_asc)),
+            (Arc::clone(col_a), SortProperties::Ordered(option_asc)),
             // a + c
             (
                 Arc::new(BinaryExpr::new(
-                    Arc::clone(&col_a),
+                    Arc::clone(col_a),
                     Operator::Plus,
-                    Arc::clone(&col_c),
+                    Arc::clone(col_c),
                 )),
                 SortProperties::Unordered,
             ),
@@ -1984,7 +1984,7 @@ mod tests {
         let a_plus_d = Arc::new(BinaryExpr::new(
             col_a.clone(),
             Operator::Plus,
-            Arc::clone(&col_d),
+            Arc::clone(col_d),
         )) as Arc<dyn PhysicalExpr>;
 
         let option_asc = SortOptions {
@@ -1998,7 +1998,7 @@ mod tests {
         // [d ASC, h DESC] also satisfies schema.
         eq_properties.add_new_orderings([vec![
             PhysicalSortExpr {
-                expr: Arc::clone(&col_d),
+                expr: Arc::clone(col_d),
                 options: option_asc,
             },
             PhysicalSortExpr {
