@@ -63,6 +63,12 @@ impl NthValueAgg {
     }
 }
 
+impl Default for NthValueAgg {
+    fn default() -> Self {
+       Self::new(1, true)
+    }
+}
+
 impl AggregateUDFImpl for NthValueAgg {
     fn as_any(&self) -> &dyn Any {
         self
