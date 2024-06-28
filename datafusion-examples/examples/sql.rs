@@ -22,8 +22,9 @@
 //! * [`regexp_demo`]: regular expression functions to manipulate strings
 //! * [`to_char_demo`]: to_char function to convert strings to date, time, timestamp and durations
 //! * [`to_timestamp_demo`]: to_timestamp function to convert strings to timestamps
+//! * [`make_date_demo`]: make_date function to convert year, month and day to a date
 
-use arrow::array::{Date32Array, RecordBatch, StringArray};
+use arrow::array::{Date32Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
@@ -41,6 +42,7 @@ async fn main() -> Result<()> {
     regexp_demo().await?;
     to_char_demo().await?;
     to_timestamp_demo().await?;
+    make_date_demo().await?;
     Ok(())
 }
 
@@ -674,9 +676,8 @@ async fn to_char_demo() -> Result<()> {
     Ok(())
 }
 
-
 /// This example demonstrates how to use the to_timestamp series
-/// of functions in the DataFrame API as well as via sql.
+/// of functions via sql.
 async fn to_timestamp_demo() -> Result<()> {
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
@@ -766,3 +767,80 @@ async fn to_timestamp_demo() -> Result<()> {
     Ok(())
 }
 
+/// This example demonstrates how to use the make_date
+/// function via sql.
+async fn make_date_demo() -> Result<()> {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("y", DataType::Int32, false),
+        Field::new("m", DataType::Int32, false),
+        Field::new("d", DataType::Int32, false),
+    ]));
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from(vec![2020, 2021, 2022, 2023, 2024])),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            Arc::new(Int32Array::from(vec![15, 16, 17, 18, 19])),
+        ],
+    )?;
+
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    ctx.register_batch("t", batch)?;
+    let df = ctx.table("t").await?;
+
+    // use sql to convert col 'y' & 'm' with a static string day to a date
+    let df = ctx.sql("select make_date(y, m, '22') from t").await?;
+
+    // print the results
+    df.show().await?;
+
+    // math expressions work
+    let df = ctx.sql("select make_date(y + 1, m, d) from t").await?;
+
+    // print the results
+    df.show().await?;
+
+    // you can cast to supported types (int, bigint, varchar) if required
+    let df = ctx
+        .sql("select make_date(2024::bigint, 01::bigint, 27::varchar(3))")
+        .await?;
+
+    // print the results
+    df.show().await?;
+
+    // arrow casts also work
+    let df = ctx
+        .sql("select make_date(arrow_cast(2024, 'Int64'), arrow_cast(1, 'Int64'), arrow_cast(27, 'Int64'))")
+        .await?;
+
+    // print the results
+    df.show().await?;
+
+    // invalid column values will result in an error
+    let result = ctx
+        .sql("select make_date(2024, null, 23)")
+        .await?
+        .collect()
+        .await;
+
+    let expected = "Execution error: Unable to parse date from null/empty value";
+    assert_contains!(result.unwrap_err().to_string(), expected);
+
+    // invalid date values will also result in an error
+    let result = ctx
+        .sql("select make_date(2024, 01, 32)")
+        .await?
+        .collect()
+        .await;
+
+    let expected = "Execution error: Unable to parse date from 2024, 1, 32";
+    assert_contains!(result.unwrap_err().to_string(), expected);
+
+    Ok(())
+}

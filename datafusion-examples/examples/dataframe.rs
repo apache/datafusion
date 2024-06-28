@@ -20,27 +20,27 @@
 //!
 //! * [`parquet`]: query a single Parquet file
 //! * [`to_date_demo`]: use the `to_date` function to convert dates to strings
+//! * [`to_timestamp_demo`]: use the `to_timestamp` function to convert strings to timestamps
+//! * [`make_date_demo`]: use the `make_date` function to create dates from year, month, and day
 
-
+use arrow::array::{Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
-use arrow::array::{RecordBatch, StringArray};
 use tempfile::tempdir;
-use datafusion_common::assert_contains;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     parquet().await?;
     to_date_demo().await?;
     to_timestamp_demo().await?;
+    make_date_demo().await?;
 
     Ok(())
 }
-
 
 /// This example demonstrates executing a simple query against an Arrow data
 /// source (Parquet) and fetching results, using the DataFrame trait
@@ -130,7 +130,6 @@ async fn example_read_csv_file_with_schema(file_path: &str) -> DataFrame {
     ctx.read_csv(file_path, csv_read_option).await.unwrap()
 }
 
-
 /// This example demonstrates how to use the to_date series
 /// of functions in the DataFrame API
 async fn to_date_demo() -> Result<()> {
@@ -165,8 +164,6 @@ async fn to_date_demo() -> Result<()> {
 
     Ok(())
 }
-
-
 
 /// This example demonstrates how to use the to_timestamp series
 /// of functions in the DataFrame API
@@ -216,6 +213,46 @@ async fn to_timestamp_demo() -> Result<()> {
             lit("%m-%d-%Y %H:%M:%S%#z"),
         ]),
     )?;
+
+    let df = df.select_columns(&["a", "b"])?;
+
+    // print the results
+    df.show().await?;
+
+    Ok(())
+}
+
+/// This example demonstrates how to use the make_date
+/// function in the DataFrame API as well as via sql.
+async fn make_date_demo() -> Result<()> {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("y", DataType::Int32, false),
+        Field::new("m", DataType::Int32, false),
+        Field::new("d", DataType::Int32, false),
+    ]));
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from(vec![2020, 2021, 2022, 2023, 2024])),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            Arc::new(Int32Array::from(vec![15, 16, 17, 18, 19])),
+        ],
+    )?;
+
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    ctx.register_batch("t", batch)?;
+    let df = ctx.table("t").await?;
+
+    // use make_date function to convert col 'y', 'm' & 'd' to a date
+    let df = df.with_column("a", make_date(col("y"), col("m"), col("d")))?;
+    // use make_date function to convert col 'y' & 'm' with a static day to a date
+    let df = df.with_column("b", make_date(col("y"), col("m"), lit(22)))?;
 
     let df = df.select_columns(&["a", "b"])?;
 
