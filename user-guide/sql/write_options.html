@@ -479,6 +479,11 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#execution-specific-options">
+     Execution Specific Options
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#json-format-specific-options">
      JSON Format Specific Options
     </a>
@@ -586,6 +591,25 @@
 </section>
 <section id="available-options">
 <h2>Available Options<a class="headerlink" href="#available-options" title="Link to this heading">¶</a></h2>
+<section id="execution-specific-options">
+<h3>Execution Specific Options<a class="headerlink" href="#execution-specific-options" title="Link to this heading">¶</a></h3>
+<p>The following options are available when executing a <code class="docutils literal notranslate"><span class="pre">COPY</span></code> query.</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Default Value</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>execution.keep_partition_by_columns</p></td>
+<td><p>Flag to retain the columns in the output data when using <code class="docutils literal notranslate"><span class="pre">PARTITIONED</span> <span class="pre">BY</span></code> queries.</p></td>
+<td><p>false</p></td>
+</tr>
+</tbody>
+</table>
+<p>Note: <code class="docutils literal notranslate"><span class="pre">execution.keep_partition_by_columns</span></code> flag can also be enabled through <code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> within <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>.</p>
+</section>
 <section id="json-format-specific-options">
 <h3>JSON Format Specific Options<a class="headerlink" href="#json-format-specific-options" title="Link to this heading">¶</a></h3>
 <p>The following options are available when writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.</p>

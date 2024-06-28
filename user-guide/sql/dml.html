@@ -556,7 +556,10 @@ TO '<i><b>file_name</i></b>'
 <p><code class="docutils literal notranslate"><span class="pre">STORED</span> <span class="pre">AS</span></code> specifies the file format the <code class="docutils literal notranslate"><span class="pre">COPY</span></code> command will write. If this
 clause is not specified, it will be inferred from the file extension if possible.</p>
 <p><code class="docutils literal notranslate"><span class="pre">PARTITIONED</span> <span class="pre">BY</span></code> specifies the columns to use for partitioning the output files into
-separate hive-style directories.</p>
+separate hive-style directories. By default, columns used in <code class="docutils literal notranslate"><span class="pre">PARTITIONED</span> <span class="pre">BY</span></code> will be removed
+from the output format. If you want to keep the columns, you should provide the option
+<code class="docutils literal notranslate"><span class="pre">execution.keep_partition_by_columns</span> <span class="pre">true</span></code>. <code class="docutils literal notranslate"><span class="pre">execution.keep_partition_by_columns</span></code> flag can also
+be enabled through <code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> within <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>.</p>
 <p>The output format is determined by the first match of the following rules:</p>
 <ol class="arabic simple">
 <li><p>Value of <code class="docutils literal notranslate"><span class="pre">STORED</span> <span class="pre">AS</span></code></p></li>
