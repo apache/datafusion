@@ -20,7 +20,8 @@ use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
 use datafusion::common::{
-    not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
+    not_impl_datafusion_err, not_impl_err, substrait_datafusion_err, substrait_err,
+    DFSchema, DFSchemaRef,
 };
 use substrait::proto::expression::literal::IntervalDayToSecond;
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
@@ -30,8 +31,7 @@ use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
     aggregate_function, expr::find_df_window_func, Aggregate, BinaryExpr, Case,
-    EmptyRelation, Expr, ExprSchemable, LogicalPlan, Operator, Projection, ScalarUDF,
-    Values,
+    EmptyRelation, Expr, ExprSchemable, LogicalPlan, Operator, Projection, Values,
 };
 
 use datafusion::logical_expr::{
@@ -1140,7 +1140,7 @@ pub async fn from_substrait_rex(
             } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
                 builder.build(ctx, f, input_schema, extensions).await
             } else {
-                not_impl_err!("Unsupported function name: {name:?}")
+                not_impl_err!("Unsupported function name: {fn_name:?}")
             }
         }
         Some(RexType::Literal(lit)) => {
@@ -1177,7 +1177,7 @@ pub async fn from_substrait_rex(
             let fun = match ctx.udaf(fn_name) {
                 Ok(udaf) => Ok(WindowFunctionDefinition::AggregateUDF(udaf)),
                 Err(_) => find_df_window_func(fn_name).ok_or_else(|| {
-                    not_impl_err!(
+                    not_impl_datafusion_err!(
                         "Window function {} is not supported: function anchor = {:?}",
                         fn_name,
                         window.function_reference
