@@ -19,6 +19,7 @@
 //!
 //! * [`parquet_demo`]: run SQL query against a single Parquet file
 //! * [`avro_demo`]: run SQL query against a single Avro file
+//! * [`csv_demo`]: run SQL query against a single CSV file
 //! * [`parquet_multi_files_demo`]: run SQL query against a table backed by multiple Parquet files
 //! * [`regexp_demo`]: regular expression functions to manipulate strings
 //! * [`to_char_demo`]: to_char function to convert strings to date, time, timestamp and durations
@@ -26,7 +27,9 @@
 //! * [`make_date_demo`]: make_date function to convert year, month and day to a date
 
 use arrow::array::{Date32Array, Int32Array, RecordBatch, StringArray};
+use arrow::util::pretty;
 use arrow_schema::{DataType, Field, Schema};
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
@@ -35,12 +38,12 @@ use datafusion_common::{assert_batches_eq, assert_contains};
 use object_store::local::LocalFileSystem;
 use std::path::Path;
 use std::sync::Arc;
-use arrow::util::pretty;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     parquet_demo().await?;
     avro_demo().await?;
+    csv_demo().await?;
     parquet_multi_files_demo().await?;
     regexp_demo().await?;
     to_char_demo().await?;
@@ -109,6 +112,54 @@ async fn avro_demo() -> Result<()> {
     Ok(())
 }
 
+/// This example demonstrates executing a simple query against an Arrow data
+/// source (CSV) and fetching results
+async fn csv_demo() -> Result<()> {
+    // create local execution context
+    let ctx = SessionContext::new();
+
+    let testdata = datafusion::test_util::arrow_test_data();
+
+    // register csv file with the execution context
+    ctx.register_csv(
+        "aggregate_test_100",
+        &format!("{testdata}/csv/aggregate_test_100.csv"),
+        CsvReadOptions::new(),
+    )
+    .await?;
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT c1, MIN(c12), MAX(c12) \
+        FROM aggregate_test_100 \
+        WHERE c11 > 0.1 AND c11 < 0.9 \
+        GROUP BY c1",
+        )
+        .await?;
+
+    // print the results
+    df.show().await?;
+
+    // query compressed CSV with specific options
+    let csv_options = CsvReadOptions::default()
+        .has_header(true)
+        .file_compression_type(FileCompressionType::GZIP)
+        .file_extension("csv.gz");
+    let df = ctx
+        .read_csv(
+            &format!("{testdata}/csv/aggregate_test_100.csv.gz"),
+            csv_options,
+        )
+        .await?;
+    let df = df
+        .filter(col("c1").eq(lit("a")))?
+        .select_columns(&["c2", "c3"])?;
+
+    df.show().await?;
+
+    Ok(())
+}
 
 /// This example demonstrates executing a simple query against an Arrow data
 /// source (a directory with multiple Parquet files) and fetching results.
@@ -825,7 +876,6 @@ async fn make_date_demo() -> Result<()> {
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     ctx.register_batch("t", batch)?;
-    let df = ctx.table("t").await?;
 
     // use sql to convert col 'y' & 'm' with a static string day to a date
     let df = ctx.sql("select make_date(y, m, '22') from t").await?;
