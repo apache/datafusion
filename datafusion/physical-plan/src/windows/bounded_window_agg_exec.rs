@@ -289,7 +289,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(BoundedWindowAggExec::try_new(
             self.window_expr.clone(),
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.partition_keys.clone(),
             self.input_order_mode.clone(),
         )?))
@@ -303,7 +303,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         let input = self.input.execute(partition, context)?;
         let search_mode = self.get_search_algo()?;
         let stream = Box::pin(BoundedWindowAggStream::new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             self.window_expr.clone(),
             input,
             BaselineMetrics::new(&self.metrics, partition),
@@ -394,7 +394,9 @@ trait PartitionSearcher: Send {
                 // as it may not have the "correct" schema in terms of output
                 // nullability constraints. For details, see the following issue:
                 // https://github.com/apache/datafusion/issues/9320
-                .or_insert_with(|| PartitionBatchState::new(self.input_schema().clone()));
+                .or_insert_with(|| {
+                    PartitionBatchState::new(Arc::clone(self.input_schema()))
+                });
             partition_batch_state.extend(&partition_batch)?;
         }
 
@@ -513,7 +515,7 @@ impl PartitionSearcher for LinearSearch {
             let length = indices.len();
             for (idx, window_agg_state) in window_agg_states.iter().enumerate() {
                 let partition = &window_agg_state[&row];
-                let values = partition.state.out_col.slice(0, length).clone();
+                let values = Arc::clone(&partition.state.out_col.slice(0, length));
                 new_columns[idx].push(values);
             }
             let partition_batch_state = &mut partition_buffers[&row];
@@ -935,7 +937,7 @@ impl BoundedWindowAggStream {
         search_mode: Box<dyn PartitionSearcher>,
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
-        let empty_batch = RecordBatch::new_empty(schema.clone());
+        let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
         Ok(Self {
             schema,
             input,
@@ -957,7 +959,7 @@ impl BoundedWindowAggStream {
             cur_window_expr.evaluate_stateful(&self.partition_buffers, state)?;
         }
 
-        let schema = self.schema.clone();
+        let schema = Arc::clone(&self.schema);
         let window_expr_out = self.search_mode.calculate_out_columns(
             &self.input_buffer,
             &self.window_agg_states,
@@ -1114,7 +1116,7 @@ impl BoundedWindowAggStream {
 impl RecordBatchStream for BoundedWindowAggStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 

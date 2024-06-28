@@ -134,7 +134,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(CoalesceBatchesExec::new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.target_batch_size,
         )))
     }
@@ -272,7 +272,7 @@ impl CoalesceBatchesStream {
 
 impl RecordBatchStream for CoalesceBatchesStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 

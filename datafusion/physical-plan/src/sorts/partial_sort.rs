@@ -260,7 +260,7 @@ impl ExecutionPlan for PartialSortExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let new_partial_sort = PartialSortExec::new(
             self.expr.clone(),
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.common_prefix_length,
         )
         .with_fetch(self.fetch)
@@ -276,7 +276,7 @@ impl ExecutionPlan for PartialSortExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start PartialSortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        let input = self.input.execute(partition, context.clone())?;
+        let input = self.input.execute(partition, Arc::clone(&context))?;
 
         trace!(
             "End PartialSortExec's input.execute for partition: {}",

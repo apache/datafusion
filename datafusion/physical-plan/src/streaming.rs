@@ -93,7 +93,7 @@ impl StreamingTableExec {
         let projected_output_ordering =
             projected_output_ordering.into_iter().collect::<Vec<_>>();
         let cache = Self::compute_properties(
-            projected_schema.clone(),
+            Arc::clone(&projected_schema),
             &projected_output_ordering,
             &partitions,
             infinite,
@@ -240,7 +240,7 @@ impl ExecutionPlan for StreamingTableExec {
         let stream = self.partitions[partition].execute(ctx);
         let projected_stream = match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
-                self.projected_schema.clone(),
+                Arc::clone(&self.projected_schema),
                 stream.map(move |x| {
                     x.and_then(|b| b.project(projection.as_ref()).map_err(Into::into))
                 }),

@@ -345,13 +345,13 @@ impl ExternalSorter {
                         spill.path()
                     )));
                 }
-                let stream = read_spill_as_stream(spill, self.schema.clone())?;
+                let stream = read_spill_as_stream(spill, Arc::clone(&self.schema))?;
                 streams.push(stream);
             }
 
             streaming_merge(
                 streams,
-                self.schema.clone(),
+                Arc::clone(&self.schema),
                 &self.expr,
                 self.metrics.baseline.clone(),
                 self.batch_size,
@@ -361,7 +361,9 @@ impl ExternalSorter {
         } else if !self.in_mem_batches.is_empty() {
             self.in_mem_sort_stream(self.metrics.baseline.clone())
         } else {
-            Ok(Box::pin(EmptyRecordBatchStream::new(self.schema.clone())))
+            Ok(Box::pin(EmptyRecordBatchStream::new(Arc::clone(
+                &self.schema,
+            ))))
         }
     }
 
@@ -402,7 +404,8 @@ impl ExternalSorter {
         let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let batches = std::mem::take(&mut self.in_mem_batches);
         let spilled_rows =
-            spill_sorted_batches(batches, spill_file.path(), self.schema.clone()).await?;
+            spill_sorted_batches(batches, spill_file.path(), Arc::clone(&self.schema))
+                .await?;
         let used = self.reservation.free();
         self.metrics.spill_count.add(1);
         self.metrics.spilled_bytes.add(used);
@@ -532,7 +535,7 @@ impl ExternalSorter {
 
         streaming_merge(
             streams,
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             &self.expr,
             metrics,
             self.batch_size,
@@ -555,7 +558,7 @@ impl ExternalSorter {
         let schema = batch.schema();
 
         let fetch = self.fetch;
-        let expressions = self.expr.clone();
+        let expressions = Arc::clone(&self.expr);
         let stream = futures::stream::once(futures::future::lazy(move |_| {
             let sorted = sort_batch(&batch, &expressions, fetch)?;
             metrics.record_output(sorted.num_rows());
@@ -915,7 +918,7 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let new_sort = SortExec::new(self.expr.clone(), children[0].clone())
+        let new_sort = SortExec::new(self.expr.clone(), Arc::clone(&children[0]))
             .with_fetch(self.fetch)
             .with_preserve_partitioning(self.preserve_partitioning);
 
@@ -929,7 +932,7 @@ impl ExecutionPlan for SortExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        let mut input = self.input.execute(partition, context.clone())?;
+        let mut input = self.input.execute(partition, Arc::clone(&context))?;
 
         let execution_options = &context.session_config().options().execution;
 

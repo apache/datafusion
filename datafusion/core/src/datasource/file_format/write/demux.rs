@@ -77,7 +77,7 @@ pub(crate) fn start_demuxer_task(
     file_extension: String,
 ) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
     let (tx, rx) = mpsc::unbounded_channel();
-    let context = context.clone();
+    let context = Arc::clone(context);
     let single_file_output = !base_output_path.is_collection();
     let task = match partition_by {
         Some(parts) => {
@@ -397,7 +397,7 @@ fn remove_partition_by_columns(
         .zip(parted_batch.schema().fields())
         .filter_map(|(a, f)| {
             if !partition_names.contains(&f.name()) {
-                Some((a.clone(), (**f).clone()))
+                Some((Arc::clone(a), (**f).clone()))
             } else {
                 None
             }

@@ -133,12 +133,12 @@ impl RepartitionExecState {
             let r_metrics = RepartitionMetrics::new(i, num_output_partitions, &metrics);
 
             let input_task = SpawnedTask::spawn(RepartitionExec::pull_from_input(
-                input.clone(),
+                Arc::clone(&input),
                 i,
                 txs.clone(),
                 partitioning.clone(),
                 r_metrics,
-                context.clone(),
+                Arc::clone(&context),
             ));
 
             // In a separate task, wait for each input to be done
@@ -616,7 +616,7 @@ impl ExecutionPlan for RepartitionExec {
                             schema: Arc::clone(&schema_captured),
                             receiver,
                             drop_helper: Arc::clone(&abort_helper),
-                            reservation: reservation.clone(),
+                            reservation: Arc::clone(&reservation),
                         }) as SendableRecordBatchStream
                     })
                     .collect::<Vec<_>>();
@@ -861,7 +861,7 @@ impl RepartitionExec {
 
                 for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
-                    let err = Err(DataFusionError::External(Box::new(e.clone())));
+                    let err = Err(DataFusionError::External(Box::new(Arc::clone(&e))));
                     tx.send(Some(err)).await.ok();
                 }
             }
@@ -940,7 +940,7 @@ impl Stream for RepartitionStream {
 impl RecordBatchStream for RepartitionStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -990,7 +990,7 @@ impl Stream for PerPartitionStream {
 impl RecordBatchStream for PerPartitionStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 

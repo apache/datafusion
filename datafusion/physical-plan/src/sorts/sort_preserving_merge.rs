@@ -182,7 +182,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(
-            SortPreservingMergeExec::new(self.expr.clone(), children[0].clone())
+            SortPreservingMergeExec::new(self.expr.clone(), Arc::clone(&children[0]))
                 .with_fetch(self.fetch),
         ))
     }
@@ -226,7 +226,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
             _ => {
                 let receivers = (0..input_partitions)
                     .map(|partition| {
-                        let stream = self.input.execute(partition, context.clone())?;
+                        let stream =
+                            self.input.execute(partition, Arc::clone(&context))?;
                         Ok(spawn_buffered(stream, 1))
                     })
                     .collect::<Result<_>>()?;

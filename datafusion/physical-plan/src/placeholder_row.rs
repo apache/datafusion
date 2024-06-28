@@ -50,7 +50,7 @@ impl PlaceholderRowExec {
     /// Create a new PlaceholderRowExec
     pub fn new(schema: SchemaRef) -> Self {
         let partitions = 1;
-        let cache = Self::compute_properties(schema.clone(), partitions);
+        let cache = Self::compute_properties(Arc::clone(&schema), partitions);
         PlaceholderRowExec {
             schema,
             partitions,
@@ -160,7 +160,7 @@ impl ExecutionPlan for PlaceholderRowExec {
 
         Ok(Box::pin(MemoryStream::try_new(
             self.data()?,
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             None,
         )?))
     }

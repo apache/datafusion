@@ -417,7 +417,7 @@ impl ExecutionPlan for InterleaveExec {
         let mut input_stream_vec = vec![];
         for input in self.inputs.iter() {
             if partition < input.output_partitioning().partition_count() {
-                input_stream_vec.push(input.execute(partition, context.clone())?);
+                input_stream_vec.push(input.execute(partition, Arc::clone(&context))?);
             } else {
                 // Do not find a partition to execute
                 break;
@@ -518,7 +518,7 @@ impl CombinedRecordBatchStream {
 
 impl RecordBatchStream for CombinedRecordBatchStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 

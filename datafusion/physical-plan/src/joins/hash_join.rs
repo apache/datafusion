@@ -367,7 +367,7 @@ impl HashJoinExec {
         let cache = Self::compute_properties(
             &left,
             &right,
-            join_schema.clone(),
+            Arc::clone(&join_schema),
             *join_type,
             &on,
             partition_mode,
@@ -461,8 +461,8 @@ impl HashJoinExec {
             None => None,
         };
         Self::try_new(
-            self.left.clone(),
-            self.right.clone(),
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
             self.on.clone(),
             self.filter.clone(),
             &self.join_type,
@@ -487,7 +487,7 @@ impl HashJoinExec {
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
-            schema.clone(),
+            Arc::clone(&schema),
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
             on,
@@ -635,8 +635,11 @@ impl ExecutionPlan for HashJoinExec {
                 Distribution::UnspecifiedDistribution,
             ],
             PartitionMode::Partitioned => {
-                let (left_expr, right_expr) =
-                    self.on.iter().map(|(l, r)| (l.clone(), r.clone())).unzip();
+                let (left_expr, right_expr) = self
+                    .on
+                    .iter()
+                    .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
+                    .unzip();
                 vec![
                     Distribution::HashPartitioned(left_expr),
                     Distribution::HashPartitioned(right_expr),
@@ -678,8 +681,8 @@ impl ExecutionPlan for HashJoinExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(HashJoinExec::try_new(
-            children[0].clone(),
-            children[1].clone(),
+            Arc::clone(&children[0]),
+            Arc::clone(&children[1]),
             self.on.clone(),
             self.filter.clone(),
             &self.join_type,
@@ -694,8 +697,16 @@ impl ExecutionPlan for HashJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
-        let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
+        let on_left = self
+            .on
+            .iter()
+            .map(|on| Arc::clone(&on.0))
+            .collect::<Vec<_>>();
+        let on_right = self
+            .on
+            .iter()
+            .map(|on| Arc::clone(&on.1))
+            .collect::<Vec<_>>();
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
 
@@ -715,9 +726,9 @@ impl ExecutionPlan for HashJoinExec {
                 collect_left_input(
                     None,
                     self.random_state.clone(),
-                    self.left.clone(),
+                    Arc::clone(&self.left),
                     on_left.clone(),
-                    context.clone(),
+                    Arc::clone(&context),
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
@@ -732,9 +743,9 @@ impl ExecutionPlan for HashJoinExec {
                 OnceFut::new(collect_left_input(
                     Some(partition),
                     self.random_state.clone(),
-                    self.left.clone(),
+                    Arc::clone(&self.left),
                     on_left.clone(),
-                    context.clone(),
+                    Arc::clone(&context),
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
@@ -791,8 +802,8 @@ impl ExecutionPlan for HashJoinExec {
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         let mut stats = estimate_join_statistics(
-            self.left.clone(),
-            self.right.clone(),
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
             self.on.clone(),
             &self.join_type,
             &self.join_schema,
@@ -836,7 +847,7 @@ async fn collect_left_input(
     };
 
     // Depending on partition argument load single partition or whole left side in memory
-    let stream = left_input.execute(left_input_partition, context.clone())?;
+    let stream = left_input.execute(left_input_partition, Arc::clone(&context))?;
 
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
@@ -1111,7 +1122,7 @@ struct HashJoinStream {
 
 impl RecordBatchStream for HashJoinStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 

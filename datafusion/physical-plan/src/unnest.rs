@@ -83,7 +83,7 @@ impl UnnestExec {
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
-        let cache = Self::compute_properties(&input, schema.clone());
+        let cache = Self::compute_properties(&input, Arc::clone(&schema));
 
         UnnestExec {
             input,
@@ -147,10 +147,10 @@ impl ExecutionPlan for UnnestExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(UnnestExec::new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.list_column_indices.clone(),
             self.struct_column_indices.clone(),
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             self.options.clone(),
         )))
     }
@@ -169,7 +169,7 @@ impl ExecutionPlan for UnnestExec {
 
         Ok(Box::pin(UnnestStream {
             input,
-            schema: self.schema.clone(),
+            schema: Arc::clone(&self.schema),
             list_type_columns: self.list_column_indices.clone(),
             struct_column_indices: self.struct_column_indices.iter().copied().collect(),
             options: self.options.clone(),
@@ -237,7 +237,7 @@ struct UnnestStream {
 
 impl RecordBatchStream for UnnestStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -330,13 +330,13 @@ fn flatten_struct_cols(
                     data_type
                 ),
             },
-            None => Ok(vec![column_data.clone()]),
+            None => Ok(vec![Arc::clone(column_data)]),
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
         .collect();
-    Ok(RecordBatch::try_new(schema.clone(), columns_expanded)?)
+    Ok(RecordBatch::try_new(Arc::clone(schema), columns_expanded)?)
 }
 
 /// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
@@ -357,7 +357,7 @@ fn build_batch(
             let list_arrays: Vec<ArrayRef> = list_type_columns
                 .iter()
                 .map(|index| {
-                    ColumnarValue::Array(batch.column(*index).clone())
+                    ColumnarValue::Array(Arc::clone(batch.column(*index)))
                         .into_array(batch.num_rows())
                 })
                 .collect::<Result<_>>()?;
@@ -372,7 +372,7 @@ fn build_batch(
                 })? as usize
             };
             if total_length == 0 {
-                return Ok(RecordBatch::new_empty(schema.clone()));
+                return Ok(RecordBatch::new_empty(Arc::clone(schema)));
             }
 
             // Unnest all the list arrays
@@ -444,7 +444,7 @@ fn find_longest_length(
         .collect::<Result<_>>()?;
 
     let longest_length = list_lengths.iter().skip(1).try_fold(
-        list_lengths[0].clone(),
+        Arc::clone(&list_lengths[0]),
         |longest, current| {
             let is_lt = lt(&longest, &current)?;
             zip(&is_lt, &current, &longest)
@@ -649,7 +649,7 @@ fn flatten_list_cols_from_indices(
         .iter()
         .enumerate()
         .map(|(col_idx, arr)| match unnested_list_arrays.get(&col_idx) {
-            Some(unnested_array) => Ok(unnested_array.clone()),
+            Some(unnested_array) => Ok(Arc::clone(unnested_array)),
             None => Ok(kernels::take::take(arr, indices, None)?),
         })
         .collect::<Result<Vec<_>>>()?;

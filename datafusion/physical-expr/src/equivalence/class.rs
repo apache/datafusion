@@ -200,17 +200,19 @@ impl EquivalenceGroup {
             }
             (Some(group_idx), None) => {
                 // Right side is new, extend left side's class:
-                self.classes[group_idx].push(right.clone());
+                self.classes[group_idx].push(Arc::clone(right));
             }
             (None, Some(group_idx)) => {
                 // Left side is new, extend right side's class:
-                self.classes[group_idx].push(left.clone());
+                self.classes[group_idx].push(Arc::clone(left));
             }
             (None, None) => {
                 // None of the expressions is among existing classes.
                 // Create a new equivalence class and extend the group.
-                self.classes
-                    .push(EquivalenceClass::new(vec![left.clone(), right.clone()]));
+                self.classes.push(EquivalenceClass::new(vec![
+                    Arc::clone(left),
+                    Arc::clone(right),
+                ]));
             }
         }
     }
@@ -261,7 +263,7 @@ impl EquivalenceGroup {
     /// The expression is replaced with the first expression in the equivalence
     /// class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
-        expr.clone()
+        Arc::clone(&expr)
             .transform(|expr| {
                 for cls in self.iter() {
                     if cls.contains(&expr) {
@@ -362,7 +364,7 @@ impl EquivalenceGroup {
                     .get_equivalence_class(source)
                     .map_or(false, |group| group.contains(expr))
                 {
-                    return Some(target.clone());
+                    return Some(Arc::clone(target));
                 }
             }
         }
@@ -376,7 +378,7 @@ impl EquivalenceGroup {
             .into_iter()
             .map(|child| self.project_expr(mapping, child))
             .collect::<Option<Vec<_>>>()
-            .map(|children| expr.clone().with_new_children(children).unwrap())
+            .map(|children| Arc::clone(expr).with_new_children(children).unwrap())
     }
 
     /// Projects this equivalence group according to the given projection mapping.
@@ -394,13 +396,13 @@ impl EquivalenceGroup {
         let mut new_classes = vec![];
         for (source, target) in mapping.iter() {
             if new_classes.is_empty() {
-                new_classes.push((source, vec![target.clone()]));
+                new_classes.push((source, vec![Arc::clone(target)]));
             }
             if let Some((_, values)) =
                 new_classes.iter_mut().find(|(key, _)| key.eq(source))
             {
                 if !physical_exprs_contains(values, target) {
-                    values.push(target.clone());
+                    values.push(Arc::clone(target));
                 }
             }
         }
@@ -448,10 +450,9 @@ impl EquivalenceGroup {
                 // are equal in the resulting table.
                 if join_type == &JoinType::Inner {
                     for (lhs, rhs) in on.iter() {
-                        let new_lhs = lhs.clone() as _;
+                        let new_lhs = Arc::clone(lhs) as _;
                         // Rewrite rhs to point to the right side of the join:
-                        let new_rhs = rhs
-                            .clone()
+                        let new_rhs = Arc::clone(rhs)
                             .transform(|expr| {
                                 if let Some(column) =
                                     expr.as_any().downcast_ref::<Column>()

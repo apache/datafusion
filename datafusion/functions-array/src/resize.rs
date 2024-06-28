@@ -67,7 +67,7 @@ impl ScalarUDFImpl for ArrayResize {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(field.clone())),
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::clone(field))),
             LargeList(field) => Ok(LargeList(Arc::clone(field))),
             _ => exec_err!(
                 "Not reachable, data_type should be List, LargeList or FixedSizeList"

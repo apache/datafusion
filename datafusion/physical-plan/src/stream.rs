@@ -382,7 +382,7 @@ where
     S: Stream<Item = Result<RecordBatch>>,
 {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -402,7 +402,7 @@ impl EmptyRecordBatchStream {
 
 impl RecordBatchStream for EmptyRecordBatchStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 

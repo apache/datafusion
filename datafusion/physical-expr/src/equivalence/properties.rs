@@ -205,12 +205,12 @@ impl EquivalenceProperties {
         if self.is_expr_constant(left) {
             // Left expression is constant, add right as constant
             if !physical_exprs_contains(&self.constants, right) {
-                self.constants.push(right.clone());
+                self.constants.push(Arc::clone(right));
             }
         } else if self.is_expr_constant(right) {
             // Right expression is constant, add left as constant
             if !physical_exprs_contains(&self.constants, left) {
-                self.constants.push(left.clone());
+                self.constants.push(Arc::clone(left));
             }
         }
 
@@ -391,11 +391,11 @@ impl EquivalenceProperties {
     fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
         let ExprProperties {
             sort_properties, ..
-        } = self.get_expr_properties(req.expr.clone());
+        } = self.get_expr_properties(Arc::clone(&req.expr));
         match sort_properties {
             SortProperties::Ordered(options) => {
                 let sort_expr = PhysicalSortExpr {
-                    expr: req.expr.clone(),
+                    expr: Arc::clone(&req.expr),
                     options,
                 };
                 sort_expr.satisfy(req, self.schema())
@@ -539,7 +539,7 @@ impl EquivalenceProperties {
                             && cast_expr.is_bigger_cast(expr_type)
                         {
                             res.push(PhysicalSortExpr {
-                                expr: r_expr.clone(),
+                                expr: Arc::clone(&r_expr),
                                 options: sort_expr.options,
                             });
                         }
@@ -682,8 +682,9 @@ impl EquivalenceProperties {
             map: mapping
                 .iter()
                 .map(|(source, target)| {
-                    let normalized_source = self.eq_group.normalize_expr(source.clone());
-                    (normalized_source, target.clone())
+                    let normalized_source =
+                        self.eq_group.normalize_expr(Arc::clone(source));
+                    (normalized_source, Arc::clone(target))
                 })
                 .collect(),
         }
@@ -725,7 +726,7 @@ impl EquivalenceProperties {
                 })
                 .flat_map(|(options, relevant_deps)| {
                     let sort_expr = PhysicalSortExpr {
-                        expr: target.clone(),
+                        expr: Arc::clone(target),
                         options,
                     };
                     // Generate dependent orderings (i.e. prefixes for `sort_expr`):
@@ -798,7 +799,7 @@ impl EquivalenceProperties {
             if self.is_expr_constant(source)
                 && !physical_exprs_contains(&projected_constants, target)
             {
-                projected_constants.push(target.clone());
+                projected_constants.push(Arc::clone(target));
             }
         }
         projected_constants

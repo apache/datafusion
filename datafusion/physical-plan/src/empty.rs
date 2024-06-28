@@ -47,7 +47,7 @@ pub struct EmptyExec {
 impl EmptyExec {
     /// Create a new EmptyExec
     pub fn new(schema: SchemaRef) -> Self {
-        let cache = Self::compute_properties(schema.clone(), 1);
+        let cache = Self::compute_properties(Arc::clone(&schema), 1);
         EmptyExec {
             schema,
             partitions: 1,
@@ -142,7 +142,7 @@ impl ExecutionPlan for EmptyExec {
 
         Ok(Box::pin(MemoryStream::try_new(
             self.data()?,
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             None,
         )?))
     }

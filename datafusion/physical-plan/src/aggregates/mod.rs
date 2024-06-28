@@ -188,7 +188,7 @@ impl PhysicalGroupBy {
     pub fn input_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.expr
             .iter()
-            .map(|(expr, _alias)| expr.clone())
+            .map(|(expr, _alias)| Arc::clone(expr))
             .collect()
     }
 
@@ -283,9 +283,9 @@ impl AggregateExec {
             group_by: self.group_by.clone(),
             filter_expr: self.filter_expr.clone(),
             limit: self.limit,
-            input: self.input.clone(),
-            schema: self.schema.clone(),
-            input_schema: self.input_schema.clone(),
+            input: Arc::clone(&self.input),
+            schema: Arc::clone(&self.schema),
+            input_schema: Arc::clone(&self.input_schema),
         }
     }
 
@@ -355,7 +355,7 @@ impl AggregateExec {
         let mut new_requirement = indices
             .iter()
             .map(|&idx| PhysicalSortRequirement {
-                expr: groupby_exprs[idx].clone(),
+                expr: Arc::clone(&groupby_exprs[idx]),
                 options: None,
             })
             .collect::<Vec<_>>();
@@ -387,7 +387,7 @@ impl AggregateExec {
 
         let cache = Self::compute_properties(
             &input,
-            schema.clone(),
+            Arc::clone(&schema),
             &projection_mapping,
             &mode,
             &input_order_mode,
@@ -446,7 +446,7 @@ impl AggregateExec {
 
     /// Get the input schema before any aggregates are applied
     pub fn input_schema(&self) -> SchemaRef {
-        self.input_schema.clone()
+        Arc::clone(&self.input_schema)
     }
 
     /// number of rows soft limit of the AggregateExec
@@ -700,9 +700,9 @@ impl ExecutionPlan for AggregateExec {
             self.group_by.clone(),
             self.aggr_expr.clone(),
             self.filter_expr.clone(),
-            children[0].clone(),
-            self.input_schema.clone(),
-            self.schema.clone(),
+            Arc::clone(&children[0]),
+            Arc::clone(&self.input_schema),
+            Arc::clone(&self.schema),
         )?;
         me.limit = self.limit;
 
@@ -999,7 +999,7 @@ fn aggregate_expressions(
                 // way order sensitive aggregators can satisfy requirement
                 // themselves.
                 if let Some(ordering_req) = agg.order_bys() {
-                    result.extend(ordering_req.iter().map(|item| item.expr.clone()));
+                    result.extend(ordering_req.iter().map(|item| Arc::clone(&item.expr)));
                 }
                 result
             })
@@ -1159,9 +1159,9 @@ pub(crate) fn evaluate_group_by(
                 .enumerate()
                 .map(|(idx, is_null)| {
                     if *is_null {
-                        null_exprs[idx].clone()
+                        Arc::clone(&null_exprs[idx])
                     } else {
-                        exprs[idx].clone()
+                        Arc::clone(&exprs[idx])
                     }
                 })
                 .collect()

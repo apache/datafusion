@@ -174,7 +174,7 @@ impl OrderingEquivalenceClass {
     pub fn add_offset(&mut self, offset: usize) {
         for ordering in self.orderings.iter_mut() {
             for sort_expr in ordering {
-                sort_expr.expr = add_offset_to_expr(sort_expr.expr.clone(), offset);
+                sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
             }
         }
     }
