@@ -22,6 +22,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::{
     FunctionFactory, RegisterFunction, SessionContext, SessionState,
 };
+use datafusion_common::logical_type::extension::ExtensionType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -216,13 +217,14 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                 .expect("Expression has to be defined!"),
             return_type: definition
                 .return_type
-                .expect("Return type has to be defined!"),
+                .expect("Return type has to be defined!")
+                .physical_type(),
             signature: Signature::exact(
                 definition
                     .args
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|a| a.data_type)
+                    .map(|a| a.data_type.physical_type())
                     .collect(),
                 definition
                     .params

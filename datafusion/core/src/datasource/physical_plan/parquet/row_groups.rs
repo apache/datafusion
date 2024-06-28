@@ -411,9 +411,8 @@ mod tests {
     use crate::datasource::physical_plan::parquet::reader::ParquetFileReader;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
 
-    use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::Result;
+    use datafusion_common::{Result, logical_type::LogicalType::*};
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::planner::logical2physical;
 
@@ -819,7 +818,7 @@ mod tests {
             .with_scale(0)
             .with_precision(9);
         let schema_descr = get_test_schema_descr(vec![field]);
-        let expr = cast(col("c1"), DataType::Decimal128(11, 2)).gt(cast(
+        let expr = cast(col("c1"), Decimal128(11, 2)).gt(cast(
             lit(ScalarValue::Decimal128(Some(500), 5, 2)),
             Decimal128(11, 2),
         ));
@@ -936,7 +935,7 @@ mod tests {
             .with_byte_len(16);
         let schema_descr = get_test_schema_descr(vec![field]);
         // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -1010,7 +1009,7 @@ mod tests {
             .with_byte_len(16);
         let schema_descr = get_test_schema_descr(vec![field]);
         // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();

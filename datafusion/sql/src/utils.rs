@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use arrow_schema::{
-    DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
@@ -31,6 +31,7 @@ use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
 use sqlparser::ast::Ident;
+use datafusion_common::logical_type::LogicalType;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -226,7 +227,7 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
 pub(crate) fn make_decimal_type(
     precision: Option<u64>,
     scale: Option<u64>,
-) -> Result<DataType> {
+) -> Result<LogicalType> {
     // postgres like behavior
     let (precision, scale) = match (precision, scale) {
         (Some(p), Some(s)) => (p as u8, s as i8),
@@ -247,9 +248,9 @@ pub(crate) fn make_decimal_type(
     } else if precision > DECIMAL128_MAX_PRECISION
         && precision <= DECIMAL256_MAX_PRECISION
     {
-        Ok(DataType::Decimal256(precision, scale))
+        Ok(LogicalType::Decimal256(precision, scale))
     } else {
-        Ok(DataType::Decimal128(precision, scale))
+        Ok(LogicalType::Decimal128(precision, scale))
     }
 }
 
@@ -316,7 +317,7 @@ pub(crate) fn recursive_transform_unnest(
         } = original_expr.transform_up(|expr: Expr| {
             if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
                 let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
-                if let DataType::Struct(_) = data_type {
+                if let LogicalType::Struct(_) = data_type {
                     return internal_err!("unnest on struct can ony be applied at the root level of select expression");
                 }
                 let transformed_exprs = transform(&expr, arg)?;

@@ -26,14 +26,26 @@ use datafusion::logical_expr::{
     CrossJoin, Distinct, Like, Partitioning, WindowFrameUnits,
 };
 use datafusion::{
-    arrow::datatypes::{DataType, TimeUnit},
+    arrow::datatypes::TimeUnit,
     error::{DataFusionError, Result},
     logical_expr::{WindowFrame, WindowFrameBound},
     prelude::{JoinType, SessionContext},
     scalar::ScalarValue,
 };
 
+use crate::variation_const::{
+    DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
+    DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_DAY_TIME_TYPE_URL,
+    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_URL,
+    INTERVAL_YEAR_MONTH_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_URL,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+};
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
+use datafusion::common::logical_type::LogicalType;
 use datafusion::common::{
     exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
 };
@@ -89,18 +101,6 @@ use substrait::{
         SortField, SortRel,
     },
     version,
-};
-
-use crate::variation_const::{
-    DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
-    DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_DAY_TIME_TYPE_URL,
-    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_URL,
-    INTERVAL_YEAR_MONTH_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_URL,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
-    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
@@ -586,9 +586,9 @@ fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
     // Substrait wants a list of all field names, including nested fields from structs,
     // also from within e.g. lists and maps. However, it does not want the list and map field names
     // themselves - only proper structs fields are considered to have useful names.
-    fn names_dfs(dtype: &DataType) -> Result<Vec<String>> {
+    fn names_dfs(dtype: &LogicalType) -> Result<Vec<String>> {
         match dtype {
-            DataType::Struct(fields) => {
+            LogicalType::Struct(fields) => {
                 let mut names = Vec::new();
                 for field in fields {
                     names.push(field.name().to_string());
@@ -596,10 +596,10 @@ fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
                 }
                 Ok(names)
             }
-            DataType::List(l) => names_dfs(l.data_type()),
-            DataType::LargeList(l) => names_dfs(l.data_type()),
-            DataType::Map(m, _) => match m.data_type() {
-                DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
+            LogicalType::List(l) => names_dfs(l.data_type()),
+            LogicalType::LargeList(l) => names_dfs(l.data_type()),
+            LogicalType::Map(m, _) => match m.data_type() {
+                LogicalType::Struct(key_and_value) if key_and_value.len() == 2 => {
                     let key_names =
                         names_dfs(key_and_value.first().unwrap().data_type())?;
                     let value_names =
@@ -1433,83 +1433,83 @@ pub fn to_substrait_rex(
     }
 }
 
-fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::Type> {
+fn to_substrait_type(dt: &LogicalType, nullable: bool) -> Result<substrait::proto::Type> {
     let nullability = if nullable {
         r#type::Nullability::Nullable as i32
     } else {
         r#type::Nullability::Required as i32
     };
     match dt {
-        DataType::Null => internal_err!("Null cast is not valid"),
-        DataType::Boolean => Ok(substrait::proto::Type {
+        LogicalType::Null => internal_err!("Null cast is not valid"),
+        LogicalType::Boolean => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Bool(r#type::Boolean {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::Int8 => Ok(substrait::proto::Type {
+        LogicalType::Int8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I8(r#type::I8 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::UInt8 => Ok(substrait::proto::Type {
+        LogicalType::UInt8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I8(r#type::I8 {
                 type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::Int16 => Ok(substrait::proto::Type {
+        LogicalType::Int16 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I16(r#type::I16 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::UInt16 => Ok(substrait::proto::Type {
+        LogicalType::UInt16 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I16(r#type::I16 {
                 type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::Int32 => Ok(substrait::proto::Type {
+        LogicalType::Int32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I32(r#type::I32 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::UInt32 => Ok(substrait::proto::Type {
+        LogicalType::UInt32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I32(r#type::I32 {
                 type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::Int64 => Ok(substrait::proto::Type {
+        LogicalType::Int64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I64(r#type::I64 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::UInt64 => Ok(substrait::proto::Type {
+        LogicalType::UInt64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I64(r#type::I64 {
                 type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
         // Float16 is not supported in Substrait
-        DataType::Float32 => Ok(substrait::proto::Type {
+        LogicalType::Float32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Fp32(r#type::Fp32 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::Float64 => Ok(substrait::proto::Type {
+        LogicalType::Float64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Fp64(r#type::Fp64 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
         // Timezone is ignored.
-        DataType::Timestamp(unit, _) => {
+        LogicalType::Timestamp(unit, _) => {
             let type_variation_reference = match unit {
                 TimeUnit::Second => TIMESTAMP_SECOND_TYPE_VARIATION_REF,
                 TimeUnit::Millisecond => TIMESTAMP_MILLI_TYPE_VARIATION_REF,
@@ -1523,19 +1523,19 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 })),
             })
         }
-        DataType::Date32 => Ok(substrait::proto::Type {
+        LogicalType::Date32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Date(r#type::Date {
                 type_variation_reference: DATE_32_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::Date64 => Ok(substrait::proto::Type {
+        LogicalType::Date64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Date(r#type::Date {
                 type_variation_reference: DATE_64_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::Interval(interval_unit) => {
+        LogicalType::Interval(interval_unit) => {
             // define two type parameters for convenience
             let i32_param = Parameter {
                 parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
@@ -1578,38 +1578,38 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 })),
             })
         }
-        DataType::Binary => Ok(substrait::proto::Type {
+        LogicalType::Binary => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Binary(r#type::Binary {
                 type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::FixedSizeBinary(length) => Ok(substrait::proto::Type {
+        LogicalType::FixedSizeBinary(length) => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::FixedBinary(r#type::FixedBinary {
                 length: *length,
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::LargeBinary => Ok(substrait::proto::Type {
+        LogicalType::LargeBinary => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Binary(r#type::Binary {
                 type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::Utf8 => Ok(substrait::proto::Type {
+        LogicalType::Utf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
                 type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::LargeUtf8 => Ok(substrait::proto::Type {
+        LogicalType::LargeUtf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
                 type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-        DataType::List(inner) => {
+        LogicalType::List(inner) => {
             let inner_type = to_substrait_type(inner.data_type(), inner.is_nullable())?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
@@ -1619,7 +1619,7 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 }))),
             })
         }
-        DataType::LargeList(inner) => {
+        LogicalType::LargeList(inner) => {
             let inner_type = to_substrait_type(inner.data_type(), inner.is_nullable())?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
@@ -1629,8 +1629,8 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 }))),
             })
         }
-        DataType::Map(inner, _) => match inner.data_type() {
-            DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
+        LogicalType::Map(inner, _) => match inner.data_type() {
+            LogicalType::Struct(key_and_value) if key_and_value.len() == 2 => {
                 let key_type = to_substrait_type(
                     key_and_value[0].data_type(),
                     key_and_value[0].is_nullable(),
@@ -1650,7 +1650,7 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
             }
             _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
         },
-        DataType::Struct(fields) => {
+        LogicalType::Struct(fields) => {
             let field_types = fields
                 .iter()
                 .map(|field| to_substrait_type(field.data_type(), field.is_nullable()))
@@ -1663,7 +1663,7 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 })),
             })
         }
-        DataType::Decimal128(p, s) => Ok(substrait::proto::Type {
+        LogicalType::Decimal128(p, s) => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Decimal(r#type::Decimal {
                 type_variation_reference: DECIMAL_128_TYPE_VARIATION_REF,
                 nullability,
@@ -1671,7 +1671,7 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 precision: *p as i32,
             })),
         }),
-        DataType::Decimal256(p, s) => Ok(substrait::proto::Type {
+        LogicalType::Decimal256(p, s) => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Decimal(r#type::Decimal {
                 type_variation_reference: DECIMAL_256_TYPE_VARIATION_REF,
                 nullability,
@@ -1897,7 +1897,7 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
             nullable: true,
             type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
             literal_type: Some(LiteralType::Null(to_substrait_type(
-                &value.data_type(),
+                &value.data_type().into(),
                 true,
             )?)),
         });
@@ -2097,7 +2097,7 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
         .collect::<Result<Vec<_>>>()?;
 
     if values.is_empty() {
-        let et = match to_substrait_type(array.data_type(), array.is_nullable())? {
+        let et = match to_substrait_type(&array.data_type().to_owned().into(), array.is_nullable())? {
             substrait::proto::Type {
                 kind: Some(r#type::Kind::List(lt)),
             } => lt.as_ref().to_owned(),
@@ -2223,7 +2223,7 @@ mod test {
         from_substrait_literal_without_names, from_substrait_type_without_names,
     };
     use datafusion::arrow::array::GenericListArray;
-    use datafusion::arrow::datatypes::Field;
+    use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::common::scalar::ScalarStructBuilder;
 
     use super::*;
@@ -2376,9 +2376,10 @@ mod test {
 
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
-        let substrait = to_substrait_type(&dt, true)?;
+        let lt = dt.into();
+        let substrait = to_substrait_type(&lt, true)?;
         let roundtrip_dt = from_substrait_type_without_names(&substrait)?;
-        assert_eq!(dt, roundtrip_dt);
+        assert_eq!(lt, roundtrip_dt);
         Ok(())
     }
 }

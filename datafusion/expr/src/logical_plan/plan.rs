@@ -40,7 +40,7 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -55,6 +55,9 @@ use crate::display::PgJsonVisitor;
 use crate::logical_plan::tree_node::unwrap_arc;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
 
 /// A `LogicalPlan` is a node in a tree of relational operators (such as
 /// Projection or Filter).
@@ -351,20 +354,20 @@ impl LogicalPlan {
     }
 
     /// Returns the (fixed) output schema for explain plans
-    pub fn explain_schema() -> SchemaRef {
-        SchemaRef::new(Schema::new(vec![
+    pub fn explain_schema() -> LogicalSchemaRef {
+        LogicalSchemaRef::new(Schema::new(vec![
             Field::new("plan_type", DataType::Utf8, false),
             Field::new("plan", DataType::Utf8, false),
-        ]))
+        ]).into())
     }
 
     /// Returns the (fixed) output schema for `DESCRIBE` plans
-    pub fn describe_schema() -> Schema {
+    pub fn describe_schema() -> LogicalSchema {
         Schema::new(vec![
             Field::new("column_name", DataType::Utf8, false),
             Field::new("data_type", DataType::Utf8, false),
             Field::new("is_nullable", DataType::Utf8, false),
-        ])
+        ]).into()
     }
 
     /// Returns all expressions (non-recursively) evaluated by the current
@@ -1388,8 +1391,8 @@ impl LogicalPlan {
     /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
     pub fn get_parameter_types(
         &self,
-    ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
-        let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
+    ) -> Result<HashMap<String, Option<LogicalType>>, DataFusionError> {
+        let mut param_types: HashMap<String, Option<LogicalType>> = HashMap::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
@@ -2085,7 +2088,7 @@ impl SubqueryAlias {
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
         let schema = DFSchemaRef::new(
-            DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
+            DFSchema::try_from_qualified_schema(alias.clone(), &schema.into())?
                 .with_functional_dependencies(func_dependencies)?,
         );
         Ok(SubqueryAlias {
@@ -2124,7 +2127,7 @@ impl Filter {
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            if predicate_type != DataType::Boolean {
+            if predicate_type != LogicalType::Boolean {
                 return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 );
@@ -2257,7 +2260,7 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
+        let fields: Vec<(Option<TableReference>, Arc<LogicalField>)> = input
             .schema()
             .iter()
             .map(|(q, f)| (q.cloned(), f.clone()))
@@ -2398,7 +2401,7 @@ impl TableScan {
         if table_name.table().is_empty() {
             return plan_err!("table_name cannot be empty");
         }
-        let schema = table_source.schema();
+        let schema: LogicalSchema = table_source.schema().as_ref().clone().into();
         let func_dependencies = FunctionalDependencies::new_from_constraints(
             table_source.constraints(),
             schema.fields.len(),
@@ -2412,7 +2415,7 @@ impl TableScan {
                 let df_schema = DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
+                            (Some(table_name.clone()), schema.field(*i).clone())
                         })
                         .collect(),
                     schema.metadata.clone(),
@@ -2473,7 +2476,7 @@ pub struct Prepare {
     /// The name of the statement
     pub name: String,
     /// Data types of the parameters ([`Expr::Placeholder`])
-    pub data_types: Vec<DataType>,
+    pub data_types: Vec<LogicalType>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,
 }
@@ -3494,7 +3497,7 @@ digraph {
         let schema = Arc::new(
             DFSchema::try_from_qualified_schema(
                 TableReference::bare("tab"),
-                &source.schema(),
+                &source.schema().as_ref().clone().into(),
             )
             .unwrap(),
         );

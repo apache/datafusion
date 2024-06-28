@@ -392,7 +392,7 @@ mod tests {
     use super::*;
     use crate::test::*;
 
-    use arrow::datatypes::DataType;
+    use datafusion_common::logical_type::LogicalType;
     use datafusion_expr::test::function_stub::sum;
     use datafusion_expr::{col, lit, max, min, out_ref_col, scalar_subquery, Between};
 
@@ -403,7 +403,7 @@ mod tests {
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
                     col("orders.o_custkey")
-                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                        .eq(out_ref_col(LogicalType::Int64, "customer.c_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
@@ -447,7 +447,7 @@ mod tests {
             LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
                 .filter(
                     col("lineitem.l_orderkey")
-                        .eq(out_ref_col(DataType::Int64, "orders.o_orderkey")),
+                        .eq(out_ref_col(LogicalType::Int64, "orders.o_orderkey")),
                 )?
                 .aggregate(
                     Vec::<Expr>::new(),
@@ -461,7 +461,7 @@ mod tests {
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
                     col("orders.o_custkey")
-                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey"))
+                        .eq(out_ref_col(LogicalType::Int64, "customer.c_custkey"))
                         .and(col("orders.o_totalprice").lt(scalar_subquery(lineitem))),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![sum(col("orders.o_totalprice"))])?
@@ -502,7 +502,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
                         .eq(col("orders.o_custkey"))
                         .and(col("o_orderkey").eq(lit(1))),
                 )?
@@ -540,8 +540,8 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
+                        .eq(out_ref_col(LogicalType::Int64, "customer.c_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
@@ -610,7 +610,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
                         .not_eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
@@ -637,7 +637,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
                         .lt(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
@@ -664,7 +664,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
                         .eq(col("orders.o_custkey"))
                         .or(col("o_orderkey").eq(lit(1))),
                 )?
@@ -713,7 +713,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
                         .eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
@@ -775,7 +775,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
                         .eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
@@ -814,7 +814,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
                         .eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
@@ -854,7 +854,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
                         .eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
@@ -893,7 +893,7 @@ mod tests {
     fn exists_subquery_correlated() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
-                .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq.a")))?
+                .filter(out_ref_col(LogicalType::UInt32, "test.a").eq(col("sq.a")))?
                 .aggregate(Vec::<Expr>::new(), vec![min(col("c"))])?
                 .project(vec![min(col("c"))])?
                 .build()?,
@@ -989,7 +989,7 @@ mod tests {
         let sq1 = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
                         .eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![min(col("orders.o_custkey"))])?
@@ -999,7 +999,7 @@ mod tests {
         let sq2 = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                    out_ref_col(LogicalType::Int64, "customer.c_custkey")
                         .eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?

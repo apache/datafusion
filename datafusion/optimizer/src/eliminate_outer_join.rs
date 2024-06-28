@@ -301,7 +301,7 @@ fn extract_non_nullable_columns(
 mod tests {
     use super::*;
     use crate::test::*;
-    use arrow::datatypes::DataType;
+    use datafusion_common::logical_type::LogicalType;
     use datafusion_expr::{
         binary_expr, cast, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
@@ -427,9 +427,9 @@ mod tests {
                 None,
             )?
             .filter(binary_expr(
-                cast(col("t1.b"), DataType::Int64).gt(lit(10u32)),
+                cast(col("t1.b"), LogicalType::Int64).gt(lit(10u32)),
                 And,
-                try_cast(col("t2.c"), DataType::Int64).lt(lit(20u32)),
+                try_cast(col("t2.c"), LogicalType::Int64).lt(lit(20u32)),
             ))?
             .build()?;
         let expected = "\

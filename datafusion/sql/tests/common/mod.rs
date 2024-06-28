@@ -25,6 +25,7 @@ use arrow_schema::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{plan_err, GetExt, Result, TableReference};
+use datafusion_common::logical_type::LogicalType;
 use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 use datafusion_sql::planner::ContextProvider;
 
@@ -202,7 +203,7 @@ impl ContextProvider for MockContextProvider {
         self.udafs.get(name).cloned()
     }
 
-    fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
+    fn get_variable_type(&self, _: &[String]) -> Option<LogicalType> {
         unimplemented!()
     }
 

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use datafusion_common::utils::list_ndims;
 use sqlparser::ast::{CastKind, Expr as SQLExpr, Subscript, TrimWhereField, Value};
@@ -24,6 +23,8 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
     ScalarValue,
 };
+use datafusion_common::logical_type::extension::ExtensionType;
+use datafusion_common::logical_type::LogicalType;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
@@ -113,8 +114,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if op == Operator::StringConcat {
             let left_type = left.get_type(schema)?;
             let right_type = right.get_type(schema)?;
-            let left_list_ndims = list_ndims(&left_type);
-            let right_list_ndims = list_ndims(&right_type);
+            let left_list_ndims = list_ndims(&left_type.physical_type());
+            let right_list_ndims = list_ndims(&right_type.physical_type());
 
             // We determine the target function to rewrite based on the list n-dimension, the check is not exact but sufficient.
             // The exact validity check is handled in the actual function, so even if there is 3d list appended with 1d list, it is also fine to rewrite.
@@ -351,12 +352,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // numeric constants are treated as seconds (rather as nanoseconds)
                 // to align with postgres / duckdb semantics
                 let expr = match &dt {
-                    DataType::Timestamp(TimeUnit::Nanosecond, tz)
-                        if expr.get_type(schema)? == DataType::Int64 =>
+                    LogicalType::Timestamp(TimeUnit::Nanosecond, tz)
+                        if expr.get_type(schema)? == LogicalType::Int64 =>
                     {
                         Expr::Cast(Cast::new(
                             Box::new(expr),
-                            DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                            LogicalType::Timestamp(TimeUnit::Second, tz.clone()),
                         ))
                     }
                     _ => expr,
@@ -635,7 +636,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?),
                 match *time_zone {
                     SQLExpr::Value(Value::SingleQuotedString(s)) => {
-                        DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into()))
+                        LogicalType::Timestamp(TimeUnit::Nanosecond, Some(s.into()))
                     }
                     _ => {
                         return not_impl_err!(
@@ -813,7 +814,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
-        if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
+        if pattern_type != LogicalType::Utf8 && pattern_type != LogicalType::Null {
             return plan_err!("Invalid pattern in LIKE expression");
         }
         let escape_char = if let Some(char) = escape_char {
@@ -844,7 +845,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
-        if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
+        if pattern_type != LogicalType::Utf8 && pattern_type != LogicalType::Null {
             return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
         let escape_char = if let Some(char) = escape_char {
@@ -1023,6 +1024,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::{Field, Schema};
+    use arrow_schema::DataType;
     use sqlparser::dialect::GenericDialect;
     use sqlparser::parser::Parser;
 
@@ -1074,7 +1076,7 @@ mod tests {
             None
         }
 
-        fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+        fn get_variable_type(&self, _variable_names: &[String]) -> Option<LogicalType> {
             None
         }
 
