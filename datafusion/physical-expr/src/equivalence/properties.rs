@@ -855,11 +855,11 @@ impl EquivalenceProperties {
                 .flat_map(|&idx| {
                     let ExprProperties {
                         sort_properties, ..
-                    } = eq_properties.get_expr_properties(exprs[idx].clone());
+                    } = eq_properties.get_expr_properties(Arc::clone(&exprs[idx]));
                     match sort_properties {
                         SortProperties::Ordered(options) => Some((
                             PhysicalSortExpr {
-                                expr: exprs[idx].clone(),
+                                expr: Arc::clone(&exprs[idx]),
                                 options,
                             },
                             idx,
@@ -869,7 +869,7 @@ impl EquivalenceProperties {
                             let options = SortOptions::default();
                             Some((
                                 PhysicalSortExpr {
-                                    expr: exprs[idx].clone(),
+                                    expr: Arc::clone(&exprs[idx]),
                                     options,
                                 },
                                 idx,
@@ -892,7 +892,7 @@ impl EquivalenceProperties {
             // an implementation strategy confined to this function.
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
                 eq_properties =
-                    eq_properties.add_constants(std::iter::once(expr.clone()));
+                    eq_properties.add_constants(std::iter::once(Arc::clone(expr)));
                 search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
@@ -918,7 +918,7 @@ impl EquivalenceProperties {
         // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
         // return `false`.
         let normalized_constants = self.eq_group.normalize_exprs(self.constants.to_vec());
-        let normalized_expr = self.eq_group.normalize_expr(expr.clone());
+        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
         is_constant_recurse(&normalized_constants, &normalized_expr)
     }
 
@@ -984,7 +984,9 @@ fn update_properties(
             Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?
     }
     // Now, check what we know about orderings:
-    let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
+    let normalized_expr = eq_properties
+        .eq_group
+        .normalize_expr(Arc::clone(&node.expr));
     if eq_properties.is_expr_constant(&normalized_expr) {
         node.data.sort_properties = SortProperties::Singleton;
     } else if let Some(options) = eq_properties
@@ -1070,7 +1072,7 @@ fn referred_dependencies(
         .keys()
         .filter(|sort_expr| expr_refers(source, &sort_expr.expr))
     {
-        let key = ExprWrapper(sort_expr.expr.clone());
+        let key = ExprWrapper(Arc::clone(&sort_expr.expr));
         expr_to_sort_exprs
             .entry(key)
             .or_default()

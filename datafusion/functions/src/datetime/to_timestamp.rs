@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::sync::Arc;
 
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
@@ -387,7 +388,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 /// the timezone if it exists.
 fn return_type_for(arg: &DataType, unit: TimeUnit) -> DataType {
     match arg {
-        Timestamp(_, Some(tz)) => Timestamp(unit, Some(tz.clone())),
+        Timestamp(_, Some(tz)) => Timestamp(unit, Some(Arc::clone(tz))),
         _ => Timestamp(unit, None),
     }
 }

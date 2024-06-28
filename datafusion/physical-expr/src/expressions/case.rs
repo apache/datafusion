@@ -173,8 +173,8 @@ impl CaseExpr {
 
         if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(e.clone(), &batch.schema(), return_type.clone())
-                .unwrap_or_else(|_| e.clone());
+            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
+                .unwrap_or_else(|_| Arc::clone(e));
             // null and unmatched tuples should be assigned else value
             remainder = or(&base_nulls, &remainder)?;
             let else_ = expr
@@ -246,8 +246,8 @@ impl CaseExpr {
 
         if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(e.clone(), &batch.schema(), return_type.clone())
-                .unwrap_or_else(|_| e.clone());
+            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
+                .unwrap_or_else(|_| Arc::clone(e));
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
                 .into_array(batch.num_rows())?;

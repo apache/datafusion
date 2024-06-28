@@ -247,7 +247,7 @@ impl FirstValueAccumulator {
             .iter()
             .zip(self.ordering_req.iter())
             .map(|(values, req)| SortColumn {
-                values: values.clone(),
+                values: Arc::clone(values),
                 options: Some(req.options),
             })
             .collect::<Vec<_>>();
@@ -547,7 +547,7 @@ impl LastValueAccumulator {
                 // Take the reverse ordering requirement. This enables us to
                 // use "fetch = 1" to get the last value.
                 SortColumn {
-                    values: values.clone(),
+                    values: Arc::clone(values),
                     options: Some(!req.options),
                 }
             })
@@ -676,7 +676,7 @@ fn convert_to_sort_cols(
     arrs.iter()
         .zip(sort_exprs.iter())
         .map(|(item, sort_expr)| SortColumn {
-            values: item.clone(),
+            values: Arc::clone(item),
             options: Some(sort_expr.options),
         })
         .collect::<Vec<_>>()

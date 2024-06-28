@@ -40,7 +40,7 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
                     arg.data_type().clone(),
                     true,
                 )),
-                arg.clone(),
+                Arc::clone(arg),
             ))
         })
         .collect::<Result<Vec<_>>>()?;

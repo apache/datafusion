@@ -105,7 +105,7 @@ pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
         .zip(args_ndim.iter())
         .map(|(array, ndim)| {
             if ndim < max_ndim {
-                let mut aligned_array = array.clone();
+                let mut aligned_array = Arc::clone(&array);
                 for _ in 0..(max_ndim - ndim) {
                     let data_type = aligned_array.data_type().to_owned();
                     let array_lengths = vec![1; aligned_array.len()];
@@ -120,7 +120,7 @@ pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
                 }
                 Ok(aligned_array)
             } else {
-                Ok(array.clone())
+                Ok(Arc::clone(&array))
             }
         })
         .collect();

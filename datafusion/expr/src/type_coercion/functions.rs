@@ -598,7 +598,7 @@ fn coerced_from<'a>(
                             Arc::new(f_into.as_ref().clone().with_data_type(data_type));
                         Some(FixedSizeList(new_field, *size_from))
                     }
-                    Some(_) => Some(FixedSizeList(f_into.clone(), *size_from)),
+                    Some(_) => Some(FixedSizeList(Arc::clone(f_into), *size_from)),
                     _ => None,
                 }
             }
@@ -607,7 +607,7 @@ fn coerced_from<'a>(
         (Timestamp(unit, Some(tz)), _) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
                 Timestamp(_, Some(from_tz)) => {
-                    Some(Timestamp(unit.clone(), Some(from_tz.clone())))
+                    Some(Timestamp(unit.clone(), Some(Arc::clone(from_tz))))
                 }
                 Null | Date32 | Utf8 | LargeUtf8 | Timestamp(_, None) => {
                     // In the absence of any other information assume the time zone is "+00" (UTC).

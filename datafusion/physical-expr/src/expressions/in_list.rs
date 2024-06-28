@@ -389,7 +389,7 @@ impl PhysicalExpr for InListExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         // assume the static_filter will not change during the rewrite process
         Ok(Arc::new(InListExpr::new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             children[1..].to_vec(),
             self.negated,
             self.static_filter.clone(),

@@ -244,7 +244,7 @@ fn hash_list_array<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
-    let values = array.values().clone();
+    let values = Arc::clone(array.values());
     let offsets = array.value_offsets();
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
@@ -274,7 +274,7 @@ fn hash_fixed_list_array(
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
-    let values = array.values().clone();
+    let values = Arc::clone(array.values());
     let value_len = array.value_length();
     let offset_size = value_len as usize / array.len();
     let nulls = array.nulls();

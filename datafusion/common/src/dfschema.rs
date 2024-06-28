@@ -198,7 +198,7 @@ impl DFSchema {
         schema: &SchemaRef,
     ) -> Result<Self> {
         let dfschema = Self {
-            inner: schema.clone(),
+            inner: Arc::clone(schema),
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
         };
@@ -298,7 +298,7 @@ impl DFSchema {
             };
             if !duplicated_field {
                 // self.inner.fields.push(field.clone());
-                schema_builder.push(field.clone());
+                schema_builder.push(Arc::clone(field));
                 qualifiers.push(qualifier.cloned());
             }
         }

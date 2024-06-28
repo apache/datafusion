@@ -328,9 +328,9 @@ impl PhysicalExpr for BinaryExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(BinaryExpr::new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.op.clone(),
-            children[1].clone(),
+            Arc::clone(&children[1]),
         )))
     }
 

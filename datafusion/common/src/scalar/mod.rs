@@ -1705,8 +1705,11 @@ impl ScalarValue {
                 if let Some(DataType::FixedSizeList(f, l)) = first_non_null_data_type {
                     for array in arrays.iter_mut() {
                         if array.is_null(0) {
-                            *array =
-                                Arc::new(FixedSizeListArray::new_null(f.clone(), l, 1));
+                            *array = Arc::new(FixedSizeListArray::new_null(
+                                Arc::clone(&f),
+                                l,
+                                1,
+                            ));
                         }
                     }
                 }
@@ -3237,16 +3240,16 @@ impl TryFrom<&DataType> for ScalarValue {
             ),
             // `ScalaValue::List` contains single element `ListArray`.
             DataType::List(field_ref) => ScalarValue::List(Arc::new(
-                GenericListArray::new_null(field_ref.clone(), 1),
+                GenericListArray::new_null(Arc::clone(field_ref), 1),
             )),
             // `ScalarValue::LargeList` contains single element `LargeListArray`.
             DataType::LargeList(field_ref) => ScalarValue::LargeList(Arc::new(
-                GenericListArray::new_null(field_ref.clone(), 1),
+                GenericListArray::new_null(Arc::clone(field_ref), 1),
             )),
             // `ScalaValue::FixedSizeList` contains single element `FixedSizeList`.
             DataType::FixedSizeList(field_ref, fixed_length) => {
                 ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::new_null(
-                    field_ref.clone(),
+                    Arc::clone(field_ref),
                     *fixed_length,
                     1,
                 )))
