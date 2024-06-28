@@ -204,12 +204,11 @@ config_namespace! {
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
         pub dialect: String, default = "generic".to_string()
 
-        /// If set to true, the system will return an error when encountering a `Varchar`
-        /// type with a specified length. This can be useful for enforcing certain schema
-        /// constraints or maintaining compatibility with systems that do not support
-        /// length-specified `Varchar` types.
+        /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
+        /// ignore the length. If false, error if a `VARCHAR` with a length is
+        /// specified. The Arrow type system does not have a notion of maximum
+        /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
-
     }
 }
 
