@@ -89,12 +89,6 @@ use crate::variation_const::{
     UNSIGNED_INTEGER_TYPE_VARIATION_REF,
 };
 
-enum ScalarFunctionType {
-    Op(Operator),
-    Expr(BuiltinExprBuilder),
-    Udf(Arc<ScalarUDF>),
-}
-
 pub fn name_to_op(name: &str) -> Result<Operator> {
     match name {
         "equal" => Ok(Operator::Eq),
@@ -126,25 +120,6 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
         "bitwise_shift_left" => Ok(Operator::BitwiseShiftLeft),
         _ => not_impl_err!("Unsupported function name: {name:?}"),
     }
-}
-
-fn scalar_function_type_from_str(
-    ctx: &SessionContext,
-    name: &str,
-) -> Result<ScalarFunctionType> {
-    if let Some(func) = ctx.state().scalar_functions().get(name) {
-        return Ok(ScalarFunctionType::Udf(func.to_owned()));
-    }
-
-    if let Ok(op) = name_to_op(name) {
-        return Ok(ScalarFunctionType::Op(op));
-    }
-
-    if let Some(builder) = BuiltinExprBuilder::try_from_name(name) {
-        return Ok(ScalarFunctionType::Expr(builder));
-    }
-
-    not_impl_err!("Unsupported function name: {name:?}")
 }
 
 pub fn substrait_fun_name(name: &str) -> &str {
@@ -1144,27 +1119,28 @@ pub async fn from_substrait_rex(
                 from_substrait_func_args(ctx, &f.arguments, input_schema, extensions)
                     .await?;
 
-            let fn_type = scalar_function_type_from_str(ctx, fn_name)?;
-            match fn_type {
-                ScalarFunctionType::Udf(fun) => Ok(Arc::new(Expr::ScalarFunction(
-                    expr::ScalarFunction::new_udf(fun, args),
-                ))),
-                ScalarFunctionType::Op(op) => {
-                    if args.len() != 2 {
-                        return not_impl_err!(
-                            "Expect two arguments for binary operator {op:?}"
-                        );
-                    }
+            // try to first match the requested function into registered udfs, then built-in ops
+            // and finally built-in expressions
+            if let Some(func) = ctx.state().scalar_functions().get(fn_name) {
+                Ok(Arc::new(Expr::ScalarFunction(
+                    expr::ScalarFunction::new_udf(func.to_owned(), args),
+                )))
+            } else if let Ok(op) = name_to_op(fn_name) {
+                if args.len() != 2 {
+                    return not_impl_err!(
+                        "Expect two arguments for binary operator {op:?}"
+                    );
+                }
 
-                    Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(args[0].to_owned()),
-                        op,
-                        right: Box::new(args[1].to_owned()),
-                    })))
-                }
-                ScalarFunctionType::Expr(builder) => {
-                    builder.build(ctx, f, input_schema, extensions).await
-                }
+                Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(args[0].to_owned()),
+                    op,
+                    right: Box::new(args[1].to_owned()),
+                })))
+            } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
+                builder.build(ctx, f, input_schema, extensions).await
+            } else {
+                not_impl_err!("Unsupported function name: {name:?}")
             }
         }
         Some(RexType::Literal(lit)) => {
