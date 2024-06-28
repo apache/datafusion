@@ -272,11 +272,11 @@ impl ExecutionPlan for PartialSortExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start PartialSortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        let input = self.input.execute(partition, context.clone())?;
+        let input = self.input.execute(partition, context)?;
 
         trace!(
             "End PartialSortExec's input.execute for partition: {}",

@@ -61,7 +61,7 @@ async fn main() {
     // Make sure you execute the plan to collect actual execution statistics.
     // For example, in this example the `file_scan_config` is known without executing
     // but the `bytes_scanned` would be None if we did not execute.
-    let mut batch_stream = execute_stream(plan.clone(), ctx.task_ctx()).unwrap();
+    let mut batch_stream = execute_stream(plan.clone(), &ctx.task_ctx()).unwrap();
     while let Some(batch) = batch_stream.next().await {
         println!("Batch rows: {}", batch.unwrap().num_rows());
     }

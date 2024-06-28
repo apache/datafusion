@@ -1403,7 +1403,7 @@ pub(crate) mod tests {
         fn execute(
             &self,
             _partition: usize,
-            _context: Arc<crate::execution::context::TaskContext>,
+            _context: &Arc<crate::execution::context::TaskContext>,
         ) -> Result<crate::physical_plan::SendableRecordBatchStream> {
             unreachable!();
         }

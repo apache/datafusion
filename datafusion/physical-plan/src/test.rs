@@ -142,7 +142,7 @@ impl PartitionStream for TestPartitionStream {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: &Arc<TaskContext>) -> SendableRecordBatchStream {
         let stream = futures::stream::iter(self.batches.clone().into_iter().map(Ok));
         Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream))
     }

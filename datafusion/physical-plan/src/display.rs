@@ -515,7 +515,7 @@ mod tests {
         fn execute(
             &self,
             _: usize,
-            _: Arc<TaskContext>,
+            _: &Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             todo!()
         }

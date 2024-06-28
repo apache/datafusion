@@ -424,7 +424,7 @@ impl ExecutionPlan for StatisticsExec {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<TaskContext>,
+        _context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
     }

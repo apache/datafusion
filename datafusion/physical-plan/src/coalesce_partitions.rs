@@ -120,7 +120,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // CoalescePartitionsExec produces a single partition
         if 0 != partition {
@@ -152,7 +152,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 // spawn independent tasks whose resulting streams (of batches)
                 // are sent to the channel for consumption.
                 for part_i in 0..input_partitions {
-                    builder.run_input(self.input.clone(), part_i, context.clone());
+                    builder.run_input(self.input.clone(), part_i, context);
                 }
 
                 let stream = builder.build();

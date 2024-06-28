@@ -136,7 +136,7 @@ impl ExecutionPlan for MemoryExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        _context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(MemoryStream::try_new(
             self.partitions[partition].clone(),

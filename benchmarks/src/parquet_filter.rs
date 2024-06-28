@@ -184,7 +184,7 @@ async fn exec_scan(
     let exec = test_file.create_scan(ctx, Some(filter)).await?;
 
     let task_ctx = ctx.task_ctx();
-    let result = collect(exec, task_ctx).await?;
+    let result = collect(exec, &task_ctx).await?;
     let elapsed = start.elapsed();
     if debug {
         pretty::print_batches(&result)?;

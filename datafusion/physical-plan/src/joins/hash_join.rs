@@ -692,7 +692,7 @@ impl ExecutionPlan for HashJoinExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
@@ -717,7 +717,7 @@ impl ExecutionPlan for HashJoinExec {
                     self.random_state.clone(),
                     self.left.clone(),
                     on_left.clone(),
-                    context.clone(),
+                    context,
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
@@ -734,7 +734,7 @@ impl ExecutionPlan for HashJoinExec {
                     self.random_state.clone(),
                     self.left.clone(),
                     on_left.clone(),
-                    context.clone(),
+                    context,
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
@@ -819,7 +819,7 @@ async fn collect_left_input(
     random_state: RandomState,
     left: Arc<dyn ExecutionPlan>,
     on_left: Vec<PhysicalExprRef>,
-    context: Arc<TaskContext>,
+    context: &Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     with_visited_indices_bitmap: bool,
@@ -836,7 +836,7 @@ async fn collect_left_input(
     };
 
     // Depending on partition argument load single partition or whole left side in memory
-    let stream = left_input.execute(left_input_partition, context.clone())?;
+    let stream = left_input.execute(left_input_partition, context)?;
 
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
@@ -1627,7 +1627,7 @@ mod tests {
         on: JoinOn,
         join_type: &JoinType,
         null_equals_null: bool,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let join = join(left, right, on, join_type, null_equals_null)?;
         let columns_header = columns(&join.schema());
@@ -1719,7 +1719,7 @@ mod tests {
 
         let mut batches = vec![];
         for i in 0..partition_count {
-            let stream = join.execute(i, context.clone())?;
+            let stream = join.execute(i, &context)?;
             let more_batches = common::collect(stream).await?;
             batches.extend(
                 more_batches
@@ -1758,7 +1758,7 @@ mod tests {
             on.clone(),
             &JoinType::Inner,
             false,
-            task_ctx,
+            &task_ctx,
         )
         .await?;
 
@@ -1844,7 +1844,7 @@ mod tests {
         )];
 
         let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+            join_collect(left, right, on, &JoinType::Inner, false, &task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -1883,7 +1883,7 @@ mod tests {
         )];
 
         let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+            join_collect(left, right, on, &JoinType::Inner, false, &task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -1930,7 +1930,7 @@ mod tests {
         ];
 
         let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+            join_collect(left, right, on, &JoinType::Inner, false, &task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
@@ -1992,7 +1992,7 @@ mod tests {
         ];
 
         let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+            join_collect(left, right, on, &JoinType::Inner, false, &task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
@@ -2049,7 +2049,7 @@ mod tests {
         )];
 
         let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+            join_collect(left, right, on, &JoinType::Inner, false, &task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -2104,7 +2104,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         // first part
-        let stream = join.execute(0, task_ctx.clone())?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         // expected joined records = 1 (first right batch)
@@ -2127,7 +2127,7 @@ mod tests {
         assert_batches_eq!(expected, &batches);
 
         // second part
-        let stream = join.execute(1, task_ctx.clone())?;
+        let stream = join.execute(1, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         // expected joined records = 2 (second right batch)
@@ -2185,7 +2185,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let stream = join.execute(0, task_ctx).unwrap();
+        let stream = join.execute(0, &task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = [
@@ -2228,7 +2228,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx).unwrap();
+        let stream = join.execute(0, &task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = [
@@ -2269,7 +2269,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let stream = join.execute(0, task_ctx).unwrap();
+        let stream = join.execute(0, &task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = [
@@ -2306,7 +2306,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx).unwrap();
+        let stream = join.execute(0, &task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = [
@@ -2347,7 +2347,7 @@ mod tests {
             on.clone(),
             &JoinType::Left,
             false,
-            task_ctx,
+            &task_ctx,
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
@@ -2447,7 +2447,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         // ignore the order
@@ -2509,7 +2509,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header.clone(), vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx.clone())?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2537,7 +2537,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2570,7 +2570,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2633,7 +2633,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx.clone())?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2661,7 +2661,7 @@ mod tests {
 
         let join =
             join_with_filter(left, right, on, filter, &JoinType::RightSemi, false)?;
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2696,7 +2696,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2755,7 +2755,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx.clone())?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2787,7 +2787,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2823,7 +2823,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2884,7 +2884,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx.clone())?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2922,7 +2922,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2962,7 +2962,7 @@ mod tests {
         )];
 
         let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Right, false, task_ctx).await?;
+            join_collect(left, right, on, &JoinType::Right, false, &task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -3045,7 +3045,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -3150,7 +3150,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -3215,7 +3215,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -3256,7 +3256,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -3300,7 +3300,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -3343,7 +3343,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -3504,7 +3504,7 @@ mod tests {
         let join = join(left, right, on, &JoinType::Inner, false)?;
 
         let task_ctx = Arc::new(TaskContext::default());
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -3564,7 +3564,7 @@ mod tests {
             .unwrap();
             let task_ctx = Arc::new(TaskContext::default());
 
-            let stream = join.execute(0, task_ctx).unwrap();
+            let stream = join.execute(0, &task_ctx).unwrap();
 
             // Expect that an error is returned
             let result_string = crate::common::collect(stream)
@@ -3675,7 +3675,7 @@ mod tests {
                     join(left.clone(), right.clone(), on.clone(), &join_type, false)
                         .unwrap();
 
-                let stream = join.execute(0, task_ctx).unwrap();
+                let stream = join.execute(0, &task_ctx).unwrap();
                 let batches = common::collect(stream).await.unwrap();
 
                 // For inner/right join expected batch count equals dev_ceil result,
@@ -3748,7 +3748,7 @@ mod tests {
 
             let join = join(left.clone(), right.clone(), on.clone(), &join_type, false)?;
 
-            let stream = join.execute(0, task_ctx)?;
+            let stream = join.execute(0, &task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
             assert_contains!(
@@ -3829,7 +3829,7 @@ mod tests {
                 false,
             )?;
 
-            let stream = join.execute(1, task_ctx)?;
+            let stream = join.execute(1, &task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
             assert_contains!(

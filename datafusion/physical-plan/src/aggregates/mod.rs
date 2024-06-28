@@ -712,9 +712,9 @@ impl ExecutionPlan for AggregateExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.execute_typed(partition, context)
+        self.execute_typed(partition, context.clone())
             .map(|stream| stream.into())
     }
 

@@ -678,7 +678,7 @@ impl ExecutionPlan for ParquetExec {
     fn execute(
         &self,
         partition_index: usize,
-        ctx: Arc<TaskContext>,
+        ctx: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let projection = match self.base_config.file_column_projection_indices() {
             Some(proj) => proj,

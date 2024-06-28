@@ -235,7 +235,7 @@ impl ExecutionPlan for UnionExec {
     fn execute(
         &self,
         mut partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -405,7 +405,7 @@ impl ExecutionPlan for InterleaveExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -417,7 +417,7 @@ impl ExecutionPlan for InterleaveExec {
         let mut input_stream_vec = vec![];
         for input in self.inputs.iter() {
             if partition < input.output_partitioning().partition_count() {
-                input_stream_vec.push(input.execute(partition, context.clone())?);
+                input_stream_vec.push(input.execute(partition, context)?);
             } else {
                 // Do not find a partition to execute
                 break;

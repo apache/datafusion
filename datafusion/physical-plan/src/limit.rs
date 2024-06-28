@@ -154,7 +154,7 @@ impl ExecutionPlan for GlobalLimitExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!(
             "Start GlobalLimitExec::execute for partition: {}",
@@ -362,7 +362,7 @@ impl ExecutionPlan for LocalLimitExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -582,7 +582,7 @@ mod tests {
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), 0, Some(7));
 
         // the result should contain 4 batches (one per input partition)
-        let iter = limit.execute(0, task_ctx)?;
+        let iter = limit.execute(0, &task_ctx)?;
         let batches = common::collect(iter).await?;
 
         // there should be a total of 100 rows
@@ -698,7 +698,7 @@ mod tests {
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
         // the result should contain 4 batches (one per input partition)
-        let iter = offset.execute(0, task_ctx)?;
+        let iter = offset.execute(0, &task_ctx)?;
         let batches = common::collect(iter).await?;
         Ok(batches.iter().map(|batch| batch.num_rows()).sum())
     }

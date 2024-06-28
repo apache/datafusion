@@ -125,7 +125,7 @@ impl ExecutionPlan for CustomPlan {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<TaskContext>,
+        _context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),

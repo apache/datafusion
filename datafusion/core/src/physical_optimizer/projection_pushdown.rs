@@ -1802,7 +1802,7 @@ mod tests {
             fn schema(&self) -> &SchemaRef {
                 &self.schema
             }
-            fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+            fn execute(&self, _ctx: &Arc<TaskContext>) -> SendableRecordBatchStream {
                 unreachable!()
             }
         }

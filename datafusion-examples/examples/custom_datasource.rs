@@ -251,7 +251,7 @@ impl ExecutionPlan for CustomExec {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<TaskContext>,
+        _context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let users: Vec<User> = {
             let db = self.db.inner.lock().unwrap();

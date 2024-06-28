@@ -182,7 +182,7 @@ impl ExecutionPlan for ValuesExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        _context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // ValuesExec has a single output partition
         if 0 != partition {

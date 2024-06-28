@@ -925,11 +925,11 @@ impl ExecutionPlan for SortExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        let mut input = self.input.execute(partition, context.clone())?;
+        let mut input = self.input.execute(partition, context)?;
 
         let execution_options = &context.session_config().options().execution;
 

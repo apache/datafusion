@@ -311,7 +311,7 @@ impl ExecutionPlan for UnboundedExec {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<TaskContext>,
+        _context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(UnboundedStream {
             batch_produce: self.batch_produce,

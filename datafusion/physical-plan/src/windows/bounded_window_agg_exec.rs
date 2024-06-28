@@ -298,7 +298,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
         let search_mode = self.get_search_algo()?;
@@ -1223,7 +1223,7 @@ mod tests {
             &self.schema
         }
 
-        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        fn execute(&self, _ctx: &Arc<TaskContext>) -> SendableRecordBatchStream {
             // We create an iterator from the record batches and map them into Ok values,
             // converting the iterator into a futures::stream::Stream
             Box::pin(self.clone())
@@ -1385,7 +1385,7 @@ mod tests {
     /// Execute the [ExecutionPlan] and collect the results in memory
     pub async fn collect_with_timeout(
         plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
         timeout_duration: Duration,
     ) -> Result<Vec<RecordBatch>> {
         let stream = execute_stream(plan, context)?;
@@ -1406,7 +1406,7 @@ mod tests {
     #[allow(dead_code)]
     pub async fn collect_bonafide(
         plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<Vec<RecordBatch>> {
         let stream = execute_stream(plan, context)?;
         let mut results = vec![];
@@ -1740,7 +1740,7 @@ mod tests {
         );
 
         let task_ctx = task_context();
-        let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;
+        let batches = collect_with_timeout(plan, &task_ctx, timeout_duration).await?;
 
         let expected = [
             "+----+------+-------+",

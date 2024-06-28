@@ -192,7 +192,7 @@ impl ExecutionPlan for WorkTableExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        _context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // WorkTable streams must be the plan base.
         if partition != 0 {

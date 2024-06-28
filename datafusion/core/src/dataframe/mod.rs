@@ -1056,7 +1056,7 @@ impl DataFrame {
     pub async fn execute_stream(self) -> Result<SendableRecordBatchStream> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        execute_stream(plan, task_ctx)
+        execute_stream(plan, &task_ctx)
     }
 
     /// Executes this DataFrame and collects all results into a vector of vector of RecordBatch
@@ -1077,7 +1077,7 @@ impl DataFrame {
     pub async fn collect_partitioned(self) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        collect_partitioned(plan, task_ctx).await
+        collect_partitioned(plan, &task_ctx).await
     }
 
     /// Executes this DataFrame and returns one stream per partition.
@@ -1103,7 +1103,7 @@ impl DataFrame {
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        execute_stream_partitioned(plan, task_ctx)
+        execute_stream_partitioned(plan, &task_ctx)
     }
 
     /// Returns the `DFSchema` describing the output of this DataFrame.
@@ -1619,7 +1619,7 @@ impl DataFrame {
         let plan = self.clone().create_physical_plan().await?;
         let schema = plan.schema();
         let task_ctx = Arc::new(self.task_ctx());
-        let partitions = collect_partitioned(plan, task_ctx).await?;
+        let partitions = collect_partitioned(plan, &task_ctx).await?;
         let mem_table = MemTable::try_new(schema, partitions)?;
         context.read_table(Arc::new(mem_table))
     }

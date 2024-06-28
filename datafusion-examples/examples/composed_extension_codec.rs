@@ -198,7 +198,7 @@ impl ExecutionPlan for ChildExec {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<datafusion::execution::TaskContext>,
+        _context: &Arc<datafusion::execution::TaskContext>,
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
     }

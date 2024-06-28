@@ -281,7 +281,7 @@ impl PartitionStream for InformationSchemaTables {
         &self.schema
     }
 
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: &Arc<TaskContext>) -> SendableRecordBatchStream {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
@@ -372,7 +372,7 @@ impl PartitionStream for InformationSchemaViews {
         &self.schema
     }
 
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: &Arc<TaskContext>) -> SendableRecordBatchStream {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
@@ -486,7 +486,7 @@ impl PartitionStream for InformationSchemaColumns {
         &self.schema
     }
 
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: &Arc<TaskContext>) -> SendableRecordBatchStream {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
@@ -729,7 +729,7 @@ impl PartitionStream for InformationSchemata {
         &self.schema
     }
 
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: &Arc<TaskContext>) -> SendableRecordBatchStream {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
@@ -774,7 +774,7 @@ impl PartitionStream for InformationSchemaDfSettings {
         &self.schema
     }
 
-    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+    fn execute(&self, ctx: &Arc<TaskContext>) -> SendableRecordBatchStream {
         let config = self.config.clone();
         let mut builder = self.builder();
         Box::pin(RecordBatchStreamAdapter::new(

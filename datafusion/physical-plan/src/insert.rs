@@ -123,7 +123,7 @@ impl DataSinkExec {
     fn execute_input_stream(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let input_stream = self.input.execute(partition, context)?;
 
@@ -264,12 +264,12 @@ impl ExecutionPlan for DataSinkExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if partition != 0 {
             return internal_err!("DataSinkExec can only be called on partition 0!");
         }
-        let data = self.execute_input_stream(0, context.clone())?;
+        let data = self.execute_input_stream(0, context)?;
 
         let count_schema = self.count_schema.clone();
         let sink = self.sink.clone();

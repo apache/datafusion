@@ -319,7 +319,7 @@ impl ExecutionPlan for SortMergeJoinExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
@@ -338,8 +338,8 @@ impl ExecutionPlan for SortMergeJoinExec {
             };
 
         // execute children plans
-        let streamed = streamed.execute(partition, context.clone())?;
-        let buffered = buffered.execute(partition, context.clone())?;
+        let streamed = streamed.execute(partition, context)?;
+        let buffered = buffered.execute(partition, context)?;
 
         // create output buffer
         let batch_size = context.session_config().batch_size();
@@ -1996,7 +1996,7 @@ mod tests {
         )?;
         let columns = columns(&join.schema());
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
         Ok((columns, batches))
     }
@@ -2013,7 +2013,7 @@ mod tests {
         let join = join(left, right, on, join_type)?;
         let columns = columns(&join.schema());
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = join.execute(0, &task_ctx)?;
         let batches = common::collect(stream).await?;
         Ok((columns, batches))
     }
@@ -2779,7 +2779,7 @@ mod tests {
                 false,
             )?;
 
-            let stream = join.execute(0, task_ctx)?;
+            let stream = join.execute(0, &task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
             assert_contains!(
@@ -2857,7 +2857,7 @@ mod tests {
                 false,
             )?;
 
-            let stream = join.execute(0, task_ctx)?;
+            let stream = join.execute(0, &task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
             assert_contains!(

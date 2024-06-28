@@ -377,7 +377,7 @@ impl PartitionStream for StreamRead {
         self.0.source.schema()
     }
 
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: &Arc<TaskContext>) -> SendableRecordBatchStream {
         let config = self.0.clone();
         let schema = self.0.source.schema().clone();
         let mut builder = RecordBatchReceiverStreamBuilder::new(schema, 2);

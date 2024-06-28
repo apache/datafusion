@@ -85,7 +85,7 @@ impl RepartitionExecState {
         metrics: ExecutionPlanMetricsSet,
         preserve_order: bool,
         name: String,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Self {
         let num_input_partitions = input.output_partitioning().partition_count();
         let num_output_partitions = partitioning.partition_count();
@@ -138,7 +138,7 @@ impl RepartitionExecState {
                 txs.clone(),
                 partitioning.clone(),
                 r_metrics,
-                context.clone(),
+                context,
             ));
 
             // In a separate task, wait for each input to be done
@@ -546,7 +546,7 @@ impl ExecutionPlan for RepartitionExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!(
             "Start {}::execute for partition: {}",
@@ -572,7 +572,6 @@ impl ExecutionPlan for RepartitionExec {
             let input_captured = Arc::clone(&input);
             let metrics_captured = metrics.clone();
             let name_captured = name.clone();
-            let context_captured = Arc::clone(&context);
             let state = lazy_state
                 .get_or_init(|| async move {
                     Mutex::new(RepartitionExecState::new(
@@ -581,7 +580,7 @@ impl ExecutionPlan for RepartitionExec {
                         metrics_captured,
                         preserve_order,
                         name_captured,
-                        context_captured,
+                        context,
                     ))
                 })
                 .await;
@@ -761,7 +760,7 @@ impl RepartitionExec {
         >,
         partitioning: Partitioning,
         metrics: RepartitionMetrics,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<()> {
         let mut partitioner =
             BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
@@ -1119,7 +1118,7 @@ mod tests {
         let mut output_partitions = vec![];
         for i in 0..exec.partitioning.partition_count() {
             // execute this *output* partition and collect all batches
-            let mut stream = exec.execute(i, task_ctx.clone())?;
+            let mut stream = exec.execute(i, &task_ctx)?;
             let mut batches = vec![];
             while let Some(result) = stream.next().await {
                 batches.push(result?);
@@ -1172,7 +1171,7 @@ mod tests {
         // returned and no results produced
         let partitioning = Partitioning::UnknownPartitioning(1);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
-        let output_stream = exec.execute(0, task_ctx).unwrap();
+        let output_stream = exec.execute(0, &task_ctx).unwrap();
 
         // Expect that an error is returned
         let result_string = crate::common::collect(output_stream)
@@ -1198,7 +1197,7 @@ mod tests {
 
         // Note: this should pass (the stream can be created) but the
         // error when the input is executed should get passed back
-        let output_stream = exec.execute(0, task_ctx).unwrap();
+        let output_stream = exec.execute(0, &task_ctx).unwrap();
 
         // Expect that an error is returned
         let result_string = crate::common::collect(output_stream)
@@ -1231,7 +1230,7 @@ mod tests {
 
         // Note: this should pass (the stream can be created) but the
         // error when the input is executed should get passed back
-        let output_stream = exec.execute(0, task_ctx).unwrap();
+        let output_stream = exec.execute(0, &task_ctx).unwrap();
 
         // Expect that an error is returned
         let result_string = crate::common::collect(output_stream)
@@ -1281,7 +1280,7 @@ mod tests {
 
         assert_batches_sorted_eq!(&expected, &expected_batches);
 
-        let output_stream = exec.execute(0, task_ctx).unwrap();
+        let output_stream = exec.execute(0, &task_ctx).unwrap();
         let batches = crate::common::collect(output_stream).await.unwrap();
 
         assert_batches_sorted_eq!(&expected, &batches);
@@ -1298,8 +1297,8 @@ mod tests {
         // partition into two output streams
         let exec = RepartitionExec::try_new(input.clone(), partitioning).unwrap();
 
-        let output_stream0 = exec.execute(0, task_ctx.clone()).unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
+        let output_stream0 = exec.execute(0, &task_ctx).unwrap();
+        let output_stream1 = exec.execute(1, &task_ctx).unwrap();
 
         // now, purposely drop output stream 0
         // *before* any outputs are produced
@@ -1345,7 +1344,7 @@ mod tests {
         // We first collect the results without droping the output stream.
         let input = Arc::new(make_barrier_exec());
         let exec = RepartitionExec::try_new(input.clone(), partitioning.clone()).unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
+        let output_stream1 = exec.execute(1, &task_ctx).unwrap();
         let mut background_task = JoinSet::new();
         background_task.spawn(async move {
             input.wait().await;
@@ -1366,8 +1365,8 @@ mod tests {
         // Now do the same but dropping the stream before waiting for the barrier
         let input = Arc::new(make_barrier_exec());
         let exec = RepartitionExec::try_new(input.clone(), partitioning).unwrap();
-        let output_stream0 = exec.execute(0, task_ctx.clone()).unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
+        let output_stream0 = exec.execute(0, &task_ctx).unwrap();
+        let output_stream1 = exec.execute(1, &task_ctx).unwrap();
         // now, purposely drop output stream 0
         // *before* any outputs are produced
         std::mem::drop(output_stream0);
@@ -1441,7 +1440,7 @@ mod tests {
             Partitioning::UnknownPartitioning(1),
         )?);
 
-        let fut = collect(repartition_exec, task_ctx);
+        let fut = collect(repartition_exec, &task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -1466,9 +1465,9 @@ mod tests {
         let schema = batch.schema();
         let input = MockExec::new(vec![Ok(batch)], schema);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
-        let output_stream0 = exec.execute(0, task_ctx.clone()).unwrap();
+        let output_stream0 = exec.execute(0, &task_ctx).unwrap();
         let batch0 = crate::common::collect(output_stream0).await.unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
+        let output_stream1 = exec.execute(1, &task_ctx).unwrap();
         let batch1 = crate::common::collect(output_stream1).await.unwrap();
         assert!(batch0.is_empty() || batch1.is_empty());
         Ok(())
@@ -1496,7 +1495,7 @@ mod tests {
 
         // pull partitions
         for i in 0..exec.partitioning.partition_count() {
-            let mut stream = exec.execute(i, task_ctx.clone())?;
+            let mut stream = exec.execute(i, &task_ctx)?;
             let err =
                 arrow_datafusion_err!(stream.next().await.unwrap().unwrap_err().into());
             let err = err.find_root();

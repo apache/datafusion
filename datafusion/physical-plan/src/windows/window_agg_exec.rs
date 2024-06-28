@@ -228,7 +228,7 @@ impl ExecutionPlan for WindowAggExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
         let stream = Box::pin(WindowAggStream::new(

@@ -403,7 +403,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream>;
 
     /// Return a snapshot of the set of [`Metric`]s for this
@@ -702,7 +702,7 @@ pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
 /// Execute the [ExecutionPlan] and collect the results in memory
 pub async fn collect(
     plan: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    context: &Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
     let stream = execute_stream(plan, context)?;
     common::collect(stream).await
@@ -718,7 +718,7 @@ pub async fn collect(
 /// any allocated resources
 pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    context: &Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
     match plan.output_partitioning().partition_count() {
         0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
@@ -736,7 +736,7 @@ pub fn execute_stream(
 /// Execute the [ExecutionPlan] and collect the results in memory
 pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    context: &Arc<TaskContext>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
     let streams = execute_stream_partitioned(plan, context)?;
 
@@ -782,12 +782,12 @@ pub async fn collect_partitioned(
 /// any allocated resources
 pub fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    context: &Arc<TaskContext>,
 ) -> Result<Vec<SendableRecordBatchStream>> {
     let num_partitions = plan.output_partitioning().partition_count();
     let mut streams = Vec::with_capacity(num_partitions);
     for i in 0..num_partitions {
-        streams.push(plan.execute(i, context.clone())?);
+        streams.push(plan.execute(i, context)?);
     }
     Ok(streams)
 }

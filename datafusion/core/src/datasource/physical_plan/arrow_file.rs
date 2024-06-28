@@ -172,7 +172,7 @@ impl ExecutionPlan for ArrowExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         use super::file_stream::FileStream;
         let object_store = context

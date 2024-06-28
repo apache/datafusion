@@ -227,7 +227,7 @@ impl ExecutionPlan for CsvExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let object_store = context
             .runtime_env()

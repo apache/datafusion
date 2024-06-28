@@ -698,7 +698,7 @@ impl PartitionStream for DummyStreamPartition {
         &self.schema
     }
 
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: &Arc<TaskContext>) -> SendableRecordBatchStream {
         // We create an iterator from the record batches and map them into Ok values,
         // converting the iterator into a futures::stream::Stream
         Box::pin(RecordBatchStreamAdapter::new(

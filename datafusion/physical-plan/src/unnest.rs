@@ -162,7 +162,7 @@ impl ExecutionPlan for UnnestExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
         let metrics = UnnestMetrics::new(partition, &self.metrics);

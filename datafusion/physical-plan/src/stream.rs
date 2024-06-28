@@ -265,7 +265,7 @@ impl RecordBatchReceiverStreamBuilder {
         &mut self,
         input: Arc<dyn ExecutionPlan>,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) {
         let output = self.tx();
 
@@ -509,7 +509,7 @@ mod test {
 
         // Configure a RecordBatchReceiverStream to consume the input
         let mut builder = RecordBatchReceiverStream::builder(schema, 2);
-        builder.run_input(Arc::new(input), 0, task_ctx.clone());
+        builder.run_input(Arc::new(input), 0, &task_ctx);
         let stream = builder.build();
 
         // input should still be present
@@ -534,7 +534,7 @@ mod test {
                 .with_use_task(false);
 
         let mut builder = RecordBatchReceiverStream::builder(schema, 2);
-        builder.run_input(Arc::new(error_stream), 0, task_ctx.clone());
+        builder.run_input(Arc::new(error_stream), 0, &task_ctx);
         let mut stream = builder.build();
 
         // get the first result, which should be an error
@@ -560,7 +560,7 @@ mod test {
         let mut builder =
             RecordBatchReceiverStream::builder(input.schema(), num_partitions);
         for partition in 0..num_partitions {
-            builder.run_input(input.clone(), partition, task_ctx.clone());
+            builder.run_input(input.clone(), partition, &task_ctx);
         }
         let mut stream = builder.build();
 

@@ -540,7 +540,7 @@ impl ExecutionPlan for TopKExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
             return internal_err!("TopKExec invalid partition {partition}");

@@ -146,7 +146,7 @@ impl ExecutionPlan for PlaceholderRowExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start PlaceholderRowExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
@@ -206,8 +206,8 @@ mod tests {
         let placeholder = PlaceholderRowExec::new(schema);
 
         // ask for the wrong partition
-        assert!(placeholder.execute(1, task_ctx.clone()).is_err());
-        assert!(placeholder.execute(20, task_ctx).is_err());
+        assert!(placeholder.execute(1, &task_ctx).is_err());
+        assert!(placeholder.execute(20, &task_ctx).is_err());
         Ok(())
     }
 
@@ -217,7 +217,7 @@ mod tests {
         let schema = test::aggr_test_schema();
         let placeholder = PlaceholderRowExec::new(schema);
 
-        let iter = placeholder.execute(0, task_ctx)?;
+        let iter = placeholder.execute(0, &task_ctx)?;
         let batches = common::collect(iter).await?;
 
         // should have one item
@@ -234,7 +234,7 @@ mod tests {
         let placeholder = PlaceholderRowExec::new(schema).with_partitions(partitions);
 
         for n in 0..partitions {
-            let iter = placeholder.execute(n, task_ctx.clone())?;
+            let iter = placeholder.execute(n, &task_ctx)?;
             let batches = common::collect(iter).await?;
 
             // should have one item

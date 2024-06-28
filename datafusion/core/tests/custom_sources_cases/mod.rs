@@ -166,7 +166,7 @@ impl ExecutionPlan for CustomExecutionPlan {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<TaskContext>,
+        _context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
@@ -252,7 +252,7 @@ async fn custom_source_dataframe() -> Result<()> {
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
 
-    let batches = collect(physical_plan, state.task_ctx()).await?;
+    let batches = collect(physical_plan, &state.task_ctx()).await?;
     let origin_rec_batch = TEST_CUSTOM_RECORD_BATCH!()?;
     assert_eq!(1, batches.len());
     assert_eq!(2, batches[0].num_columns());

@@ -141,7 +141,7 @@ impl CrossJoinExec {
 /// Asynchronously collect the result of the left child
 async fn load_left_input(
     left: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    context: &Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
@@ -235,9 +235,9 @@ impl ExecutionPlan for CrossJoinExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.right.execute(partition, context.clone())?;
+        let stream = self.right.execute(partition, context)?;
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 

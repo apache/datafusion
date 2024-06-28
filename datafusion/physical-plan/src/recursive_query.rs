@@ -157,7 +157,7 @@ impl ExecutionPlan for RecursiveQueryExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // TODO: we might be able to handle multiple partitions in the future.
         if partition != 0 {
@@ -167,10 +167,10 @@ impl ExecutionPlan for RecursiveQueryExec {
             )));
         }
 
-        let static_stream = self.static_term.execute(partition, context.clone())?;
+        let static_stream = self.static_term.execute(partition, context)?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(RecursiveQueryStream::new(
-            context,
+            context.clone(),
             self.work_table.clone(),
             self.recursive_term.clone(),
             static_stream,

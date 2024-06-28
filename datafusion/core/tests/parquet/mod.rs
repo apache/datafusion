@@ -298,9 +298,10 @@ impl ContextWithParquet {
             .expect("creating physical plan");
 
         let task_ctx = state.task_ctx();
-        let results = datafusion::physical_plan::collect(physical_plan.clone(), task_ctx)
-            .await
-            .expect("Running");
+        let results =
+            datafusion::physical_plan::collect(physical_plan.clone(), &task_ctx)
+                .await
+                .expect("Running");
 
         // find the parquet metrics
         let parquet_metrics =

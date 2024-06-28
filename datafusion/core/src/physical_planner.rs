@@ -2860,7 +2860,7 @@ mod tests {
         fn execute(
             &self,
             _partition: usize,
-            _context: Arc<TaskContext>,
+            _context: &Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
         }

@@ -235,7 +235,7 @@ impl ExecutionPlan for StreamingTableExec {
     fn execute(
         &self,
         partition: usize,
-        ctx: Arc<TaskContext>,
+        ctx: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let stream = self.partitions[partition].execute(ctx);
         let projected_stream = match self.projection.clone() {
@@ -302,7 +302,7 @@ mod test {
     /// rows in each partition
     async fn collect_num_rows(exec: Arc<dyn ExecutionPlan>) -> Vec<usize> {
         let ctx = Arc::new(TaskContext::default());
-        let partition_batches = collect_partitioned(exec, ctx).await.unwrap();
+        let partition_batches = collect_partitioned(exec, &ctx).await.unwrap();
         partition_batches
             .into_iter()
             .map(|batches| batches.iter().map(|b| b.num_rows()).sum::<usize>())

@@ -454,7 +454,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
@@ -489,9 +489,9 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let right_side_joiner =
             OneSideHashJoiner::new(JoinSide::Right, on_right, self.right.schema());
 
-        let left_stream = self.left.execute(partition, context.clone())?;
+        let left_stream = self.left.execute(partition, context)?;
 
-        let right_stream = self.right.execute(partition, context.clone())?;
+        let right_stream = self.right.execute(partition, context)?;
 
         let reservation = Arc::new(Mutex::new(
             MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))

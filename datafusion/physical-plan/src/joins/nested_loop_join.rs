@@ -297,7 +297,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
@@ -309,7 +309,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         let inner_table = self.inner_table.once(|| {
             collect_left_input(
                 self.left.clone(),
-                context.clone(),
+                context,
                 join_metrics.clone(),
                 load_reservation,
                 need_produce_result_in_final(self.join_type),
@@ -348,7 +348,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 /// Asynchronously collect input into a single batch, and creates `JoinLeftData` from it
 async fn collect_left_input(
     input: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    context: &Arc<TaskContext>,
     join_metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     with_visited_left_side: bool,

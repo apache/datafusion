@@ -148,7 +148,7 @@ impl ExecutionPlan for AnalyzeExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
             return internal_err!(
@@ -164,7 +164,7 @@ impl ExecutionPlan for AnalyzeExec {
             RecordBatchReceiverStream::builder(self.schema(), num_input_partitions);
 
         for input_partition in 0..num_input_partitions {
-            builder.run_input(self.input.clone(), input_partition, context.clone());
+            builder.run_input(self.input.clone(), input_partition, context);
         }
 
         // Create future that computes thefinal output

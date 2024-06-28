@@ -142,7 +142,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(CoalesceBatchesStream {
             input: self.input.execute(partition, context)?,

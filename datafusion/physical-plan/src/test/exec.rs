@@ -366,7 +366,7 @@ impl ExecutionPlan for BarrierExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        _context: &Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         assert!(partition < self.data.len());
 
