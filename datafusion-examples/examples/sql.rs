@@ -18,6 +18,7 @@
 //! This file contains several examples of how to run SQL queries using DataFusion
 //!
 //! * [`parquet_demo`]: run SQL query against a single Parquet file
+//! * [`avro_demo`]: run SQL query against a single Avro file
 //! * [`parquet_multi_files_demo`]: run SQL query against a table backed by multiple Parquet files
 //! * [`regexp_demo`]: regular expression functions to manipulate strings
 //! * [`to_char_demo`]: to_char function to convert strings to date, time, timestamp and durations
@@ -34,10 +35,12 @@ use datafusion_common::{assert_batches_eq, assert_contains};
 use object_store::local::LocalFileSystem;
 use std::path::Path;
 use std::sync::Arc;
+use arrow::util::pretty;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     parquet_demo().await?;
+    avro_demo().await?;
     parquet_multi_files_demo().await?;
     regexp_demo().await?;
     to_char_demo().await?;
@@ -76,6 +79,36 @@ async fn parquet_demo() -> Result<()> {
 
     Ok(())
 }
+
+/// This example demonstrates executing a simple query against an Arrow data
+/// source (Avro) and fetching results
+async fn avro_demo() -> Result<()> {
+    // create local execution context
+    let ctx = SessionContext::new();
+
+    let testdata = datafusion::test_util::arrow_test_data();
+
+    // register avro file with the execution context
+    let avro_file = &format!("{testdata}/avro/alltypes_plain.avro");
+    ctx.register_avro("alltypes_plain", avro_file, AvroReadOptions::default())
+        .await?;
+
+    // execute the query
+    let df = ctx
+        .sql(
+            "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
+        FROM alltypes_plain \
+        WHERE id > 1 AND tinyint_col < double_col",
+        )
+        .await?;
+    let results = df.collect().await?;
+
+    // print the results
+    pretty::print_batches(&results)?;
+
+    Ok(())
+}
+
 
 /// This example demonstrates executing a simple query against an Arrow data
 /// source (a directory with multiple Parquet files) and fetching results.
