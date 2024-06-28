@@ -1490,7 +1490,7 @@ impl SQLOptions {
         Default::default()
     }
 
-    /// Should DML data definition commands  (e.g. `CREATE TABLE` and `COPY`) be run? Defaults to `true`.
+    /// Should DML data definition commands  (e.g. `CREATE TABLE`) be run? Defaults to `true`.
     pub fn with_allow_ddl(mut self, allow: bool) -> Self {
         self.allow_ddl = allow;
         self
