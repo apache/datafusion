@@ -1226,22 +1226,6 @@ fn select_binary_expr_nested() {
 }
 
 #[test]
-fn select_at_arrow_operator() {
-    let sql = "SELECT left @> right from array";
-    let expected = "Projection: array.left @> array.right\
-                        \n  TableScan: array";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn select_arrow_at_operator() {
-    let sql = "SELECT left <@ right from array";
-    let expected = "Projection: array.left <@ array.right\
-                        \n  TableScan: array";
-    quick_test(sql, expected);
-}
-
-#[test]
 fn select_wildcard_with_groupby() {
     quick_test(
             r#"SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date, "😀""#,

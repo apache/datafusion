@@ -150,7 +150,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         vec![left, right],
                     )));
                 } else {
-                    return internal_err!("array_append not found");
+                    return internal_err!("array_prepend not found");
                 }
             }
         } else if matches!(op, Operator::AtArrow | Operator::ArrowAt) {
@@ -177,7 +177,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         )));
                     }
                 } else {
-                    return internal_err!("array_append not found");
+                    return internal_err!("array_has_all not found");
                 }
             }
         }
