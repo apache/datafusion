@@ -153,7 +153,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return internal_err!("array_append not found");
                 }
             }
+        } else if matches!(op, Operator::AtArrow | Operator::ArrowAt) {
+            let left_type = left.get_type(schema)?;
+            let right_type = right.get_type(schema)?;
+            let left_list_ndims = list_ndims(&left_type);
+            let right_list_ndims = list_ndims(&right_type);
+            // if both are list
+            if left_list_ndims > 0 && right_list_ndims > 0 {
+                if let Some(udf) =
+                    self.context_provider.get_function_meta("array_has_all")
+                {
+                    // array1 @> array2 -> array_has_all(array1, array2)
+                    if op == Operator::AtArrow {
+                        return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                            udf,
+                            vec![left, right],
+                        )));
+                    // array1 <@ array2 -> array_has_all(array2, array1)
+                    } else {
+                        return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                            udf,
+                            vec![right, left],
+                        )));
+                    }
+                } else {
+                    return internal_err!("array_append not found");
+                }
+            }
         }
+
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
             op,
