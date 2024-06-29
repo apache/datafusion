@@ -247,6 +247,8 @@ pub enum ScalarValue {
     /// Represents a single element [`StructArray`] as an [`ArrayRef`]. See
     /// [`ScalarValue`] for examples of how to create instances of this type.
     Struct(Arc<StructArray>),
+    /// Represents a single element [`MapArray`] as an [`ArrayRef`].
+    Map(Arc<MapArray>),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int milliseconds since UNIX epoch 1970-01-01
@@ -370,6 +372,8 @@ impl PartialEq for ScalarValue {
             (LargeList(_), _) => false,
             (Struct(v1), Struct(v2)) => v1.eq(v2),
             (Struct(_), _) => false,
+            (Map(v1), Map(v2)) => v1.eq(v2),
+            (Map(_), _) => false,
             (Date32(v1), Date32(v2)) => v1.eq(v2),
             (Date32(_), _) => false,
             (Date64(v1), Date64(v2)) => v1.eq(v2),
@@ -502,6 +506,10 @@ impl PartialOrd for ScalarValue {
                 partial_cmp_struct(struct_arr1, struct_arr2)
             }
             (Struct(_), _) => None,
+            (Map(map_arr1), Map(map_arr2)) => {
+                partial_cmp_map(map_arr1, map_arr2)
+            },
+            (Map(_), _) => None,
             (Date32(v1), Date32(v2)) => v1.partial_cmp(v2),
             (Date32(_), _) => None,
             (Date64(v1), Date64(v2)) => v1.partial_cmp(v2),
@@ -631,6 +639,34 @@ fn partial_cmp_struct(s1: &Arc<StructArray>, s2: &Arc<StructArray>) -> Option<Or
     Some(Ordering::Equal)
 }
 
+fn partial_cmp_map(m1: &Arc<MapArray>, m2: &Arc<MapArray>) -> Option<Ordering> {
+    if m1.len() != m2.len() {
+        return None;
+    }
+
+    if m1.data_type() != m2.data_type() {
+        return None;
+    }
+
+    for col_index in 0..m1.len() {
+        let arr1 = m1.column(col_index);
+        let arr2 = m2.column(col_index);
+
+        let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
+        let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
+
+        for j in 0..lt_res.len() {
+            if lt_res.is_valid(j) && lt_res.value(j) {
+                return Some(Ordering::Less);
+            }
+            if eq_res.is_valid(j) && !eq_res.value(j) {
+                return Some(Ordering::Greater);
+            }
+        }
+    }
+    Some(Ordering::Equal)
+}
+
 impl Eq for ScalarValue {}
 
 //Float wrapper over f32/f64. Just because we cannot build std::hash::Hash for floats directly we have to do it through type wrapper
@@ -694,6 +730,9 @@ impl std::hash::Hash for ScalarValue {
                 hash_nested_array(arr.to_owned() as ArrayRef, state);
             }
             Struct(arr) => {
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
+            }
+            Map(arr) => {
                 hash_nested_array(arr.to_owned() as ArrayRef, state);
             }
             Date32(v) => v.hash(state),
@@ -1128,6 +1167,7 @@ impl ScalarValue {
             ScalarValue::LargeList(arr) => arr.data_type().to_owned(),
             ScalarValue::FixedSizeList(arr) => arr.data_type().to_owned(),
             ScalarValue::Struct(arr) => arr.data_type().to_owned(),
+            ScalarValue::Map(arr) => arr.data_type().to_owned(),
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
             ScalarValue::Time32Second(_) => DataType::Time32(TimeUnit::Second),
@@ -1395,6 +1435,7 @@ impl ScalarValue {
             ScalarValue::LargeList(arr) => arr.len() == arr.null_count(),
             ScalarValue::FixedSizeList(arr) => arr.len() == arr.null_count(),
             ScalarValue::Struct(arr) => arr.len() == arr.null_count(),
+            ScalarValue::Map(arr) => arr.len() == arr.null_count(),
             ScalarValue::Date32(v) => v.is_none(),
             ScalarValue::Date64(v) => v.is_none(),
             ScalarValue::Time32Second(v) => v.is_none(),
@@ -2161,6 +2202,9 @@ impl ScalarValue {
             ScalarValue::Struct(arr) => {
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
+            ScalarValue::Map(arr) => {
+                Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
+            }
             ScalarValue::Date32(e) => {
                 build_array_from_option!(Date32, Date32Array, e, size)
             }
@@ -2790,6 +2834,9 @@ impl ScalarValue {
             ScalarValue::Struct(arr) => {
                 Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
             }
+            ScalarValue::Map(arr) => {
+                Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
+            }
             ScalarValue::Date32(val) => {
                 eq_array_primitive!(array, index, Date32Array, val)?
             }
@@ -2925,6 +2972,7 @@ impl ScalarValue {
                 ScalarValue::LargeList(arr) => arr.get_array_memory_size(),
                 ScalarValue::FixedSizeList(arr) => arr.get_array_memory_size(),
                 ScalarValue::Struct(arr) => arr.get_array_memory_size(),
+                ScalarValue::Map(arr) => arr.get_array_memory_size(),
                 ScalarValue::Union(vals, fields, _mode) => {
                     vals.as_ref()
                         .map(|(_id, sv)| sv.size() - std::mem::size_of_val(sv))
@@ -3387,6 +3435,29 @@ impl fmt::Display for ScalarValue {
                         .join(",")
                 )?
             }
+            ScalarValue::Map(map_arr) => {
+                // ScalarValue Map should always have a single element
+                assert_eq!(map_arr.len(), 1);
+
+                if map_arr.null_count() == map_arr.len() {
+                    write!(f, "NULL")?;
+                    return Ok(());
+                }
+
+                // TODO: check
+                write!(
+                    f,
+                    "{{{}}}",
+                    map_arr.iter().map(|struct_array| {
+                        if let Some(arr) = struct_array {
+                            array_value_to_string(arr.column(0), 0)?.to_string()
+                        }
+                        else {
+                            "NULL".to_string()
+                        }
+                    }).collect::<Vec<_>>().join(",")
+                )?
+            }
             ScalarValue::Union(val, _fields, _mode) => match val {
                 Some((id, val)) => write!(f, "{}:{}", id, val)?,
                 None => write!(f, "NULL")?,
@@ -3480,6 +3551,10 @@ impl fmt::Debug for ScalarValue {
                         .join(",")
                 )
             }
+            ScalarValue::Map(_) => {
+                // TODO:
+                write!(f, "Map({self}")
+            },
             ScalarValue::Date32(_) => write!(f, "Date32(\"{self}\")"),
             ScalarValue::Date64(_) => write!(f, "Date64(\"{self}\")"),
             ScalarValue::Time32Second(_) => write!(f, "Time32Second(\"{self}\")"),

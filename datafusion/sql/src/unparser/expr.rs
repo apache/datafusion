@@ -1484,7 +1484,7 @@ mod tests {
                     data_type: DataType::Decimal128(10, -2),
                 }),
                 r#"CAST(a AS DECIMAL(12,0))"#,
-            ),
+            )
         ];
 
         for (expr, expected) in tests {
