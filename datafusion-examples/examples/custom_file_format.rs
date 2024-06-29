@@ -36,8 +36,19 @@ use datafusion::{
 use datafusion_common::{GetExt, Statistics};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use object_store::{ObjectMeta, ObjectStore};
+use tempfile::tempdir;
+
+/// Example of a custom file format that reads and writes TSV files.
+///
+/// TSVFileFormatFactory is responsible for creating instances of TSVFileFormat.
+/// The former, once registered with the SessionState, will then be used
+/// to facilitate SQL operations on TSV files, such as `COPY TO` shown here.
 
 #[derive(Debug)]
+/// Custom file format that reads and writes TSV files
+///
+/// This file format is a wrapper around the CSV file format
+/// for demonstration purposes.
 struct TSVFileFormat {
     csv_file_format: Arc<dyn FileFormat>,
 }
@@ -117,6 +128,10 @@ impl FileFormat for TSVFileFormat {
 }
 
 #[derive(Default)]
+/// Factory for creating TSV file formats
+///
+/// This factory is a wrapper around the CSV file format factory
+/// for demonstration purposes.
 pub struct TSVFileFactory {
     csv_file_factory: CsvFormatFactory,
 }
@@ -172,8 +187,14 @@ async fn main() -> Result<()> {
     let mem_table = create_mem_table();
     ctx.register_table("mem_table", mem_table).unwrap();
 
+    let temp_dir = tempdir().unwrap();
+    let table_save_path = temp_dir.path().join("mem_table.tsv");
+
     let d = ctx
-        .sql("COPY mem_table TO 'mem_table.tsv' STORED AS TSV;")
+        .sql(&format!(
+            "COPY mem_table TO '{}' STORED AS TSV;",
+            table_save_path.display(),
+        ))
         .await?;
 
     let results = d.collect().await?;
