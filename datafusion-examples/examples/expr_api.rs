@@ -292,14 +292,14 @@ fn expression_type_demo() -> Result<()> {
     // types of the input expressions. You can provide this information using
     // a schema. In this case we create a schema where the column `c` is of
     // type Utf8 (a String / VARCHAR)
-    let schema = DFSchema::from_unqualifed_fields(
+    let schema = DFSchema::from_unqualified_fields(
         vec![Field::new("c", DataType::Utf8, true)].into(),
         HashMap::new(),
     )?;
     assert_eq!("Utf8", format!("{}", expr.get_type(&schema).unwrap()));
 
     // Using a schema where the column `foo` is of type Int32
-    let schema = DFSchema::from_unqualifed_fields(
+    let schema = DFSchema::from_unqualified_fields(
         vec![Field::new("c", DataType::Int32, true)].into(),
         HashMap::new(),
     )?;
@@ -308,7 +308,7 @@ fn expression_type_demo() -> Result<()> {
     // Get the type of an expression that adds 2 columns. Adding an Int32
     // and Float32 results in Float32 type
     let expr = col("c1") + col("c2");
-    let schema = DFSchema::from_unqualifed_fields(
+    let schema = DFSchema::from_unqualified_fields(
         vec![
             Field::new("c1", DataType::Int32, true),
             Field::new("c2", DataType::Float32, true),

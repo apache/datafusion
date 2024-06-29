@@ -223,7 +223,7 @@ impl LogicalPlanBuilder {
                 Field::new(name, data_type.clone(), true)
             })
             .collect::<Vec<_>>();
-        let dfschema = DFSchema::from_unqualifed_fields(fields.into(), HashMap::new())?;
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
