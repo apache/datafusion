@@ -124,7 +124,6 @@ impl AggregateFunction {
         match self {
             AggregateFunction::Max | AggregateFunction::Min => Ok(true),
             AggregateFunction::ArrayAgg => Ok(false),
-            AggregateFunction::Grouping => Ok(true),
             AggregateFunction::NthValue => Ok(true),
         }
     }
