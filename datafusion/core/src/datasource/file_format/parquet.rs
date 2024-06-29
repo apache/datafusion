@@ -1445,25 +1445,16 @@ mod tests {
     async fn test_statistics_from_parquet_metadata_dictionary() -> Result<()> {
         // Data for column c_dic: ["a", "b", "c", "d"]
         let values = StringArray::from_iter_values(["a", "b", "c", "d"]);
-        let keys = Int32Array::from_iter_values([0, 0, 1, 2]);
+        let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
         let dic_array =
             DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
-        let boxed_array: Box<dyn arrow_array::Array> = Box::new(dic_array);
-        let c_dic: ArrayRef = Arc::from(boxed_array);
+        let c_dic: ArrayRef = Arc::new(dic_array);
 
-        // Define the schema
-        let field = Field::new(
-            "c_dic",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            false,
-        );
-        let schema = Schema::new(vec![field]);
-        // Create the RecordBatch
-        let batch1 = RecordBatch::try_new(Arc::new(schema), vec![c_dic]).unwrap();
+        let batch1 = RecordBatch::try_from_iter(vec![("c_dic", c_dic)]).unwrap();
 
         // Use store_parquet to write each batch to its own file
         // . batch1 written into first file and includes:
-        //    - column c_dic that has 4 rows with no null. Stats min and max of string column is missing for this test even the column has values
+        //    - column c_dic that has 4 rows with no null. Stats min and max of dictionary column is available.
         let store = Arc::new(LocalFileSystem::new()) as _;
         let (files, _file_names) = store_parquet(vec![batch1], false).await?;
 
@@ -1482,7 +1473,7 @@ mod tests {
         assert_eq!(c_dic_stats.null_count, Precision::Exact(0));
         assert_eq!(
             c_dic_stats.max_value,
-            Precision::Exact(Utf8(Some("c".into())))
+            Precision::Exact(Utf8(Some("d".into())))
         );
         assert_eq!(
             c_dic_stats.min_value,
