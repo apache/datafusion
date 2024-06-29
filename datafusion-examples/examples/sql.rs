@@ -259,7 +259,7 @@ async fn regexp_demo() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_csv(
         "examples",
-        "../../datafusion/physical-expr/tests/data/regex.csv",
+        "./datafusion/physical-expr/tests/data/regex.csv",
         CsvReadOptions::new(),
     )
     .await?;
