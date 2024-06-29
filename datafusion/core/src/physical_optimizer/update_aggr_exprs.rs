@@ -52,6 +52,7 @@ use datafusion_physical_plan::{
 pub struct OptimizeAggregateOrder {}
 
 impl OptimizeAggregateOrder {
+    #[allow(missing_docs)]
     pub fn new() -> Self {
         Self::default()
     }
