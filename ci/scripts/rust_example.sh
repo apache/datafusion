@@ -18,9 +18,14 @@
 # under the License.
 
 set -ex
+
+repo_dir=$PWD
+
 cd datafusion-examples/examples/
 cargo fmt --all -- --check
 cargo check --examples
+
+size_threshold=$((10 * 1024 * 1024 * 1024))  # 10GB
 
 files=$(ls .)
 for filename in $files
@@ -29,5 +34,14 @@ do
   # Skip tests that rely on external storage and flight
   if [ ! -d $filename ]; then
      cargo run --example $example_name
+
+     # If the examples are getting to big, run cargo clean
+     current_size=$(du -s $repo_dir/target/debug | awk '{print $1}')
+
+    if [ $current_size -gt $size_threshold ]; then
+        echo "Cleaning cargo due to directory size exceeding 10 GB..."
+        cargo clean
+    fi
+
   fi
 done
