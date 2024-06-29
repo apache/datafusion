@@ -244,9 +244,7 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     let aggr_expr = expr.as_any();
     let mut distinct = false;
 
-    let inner = if aggr_expr.downcast_ref::<Grouping>().is_some() {
-        protobuf::AggregateFunction::Grouping
-    } else if aggr_expr.downcast_ref::<ArrayAgg>().is_some() {
+    let inner = if aggr_expr.downcast_ref::<ArrayAgg>().is_some() {
         protobuf::AggregateFunction::ArrayAgg
     } else if aggr_expr.downcast_ref::<DistinctArrayAgg>().is_some() {
         distinct = true;
