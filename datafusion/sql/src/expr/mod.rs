@@ -954,7 +954,7 @@ impl ArrayFunctionPlanner {
         };
         let Some(array_has_all) = context_provider.get_function_meta("array_has_all")
         else {
-            return internal_err!("array_prepend not found");
+            return internal_err!("array_has_all not found");
         };
 
         Ok(Self {
@@ -1090,8 +1090,8 @@ impl UserDefinedPlanner for FieldAccessPlanner {
                                     .chain(std::iter::once(*index))
                                     .collect(),
                                 agg_func.distinct,
-                                agg_func.filter.clone(),
-                                agg_func.order_by.clone(),
+                                agg_func.filter,
+                                agg_func.order_by,
                                 agg_func.null_treatment,
                             ),
                         )))
