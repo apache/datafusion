@@ -129,9 +129,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     binary_expr = expr;
                 }
                 _ => {
-                    return exec_err!(
-                        "Unexpected result, do you expect to return OriginalBinaryExpr?"
-                    )
+                    return exec_err!("Unexpected result encountered. Did you expect an OriginalBinaryExpr?")
                 }
             }
         }
@@ -222,7 +220,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let expr =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
 
-                let get_field_access = match *subscript {
+                let field_access = match *subscript {
                     Subscript::Index { index } => {
                         // index can be a name, in which case it is a named field access
                         match index {
@@ -291,7 +289,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 };
 
-                self.plan_field_access(expr, get_field_access)
+                let mut field_access_expr =
+                    crate::planner::FieldAccessExpr { expr, field_access };
+                let num_planners = self.planners.len();
+                for (i, planner) in self.planners.iter().enumerate() {
+                    match planner.plan_field_access(field_access_expr, schema)? {
+                        PlannerSimplifyResult::Simplified(expr) => {
+                            return Ok(expr)
+                        }
+                        PlannerSimplifyResult::OriginalFieldAccessExpr(_) if i + 1 == num_planners => {
+                            return internal_err!("Expected a simplified result, but none was found")
+                        }
+                        PlannerSimplifyResult::OriginalFieldAccessExpr(expr) => {
+                            field_access_expr = expr;
+                        }
+                        _ => {
+                            return exec_err!("Unexpected result encountered. Did you expect an OriginalFieldAccessExpr?")
+                        }
+                    }
+                }
+
+                internal_err!("Unexpect to reach here")
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
@@ -626,36 +644,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    /// Simplifies an expression like `ARRAY_AGG(expr)[index]` to `NTH_VALUE(expr, index)`
-    ///
-    /// returns Some(Expr) if the expression was simplified, otherwise None
-    /// TODO: this should likely be done in ArrayAgg::simplify when it is moved to a UDAF
-    fn simplify_array_index_expr(expr: &Expr, index: &Expr) -> Option<Expr> {
-        fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
-            agg_func.func_def
-                == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(
-                    AggregateFunction::ArrayAgg,
-                )
-        }
-        match expr {
-            Expr::AggregateFunction(agg_func) if is_array_agg(agg_func) => {
-                let mut new_args = agg_func.args.clone();
-                new_args.push(index.clone());
-                Some(Expr::AggregateFunction(
-                    datafusion_expr::expr::AggregateFunction::new(
-                        AggregateFunction::NthValue,
-                        new_args,
-                        agg_func.distinct,
-                        agg_func.filter.clone(),
-                        agg_func.order_by.clone(),
-                        agg_func.null_treatment,
-                    ),
-                ))
-            }
-            _ => None,
-        }
-    }
-
     /// Parses a struct(..) expression
     fn parse_struct(
         &self,
@@ -941,58 +929,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let args = vec![fullstr, substr];
         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
-
-    /// Given an expression and the field to access, creates a new expression for accessing that field
-    fn plan_field_access(
-        &self,
-        expr: Expr,
-        get_field_access: GetFieldAccess,
-    ) -> Result<Expr> {
-        match get_field_access {
-            GetFieldAccess::NamedStructField { name } => {
-                if let Some(udf) = self.context_provider.get_function_meta("get_field") {
-                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![expr, lit(name)],
-                    )))
-                } else {
-                    internal_err!("get_field not found")
-                }
-            }
-            // expr[idx] ==> array_element(expr, idx)
-            GetFieldAccess::ListIndex { key } => {
-                // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
-                if let Some(simplified) = Self::simplify_array_index_expr(&expr, &key) {
-                    Ok(simplified)
-                } else if let Some(udf) =
-                    self.context_provider.get_function_meta("array_element")
-                {
-                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![expr, *key],
-                    )))
-                } else {
-                    internal_err!("get_field not found")
-                }
-            }
-            // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
-            GetFieldAccess::ListRange {
-                start,
-                stop,
-                stride,
-            } => {
-                if let Some(udf) = self.context_provider.get_function_meta("array_slice")
-                {
-                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![expr, *start, *stop, *stride],
-                    )))
-                } else {
-                    internal_err!("array_slice not found")
-                }
-            }
-        }
-    }
 }
 
 pub struct ArrayFunctionPlanner {
@@ -1096,6 +1032,92 @@ impl UserDefinedPlanner for ArrayFunctionPlanner {
             crate::planner::BinaryExpr { op, left, right },
         ))
     }
+}
+
+pub struct FieldAccessPlanner {
+    get_field: Arc<ScalarUDF>,
+    array_element: Arc<ScalarUDF>,
+    array_slice: Arc<ScalarUDF>,
+}
+
+impl FieldAccessPlanner {
+    pub fn try_new(context_provider: &dyn ContextProvider) -> Result<Self> {
+        let Some(get_field) = context_provider.get_function_meta("get_field") else {
+            return internal_err!("get_feild not found");
+        };
+        let Some(array_element) = context_provider.get_function_meta("array_element")
+        else {
+            return internal_err!("array_element not found");
+        };
+        let Some(array_slice) = context_provider.get_function_meta("array_slice") else {
+            return internal_err!("array_slice not found");
+        };
+
+        Ok(Self {
+            get_field,
+            array_element,
+            array_slice,
+        })
+    }
+}
+
+impl UserDefinedPlanner for FieldAccessPlanner {
+    fn plan_field_access(
+        &self,
+        expr: crate::planner::FieldAccessExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerSimplifyResult> {
+        let crate::planner::FieldAccessExpr { expr, field_access } = expr;
+
+        match field_access {
+            // expr["field"] => get_field(expr, "field")
+            GetFieldAccess::NamedStructField { name } => {
+                Ok(PlannerSimplifyResult::Simplified(
+                    self.get_field.call(vec![expr, lit(name)]),
+                ))
+            }
+            // expr[idx] ==> array_element(expr, idx)
+            GetFieldAccess::ListIndex { key: index } => {
+                match expr {
+                    // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
+                    Expr::AggregateFunction(agg_func) if is_array_agg(&agg_func) => {
+                        Ok(PlannerSimplifyResult::Simplified(Expr::AggregateFunction(
+                            datafusion_expr::expr::AggregateFunction::new(
+                                AggregateFunction::NthValue,
+                                agg_func
+                                    .args
+                                    .into_iter()
+                                    .chain(std::iter::once(*index))
+                                    .collect(),
+                                agg_func.distinct,
+                                agg_func.filter.clone(),
+                                agg_func.order_by.clone(),
+                                agg_func.null_treatment,
+                            ),
+                        )))
+                    }
+                    _ => Ok(PlannerSimplifyResult::Simplified(
+                        self.array_element.call(vec![expr, *index]),
+                    )),
+                }
+            }
+            // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
+            GetFieldAccess::ListRange {
+                start,
+                stop,
+                stride,
+            } => Ok(PlannerSimplifyResult::Simplified(
+                self.array_slice.call(vec![expr, *start, *stop, *stride]),
+            )),
+        }
+    }
+}
+
+fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
+    agg_func.func_def
+        == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(
+            AggregateFunction::ArrayAgg,
+        )
 }
 
 #[cfg(test)]

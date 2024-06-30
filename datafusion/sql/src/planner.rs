@@ -31,7 +31,7 @@ use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
-use crate::expr::ArrayFunctionPlanner;
+use crate::expr::{ArrayFunctionPlanner, FieldAccessPlanner};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::TableReference;
 use datafusion_common::{
@@ -251,10 +251,10 @@ pub trait UserDefinedPlanner {
 
     fn plan_field_access(
         &self,
-        _expr: FieldAccessExpr,
+        expr: FieldAccessExpr,
         _schema: &DFSchema,
-    ) -> Result<Option<Expr>> {
-        Ok(None)
+    ) -> Result<PlannerSimplifyResult> {
+        Ok(PlannerSimplifyResult::OriginalFieldAccessExpr(expr))
     }
 }
 
@@ -315,6 +315,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let normalize = options.enable_ident_normalization;
         let array_planner =
             Arc::new(ArrayFunctionPlanner::try_new(context_provider).unwrap()) as _;
+        let field_access_planner =
+            Arc::new(FieldAccessPlanner::try_new(context_provider).unwrap()) as _;
 
         SqlToRel {
             context_provider,
@@ -324,6 +326,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
         // todo put this somewhere else
         .with_user_defined_planner(array_planner)
+        .with_user_defined_planner(field_access_planner)
     }
 
     pub fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {
