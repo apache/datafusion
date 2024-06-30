@@ -25,7 +25,7 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
 };
-use datafusion_expr::WindowUDF;
+use datafusion_expr::{GetFieldAccess, WindowUDF};
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
@@ -243,13 +243,47 @@ pub trait UserDefinedPlanner {
     /// TODO make an API that avoids the need to clone the expressions
     fn plan_binary_op(
         &self,
-        _op: sqlparser::ast::BinaryOperator,
-        _left: Expr,
-        _right: Expr,
+        expr: BinaryExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerSimplifyResult> {
+        Ok(PlannerSimplifyResult::OriginalBinaryExpr(expr))
+    }
+
+    fn plan_field_access(
+        &self,
+        _expr: FieldAccessExpr,
         _schema: &DFSchema,
     ) -> Result<Option<Expr>> {
         Ok(None)
     }
+}
+
+pub struct BinaryExpr {
+    pub op: sqlparser::ast::BinaryOperator,
+    pub left: Expr,
+    pub right: Expr,
+}
+
+pub struct FieldAccessExpr {
+    pub field_access: GetFieldAccess,
+    pub expr: Expr,
+}
+
+pub enum PlannerSimplifyResult {
+    /// The function call was simplified to an entirely new Expr
+    Simplified(Expr),
+    /// the function call could not be simplified, and the arguments
+    /// are return unmodified.
+    OriginalBinaryExpr(BinaryExpr),
+    OriginalFieldAccessExpr(FieldAccessExpr),
+}
+
+pub enum PlanSimplifyResult {
+    /// The function call was simplified to an entirely new Expr
+    Simplified(Expr),
+    /// the function call could not be simplified, and the arguments
+    /// are return unmodified.
+    Original(Vec<Expr>),
 }
 
 /// SQL query planner
