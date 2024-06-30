@@ -131,6 +131,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )))
     }
 
+    // IMPORTANT: Keep sql_array_literal's function body small to prevent stack overflow
+    // This function is recursively called, potentially leading to deep call stacks.
     pub(super) fn sql_array_literal(
         &self,
         elements: Vec<SQLExpr>,
@@ -143,6 +145,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        self.try_plan_array_literal(values, schema)
+    }
+
+    fn try_plan_array_literal(
+        &self,
+        values: Vec<Expr>,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
         let mut exprs = values;
         for planner in self.planners.iter() {
             match planner.plan_array_literal(exprs, schema)? {
