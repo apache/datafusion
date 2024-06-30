@@ -101,12 +101,14 @@ pub fn expr_to_unparsed(expr: &Expr) -> Result<Unparsed> {
     unparser.expr_to_unparsed(expr)
 }
 
+const LOWEST: BinaryOperator = BinaryOperator::BitwiseOr;
+
 impl Unparser<'_> {
     /// Try to unparse the expression into a more human-readable format
     /// by removing unnecessary parentheses.
     pub fn pretty_expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
         let root_expr = self.expr_to_sql(expr)?;
-        Ok(self.pretty(root_expr, 0, 0))
+        Ok(self.pretty(root_expr, &LOWEST, &LOWEST))
     }
 
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
@@ -620,28 +622,33 @@ impl Unparser<'_> {
     fn pretty(
         &self,
         expr: ast::Expr,
-        left_precedence: u8,
-        right_precedence: u8,
+        left_op: &BinaryOperator,
+        right_op: &BinaryOperator,
     ) -> ast::Expr {
         match expr {
             ast::Expr::Nested(nested) => {
-                let surrounding_precedence = left_precedence.max(right_precedence);
-                let inner_precedence = self.lowest_inner_precedence(&nested);
-                if inner_precedence >= surrounding_precedence {
-                    self.pretty(*nested, left_precedence, right_precedence)
-                } else {
-                    ast::Expr::Nested(Box::new(self.pretty(*nested, 0, 0)))
-                }
-            }
-            ast::Expr::BinaryOp { left, op, right } => {
-                let op_precedence = self.sql_op_precedence(&op);
+                let surrounding_precedence = self
+                    .sql_op_precedence(left_op)
+                    .max(self.sql_op_precedence(right_op));
 
-                ast::Expr::BinaryOp {
-                    left: Box::new(self.pretty(*left, left_precedence, op_precedence)),
-                    right: Box::new(self.pretty(*right, op_precedence, right_precedence)),
-                    op,
+                let inner_precedence = self.lowest_inner_precedence(&nested);
+
+                let not_associative =
+                    matches!(left_op, BinaryOperator::Minus | BinaryOperator::Divide);
+
+                if inner_precedence == surrounding_precedence && not_associative {
+                    ast::Expr::Nested(Box::new(self.pretty(*nested, &LOWEST, &LOWEST)))
+                } else if inner_precedence >= surrounding_precedence {
+                    self.pretty(*nested, left_op, right_op)
+                } else {
+                    ast::Expr::Nested(Box::new(self.pretty(*nested, &LOWEST, &LOWEST)))
                 }
             }
+            ast::Expr::BinaryOp { left, op, right } => ast::Expr::BinaryOp {
+                left: Box::new(self.pretty(*left, left_op, &op)),
+                right: Box::new(self.pretty(*right, &op, right_op)),
+                op,
+            },
             _ => expr,
         }
     }

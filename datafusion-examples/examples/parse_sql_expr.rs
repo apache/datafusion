@@ -193,6 +193,11 @@ async fn round_trip_parse_sql_expr_pretty_demo() -> Result<()> {
             "((int_col > 10) * (double_col BETWEEN 10 AND 20))",
             "(int_col > 10) * (double_col BETWEEN 10 AND 20)",
         ),
+        ("int_col - (double_col - 8)", "int_col - (double_col - 8)"),
+        ("((int_col - double_col) - 8)", "int_col - double_col - 8"),
+        ("(int_col OR (double_col - 8))", "int_col OR double_col - 8"),
+        ("(int_col / (double_col - 8))", "int_col / (double_col - 8)"),
+        ("((int_col / double_col) * 8)", "int_col / double_col * 8"),
     ];
 
     for (sql, pretty) in sql_pairs.iter() {
