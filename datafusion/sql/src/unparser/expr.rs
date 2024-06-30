@@ -106,10 +106,7 @@ impl Unparser<'_> {
     /// by removing unnecessary parentheses.
     pub fn pretty_expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
         let root_expr = self.expr_to_sql(expr)?;
-        match root_expr {
-            ast::Expr::Nested(nested) => Ok(self.pretty(*nested, 100, 100)),
-            expr => Ok(self.pretty(expr, 100, 100)),
-        }
+        Ok(self.pretty(root_expr, 0, 0))
     }
 
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
@@ -613,15 +610,13 @@ impl Unparser<'_> {
         }
     }
 
-    /// Given an expression of the form `(a + b) * (c * d)`,
+    /// Given an expression of the form `((a + b) * (c * d))`,
     /// the parenthesing is redundant if the precedence of the nested expression is already higher
     /// than the surrounding operators' precedence. The above expression would become
     /// `(a + b) * c * d`.
     ///
     /// Also note that when fetching the precedence of a nested expression, we ignore other nested
     /// expressions, so precedence of expr `(a * (b + c))` equals `*` and not `+`.
-    ///
-    /// Note that outermost parentheses should be removed before calling this function.
     fn pretty(
         &self,
         expr: ast::Expr,
@@ -630,12 +625,12 @@ impl Unparser<'_> {
     ) -> ast::Expr {
         match expr {
             ast::Expr::Nested(nested) => {
-                let surrounding_precedence = left_precedence.min(right_precedence);
+                let surrounding_precedence = left_precedence.max(right_precedence);
                 let inner_precedence = self.lowest_inner_precedence(&nested);
                 if inner_precedence >= surrounding_precedence {
                     self.pretty(*nested, left_precedence, right_precedence)
                 } else {
-                    ast::Expr::Nested(Box::new(self.pretty(*nested, 100, 100)))
+                    ast::Expr::Nested(Box::new(self.pretty(*nested, 0, 0)))
                 }
             }
             ast::Expr::BinaryOp { left, op, right } => {
