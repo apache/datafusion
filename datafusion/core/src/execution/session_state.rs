@@ -953,11 +953,9 @@ impl SessionState {
         // register crate of array expressions (if enabled)
         #[cfg(feature = "array_expressions")]
         {
-            let array_planner =
-                Arc::new(ArrayFunctionPlanner::try_new(provider).unwrap()) as _;
+            let array_planner = Arc::new(ArrayFunctionPlanner::default()) as _;
 
-            let field_access_planner =
-                Arc::new(FieldAccessPlanner::try_new(provider).unwrap()) as _;
+            let field_access_planner = Arc::new(FieldAccessPlanner::default()) as _;
 
             query
                 .with_user_defined_planner(array_planner)

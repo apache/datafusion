@@ -15,57 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use datafusion_common::{internal_err, utils::list_ndims, DFSchema, Result};
+use datafusion_common::{utils::list_ndims, DFSchema, Result};
 use datafusion_expr::{
-    lit,
-    planner::{
-        BinaryExpr, ContextProvider, FieldAccessExpr, PlannerSimplifyResult,
-        UserDefinedPlanner,
-    },
-    AggregateFunction, Expr, ExprSchemable, GetFieldAccess, ScalarUDF,
+    planner::{BinaryExpr, FieldAccessExpr, PlannerSimplifyResult, UserDefinedPlanner},
+    AggregateFunction, Expr, ExprSchemable, GetFieldAccess,
+};
+use datafusion_functions::expr_fn::get_field;
+
+use crate::{
+    array_has::array_has_all,
+    expr_fn::{array_append, array_concat, array_prepend},
+    extract::{array_element, array_slice},
+    make_array::make_array,
 };
 
-pub struct ArrayFunctionPlanner {
-    array_concat: Arc<ScalarUDF>,
-    array_append: Arc<ScalarUDF>,
-    array_prepend: Arc<ScalarUDF>,
-    array_has_all: Arc<ScalarUDF>,
-    make_array: Arc<ScalarUDF>,
-}
-
-impl ArrayFunctionPlanner {
-    pub fn try_new(context_provider: &dyn ContextProvider) -> Result<Self> {
-        let Some(array_concat) = context_provider.get_function_meta("array_concat")
-        else {
-            return internal_err!("array_concat not found");
-        };
-        let Some(array_append) = context_provider.get_function_meta("array_append")
-        else {
-            return internal_err!("array_append not found");
-        };
-        let Some(array_prepend) = context_provider.get_function_meta("array_prepend")
-        else {
-            return internal_err!("array_prepend not found");
-        };
-        let Some(array_has_all) = context_provider.get_function_meta("array_has_all")
-        else {
-            return internal_err!("array_has_all not found");
-        };
-        let Some(make_array) = context_provider.get_function_meta("make_array") else {
-            return internal_err!("make_array not found");
-        };
-
-        Ok(Self {
-            array_concat,
-            array_append,
-            array_prepend,
-            array_has_all,
-            make_array,
-        })
-    }
-}
+#[derive(Default)]
+pub struct ArrayFunctionPlanner {}
 
 impl UserDefinedPlanner for ArrayFunctionPlanner {
     fn plan_binary_op(
@@ -93,17 +58,15 @@ impl UserDefinedPlanner for ArrayFunctionPlanner {
                 // TODO: concat function ignore null, but string concat takes null into consideration
                 // we can rewrite it to concat if we can configure the behaviour of concat function to the one like `string concat operator`
             } else if left_list_ndims == right_list_ndims {
-                return Ok(PlannerSimplifyResult::Simplified(
-                    self.array_concat.call(vec![left, right]),
-                ));
+                return Ok(PlannerSimplifyResult::Simplified(array_concat(vec![
+                    left, right,
+                ])));
             } else if left_list_ndims > right_list_ndims {
-                return Ok(PlannerSimplifyResult::Simplified(
-                    self.array_append.call(vec![left, right]),
-                ));
+                return Ok(PlannerSimplifyResult::Simplified(array_append(left, right)));
             } else if left_list_ndims < right_list_ndims {
-                return Ok(PlannerSimplifyResult::Simplified(
-                    self.array_prepend.call(vec![left, right]),
-                ));
+                return Ok(PlannerSimplifyResult::Simplified(array_prepend(
+                    left, right,
+                )));
             }
         } else if matches!(
             op,
@@ -118,14 +81,14 @@ impl UserDefinedPlanner for ArrayFunctionPlanner {
             if left_list_ndims > 0 && right_list_ndims > 0 {
                 if op == sqlparser::ast::BinaryOperator::AtArrow {
                     // array1 @> array2 -> array_has_all(array1, array2)
-                    return Ok(PlannerSimplifyResult::Simplified(
-                        self.array_has_all.call(vec![left, right]),
-                    ));
+                    return Ok(PlannerSimplifyResult::Simplified(array_has_all(
+                        left, right,
+                    )));
                 } else {
                     // array1 <@ array2 -> array_has_all(array2, array1)
-                    return Ok(PlannerSimplifyResult::Simplified(
-                        self.array_has_all.call(vec![right, left]),
-                    ));
+                    return Ok(PlannerSimplifyResult::Simplified(array_has_all(
+                        right, left,
+                    )));
                 }
             }
         }
@@ -142,38 +105,12 @@ impl UserDefinedPlanner for ArrayFunctionPlanner {
         exprs: Vec<Expr>,
         _schema: &DFSchema,
     ) -> Result<PlannerSimplifyResult> {
-        Ok(PlannerSimplifyResult::Simplified(
-            self.make_array.call(exprs),
-        ))
+        Ok(PlannerSimplifyResult::Simplified(make_array(exprs)))
     }
 }
 
-pub struct FieldAccessPlanner {
-    get_field: Arc<ScalarUDF>,
-    array_element: Arc<ScalarUDF>,
-    array_slice: Arc<ScalarUDF>,
-}
-
-impl FieldAccessPlanner {
-    pub fn try_new(context_provider: &dyn ContextProvider) -> Result<Self> {
-        let Some(get_field) = context_provider.get_function_meta("get_field") else {
-            return internal_err!("get_feild not found");
-        };
-        let Some(array_element) = context_provider.get_function_meta("array_element")
-        else {
-            return internal_err!("array_element not found");
-        };
-        let Some(array_slice) = context_provider.get_function_meta("array_slice") else {
-            return internal_err!("array_slice not found");
-        };
-
-        Ok(Self {
-            get_field,
-            array_element,
-            array_slice,
-        })
-    }
-}
+#[derive(Default)]
+pub struct FieldAccessPlanner {}
 
 impl UserDefinedPlanner for FieldAccessPlanner {
     fn plan_field_access(
@@ -186,9 +123,7 @@ impl UserDefinedPlanner for FieldAccessPlanner {
         match field_access {
             // expr["field"] => get_field(expr, "field")
             GetFieldAccess::NamedStructField { name } => {
-                Ok(PlannerSimplifyResult::Simplified(
-                    self.get_field.call(vec![expr, lit(name)]),
-                ))
+                Ok(PlannerSimplifyResult::Simplified(get_field(expr, name)))
             }
             // expr[idx] ==> array_element(expr, idx)
             GetFieldAccess::ListIndex { key: index } => {
@@ -210,9 +145,9 @@ impl UserDefinedPlanner for FieldAccessPlanner {
                             ),
                         )))
                     }
-                    _ => Ok(PlannerSimplifyResult::Simplified(
-                        self.array_element.call(vec![expr, *index]),
-                    )),
+                    _ => Ok(PlannerSimplifyResult::Simplified(array_element(
+                        expr, *index,
+                    ))),
                 }
             }
             // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
@@ -220,9 +155,12 @@ impl UserDefinedPlanner for FieldAccessPlanner {
                 start,
                 stop,
                 stride,
-            } => Ok(PlannerSimplifyResult::Simplified(
-                self.array_slice.call(vec![expr, *start, *stop, *stride]),
-            )),
+            } => Ok(PlannerSimplifyResult::Simplified(array_slice(
+                expr,
+                *start,
+                *stop,
+                Some(*stride),
+            ))),
         }
     }
 }

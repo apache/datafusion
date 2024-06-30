@@ -181,56 +181,6 @@ impl PlannerContext {
     }
 }
 
-// /// This trait allows users to customize the behavior of the SQL planner
-// pub trait UserDefinedPlanner {
-//     /// Plan the binary operation between two expressions, return None if not possible
-//     fn plan_binary_op(
-//         &self,
-//         expr: BinaryExpr,
-//         _schema: &DFSchema,
-//     ) -> Result<PlannerSimplifyResult> {
-//         Ok(PlannerSimplifyResult::OriginalBinaryExpr(expr))
-//     }
-
-//     /// Plan the field access expression, return None if not possible
-//     fn plan_field_access(
-//         &self,
-//         expr: FieldAccessExpr,
-//         _schema: &DFSchema,
-//     ) -> Result<PlannerSimplifyResult> {
-//         Ok(PlannerSimplifyResult::OriginalFieldAccessExpr(expr))
-//     }
-
-//     fn plan_array_literal(
-//         &self,
-//         exprs: Vec<Expr>,
-//         _schema: &DFSchema,
-//     ) -> Result<PlannerSimplifyResult> {
-//         Ok(PlannerSimplifyResult::OriginalArray(exprs))
-//     }
-// }
-
-// pub struct BinaryExpr {
-//     pub op: sqlparser::ast::BinaryOperator,
-//     pub left: Expr,
-//     pub right: Expr,
-// }
-
-// pub struct FieldAccessExpr {
-//     pub field_access: GetFieldAccess,
-//     pub expr: Expr,
-// }
-
-// pub enum PlannerSimplifyResult {
-//     /// The function call was simplified to an entirely new Expr
-//     Simplified(Expr),
-//     /// the function call could not be simplified, and the arguments
-//     /// are return unmodified.
-//     OriginalBinaryExpr(BinaryExpr),
-//     OriginalFieldAccessExpr(FieldAccessExpr),
-//     OriginalArray(Vec<Expr>),
-// }
-
 /// SQL query planner
 pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,

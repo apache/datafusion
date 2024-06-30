@@ -1319,7 +1319,6 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
- "datafusion-sql",
  "itertools",
  "log",
  "paste",
