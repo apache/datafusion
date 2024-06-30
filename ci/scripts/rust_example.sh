@@ -29,6 +29,6 @@ do
   # Skip tests that rely on external storage and flight
   if [ ! -d $filename ]; then
      cargo run --example $example_name
-     cargo clean
+     cargo clean -p datafusion-examples
   fi
 done
