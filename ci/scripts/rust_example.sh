@@ -25,7 +25,7 @@ cd datafusion-examples/examples/
 cargo fmt --all -- --check
 cargo check --examples
 
-size_threshold=$((10 * 1024 * 1024 * 1024))  # 10GB
+size_threshold=$((1 * 1024 * 1024 * 1024))  # 1GB
 
 files=$(ls .)
 for filename in $files
@@ -35,7 +35,7 @@ do
   if [ ! -d $filename ]; then
      cargo run --example $example_name
 
-     # If the examples are getting to big, run cargo clean
+     # If the examples are getting too big, run cargo clean
      current_size=$(du -s $repo_dir/target/debug | awk '{print $1}')
 
     if [ $current_size -gt $size_threshold ]; then
