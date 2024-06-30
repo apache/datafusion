@@ -896,7 +896,7 @@ macro_rules! get_data_page_statistics {
                             [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten(),
                         )),
                         _ => {
-                            // don't know how to extract statistics, so return a new null array
+                            // don't know how to extract statistics, so return an empty array
                             new_empty_array(&DataType::Time64(unit.clone()))
                         }
                     })
