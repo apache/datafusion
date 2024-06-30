@@ -873,6 +873,36 @@ macro_rules! get_data_page_statistics {
                     Decimal128Array::from_iter([<$stat_type_prefix Decimal128DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
                 Some(DataType::Decimal256(precision, scale)) => Ok(Arc::new(
                     Decimal256Array::from_iter([<$stat_type_prefix Decimal256DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
+                Some(DataType::Time32(unit)) => {
+                    Ok(match unit {
+                        TimeUnit::Second =>  Arc::new(Time32SecondArray::from_iter(
+                            [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        TimeUnit::Millisecond => Arc::new(Time32MillisecondArray::from_iter(
+                            [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        _ => {
+                            let len = $iterator.count();
+                            // // don't know how to extract statistics, so return a null array
+                            new_null_array($data_type.unwrap(), len)
+                        }
+                    })
+                }
+                Some(DataType::Time64(unit)) => {
+                    Ok(match unit {
+                        TimeUnit::Microsecond =>  Arc::new(Time64MicrosecondArray::from_iter(
+                            [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        TimeUnit::Nanosecond => Arc::new(Time64NanosecondArray::from_iter(
+                            [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        _ => {
+                            let len = $iterator.count();
+                            // // don't know how to extract statistics, so return a null array
+                            new_null_array($data_type.unwrap(), len)
+                        }
+                    })
+                }
                 _ => unimplemented!()
             }
         }
