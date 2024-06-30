@@ -39,6 +39,7 @@ pub mod extract;
 pub mod flatten;
 pub mod length;
 pub mod make_array;
+pub mod planner;
 pub mod position;
 pub mod range;
 pub mod remove;
