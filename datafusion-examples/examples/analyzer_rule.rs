@@ -37,13 +37,14 @@ use std::sync::{Arc, Mutex};
 /// See [optimizer_rule.rs] for an example of a optimizer rule
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    // AnalyzerRules run before OptimizerRuless.
+    // AnalyzerRules run before OptimizerRules.
     //
     // DataFusion includes several built in AnalyzerRules for tasks such as type
     // coercion which change the types of expressions in the plan. Add our new
     // rule to the context to run it during the analysis phase.
     let rule = Arc::new(RowLevelAccessControl::new());
-    let ctx = SessionContext::new().add_analyzer_rule(Arc::clone(&rule) as _);
+    let ctx = SessionContext::new();
+    ctx.add_analyzer_rule(Arc::clone(&rule) as _);
 
     ctx.register_batch("employee", employee_batch())?;
 
