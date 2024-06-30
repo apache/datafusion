@@ -213,6 +213,7 @@ datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
+datafusion.explain.show_schema false
 datafusion.explain.show_sizes true
 datafusion.explain.show_statistics false
 datafusion.optimizer.allow_symmetric_joins_without_pruning true
@@ -296,6 +297,7 @@ datafusion.execution.target_partitions 7 Number of partitions for query executio
 datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
 datafusion.explain.logical_plan_only false When set to true, the explain statement will only print logical plans
 datafusion.explain.physical_plan_only false When set to true, the explain statement will only print physical plans
+datafusion.explain.show_schema false When set to true, the explain statement will print schema information
 datafusion.explain.show_sizes true When set to true, the explain statement will print the partition sizes
 datafusion.explain.show_statistics false When set to true, the explain statement will print operator statistics for physical plans
 datafusion.optimizer.allow_symmetric_joins_without_pruning true Should DataFusion allow symmetric hash joins for unbounded data sources even when its inputs do not have any ordering or filtering If the flag is not enabled, the SymmetricHashJoin operator will be unable to prune its internal buffers, resulting in certain join types - such as Full, Left, LeftAnti, LeftSemi, Right, RightAnti, and RightSemi - being produced only at the end of the execution. This is not typical in stream processing. Additionally, without proper design for long runner execution, all types of joins may encounter out-of-memory errors.
