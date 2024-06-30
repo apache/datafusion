@@ -48,7 +48,6 @@ async fn main() -> Result<()> {
     simple_dataframe_parse_sql_expr_demo().await?;
     query_parquet_demo().await?;
     round_trip_parse_sql_expr_demo().await?;
-    round_trip_parse_sql_expr_pretty_demo().await?;
     Ok(())
 }
 
@@ -153,57 +152,6 @@ async fn round_trip_parse_sql_expr_demo() -> Result<()> {
     let round_trip_sql = unparser.expr_to_sql(&parsed_expr)?.to_string();
 
     assert_eq!(sql, round_trip_sql);
-
-    Ok(())
-}
-
-// TODO: Move these to sql/tests/cases/plan_to_sql.rs
-async fn round_trip_parse_sql_expr_pretty_demo() -> Result<()> {
-    let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
-    let df = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-
-    let unparser = Unparser::default();
-
-    let sql_pairs = vec![
-        (
-            "((int_col < 5) OR (double_col = 8))",
-            "int_col < 5 OR double_col = 8",
-        ),
-        (
-            "((int_col + 5) * (double_col * 8))",
-            "(int_col + 5) * double_col * 8",
-        ),
-        ("(3 + (5 * 6) * 3)", "3 + 5 * 6 * 3"),
-        ("((3 * (5 + 6)) * 3)", "3 * (5 + 6) * 3"),
-        ("((3 AND (5 OR 6)) * 3)", "(3 AND (5 OR 6)) * 3"),
-        ("((3 + (5 + 6)) * 3)", "(3 + 5 + 6) * 3"),
-        ("((3 + (5 + 6)) * 3)", "(3 + 5 + 6) * 3"),
-        (
-            "((int_col > 10) AND (double_col BETWEEN 10 AND 20))",
-            "int_col > 10 AND double_col BETWEEN 10 AND 20",
-        ),
-        (
-            "((int_col > 10) * (double_col BETWEEN 10 AND 20))",
-            "(int_col > 10) * (double_col BETWEEN 10 AND 20)",
-        ),
-        ("int_col - (double_col - 8)", "int_col - (double_col - 8)"),
-        ("((int_col - double_col) - 8)", "int_col - double_col - 8"),
-        ("(int_col OR (double_col - 8))", "int_col OR double_col - 8"),
-        ("(int_col / (double_col - 8))", "int_col / (double_col - 8)"),
-        ("((int_col / double_col) * 8)", "int_col / double_col * 8"),
-    ];
-
-    for (sql, pretty) in sql_pairs.iter() {
-        let parsed_expr = df.parse_sql_expr(sql)?;
-        let round_trip_sql = unparser.pretty_expr_to_sql(&parsed_expr)?.to_string();
-        assert_eq!(pretty.to_string(), round_trip_sql);
-    }
 
     Ok(())
 }

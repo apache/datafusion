@@ -315,4 +315,52 @@ fn test_table_references_in_plan_to_sql() {
     );
 }
 
-// TODO: Pretty unparse tests here
+#[test]
+fn test_pretty_roundtrip() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+
+    let df_schema = DFSchema::try_from(schema)?;
+
+    let context = MockContextProvider::default();
+    let sql_to_rel = SqlToRel::new(&context);
+
+    let unparser = Unparser::default();
+
+    let sql_to_pretty_unparse = vec![
+        ("((id < 5) OR (age = 8))", "id < 5 OR age = 8"),
+        ("((id + 5) * (age * 8))", "(id + 5) * age * 8"),
+        ("(3 + (5 * 6) * 3)", "3 + 5 * 6 * 3"),
+        ("((3 * (5 + 6)) * 3)", "3 * (5 + 6) * 3"),
+        ("((3 AND (5 OR 6)) * 3)", "(3 AND (5 OR 6)) * 3"),
+        ("((3 + (5 + 6)) * 3)", "(3 + 5 + 6) * 3"),
+        ("((3 + (5 + 6)) + 3)", "3 + 5 + 6 + 3"),
+        (
+            "((id > 10) AND (age BETWEEN 10 AND 20))",
+            "id > 10 AND age BETWEEN 10 AND 20",
+        ),
+        (
+            "((id > 10) * (age BETWEEN 10 AND 20))",
+            "(id > 10) * (age BETWEEN 10 AND 20)",
+        ),
+        ("id - (age - 8)", "id - (age - 8)"),
+        ("((id - age) - 8)", "id - age - 8"),
+        ("(id OR (age - 8))", "id OR age - 8"),
+        ("(id / (age - 8))", "id / (age - 8)"),
+        ("((id / age) * 8)", "id / age * 8"),
+    ];
+
+    for (sql, pretty) in sql_to_pretty_unparse.iter() {
+        let sql_expr = Parser::new(&GenericDialect {})
+            .try_with_sql(sql)?
+            .parse_expr()?;
+        let expr =
+            sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
+        let round_trip_sql = unparser.pretty_expr_to_sql(&expr)?.to_string();
+        assert_eq!(pretty.to_string(), round_trip_sql);
+    }
+
+    Ok(())
+}
