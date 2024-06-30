@@ -24,16 +24,16 @@ concurrency:
 on:
   push:
     paths-ignore:
-      - "docs/**"
-      - "**.md"
-      - ".github/ISSUE_TEMPLATE/**"
-      - ".github/pull_request_template.md"
+      - 'docs/**'
+      - '**.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
   pull_request:
     paths-ignore:
-      - "docs/**"
-      - "**.md"
-      - ".github/ISSUE_TEMPLATE/**"
-      - ".github/pull_request_template.md"
+      - 'docs/**'
+      - '**.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
@@ -134,7 +134,7 @@ jobs:
   # Run tests
   linux-test:
     name: cargo test (amd64)
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -145,7 +145,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: stable        
+          rust-version: stable
       - name: Run tests (excluding doctests)
         run: cargo test --lib --tests --bins --features avro,json,backtrace
       - name: Verify Working Directory Clean
@@ -153,7 +153,7 @@ jobs:
 
   linux-test-datafusion-cli:
     name: cargo test datafusion-cli (amd64)
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -174,11 +174,18 @@ jobs:
 
   linux-test-example:
     name: cargo examples (amd64)
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
     steps:
+      - run: |
+          # clear space for the examples
+          # https://github.com/actions/runner-images/issues/2840#issuecomment-790492173
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo rm -rf "/usr/local/share/boost"
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -195,12 +202,10 @@ jobs:
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
-
-
   # Run `cargo test doc` (test documentation examples)
   linux-test-doc:
     name: cargo test doc (amd64)
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -223,7 +228,7 @@ jobs:
   # Run `cargo doc` to ensure the rustdoc is clean
   linux-rustdoc:
     name: cargo doc
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -260,7 +265,7 @@ jobs:
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
     name: verify benchmark results (amd64)
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -290,8 +295,8 @@ jobs:
         run: git diff --exit-code
 
   sqllogictest-postgres:
-    name: "Run sqllogictest with Postgres runner"
-    needs: [ linux-build-lib ]
+    name: 'Run sqllogictest with Postgres runner'
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -343,15 +348,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true      
+          submodules: true
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-macos-builder       
+        uses: ./.github/actions/setup-macos-builder
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
           cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
-          cargo test --lib --tests --bins --all-features  
+          cargo test --lib --tests --bins --all-features
 
   macos-aarch64:
     name: cargo test (macos-aarch64)
@@ -371,7 +376,7 @@ jobs:
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-20.04
     container:
       image: amd64/rust:bullseye # Workaround https://github.com/actions/setup-python/issues/721
@@ -381,7 +386,7 @@ jobs:
           submodules: true
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.8"
+          python-version: '3.8'
       - name: Install PyArrow
         run: |
           echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
@@ -468,7 +473,7 @@ jobs:
 
   clippy:
     name: clippy
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -488,7 +493,7 @@ jobs:
   # Check answers are correct when hash values collide
   hash-collisions:
     name: cargo test hash collisions (amd64)
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -507,7 +512,7 @@ jobs:
 
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -527,7 +532,7 @@ jobs:
 
   config-docs-check:
     name: check configs.md is up-to-date
-    needs: [ linux-build-lib ]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -541,7 +546,7 @@ jobs:
           rust-version: stable
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
       - name: Check if configs.md has been modified
         run: |
           # If you encounter an error, run './dev/update_config_docs.sh' and commit
@@ -568,9 +573,9 @@ jobs:
         working-directory: datafusion/core
         run: |
           # If you encounter an error with any of the commands below
-          # it means some crate in your dependency tree has a higher 
-          # MSRV (Min Supported Rust Version) than the one specified 
-          # in the `rust-version` key of `Cargo.toml`. Check your 
+          # it means some crate in your dependency tree has a higher
+          # MSRV (Min Supported Rust Version) than the one specified
+          # in the `rust-version` key of `Cargo.toml`. Check your
           # dependencies or update the version in `Cargo.toml`
           cargo msrv verify
       - name: Check datafusion-substrait
