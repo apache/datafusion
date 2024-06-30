@@ -158,7 +158,6 @@ async fn round_trip_parse_sql_expr_demo() -> Result<()> {
 }
 
 // TODO: Move these to sql/tests/cases/plan_to_sql.rs
-/// DataFusion can parse a SQL text and convert it back to SQL using [`Unparser`].
 async fn round_trip_parse_sql_expr_pretty_demo() -> Result<()> {
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();

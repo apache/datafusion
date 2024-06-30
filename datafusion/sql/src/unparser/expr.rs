@@ -101,14 +101,14 @@ pub fn expr_to_unparsed(expr: &Expr) -> Result<Unparsed> {
     unparser.expr_to_unparsed(expr)
 }
 
-const LOWEST: BinaryOperator = BinaryOperator::BitwiseOr;
+const LOWEST: &BinaryOperator = &BinaryOperator::BitwiseOr;
 
 impl Unparser<'_> {
     /// Try to unparse the expression into a more human-readable format
     /// by removing unnecessary parentheses.
     pub fn pretty_expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
         let root_expr = self.expr_to_sql(expr)?;
-        Ok(self.pretty(root_expr, &LOWEST, &LOWEST))
+        Ok(self.pretty(root_expr, LOWEST, LOWEST))
     }
 
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
@@ -631,17 +631,17 @@ impl Unparser<'_> {
                     .sql_op_precedence(left_op)
                     .max(self.sql_op_precedence(right_op));
 
-                let inner_precedence = self.lowest_inner_precedence(&nested);
+                let inner_precedence = self.inner_precedence(&nested);
 
                 let not_associative =
                     matches!(left_op, BinaryOperator::Minus | BinaryOperator::Divide);
 
                 if inner_precedence == surrounding_precedence && not_associative {
-                    ast::Expr::Nested(Box::new(self.pretty(*nested, &LOWEST, &LOWEST)))
+                    ast::Expr::Nested(Box::new(self.pretty(*nested, LOWEST, LOWEST)))
                 } else if inner_precedence >= surrounding_precedence {
                     self.pretty(*nested, left_op, right_op)
                 } else {
-                    ast::Expr::Nested(Box::new(self.pretty(*nested, &LOWEST, &LOWEST)))
+                    ast::Expr::Nested(Box::new(self.pretty(*nested, LOWEST, LOWEST)))
                 }
             }
             ast::Expr::BinaryOp { left, op, right } => ast::Expr::BinaryOp {
@@ -653,7 +653,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn lowest_inner_precedence(&self, expr: &ast::Expr) -> u8 {
+    fn inner_precedence(&self, expr: &ast::Expr) -> u8 {
         match expr {
             ast::Expr::Nested(_) | ast::Expr::Identifier(_) | ast::Expr::Value(_) => 100,
             ast::Expr::BinaryOp { op, .. } => self.sql_op_precedence(op),
