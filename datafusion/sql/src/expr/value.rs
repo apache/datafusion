@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, PlannerContext, PlannerSimplifyResult, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
+    ScalarValue,
 };
-use datafusion_expr::expr::{BinaryExpr, Placeholder, ScalarFunction};
+use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
@@ -142,13 +143,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        if let Some(udf) = self.context_provider.get_function_meta("make_array") {
-            Ok(Expr::ScalarFunction(ScalarFunction::new_udf(udf, values)))
-        } else {
-            not_impl_err!(
-                "array_expression featrue is disable, So should implement make_array UDF by yourself"
-            )
+        let mut exprs = values;
+        let num_planners = self.planners.len();
+        for (i, planner) in self.planners.iter().enumerate() {
+            match planner.plan_array_literal(exprs, schema)? {
+                PlannerSimplifyResult::Simplified(expr) => {
+                    return Ok(expr);
+                }
+                PlannerSimplifyResult::OriginalArray(_) if i + 1 == num_planners => {
+                    return internal_err!(
+                        "Expected a simplified result, but none was found"
+                    )
+                }
+                PlannerSimplifyResult::OriginalArray(values) => exprs = values,
+                _ => {
+                    return exec_err!(
+                        "Unexpected result encountered. Did you expect an OriginalArray?"
+                    )
+                }
+            }
         }
+
+        internal_err!("Unexpect to reach here")
     }
 
     /// Convert a SQL interval expression to a DataFusion logical plan

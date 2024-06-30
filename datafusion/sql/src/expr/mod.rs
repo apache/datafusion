@@ -936,6 +936,7 @@ pub struct ArrayFunctionPlanner {
     array_append: Arc<ScalarUDF>,
     array_prepend: Arc<ScalarUDF>,
     array_has_all: Arc<ScalarUDF>,
+    make_array: Arc<ScalarUDF>,
 }
 
 impl ArrayFunctionPlanner {
@@ -956,12 +957,16 @@ impl ArrayFunctionPlanner {
         else {
             return internal_err!("array_has_all not found");
         };
+        let Some(make_array) = context_provider.get_function_meta("make_array") else {
+            return internal_err!("make_array not found");
+        };
 
         Ok(Self {
             array_concat,
             array_append,
             array_prepend,
             array_has_all,
+            make_array,
         })
     }
 }
@@ -1030,6 +1035,16 @@ impl UserDefinedPlanner for ArrayFunctionPlanner {
 
         Ok(PlannerSimplifyResult::OriginalBinaryExpr(
             crate::planner::BinaryExpr { op, left, right },
+        ))
+    }
+
+    fn plan_array_literal(
+        &self,
+        exprs: Vec<Expr>,
+        _schema: &DFSchema,
+    ) -> Result<PlannerSimplifyResult> {
+        Ok(PlannerSimplifyResult::Simplified(
+            self.make_array.call(exprs),
         ))
     }
 }

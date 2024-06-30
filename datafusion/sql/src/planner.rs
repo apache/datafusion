@@ -240,7 +240,6 @@ impl PlannerContext {
 /// This trait allows users to customize the behavior of the SQL planner
 pub trait UserDefinedPlanner {
     /// Plan the binary operation between two expressions, return None if not possible
-    /// TODO make an API that avoids the need to clone the expressions
     fn plan_binary_op(
         &self,
         expr: BinaryExpr,
@@ -249,12 +248,21 @@ pub trait UserDefinedPlanner {
         Ok(PlannerSimplifyResult::OriginalBinaryExpr(expr))
     }
 
+    /// Plan the field access expression, return None if not possible
     fn plan_field_access(
         &self,
         expr: FieldAccessExpr,
         _schema: &DFSchema,
     ) -> Result<PlannerSimplifyResult> {
         Ok(PlannerSimplifyResult::OriginalFieldAccessExpr(expr))
+    }
+
+    fn plan_array_literal(
+        &self,
+        exprs: Vec<Expr>,
+        _schema: &DFSchema,
+    ) -> Result<PlannerSimplifyResult> {
+        Ok(PlannerSimplifyResult::OriginalArray(exprs))
     }
 }
 
@@ -276,6 +284,7 @@ pub enum PlannerSimplifyResult {
     /// are return unmodified.
     OriginalBinaryExpr(BinaryExpr),
     OriginalFieldAccessExpr(FieldAccessExpr),
+    OriginalArray(Vec<Expr>),
 }
 
 pub enum PlanSimplifyResult {
