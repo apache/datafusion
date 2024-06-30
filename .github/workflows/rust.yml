@@ -182,10 +182,10 @@ jobs:
       - run: |
           # clear space for the examples
           # https://github.com/actions/runner-images/issues/2840#issuecomment-790492173
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo rm -rf "/usr/local/share/boost"
+          rm -rf /usr/share/dotnet
+          rm -rf /opt/ghc
+          rm -rf "$AGENT_TOOLSDIRECTORY"
+          rm -rf "/usr/local/share/boost"
       - uses: actions/checkout@v4
         with:
           submodules: true
