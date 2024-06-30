@@ -20,11 +20,10 @@ use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
-    ScalarValue,
+    internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
-use datafusion_expr::planner::PlannerSimplifyResult;
+use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
@@ -147,15 +146,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut exprs = values;
         for planner in self.planners.iter() {
             match planner.plan_array_literal(exprs, schema)? {
-                PlannerSimplifyResult::Simplified(expr) => {
+                PlannerResult::Simplified(expr) => {
                     return Ok(expr);
                 }
-                PlannerSimplifyResult::OriginalArray(values) => exprs = values,
-                _ => {
-                    return exec_err!(
-                        "Unexpected result encountered. Did you expect an OriginalArray?"
-                    )
-                }
+                PlannerResult::Original(values) => exprs = values,
             }
         }
 

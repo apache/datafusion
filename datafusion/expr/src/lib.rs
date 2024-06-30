@@ -82,6 +82,7 @@ pub use partition_evaluator::PartitionEvaluator;
 pub use signature::{
     ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
 };
+pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{AggregateExt, AggregateUDF, AggregateUDFImpl, ReversedUDAF};
 pub use udf::{ScalarUDF, ScalarUDFImpl};

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL query planner module
+//! [`ContextProvider`] and [`UserDefinedPlanner`] APIs to customize SQL query planning
 
 use std::sync::Arc;
 
@@ -27,8 +27,9 @@ use datafusion_common::{
 
 use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
 
-/// The ContextProvider trait allows the query planner to obtain meta-data about tables and
-/// functions referenced in SQL statements
+/// Provides the `SQL` query planner  meta-data about tables and
+/// functions referenced in SQL statements, without a direct dependency on other
+/// DataFusion structures
 pub trait ContextProvider {
     /// Getter for a datasource
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
@@ -82,23 +83,23 @@ pub trait ContextProvider {
 }
 
 /// This trait allows users to customize the behavior of the SQL planner
-pub trait UserDefinedPlanner {
+pub trait UserDefinedSQLPlanner {
     /// Plan the binary operation between two expressions, returns OriginalBinaryExpr if not possible
     fn plan_binary_op(
         &self,
-        expr: BinaryExpr,
+        expr: RawBinaryExpr,
         _schema: &DFSchema,
-    ) -> Result<PlannerSimplifyResult> {
-        Ok(PlannerSimplifyResult::OriginalBinaryExpr(expr))
+    ) -> Result<PlannerResult<RawBinaryExpr>> {
+        Ok(PlannerResult::Original(expr))
     }
 
     /// Plan the field access expression, returns OriginalFieldAccessExpr if not possible
     fn plan_field_access(
         &self,
-        expr: FieldAccessExpr,
+        expr: RawFieldAccessExpr,
         _schema: &DFSchema,
-    ) -> Result<PlannerSimplifyResult> {
-        Ok(PlannerSimplifyResult::OriginalFieldAccessExpr(expr))
+    ) -> Result<PlannerResult<RawFieldAccessExpr>> {
+        Ok(PlannerResult::Original(expr))
     }
 
     // Plan the array literal, returns OriginalArray if not possible
@@ -106,28 +107,33 @@ pub trait UserDefinedPlanner {
         &self,
         exprs: Vec<Expr>,
         _schema: &DFSchema,
-    ) -> Result<PlannerSimplifyResult> {
-        Ok(PlannerSimplifyResult::OriginalArray(exprs))
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(exprs))
     }
 }
 
-pub struct BinaryExpr {
+/// An operator with two arguments to plan
+///
+/// Note `left` and `right` are DataFusion [`Expr`]s but the `op` is the SQL AST operator.
+/// This structure is used by [`UserDefinedPlanner`] to plan operators with custom expressions.
+pub struct RawBinaryExpr {
     pub op: sqlparser::ast::BinaryOperator,
     pub left: Expr,
     pub right: Expr,
 }
 
-pub struct FieldAccessExpr {
+/// An expression with GetFieldAccess to plan
+///
+/// This structure is used by [`UserDefinedPlanner`] to plan operators with custom expressions.
+pub struct RawFieldAccessExpr {
     pub field_access: GetFieldAccess,
     pub expr: Expr,
 }
 
-pub enum PlannerSimplifyResult {
+pub enum PlannerResult<T> {
     /// The function call was simplified to an entirely new Expr
     Simplified(Expr),
     /// the function call could not be simplified, and the arguments
     /// are return unmodified.
-    OriginalBinaryExpr(BinaryExpr),
-    OriginalFieldAccessExpr(FieldAccessExpr),
-    OriginalArray(Vec<Expr>),
+    Original(T),
 }

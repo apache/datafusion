@@ -17,9 +17,8 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use datafusion_common::exec_err;
-use datafusion_expr::planner::FieldAccessExpr;
-use datafusion_expr::planner::PlannerSimplifyResult;
+use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::planner::RawFieldAccessExpr;
 use sqlparser::ast::{CastKind, Expr as SQLExpr, Subscript, TrimWhereField, Value};
 
 use datafusion_common::{
@@ -107,22 +106,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
     ) -> Result<Expr> {
         // try extension planers
-        let mut binary_expr = datafusion_expr::planner::BinaryExpr { op, left, right };
+        let mut binary_expr = datafusion_expr::planner::RawBinaryExpr { op, left, right };
         for planner in self.planners.iter() {
             match planner.plan_binary_op(binary_expr, schema)? {
-                PlannerSimplifyResult::Simplified(expr) => {
+                PlannerResult::Simplified(expr) => {
                     return Ok(expr);
                 }
-                PlannerSimplifyResult::OriginalBinaryExpr(expr) => {
+                PlannerResult::Original(expr) => {
                     binary_expr = expr;
-                }
-                _ => {
-                    return exec_err!("Unexpected result encountered. Did you expect an OriginalBinaryExpr?")
                 }
             }
         }
 
-        let datafusion_expr::planner::BinaryExpr { op, left, right } = binary_expr;
+        let datafusion_expr::planner::RawBinaryExpr { op, left, right } = binary_expr;
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
             self.parse_sql_binary_op(op)?,
@@ -282,17 +278,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 };
 
-                let mut field_access_expr = FieldAccessExpr { expr, field_access };
+                let mut field_access_expr = RawFieldAccessExpr { expr, field_access };
                 for planner in self.planners.iter() {
                     match planner.plan_field_access(field_access_expr, schema)? {
-                        PlannerSimplifyResult::Simplified(expr) => {
-                            return Ok(expr)
-                        }
-                        PlannerSimplifyResult::OriginalFieldAccessExpr(expr) => {
+                        PlannerResult::Simplified(expr) => return Ok(expr),
+                        PlannerResult::Original(expr) => {
                             field_access_expr = expr;
-                        }
-                        _ => {
-                            return exec_err!("Unexpected result encountered. Did you expect an OriginalFieldAccessExpr?")
                         }
                     }
                 }

@@ -52,7 +52,6 @@ datafusion-functions = { workspace = true }
 itertools = { version = "0.12", features = ["use_std"] }
 log = { workspace = true }
 paste = "1.0.14"
-sqlparser = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }

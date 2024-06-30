@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! SQL planning extensions like [`ArrayFunctionPlanner`] and [`FieldAccessPlanner`]
+
 use datafusion_common::{utils::list_ndims, DFSchema, Result};
 use datafusion_expr::{
-    planner::{BinaryExpr, FieldAccessExpr, PlannerSimplifyResult, UserDefinedPlanner},
-    AggregateFunction, Expr, ExprSchemable, GetFieldAccess,
+    planner::{PlannerResult, RawBinaryExpr, RawFieldAccessExpr, UserDefinedSQLPlanner},
+    sqlparser, AggregateFunction, Expr, ExprSchemable, GetFieldAccess,
 };
 use datafusion_functions::expr_fn::get_field;
 
@@ -32,13 +34,13 @@ use crate::{
 #[derive(Default)]
 pub struct ArrayFunctionPlanner {}
 
-impl UserDefinedPlanner for ArrayFunctionPlanner {
+impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
     fn plan_binary_op(
         &self,
-        expr: BinaryExpr,
+        expr: RawBinaryExpr,
         schema: &DFSchema,
-    ) -> Result<PlannerSimplifyResult> {
-        let BinaryExpr { op, left, right } = expr;
+    ) -> Result<PlannerResult<RawBinaryExpr>> {
+        let RawBinaryExpr { op, left, right } = expr;
 
         if op == sqlparser::ast::BinaryOperator::StringConcat {
             let left_type = left.get_type(schema)?;
@@ -58,15 +60,11 @@ impl UserDefinedPlanner for ArrayFunctionPlanner {
                 // TODO: concat function ignore null, but string concat takes null into consideration
                 // we can rewrite it to concat if we can configure the behaviour of concat function to the one like `string concat operator`
             } else if left_list_ndims == right_list_ndims {
-                return Ok(PlannerSimplifyResult::Simplified(array_concat(vec![
-                    left, right,
-                ])));
+                return Ok(PlannerResult::Simplified(array_concat(vec![left, right])));
             } else if left_list_ndims > right_list_ndims {
-                return Ok(PlannerSimplifyResult::Simplified(array_append(left, right)));
+                return Ok(PlannerResult::Simplified(array_append(left, right)));
             } else if left_list_ndims < right_list_ndims {
-                return Ok(PlannerSimplifyResult::Simplified(array_prepend(
-                    left, right,
-                )));
+                return Ok(PlannerResult::Simplified(array_prepend(left, right)));
             }
         } else if matches!(
             op,
@@ -81,56 +79,48 @@ impl UserDefinedPlanner for ArrayFunctionPlanner {
             if left_list_ndims > 0 && right_list_ndims > 0 {
                 if op == sqlparser::ast::BinaryOperator::AtArrow {
                     // array1 @> array2 -> array_has_all(array1, array2)
-                    return Ok(PlannerSimplifyResult::Simplified(array_has_all(
-                        left, right,
-                    )));
+                    return Ok(PlannerResult::Simplified(array_has_all(left, right)));
                 } else {
                     // array1 <@ array2 -> array_has_all(array2, array1)
-                    return Ok(PlannerSimplifyResult::Simplified(array_has_all(
-                        right, left,
-                    )));
+                    return Ok(PlannerResult::Simplified(array_has_all(right, left)));
                 }
             }
         }
 
-        Ok(PlannerSimplifyResult::OriginalBinaryExpr(BinaryExpr {
-            op,
-            left,
-            right,
-        }))
+        Ok(PlannerResult::Original(RawBinaryExpr { op, left, right }))
     }
 
     fn plan_array_literal(
         &self,
         exprs: Vec<Expr>,
         _schema: &DFSchema,
-    ) -> Result<PlannerSimplifyResult> {
-        Ok(PlannerSimplifyResult::Simplified(make_array(exprs)))
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Simplified(make_array(exprs)))
     }
 }
 
 #[derive(Default)]
 pub struct FieldAccessPlanner {}
 
-impl UserDefinedPlanner for FieldAccessPlanner {
+impl UserDefinedSQLPlanner for FieldAccessPlanner {
     fn plan_field_access(
         &self,
-        expr: FieldAccessExpr,
+        expr: RawFieldAccessExpr,
         _schema: &DFSchema,
-    ) -> Result<PlannerSimplifyResult> {
-        let FieldAccessExpr { expr, field_access } = expr;
+    ) -> Result<PlannerResult<RawFieldAccessExpr>> {
+        let RawFieldAccessExpr { expr, field_access } = expr;
 
         match field_access {
             // expr["field"] => get_field(expr, "field")
             GetFieldAccess::NamedStructField { name } => {
-                Ok(PlannerSimplifyResult::Simplified(get_field(expr, name)))
+                Ok(PlannerResult::Simplified(get_field(expr, name)))
             }
             // expr[idx] ==> array_element(expr, idx)
             GetFieldAccess::ListIndex { key: index } => {
                 match expr {
                     // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
                     Expr::AggregateFunction(agg_func) if is_array_agg(&agg_func) => {
-                        Ok(PlannerSimplifyResult::Simplified(Expr::AggregateFunction(
+                        Ok(PlannerResult::Simplified(Expr::AggregateFunction(
                             datafusion_expr::expr::AggregateFunction::new(
                                 AggregateFunction::NthValue,
                                 agg_func
@@ -145,9 +135,7 @@ impl UserDefinedPlanner for FieldAccessPlanner {
                             ),
                         )))
                     }
-                    _ => Ok(PlannerSimplifyResult::Simplified(array_element(
-                        expr, *index,
-                    ))),
+                    _ => Ok(PlannerResult::Simplified(array_element(expr, *index))),
                 }
             }
             // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
@@ -155,7 +143,7 @@ impl UserDefinedPlanner for FieldAccessPlanner {
                 start,
                 stop,
                 stride,
-            } => Ok(PlannerSimplifyResult::Simplified(array_slice(
+            } => Ok(PlannerResult::Simplified(array_slice(
                 expr,
                 *start,
                 *stop,
