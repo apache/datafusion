@@ -67,7 +67,6 @@ use datafusion_expr::{
     AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ScalarUDF, TableSource,
     WindowUDF,
 };
-use datafusion_functions_array::planner::{ArrayFunctionPlanner, FieldAccessPlanner};
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerRule,
@@ -953,9 +952,11 @@ impl SessionState {
         // register crate of array expressions (if enabled)
         #[cfg(feature = "array_expressions")]
         {
-            let array_planner = Arc::new(ArrayFunctionPlanner::default()) as _;
+            let array_planner =
+                Arc::new(functions_array::planner::ArrayFunctionPlanner::default()) as _;
 
-            let field_access_planner = Arc::new(FieldAccessPlanner::default()) as _;
+            let field_access_planner =
+                Arc::new(functions_array::planner::FieldAccessPlanner::default()) as _;
 
             query
                 .with_user_defined_planner(array_planner)

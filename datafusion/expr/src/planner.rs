@@ -83,7 +83,7 @@ pub trait ContextProvider {
 
 /// This trait allows users to customize the behavior of the SQL planner
 pub trait UserDefinedPlanner {
-    /// Plan the binary operation between two expressions, return None if not possible
+    /// Plan the binary operation between two expressions, returns OriginalBinaryExpr if not possible
     fn plan_binary_op(
         &self,
         expr: BinaryExpr,
@@ -92,7 +92,7 @@ pub trait UserDefinedPlanner {
         Ok(PlannerSimplifyResult::OriginalBinaryExpr(expr))
     }
 
-    /// Plan the field access expression, return None if not possible
+    /// Plan the field access expression, returns OriginalFieldAccessExpr if not possible
     fn plan_field_access(
         &self,
         expr: FieldAccessExpr,
@@ -101,6 +101,7 @@ pub trait UserDefinedPlanner {
         Ok(PlannerSimplifyResult::OriginalFieldAccessExpr(expr))
     }
 
+    // Plan the array literal, returns OriginalArray if not possible
     fn plan_array_literal(
         &self,
         exprs: Vec<Expr>,
