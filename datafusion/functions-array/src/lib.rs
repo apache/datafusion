@@ -46,7 +46,6 @@ pub mod repeat;
 pub mod replace;
 pub mod resize;
 pub mod reverse;
-pub mod rewrite;
 pub mod set_ops;
 pub mod sort;
 pub mod string;
@@ -151,7 +150,6 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         }
         Ok(()) as Result<()>
     })?;
-    registry.register_function_rewrite(Arc::new(rewrite::ArrayFunctionRewriter {}))?;
 
     Ok(())
 }

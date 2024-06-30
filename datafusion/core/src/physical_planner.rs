@@ -775,6 +775,16 @@ impl DefaultPhysicalPlanner {
                     .map(|s| (s.to_string(), arrow_schema::DataType::Null))
                     .collect::<Vec<_>>();
 
+                let keep_partition_by_columns = match source_option_tuples
+                    .get("execution.keep_partition_by_columns")
+                    .map(|v| v.trim()) {
+                    None => session_state.config().options().execution.keep_partition_by_columns,
+                    Some("true") => true,
+                    Some("false") => false,
+                    Some(value) =>
+                        return Err(DataFusionError::Configuration(format!("provided value for 'execution.keep_partition_by_columns' was not recognized: \"{}\"", value))),
+                };
+
                 // Set file sink related options
                 let config = FileSinkConfig {
                     object_store_url,
@@ -783,6 +793,7 @@ impl DefaultPhysicalPlanner {
                     output_schema: Arc::new(schema),
                     table_partition_cols,
                     overwrite: false,
+                    keep_partition_by_columns,
                 };
 
                 let sink_format = file_type_to_format(file_type)?
@@ -2752,7 +2763,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 schema: DFSchemaRef::new(
-                    DFSchema::from_unqualifed_fields(
+                    DFSchema::from_unqualified_fields(
                         vec![Field::new("a", DataType::Int32, false)].into(),
                         HashMap::new(),
                     )

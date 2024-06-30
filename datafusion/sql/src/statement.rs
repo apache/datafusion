@@ -888,6 +888,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 Some(v) => v,
             };
+
             if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
