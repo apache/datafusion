@@ -22,13 +22,13 @@
 use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
-    new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
-    StringArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    new_empty_array, new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+    LargeStringArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
@@ -882,9 +882,8 @@ macro_rules! get_data_page_statistics {
                             [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten(),
                         )),
                         _ => {
-                            let len = $iterator.count();
-                            // // don't know how to extract statistics, so return a null array
-                            new_null_array($data_type.unwrap(), len)
+                            // don't know how to extract statistics, so return an empty array
+                            new_empty_array(&DataType::Time32(unit.clone()))
                         }
                     })
                 }
@@ -897,9 +896,8 @@ macro_rules! get_data_page_statistics {
                             [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten(),
                         )),
                         _ => {
-                            let len = $iterator.count();
-                            // // don't know how to extract statistics, so return a null array
-                            new_null_array($data_type.unwrap(), len)
+                            // don't know how to extract statistics, so return a new null array
+                            new_empty_array(&DataType::Time64(unit.clone()))
                         }
                     })
                 }
