@@ -1705,7 +1705,7 @@ mod test {
     fn test_extract_expressions_from_grouping_set() -> Result<()> {
         let mut result = Vec::with_capacity(3);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
-        let schema = DFSchema::from_unqualifed_fields(
+        let schema = DFSchema::from_unqualified_fields(
             vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
@@ -1724,7 +1724,7 @@ mod test {
     fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
         let mut result = Vec::with_capacity(2);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
-        let schema = DFSchema::from_unqualifed_fields(
+        let schema = DFSchema::from_unqualified_fields(
             vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
@@ -1793,7 +1793,7 @@ mod test {
     #[test]
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
-        let schema = DFSchema::from_unqualifed_fields(
+        let schema = DFSchema::from_unqualified_fields(
             vec![Field::new("a", DataType::Int32, false)].into(),
             HashMap::default(),
         )?;

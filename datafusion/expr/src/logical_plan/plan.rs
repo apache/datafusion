@@ -857,13 +857,13 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo {
                 input: _,
                 output_url,
-                format_options,
+                file_type,
                 options,
                 partition_by,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
-                format_options: format_options.clone(),
+                file_type: file_type.clone(),
                 options: options.clone(),
                 partition_by: partition_by.clone(),
             })),
@@ -1728,7 +1728,7 @@ impl LogicalPlan {
                     LogicalPlan::Copy(CopyTo {
                         input: _,
                         output_url,
-                        format_options,
+                        file_type,
                         options,
                         ..
                     }) => {
@@ -1738,7 +1738,7 @@ impl LogicalPlan {
                             .collect::<Vec<String>>()
                             .join(", ");
 
-                        write!(f, "CopyTo: format={format_options} output_url={output_url} options: ({op_str})")
+                        write!(f, "CopyTo: format={} output_url={output_url} options: ({op_str})", file_type.get_ext())
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())
@@ -2079,7 +2079,7 @@ impl SubqueryAlias {
         let fields = change_redundant_column(plan.schema().fields());
         let meta_data = plan.schema().as_ref().metadata().clone();
         let schema: Schema =
-            DFSchema::from_unqualifed_fields(fields.into(), meta_data)?.into();
+            DFSchema::from_unqualified_fields(fields.into(), meta_data)?.into();
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();

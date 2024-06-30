@@ -84,6 +84,7 @@ fn parse_decimals() {
             ParserOptions {
                 parse_float_as_decimal: true,
                 enable_ident_normalization: false,
+                support_varchar_with_length: false,
             },
         );
     }
@@ -137,6 +138,7 @@ fn parse_ident_normalization() {
             ParserOptions {
                 parse_float_as_decimal: false,
                 enable_ident_normalization,
+                support_varchar_with_length: false,
             },
         );
         if plan.is_ok() {
@@ -1222,22 +1224,6 @@ fn select_binary_expr_nested() {
     let sql = "SELECT (age + salary)/2 from person";
     let expected = "Projection: (person.age + person.salary) / Int64(2)\
                         \n  TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn select_at_arrow_operator() {
-    let sql = "SELECT left @> right from array";
-    let expected = "Projection: array.left @> array.right\
-                        \n  TableScan: array";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn select_arrow_at_operator() {
-    let sql = "SELECT left <@ right from array";
-    let expected = "Projection: array.left <@ array.right\
-                        \n  TableScan: array";
     quick_test(sql, expected);
 }
 

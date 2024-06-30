@@ -843,7 +843,7 @@ mod test {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(
-                DFSchema::from_unqualifed_fields(
+                DFSchema::from_unqualified_fields(
                     vec![Field::new("a", data_type, true)].into(),
                     std::collections::HashMap::new(),
                 )
@@ -1081,7 +1081,7 @@ mod test {
         let expr = col("a").in_list(vec![lit(1_i32), lit(4_i8), lit(8_i64)], false);
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::from_unqualifed_fields(
+            schema: Arc::new(DFSchema::from_unqualified_fields(
                 vec![Field::new("a", DataType::Decimal128(12, 4), true)].into(),
                 std::collections::HashMap::new(),
             )?),
@@ -1278,7 +1278,7 @@ mod test {
     #[test]
     fn test_type_coercion_rewrite() -> Result<()> {
         // gt
-        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
@@ -1289,7 +1289,7 @@ mod test {
         assert_eq!(expected, result);
 
         // eq
-        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
@@ -1300,7 +1300,7 @@ mod test {
         assert_eq!(expected, result);
 
         // lt
-        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
@@ -1373,7 +1373,7 @@ mod test {
 
     #[test]
     fn test_case_expression_coercion() -> Result<()> {
-        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
                 Field::new("boolean", DataType::Boolean, true),
                 Field::new("integer", DataType::Int32, true),

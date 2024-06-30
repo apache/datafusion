@@ -799,7 +799,7 @@ mod tests {
     use arrow::datatypes::{Field, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
     use arrow_schema::Fields;
-    use datafusion_common::{assert_contains, FileType, GetExt, ScalarValue};
+    use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::ExecutionPlanProperties;
@@ -1994,7 +1994,7 @@ mod tests {
         // Configure listing options
         let file_format = ParquetFormat::default().with_enable_pruning(true);
         let listing_options = ListingOptions::new(Arc::new(file_format))
-            .with_file_extension(FileType::PARQUET.get_ext());
+            .with_file_extension(ParquetFormat::default().get_ext());
 
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";

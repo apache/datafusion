@@ -21,7 +21,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::config::FormatOptions;
+use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{DFSchemaRef, TableReference};
 
 use crate::LogicalPlan;
@@ -35,8 +35,8 @@ pub struct CopyTo {
     pub output_url: String,
     /// Determines which, if any, columns should be used for hive-style partitioned writes
     pub partition_by: Vec<String>,
-    /// File format options.
-    pub format_options: FormatOptions,
+    /// File type trait
+    pub file_type: Arc<dyn FileType>,
     /// SQL Options that can affect the formats
     pub options: HashMap<String, String>,
 }
