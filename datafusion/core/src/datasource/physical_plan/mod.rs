@@ -24,14 +24,10 @@ mod file_groups;
 mod file_scan_config;
 pub mod file_stream;
 mod json;
-#[cfg(feature = "parquet")]
-pub mod parquet;
 mod statistics;
 
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
-#[cfg(feature = "parquet")]
-pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
