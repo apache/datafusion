@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`MemoryCatalogProvider`], [`MemoryCatalogProviderList`]: In-memory implementations of [`CatalogListProvider`] and [`CatalogProvider`]:
+//! [`MemoryCatalogProvider`], [`MemoryCatalogProviderList`]: In-memory
+//! implementations of [`CatalogProviderList`] and [`CatalogProvider`].
 
 use crate::catalog::schema::SchemaProvider;
 use crate::catalog::{CatalogProvider, CatalogProviderList};
