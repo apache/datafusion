@@ -124,12 +124,12 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
-            // The SanityCheckPlan will reject non-runnable query
+            // The SanityCheckPlan rule checks whether the order and
+            // distribution requirements of each node in the plan
+            // is satisfied. It will also reject non-runnable query
             // plans that use pipeline-breaking operators on infinite
-            // input(s) as well as checks whether the order and
-            // distribution requirements of each children of a plan
-            // are satisfied. The rule generates a diagnostic error
-            // message when this happens. It makes no changes to the
+            // input(s). The rule generates a diagnostic error
+            // message for invalid plans. It makes no changes to the
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
             Arc::new(SanityCheckPlan::new()),
