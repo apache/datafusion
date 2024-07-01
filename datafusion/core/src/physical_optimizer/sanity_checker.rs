@@ -126,19 +126,16 @@ pub fn check_plan_sanity(
         plan.required_input_distribution().iter()
     ) {
         let child_eq_props = child.equivalence_properties();
-        match child_sort_req {
-            None => (),
-            Some(child_sort_req) => {
-                if !child_eq_props.ordering_satisfy_requirement(child_sort_req) {
-                    let child_plan_str = get_plan_string(child);
-                    return plan_err!(
-                        "Child: {:?} does not satisfy parent order requirements: {:?}",
-                        child_plan_str,
-                        child_sort_req
-                    );
-                }
+        if let Some(child_sort_req) = child_sort_req {
+            if !child_eq_props.ordering_satisfy_requirement(child_sort_req) {
+                let child_plan_str = get_plan_string(child);
+                return plan_err!(
+                    "Child: {:?} does not satisfy parent order requirements: {:?}",
+                    child_plan_str,
+                    child_sort_req
+                );
             }
-        };
+        }
 
         if !child
             .output_partitioning()

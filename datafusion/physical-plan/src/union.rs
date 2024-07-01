@@ -137,7 +137,8 @@ impl UnionExec {
         PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
-
+/// Calculate `EquivalenceProperties` for `UnionExec` from the `EquivalenceProperties`
+/// of its children.
 fn calculate_union_eq_properties(
     children_eqs: &[&EquivalenceProperties],
     schema: SchemaRef,

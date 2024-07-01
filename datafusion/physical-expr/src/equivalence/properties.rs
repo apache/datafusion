@@ -959,8 +959,7 @@ impl EquivalenceProperties {
         let const_exprs = self
             .constants
             .iter()
-            .map(|const_expr| const_expr.expr().clone())
-            .collect::<Vec<_>>();
+            .map(|const_expr| const_expr.expr().clone());
         let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
         let normalized_expr = self.eq_group.normalize_expr(expr.clone());
         is_constant_recurse(&normalized_constants, &normalized_expr)
