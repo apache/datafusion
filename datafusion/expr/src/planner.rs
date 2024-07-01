@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ContextProvider`] and [`UserDefinedPlanner`] APIs to customize SQL query planning
+//! [`ContextProvider`] and [`UserDefinedSQLPlanner`] APIs to customize SQL query planning
 
 use std::sync::Arc;
 
