@@ -600,7 +600,7 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 // * the current column is an expression "f"
                 //
                 // return the expression `d + e` (not `d + e` as f)
-                let input_expr = input.expr[idx].clone().unalias_nested();
+                let input_expr = input.expr[idx].clone().unalias_nested().data;
                 Ok(Transformed::yes(input_expr))
             }
             // Unsupported type for consecutive projection merge analysis.
