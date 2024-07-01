@@ -846,6 +846,9 @@ macro_rules! get_data_page_statistics {
                     })
                     }).flatten().collect::<Vec<_>>(),
                 ))),
+                Some(DataType::Dictionary(_, value_type)) => {
+                    [<$stat_type_prefix:lower _ page_statistics>](Some(value_type), $iterator)
+                },
                 Some(DataType::Timestamp(unit, timezone)) => {
                     let iter = [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten();
                     Ok(match unit {

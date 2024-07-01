@@ -1752,7 +1752,7 @@ async fn test_dictionary() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "string_dict_i32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
