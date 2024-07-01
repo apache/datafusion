@@ -177,6 +177,22 @@ select unnest(column1) + 1 , column1 from unnest_table;
 7 [6]
 13 [12]
 
+## unnest on multiple columns
+query II
+select unnest(column1), unnest(column2) from unnest_table;
+----
+1 7
+2 NULL
+3 NULL
+4 8
+5 9
+NULL 10
+6 11
+NULL 12
+12 NULL
+NULL 42
+NULL NULL
+
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest('foo');
 
