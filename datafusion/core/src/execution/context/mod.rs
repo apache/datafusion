@@ -317,6 +317,37 @@ impl SessionContext {
         }
     }
 
+    /// Enable the dynamic file query for the current session.
+    /// See [DynamicFileSchemaProvider] for more details
+    ///
+    /// # Example: query the url table
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::{error::Result, assert_batches_eq};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+    /// let ctx = SessionContext::new_with_config(cfg);
+    /// ctx.enable_url_table().ok();
+    /// let results = ctx
+    ///   .sql("SELECT a, MIN(b) FROM 'tests/data/example.csv' as example GROUP BY a LIMIT 100")
+    ///   .await?
+    ///   .collect()
+    ///   .await?;
+    /// assert_batches_eq!(
+    ///  &[
+    ///    "+---+----------------+",
+    ///    "| a | MIN(example.b) |",
+    ///    "+---+----------------+",
+    ///    "| 1 | 2              |",
+    ///    "+---+----------------+",
+    ///  ],
+    ///  &results
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn enable_url_table(&self) -> Result<Option<Arc<dyn SchemaProvider>>> {
         let state_ref = self.state();
         let catalog_name = state_ref.config_options().catalog.default_catalog.as_str();

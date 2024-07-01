@@ -1093,22 +1093,25 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
 }
 
 /// The state store that stores the reference of the runtime session state.
-pub(crate) struct StateStore {
+pub struct StateStore {
     state: Arc<Mutex<Option<Weak<RwLock<SessionState>>>>>,
 }
 
 impl StateStore {
+    /// Create a new [StateStore]
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(None)),
         }
     }
 
+    /// Set the session state of the store
     pub fn with_state(&self, state: Weak<RwLock<SessionState>>) {
         let mut lock = self.state.lock();
         *lock = Some(state);
     }
 
+    /// Get the current session state of the store
     pub fn get_state(&self) -> Weak<RwLock<SessionState>> {
         self.state.lock().clone().unwrap()
     }

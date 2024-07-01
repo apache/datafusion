@@ -112,6 +112,7 @@ pub struct DynamicListTableFactory {
 }
 
 impl DynamicListTableFactory {
+    /// Create a new [DynamicListTableFactory] with the given state store.
     pub fn new(state_store: Arc<StateStore>) -> Self {
         Self { state_store }
     }

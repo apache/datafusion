@@ -31,7 +31,7 @@ CREATE TABLE data AS
 ;
 
 query ??I rowsort
-SELECT * FROM date;
+SELECT * FROM data;
 ----
 [1, 2, 3] NULL 1
 [1, 2, 3] [4, 5] 1
@@ -42,47 +42,47 @@ SELECT * FROM date;
 ###########
 
 query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) == List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
-SELECT * FROM date WHERE column1 = [1,2,3];
+SELECT * FROM data WHERE column1 = [1,2,3];
 
 query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) == List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
-SELECT * FROM date WHERE column1 = column2
+SELECT * FROM data WHERE column1 = column2
 
 query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) != List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
-SELECT * FROM date WHERE column1 != [1,2,3];
+SELECT * FROM data WHERE column1 != [1,2,3];
 
 query error DataFusion error: Arrow error: Invalid argument error: Invalid comparison operation: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) != List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
-SELECT * FROM date WHERE column1 != column2
+SELECT * FROM data WHERE column1 != column2
 
 ###########
 # Aggregates
 ###########
 
 query error Internal error: Min/Max accumulator not implemented for type List
-SELECT min(column1) FROM date;
+SELECT min(column1) FROM data;
 
 query error Internal error: Min/Max accumulator not implemented for type List
-SELECT max(column1) FROM date;
+SELECT max(column1) FROM data;
 
 query I
-SELECT count(column1) FROM date;
+SELECT count(column1) FROM data;
 ----
 3
 
 # note single count distincts are rewritten to use a group by
 query I
-SELECT count(distinct column1) FROM date;
+SELECT count(distinct column1) FROM data;
 ----
 2
 
 query I
-SELECT count(distinct column2) FROM date;
+SELECT count(distinct column2) FROM data;
 ----
 2
 
 
 # note multiple count distincts are not rewritten
 query II
-SELECT count(distinct column1), count(distinct column2) FROM date;
+SELECT count(distinct column1), count(distinct column2) FROM data;
 ----
 2 2
 
@@ -93,24 +93,24 @@ SELECT count(distinct column1), count(distinct column2) FROM date;
 
 
 query I
-SELECT count(column1) FROM date GROUP BY column3;
+SELECT count(column1) FROM data GROUP BY column3;
 ----
 3
 
 # note single count distincts are rewritten to use a group by
 query I
-SELECT count(distinct column1) FROM date GROUP BY column3;
+SELECT count(distinct column1) FROM data GROUP BY column3;
 ----
 2
 
 query I
-SELECT count(distinct column2) FROM date GROUP BY column3;
+SELECT count(distinct column2) FROM data GROUP BY column3;
 ----
 2
 
 # note multiple count distincts are not rewritten
 query II
-SELECT count(distinct column1), count(distinct column2) FROM date GROUP BY column3;
+SELECT count(distinct column1), count(distinct column2) FROM data GROUP BY column3;
 ----
 2 2
 
@@ -120,21 +120,21 @@ SELECT count(distinct column1), count(distinct column2) FROM date GROUP BY colum
 ###########
 
 query ??I
-SELECT * FROM date ORDER BY column2;
+SELECT * FROM data ORDER BY column2;
 ----
 [2, 3] [2, 3] 1
 [1, 2, 3] [4, 5] 1
 [1, 2, 3] NULL 1
 
 query ??I
-SELECT * FROM date ORDER BY column2 DESC;
+SELECT * FROM data ORDER BY column2 DESC;
 ----
 [1, 2, 3] NULL 1
 [1, 2, 3] [4, 5] 1
 [2, 3] [2, 3] 1
 
 query ??I
-SELECT * FROM date ORDER BY column2 DESC NULLS LAST;
+SELECT * FROM data ORDER BY column2 DESC NULLS LAST;
 ----
 [1, 2, 3] [4, 5] 1
 [2, 3] [2, 3] 1
@@ -142,14 +142,14 @@ SELECT * FROM date ORDER BY column2 DESC NULLS LAST;
 
 # multi column
 query ??I
-SELECT * FROM date ORDER BY column1, column2;
+SELECT * FROM data ORDER BY column1, column2;
 ----
 [1, 2, 3] [4, 5] 1
 [1, 2, 3] NULL 1
 [2, 3] [2, 3] 1
 
 query ??I
-SELECT * FROM date ORDER BY column1, column3, column2;
+SELECT * FROM data ORDER BY column1, column3, column2;
 ----
 [1, 2, 3] [4, 5] 1
 [1, 2, 3] NULL 1
@@ -157,4 +157,4 @@ SELECT * FROM date ORDER BY column1, column3, column2;
 
 
 statement ok
-drop table date
+drop table data

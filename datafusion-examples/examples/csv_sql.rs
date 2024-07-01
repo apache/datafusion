@@ -46,6 +46,7 @@ async fn main() -> Result<()> {
     // print the results
     df.show().await?;
 
+    ctx.enable_url_table()?;
     // query the file by the path dynamically.
     let df = ctx
         .sql(
