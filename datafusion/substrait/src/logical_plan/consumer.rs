@@ -20,8 +20,8 @@ use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
 use datafusion::common::{
-    not_impl_datafusion_err, not_impl_err, substrait_datafusion_err, substrait_err,
-    DFSchema, DFSchemaRef,
+    not_impl_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
+    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
 use substrait::proto::expression::literal::IntervalDayToSecond;
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
@@ -57,7 +57,7 @@ use substrait::proto::{
         reference_segment::ReferenceType::StructField,
         window_function::bound as SubstraitBound,
         window_function::bound::Kind as BoundKind, window_function::Bound,
-        MaskExpression, RexType,
+        window_function::BoundsType, MaskExpression, RexType,
     },
     extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
@@ -71,7 +71,6 @@ use substrait::proto::{
 use substrait::proto::{FunctionArgument, SortField};
 
 use datafusion::arrow::array::GenericListArray;
-use datafusion::common::plan_err;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::logical_expr::expr::{InList, InSubquery, Sort};
 use std::collections::HashMap;
@@ -1188,15 +1187,24 @@ pub async fn from_substrait_rex(
             let order_by =
                 from_substrait_sorts(ctx, &window.sorts, input_schema, extensions)
                     .await?;
-            // Substrait does not encode WindowFrameUnits so we're using a simple logic to determine the units
-            // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
-            // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
-            // TODO: Consider the cases where window frame is specified in query and is different from default
-            let units = if order_by.is_empty() {
-                WindowFrameUnits::Rows
-            } else {
-                WindowFrameUnits::Range
-            };
+
+            let bound_units =
+                match BoundsType::try_from(window.bounds_type).map_err(|e| {
+                    plan_datafusion_err!("Invalid bound type {}: {e}", window.bounds_type)
+                })? {
+                    BoundsType::Rows => WindowFrameUnits::Rows,
+                    BoundsType::Range => WindowFrameUnits::Range,
+                    BoundsType::Unspecified => {
+                        // If the plan does not specify the bounds type, then we use a simple logic to determine the units
+                        // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
+                        // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
+                        if order_by.is_empty() {
+                            WindowFrameUnits::Rows
+                        } else {
+                            WindowFrameUnits::Range
+                        }
+                    }
+                };
             Ok(Arc::new(Expr::WindowFunction(expr::WindowFunction {
                 fun,
                 args: from_substrait_func_args(
@@ -1215,7 +1223,7 @@ pub async fn from_substrait_rex(
                 .await?,
                 order_by,
                 window_frame: datafusion::logical_expr::WindowFrame::new_bounds(
-                    units,
+                    bound_units,
                     from_substrait_bound(&window.lower_bound, true)?,
                     from_substrait_bound(&window.upper_bound, false)?,
                 ),
