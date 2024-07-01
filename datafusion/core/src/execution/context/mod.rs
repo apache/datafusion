@@ -52,7 +52,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    exec_err, not_impl_err, plan_err,
+    config_err, exec_err, not_impl_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, SchemaReference, TableReference,
 };
@@ -72,7 +72,11 @@ use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 
-use crate::catalog::dynamic_file_schema::DynamicFileSchemaProvider;
+use crate::catalog::dynamic_file_schema::{
+    DynamicFileSchemaProvider, DynamicListTableFactory,
+};
+use crate::catalog::schema::SchemaProvider;
+use crate::execution::session_state::StateStore;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -306,28 +310,37 @@ impl SessionContext {
 
     /// Creates a new `SessionContext` using the provided [`SessionState`]
     pub fn new_with_state(state: SessionState) -> Self {
-        let state_ref = Arc::new(RwLock::new(state.clone()));
+        Self {
+            session_id: state.session_id().to_string(),
+            session_start_time: Utc::now(),
+            state: Arc::new(RwLock::new(state.clone())),
+        }
+    }
 
-        if let Ok(provider) = state
+    pub fn enable_url_table(&self) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        let state_ref = self.state();
+        let catalog_name = state_ref.config_options().catalog.default_catalog.as_str();
+        let schema_name = state_ref.config_options().catalog.default_schema.as_str();
+        if let Ok(provider) = state_ref
             // provide a fake table reference to get the default schema provider.
             .schema_for_ref(TableReference::full(
-                state.config_options().catalog.default_catalog.as_str(),
-                state.config_options().catalog.default_schema.as_str(),
+                catalog_name,
+                schema_name,
                 UNNAMED_TABLE,
             ))
         {
-            if let Some(provider) = provider
-                .as_any()
-                .downcast_ref::<DynamicFileSchemaProvider>()
-            {
-                provider.with_state(Arc::downgrade(&state_ref));
-            }
-        }
-
-        Self {
-            session_id: state_ref.clone().read().session_id().to_string(),
-            session_start_time: Utc::now(),
-            state: state_ref,
+            let state_store = Arc::new(StateStore::new());
+            state_store.with_state(self.state_weak_ref());
+            let factory = Arc::new(DynamicListTableFactory::new(state_store));
+            let new_provider =
+                Arc::new(DynamicFileSchemaProvider::new(provider, factory));
+            state_ref
+                .catalog_list()
+                .catalog(catalog_name)
+                .unwrap()
+                .register_schema(schema_name, new_provider)
+        } else {
+            config_err!("default catalog and schema are required for url table")
         }
     }
 

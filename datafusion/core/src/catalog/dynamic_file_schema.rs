@@ -18,11 +18,10 @@
 //! dynamic_file_schema contains a SchemaProvider that creates tables from file paths
 
 use std::any::Any;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use dirs::home_dir;
-use parking_lot::{Mutex, RwLock};
 
 use datafusion_common::plan_datafusion_err;
 
@@ -30,7 +29,7 @@ use crate::catalog::schema::SchemaProvider;
 use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
 use crate::datasource::TableProvider;
 use crate::error::Result;
-use crate::execution::context::SessionState;
+use crate::execution::session_state::StateStore;
 
 /// Implements the [DynamicFileSchemaProvider] that can create tables provider from the file path.
 ///
@@ -38,21 +37,16 @@ use crate::execution::context::SessionState;
 /// isn't exist in the inner schema provider. The required object store must be registered in the session context.
 pub struct DynamicFileSchemaProvider {
     inner: Arc<dyn SchemaProvider>,
-    state_store: StateStore,
+    factory: Arc<dyn UrlTableFactory>,
 }
 
 impl DynamicFileSchemaProvider {
     /// Create a new [DynamicFileSchemaProvider] with the given inner schema provider.
-    pub fn new(inner: Arc<dyn SchemaProvider>) -> Self {
-        Self {
-            inner,
-            state_store: StateStore::new(),
-        }
-    }
-
-    /// register the state store to the schema provider.
-    pub fn with_state(&self, state: Weak<RwLock<SessionState>>) {
-        self.state_store.with_state(state);
+    pub fn new(
+        inner: Arc<dyn SchemaProvider>,
+        factory: Arc<dyn UrlTableFactory>,
+    ) -> Self {
+        Self { inner, factory }
     }
 }
 
@@ -80,26 +74,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         }
 
         let optimized_url = substitute_tilde(name.to_owned());
-        let Ok(table_url) = ListingTableUrl::parse(optimized_url.as_str()) else {
-            return Ok(None);
-        };
-
-        let state = &self
-            .state_store
-            .get_state()
-            .upgrade()
-            .ok_or_else(|| plan_datafusion_err!("locking error"))?
-            .read()
-            .clone();
-        if let Ok(cfg) = ListingTableConfig::new(table_url.clone())
-            .infer(state)
-            .await
-        {
-            ListingTable::try_new(cfg)
-                .map(|table| Some(Arc::new(table) as Arc<dyn TableProvider>))
-        } else {
-            Ok(None)
-        }
+        self.factory.try_new(optimized_url.as_str()).await
     }
 
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -123,31 +98,48 @@ pub fn substitute_tilde(cur: String) -> String {
     cur
 }
 
-/// The state store that stores the reference of the runtime session state.
-pub(crate) struct StateStore {
-    state: Arc<Mutex<Option<Weak<RwLock<SessionState>>>>>,
+/// [UrlTableFactory] is a factory that can create a table provider from the given url.
+#[async_trait]
+pub trait UrlTableFactory: Sync + Send {
+    /// create a new table provider from the provided url
+    async fn try_new(&self, url: &str) -> Result<Option<Arc<dyn TableProvider>>>;
 }
 
-impl StateStore {
-    pub fn new() -> Self {
-        Self {
-            state: Arc::new(Mutex::new(None)),
+/// [DynamicListTableFactory] is a factory that can create a [ListingTable] from the given url.
+#[derive(Default)]
+pub struct DynamicListTableFactory {
+    state_store: Arc<StateStore>,
+}
+
+impl DynamicListTableFactory {
+    pub fn new(state_store: Arc<StateStore>) -> Self {
+        Self { state_store }
+    }
+}
+
+#[async_trait]
+impl UrlTableFactory for DynamicListTableFactory {
+    async fn try_new(&self, url: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        let Ok(table_url) = ListingTableUrl::parse(url) else {
+            return Ok(None);
+        };
+
+        let state = &self
+            .state_store
+            .get_state()
+            .upgrade()
+            .ok_or_else(|| plan_datafusion_err!("locking error"))?
+            .read()
+            .clone();
+        if let Ok(cfg) = ListingTableConfig::new(table_url.clone())
+            .infer(state)
+            .await
+        {
+            ListingTable::try_new(cfg)
+                .map(|table| Some(Arc::new(table) as Arc<dyn TableProvider>))
+        } else {
+            Ok(None)
         }
-    }
-
-    pub fn with_state(&self, state: Weak<RwLock<SessionState>>) {
-        let mut lock = self.state.lock();
-        *lock = Some(state);
-    }
-
-    pub fn get_state(&self) -> Weak<RwLock<SessionState>> {
-        self.state.lock().clone().unwrap()
-    }
-}
-
-impl Default for StateStore {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

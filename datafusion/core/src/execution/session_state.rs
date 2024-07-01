@@ -17,7 +17,6 @@
 
 //! [`SessionState`]: information required to run queries in a session
 
-use crate::catalog::dynamic_file_schema::DynamicFileSchemaProvider;
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
@@ -69,11 +68,12 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
+use parking_lot::{Mutex, RwLock};
 use sqlparser::dialect::dialect_from_str;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use url::Url;
 use uuid::Uuid;
 
@@ -197,8 +197,7 @@ impl SessionState {
 
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
-            let schema =
-                DynamicFileSchemaProvider::new(Arc::new(MemorySchemaProvider::new()));
+            let schema = MemorySchemaProvider::new();
 
             default_catalog
                 .register_schema(
@@ -1090,5 +1089,33 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
 
     fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
         expr.get_type(self.df_schema)
+    }
+}
+
+/// The state store that stores the reference of the runtime session state.
+pub(crate) struct StateStore {
+    state: Arc<Mutex<Option<Weak<RwLock<SessionState>>>>>,
+}
+
+impl StateStore {
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn with_state(&self, state: Weak<RwLock<SessionState>>) {
+        let mut lock = self.state.lock();
+        *lock = Some(state);
+    }
+
+    pub fn get_state(&self) -> Weak<RwLock<SessionState>> {
+        self.state.lock().clone().unwrap()
+    }
+}
+
+impl Default for StateStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
