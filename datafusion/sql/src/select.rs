@@ -290,8 +290,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
-    /// FIXME: if within select_exprs, one unnest expr is referenced multiple times
-    /// it will throw error (e.g select unnest(col1), unnest(col)+1 )
     pub(super) fn try_process_unnest(
         &self,
         input: LogicalPlan,
