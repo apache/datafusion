@@ -115,7 +115,7 @@ pub trait UserDefinedSQLPlanner {
 /// An operator with two arguments to plan
 ///
 /// Note `left` and `right` are DataFusion [`Expr`]s but the `op` is the SQL AST operator.
-/// This structure is used by [`UserDefinedPlanner`] to plan operators with custom expressions.
+/// This structure is used by [`UserDefinedSQLPlanner`] to plan operators with custom expressions.
 pub struct RawBinaryExpr {
     pub op: sqlparser::ast::BinaryOperator,
     pub left: Expr,
@@ -124,7 +124,7 @@ pub struct RawBinaryExpr {
 
 /// An expression with GetFieldAccess to plan
 ///
-/// This structure is used by [`UserDefinedPlanner`] to plan operators with custom expressions.
+/// This structure is used by [`UserDefinedSQLPlanner`] to plan operators with custom expressions.
 pub struct RawFieldAccessExpr {
     pub field_access: GetFieldAccess,
     pub expr: Expr,
