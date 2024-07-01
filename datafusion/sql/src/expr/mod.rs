@@ -288,7 +288,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
 
-                internal_err!("Expected a simplified result, but none was found")
+                not_impl_err!("GetFieldAccess not supported by UserDefinedExtensionPlanners: {field_access_expr:?}")
             }
 
             SQLExpr::CompoundIdentifier(ids) => {

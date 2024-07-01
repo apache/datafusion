@@ -119,6 +119,7 @@ pub trait UserDefinedSQLPlanner {
 ///
 /// This structure is used by [`UserDefinedSQLPlanner`] to plan operators with
 /// custom expressions.
+#[derive(Debug, Clone)]
 pub struct RawBinaryExpr {
     pub op: sqlparser::ast::BinaryOperator,
     pub left: Expr,
@@ -129,15 +130,17 @@ pub struct RawBinaryExpr {
 ///
 /// This structure is used by [`UserDefinedSQLPlanner`] to plan operators with
 /// custom expressions.
+#[derive(Debug, Clone)]
 pub struct RawFieldAccessExpr {
     pub field_access: GetFieldAccess,
     pub expr: Expr,
 }
 
+/// Result of planning a raw expr with [`UserDefinedSQLPlanner`]
+#[derive(Debug, Clone)]
 pub enum PlannerResult<T> {
-    /// The function call was successfully planned as a new Expr
+    /// The raw expression was successfully planned as a new [`Expr`]
     Planned(Expr),
-    /// the function call could not be simplified, and the arguments
-    /// are return unmodified.
+    /// The raw expression could not be planned, and is returned unmodified
     Original(T),
 }
