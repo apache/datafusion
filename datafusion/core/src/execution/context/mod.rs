@@ -1792,6 +1792,7 @@ mod tests {
         let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
         let session_state = SessionState::new_with_config_rt(cfg, runtime);
         let ctx = SessionContext::new_with_state(session_state);
+        ctx.enable_url_table()?;
 
         let result = plan_and_collect(
             &ctx,
