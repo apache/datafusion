@@ -411,27 +411,10 @@ pub struct CopyToNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(string, tag = "2")]
     pub output_url: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "3")]
+    pub file_type: ::prost::alloc::vec::Vec<u8>,
     #[prost(string, repeated, tag = "7")]
     pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(oneof = "copy_to_node::FormatOptions", tags = "8, 9, 10, 11, 12")]
-    pub format_options: ::core::option::Option<copy_to_node::FormatOptions>,
-}
-/// Nested message and enum types in `CopyToNode`.
-pub mod copy_to_node {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum FormatOptions {
-        #[prost(message, tag = "8")]
-        Csv(super::super::datafusion_common::CsvOptions),
-        #[prost(message, tag = "9")]
-        Json(super::super::datafusion_common::JsonOptions),
-        #[prost(message, tag = "10")]
-        Parquet(super::super::datafusion_common::TableParquetOptions),
-        #[prost(message, tag = "11")]
-        Avro(super::super::datafusion_common::AvroOptions),
-        #[prost(message, tag = "12")]
-        Arrow(super::super::datafusion_common::ArrowOptions),
-    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -592,8 +575,8 @@ pub mod logical_expr_node {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Wildcard {
-    #[prost(string, tag = "1")]
-    pub qualifier: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "1")]
+    pub qualifier: ::core::option::Option<TableReference>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -964,7 +947,10 @@ pub struct OptimizedPhysicalPlanType {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlanType {
-    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 9, 5, 6, 10")]
+    #[prost(
+        oneof = "plan_type::PlanTypeEnum",
+        tags = "1, 7, 8, 2, 3, 4, 9, 11, 5, 6, 10, 12"
+    )]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
 /// Nested message and enum types in `PlanType`.
@@ -986,12 +972,16 @@ pub mod plan_type {
         InitialPhysicalPlan(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "9")]
         InitialPhysicalPlanWithStats(super::super::datafusion_common::EmptyMessage),
+        #[prost(message, tag = "11")]
+        InitialPhysicalPlanWithSchema(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "5")]
         OptimizedPhysicalPlan(super::OptimizedPhysicalPlanType),
         #[prost(message, tag = "6")]
         FinalPhysicalPlan(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "10")]
         FinalPhysicalPlanWithStats(super::super::datafusion_common::EmptyMessage),
+        #[prost(message, tag = "12")]
+        FinalPhysicalPlanWithSchema(super::super::datafusion_common::EmptyMessage),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1145,6 +1135,8 @@ pub struct FileSinkConfig {
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(bool, tag = "8")]
     pub overwrite: bool,
+    #[prost(bool, tag = "9")]
+    pub keep_partition_by_columns: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1929,7 +1921,7 @@ pub enum AggregateFunction {
     Min = 0,
     Max = 1,
     /// SUM = 2;
-    Avg = 3,
+    /// AVG = 3;
     /// COUNT = 4;
     /// APPROX_DISTINCT = 5;
     ArrayAgg = 6,
@@ -1939,7 +1931,7 @@ pub enum AggregateFunction {
     /// COVARIANCE_POP = 10;
     /// STDDEV = 11;
     /// STDDEV_POP = 12;
-    Correlation = 13,
+    /// CORRELATION = 13;
     /// APPROX_PERCENTILE_CONT = 14;
     /// APPROX_MEDIAN = 15;
     /// APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
@@ -1948,8 +1940,8 @@ pub enum AggregateFunction {
     /// BIT_AND = 19;
     /// BIT_OR = 20;
     /// BIT_XOR = 21;
-    BoolAnd = 22,
-    BoolOr = 23,
+    ///   BOOL_AND = 22;
+    ///   BOOL_OR = 23;
     /// REGR_SLOPE = 26;
     /// REGR_INTERCEPT = 27;
     /// REGR_COUNT = 28;
@@ -1971,12 +1963,8 @@ impl AggregateFunction {
         match self {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
-            AggregateFunction::Avg => "AVG",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
-            AggregateFunction::Correlation => "CORRELATION",
             AggregateFunction::Grouping => "GROUPING",
-            AggregateFunction::BoolAnd => "BOOL_AND",
-            AggregateFunction::BoolOr => "BOOL_OR",
             AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
     }
@@ -1985,12 +1973,8 @@ impl AggregateFunction {
         match value {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
-            "AVG" => Some(Self::Avg),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
-            "CORRELATION" => Some(Self::Correlation),
             "GROUPING" => Some(Self::Grouping),
-            "BOOL_AND" => Some(Self::BoolAnd),
-            "BOOL_OR" => Some(Self::BoolOr),
             "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
         }

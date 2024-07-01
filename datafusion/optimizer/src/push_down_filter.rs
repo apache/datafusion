@@ -32,13 +32,16 @@ use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
 };
-use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
+use datafusion_expr::utils::{
+    conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
+};
 use datafusion_expr::{
     and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
     Projection, TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::has_all_column_refs;
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
@@ -197,13 +200,7 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
             ]
         })
         .collect::<HashSet<_>>();
-    let columns = predicate.to_columns()?;
-
-    Ok(schema_columns
-        .intersection(&columns)
-        .collect::<HashSet<_>>()
-        .len()
-        == columns.len())
+    Ok(has_all_column_refs(predicate, &schema_columns))
 }
 
 /// Determine whether the predicate can evaluate as the join conditions
@@ -370,14 +367,7 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
             }
         }
         _ => {
-            let columns = expr.to_columns().ok().unwrap();
-
-            if schema_columns
-                .intersection(&columns)
-                .collect::<HashSet<_>>()
-                .len()
-                == columns.len()
-            {
+            if has_all_column_refs(expr, schema_columns) {
                 predicate = Some(expr.clone());
             }
         }
@@ -559,12 +549,9 @@ fn infer_join_predicates(
         .filter_map(|predicate| {
             let mut join_cols_to_replace = HashMap::new();
 
-            let columns = match predicate.to_columns() {
-                Ok(columns) => columns,
-                Err(e) => return Some(Err(e)),
-            };
+            let columns = predicate.column_refs();
 
-            for col in columns.iter() {
+            for &col in columns.iter() {
                 for (l, r) in join_col_keys.iter() {
                     if col == *l {
                         join_cols_to_replace.insert(col, *r);
@@ -594,14 +581,6 @@ fn infer_join_predicates(
 }
 
 impl OptimizerRule for PushDownFilter {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called PushDownFilter::rewrite")
-    }
-
     fn name(&self) -> &str {
         "push_down_filter"
     }
@@ -691,8 +670,9 @@ impl OptimizerRule for PushDownFilter {
                 insert_below(LogicalPlan::SubqueryAlias(subquery_alias), new_filter)
             }
             LogicalPlan::Projection(projection) => {
+                let predicates = split_conjunction_owned(filter.predicate.clone());
                 let (new_projection, keep_predicate) =
-                    rewrite_projection(filter.predicate.clone(), projection)?;
+                    rewrite_projection(predicates, projection)?;
                 if new_projection.transformed {
                     match keep_predicate {
                         None => Ok(new_projection),
@@ -707,32 +687,54 @@ impl OptimizerRule for PushDownFilter {
                 }
             }
             LogicalPlan::Unnest(mut unnest) => {
-                // Unnest is built above Projection, so we only take Projection into consideration
-                match unwrap_arc(unnest.input) {
-                    LogicalPlan::Projection(projection) => {
-                        let (new_projection, keep_predicate) =
-                            rewrite_projection(filter.predicate.clone(), projection)?;
-                        unnest.input = Arc::new(new_projection.data);
+                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let mut non_unnest_predicates = vec![];
+                let mut unnest_predicates = vec![];
+                for predicate in predicates {
+                    // collect all the Expr::Column in predicate recursively
+                    let mut accum: HashSet<Column> = HashSet::new();
+                    expr_to_columns(&predicate, &mut accum)?;
 
-                        if new_projection.transformed {
-                            match keep_predicate {
-                                None => Ok(Transformed::yes(LogicalPlan::Unnest(unnest))),
-                                Some(keep_predicate) => Ok(Transformed::yes(
-                                    LogicalPlan::Filter(Filter::try_new(
-                                        keep_predicate,
-                                        Arc::new(LogicalPlan::Unnest(unnest)),
-                                    )?),
-                                )),
-                            }
-                        } else {
-                            filter.input = Arc::new(LogicalPlan::Unnest(unnest));
-                            Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                        }
+                    if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                        unnest_predicates.push(predicate);
+                    } else {
+                        non_unnest_predicates.push(predicate);
                     }
-                    child => {
-                        filter.input = Arc::new(child);
-                        Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                    }
+                }
+
+                // Unnest predicates should not be pushed down.
+                // If no non-unnest predicates exist, early return
+                if non_unnest_predicates.is_empty() {
+                    filter.input = Arc::new(LogicalPlan::Unnest(unnest));
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                }
+
+                // Push down non-unnest filter predicate
+                // Unnest
+                //   Unenst Input (Projection)
+                // -> rewritten to
+                // Unnest
+                //   Filter
+                //     Unenst Input (Projection)
+
+                let unnest_input = std::mem::take(&mut unnest.input);
+
+                let filter_with_unnest_input = LogicalPlan::Filter(Filter::try_new(
+                    conjunction(non_unnest_predicates).unwrap(), // Safe to unwrap since non_unnest_predicates is not empty.
+                    unnest_input,
+                )?);
+
+                // Directly assign new filter plan as the new unnest's input.
+                // The new filter plan will go through another rewrite pass since the rule itself
+                // is applied recursively to all the child from top to down
+                let unnest_plan =
+                    insert_below(LogicalPlan::Unnest(unnest), filter_with_unnest_input)?;
+
+                match conjunction(unnest_predicates) {
+                    None => Ok(unnest_plan),
+                    Some(predicate) => Ok(Transformed::yes(LogicalPlan::Filter(
+                        Filter::try_new(predicate, Arc::new(unnest_plan.data))?,
+                    ))),
                 }
             }
             LogicalPlan::Union(ref union) => {
@@ -773,7 +775,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
                 for expr in predicates {
-                    let cols = expr.to_columns()?;
+                    let cols = expr.column_refs();
                     if cols.iter().all(|c| group_expr_columns.contains(c)) {
                         push_predicates.push(expr);
                     } else {
@@ -874,7 +876,7 @@ impl OptimizerRule for PushDownFilter {
                 let predicate_push_or_keep = split_conjunction(&filter.predicate)
                     .iter()
                     .map(|expr| {
-                        let cols = expr.to_columns()?;
+                        let cols = expr.column_refs();
                         if cols.iter().any(|c| prevent_cols.contains(&c.name)) {
                             Ok(false) // No push (keep)
                         } else {
@@ -947,6 +949,10 @@ impl OptimizerRule for PushDownFilter {
 /// `plan` is a LogicalPlan for `projection` with possibly a new FilterExec below it.
 /// `remaining_predicate` is any part of the predicate that could not be pushed down
 ///
+/// # Args
+/// - predicates: Split predicates like `[foo=5, bar=6]`
+/// - projection: The target projection plan to push down the predicates
+///
 /// # Example
 ///
 /// Pushing a predicate like `foo=5 AND bar=6` with an input plan like this:
@@ -963,7 +969,7 @@ impl OptimizerRule for PushDownFilter {
 ///   ...
 /// ```
 fn rewrite_projection(
-    predicate: Expr,
+    predicates: Vec<Expr>,
     projection: Projection,
 ) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
     // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
@@ -983,7 +989,7 @@ fn rewrite_projection(
 
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
-    for expr in split_conjunction_owned(predicate) {
+    for expr in predicates {
         if contain(&expr, &volatile_map) {
             keep_predicates.push(expr);
         } else {

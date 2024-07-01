@@ -217,17 +217,6 @@ mod unix_test {
             .set_bool("datafusion.execution.coalesce_batches", false)
             .with_target_partitions(1);
         let ctx = SessionContext::new_with_config(config);
-        // Tasks
-        let mut tasks: Vec<JoinHandle<()>> = vec![];
-
-        // Join filter
-        let a1_iter = 0..TEST_DATA_SIZE;
-        // Join key
-        let a2_iter = (0..TEST_DATA_SIZE).map(|x| x % 10);
-        let lines = a1_iter
-            .zip(a2_iter)
-            .map(|(a1, a2)| format!("{a1},{a2}\n"))
-            .collect::<Vec<_>>();
 
         // Create a new temporary FIFO file
         let tmp_dir = TempDir::new()?;
@@ -237,22 +226,6 @@ mod unix_test {
         let right_fifo = create_fifo_file(&tmp_dir, "right.csv")?;
         // Create a mutex for tracking if the right input source is waiting for data.
         let waiting = Arc::new(AtomicBool::new(true));
-
-        // Create writing threads for the left and right FIFO files
-        tasks.push(create_writing_thread(
-            left_fifo.clone(),
-            "a1,a2\n".to_owned(),
-            lines.clone(),
-            waiting.clone(),
-            TEST_BATCH_SIZE,
-        ));
-        tasks.push(create_writing_thread(
-            right_fifo.clone(),
-            "a1,a2\n".to_owned(),
-            lines.clone(),
-            waiting.clone(),
-            TEST_BATCH_SIZE,
-        ));
 
         // Create schema
         let schema = Arc::new(Schema::new(vec![
@@ -264,10 +237,10 @@ mod unix_test {
         let order = vec![vec![datafusion_expr::col("a1").sort(true, false)]];
 
         // Set unbounded sorted files read configuration
-        let provider = fifo_table(schema.clone(), left_fifo, order.clone());
+        let provider = fifo_table(schema.clone(), left_fifo.clone(), order.clone());
         ctx.register_table("left", provider)?;
 
-        let provider = fifo_table(schema.clone(), right_fifo, order);
+        let provider = fifo_table(schema.clone(), right_fifo.clone(), order);
         ctx.register_table("right", provider)?;
 
         // Execute the query, with no matching rows. (since key is modulus 10)
@@ -287,6 +260,34 @@ mod unix_test {
             .await?;
         let mut stream = df.execute_stream().await?;
         let mut operations = vec![];
+
+        // Tasks
+        let mut tasks: Vec<JoinHandle<()>> = vec![];
+
+        // Join filter
+        let a1_iter = 0..TEST_DATA_SIZE;
+        // Join key
+        let a2_iter = (0..TEST_DATA_SIZE).map(|x| x % 10);
+        let lines = a1_iter
+            .zip(a2_iter)
+            .map(|(a1, a2)| format!("{a1},{a2}\n"))
+            .collect::<Vec<_>>();
+
+        // Create writing threads for the left and right FIFO files
+        tasks.push(create_writing_thread(
+            left_fifo,
+            "a1,a2\n".to_owned(),
+            lines.clone(),
+            waiting.clone(),
+            TEST_BATCH_SIZE,
+        ));
+        tasks.push(create_writing_thread(
+            right_fifo,
+            "a1,a2\n".to_owned(),
+            lines.clone(),
+            waiting.clone(),
+            TEST_BATCH_SIZE,
+        ));
         // Partial.
         while let Some(Ok(batch)) = stream.next().await {
             waiting.store(false, Ordering::SeqCst);

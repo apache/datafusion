@@ -889,21 +889,18 @@ fn dictionary_coercion(
 /// 2. Data type of the other side should be able to cast to string type
 fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    string_coercion(lhs_type, rhs_type)
-        .or_else(|| list_coercion(lhs_type, rhs_type))
-        .or(match (lhs_type, rhs_type) {
-            (Utf8, from_type) | (from_type, Utf8) => {
-                string_concat_internal_coercion(from_type, &Utf8)
-            }
-            (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
-                string_concat_internal_coercion(from_type, &LargeUtf8)
-            }
-            _ => None,
-        })
+    string_coercion(lhs_type, rhs_type).or(match (lhs_type, rhs_type) {
+        (Utf8, from_type) | (from_type, Utf8) => {
+            string_concat_internal_coercion(from_type, &Utf8)
+        }
+        (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
+            string_concat_internal_coercion(from_type, &LargeUtf8)
+        }
+        _ => None,
+    })
 }
 
 fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    // TODO: cast between array elements (#6558)
     if lhs_type.equals_datatype(rhs_type) {
         Some(lhs_type.to_owned())
     } else {
@@ -952,10 +949,7 @@ fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        // TODO: cast between array elements (#6558)
         (List(_), List(_)) => Some(lhs_type.clone()),
-        (List(_), _) => Some(lhs_type.clone()),
-        (_, List(_)) => Some(rhs_type.clone()),
         _ => None,
     }
 }
@@ -1050,12 +1044,16 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         }
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
-                // can't cast across timezones
                 (Some(lhs_tz), Some(rhs_tz)) => {
-                    if lhs_tz != rhs_tz {
-                        return None;
-                    } else {
-                        Some(lhs_tz.clone())
+                    match (lhs_tz.as_ref(), rhs_tz.as_ref()) {
+                        // UTC and "+00:00" are the same by definition. Most other timezones
+                        // do not have a 1-1 mapping between timezone and an offset from UTC
+                        ("UTC", "+00:00") | ("+00:00", "UTC") => Some(lhs_tz.clone()),
+                        (lhs, rhs) if lhs == rhs => Some(lhs_tz.clone()),
+                        // can't cast across timezones
+                        _ => {
+                            return None;
+                        }
                     }
                 }
                 (Some(lhs_tz), None) => Some(lhs_tz.clone()),
@@ -1154,8 +1152,8 @@ mod tests {
         ];
         for (i, input_type) in input_types.iter().enumerate() {
             let expect_type = &result_types[i];
-            for op in comparison_op_types {
-                let (lhs, rhs) = get_input_types(&input_decimal, &op, input_type)?;
+            for op in &comparison_op_types {
+                let (lhs, rhs) = get_input_types(&input_decimal, op, input_type)?;
                 assert_eq!(expect_type, &lhs);
                 assert_eq!(expect_type, &rhs);
             }

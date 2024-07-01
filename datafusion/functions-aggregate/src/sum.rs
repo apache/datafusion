@@ -384,7 +384,7 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            vec![ScalarValue::List(ScalarValue::new_list(
+            vec![ScalarValue::List(ScalarValue::new_list_nullable(
                 &distinct_values,
                 &self.data_type,
             ))]

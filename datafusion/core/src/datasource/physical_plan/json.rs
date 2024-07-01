@@ -384,7 +384,6 @@ mod tests {
 
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
-    use crate::datasource::file_format::file_compression_type::FileTypeExt;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
@@ -397,7 +396,6 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::{Field, SchemaBuilder};
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
-    use datafusion_common::FileType;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
@@ -419,7 +417,7 @@ mod tests {
             TEST_DATA_BASE,
             filename,
             1,
-            FileType::JSON,
+            Arc::new(JsonFormat::default()),
             file_compression_type.to_owned(),
             work_dir,
         )
@@ -453,7 +451,7 @@ mod tests {
             TEST_DATA_BASE,
             filename,
             1,
-            FileType::JSON,
+            Arc::new(JsonFormat::default()),
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )
@@ -472,8 +470,8 @@ mod tests {
         let path_buf = Path::new(url.path()).join(path);
         let path = path_buf.to_str().unwrap();
 
-        let ext = FileType::JSON
-            .get_ext_with_compression(file_compression_type.to_owned())
+        let ext = JsonFormat::default()
+            .get_ext_with_compression(&file_compression_type)
             .unwrap();
 
         let read_options = NdJsonReadOptions::default()
@@ -904,8 +902,8 @@ mod tests {
         let url: &Url = store_url.as_ref();
         let path_buf = Path::new(url.path()).join(path);
         let path = path_buf.to_str().unwrap();
-        let ext = FileType::JSON
-            .get_ext_with_compression(file_compression_type.to_owned())
+        let ext = JsonFormat::default()
+            .get_ext_with_compression(&file_compression_type)
             .unwrap();
 
         let read_option = NdJsonReadOptions::default()

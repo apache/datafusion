@@ -281,6 +281,15 @@ pub enum LogicalPlan {
     RecursiveQuery(RecursiveQuery),
 }
 
+impl Default for LogicalPlan {
+    fn default() -> Self {
+        LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        })
+    }
+}
+
 impl LogicalPlan {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
@@ -848,13 +857,13 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo {
                 input: _,
                 output_url,
-                format_options,
+                file_type,
                 options,
                 partition_by,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
-                format_options: format_options.clone(),
+                file_type: file_type.clone(),
                 options: options.clone(),
                 partition_by: partition_by.clone(),
             })),
@@ -870,37 +879,7 @@ impl LogicalPlan {
             LogicalPlan::Filter { .. } => {
                 assert_eq!(1, expr.len());
                 let predicate = expr.pop().unwrap();
-
-                // filter predicates should not contain aliased expressions so we remove any aliases
-                // before this logic was added we would have aliases within filters such as for
-                // benchmark q6:
-                //
-                // lineitem.l_shipdate >= Date32(\"8766\")
-                // AND lineitem.l_shipdate < Date32(\"9131\")
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
-                // Decimal128(Some(49999999999999),30,15)
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
-                // Decimal128(Some(69999999999999),30,15)
-                // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
-
-                let predicate = predicate
-                    .transform_down(|expr| {
-                        match expr {
-                            Expr::Exists { .. }
-                            | Expr::ScalarSubquery(_)
-                            | Expr::InSubquery(_) => {
-                                // subqueries could contain aliases so we don't recurse into those
-                                Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
-                            }
-                            Expr::Alias(_) => Ok(Transformed::new(
-                                expr.unalias(),
-                                true,
-                                TreeNodeRecursion::Jump,
-                            )),
-                            _ => Ok(Transformed::no(expr)),
-                        }
-                    })
-                    .data()?;
+                let predicate = Filter::remove_aliases(predicate)?.data;
 
                 Filter::try_new(predicate, Arc::new(inputs.swap_remove(0)))
                     .map(LogicalPlan::Filter)
@@ -1750,7 +1729,7 @@ impl LogicalPlan {
                     LogicalPlan::Copy(CopyTo {
                         input: _,
                         output_url,
-                        format_options,
+                        file_type,
                         options,
                         ..
                     }) => {
@@ -1760,7 +1739,7 @@ impl LogicalPlan {
                             .collect::<Vec<String>>()
                             .join(", ");
 
-                        write!(f, "CopyTo: format={format_options} output_url={output_url} options: ({op_str})")
+                        write!(f, "CopyTo: format={} output_url={output_url} options: ({op_str})", file_type.get_ext())
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())
@@ -2101,7 +2080,7 @@ impl SubqueryAlias {
         let fields = change_redundant_column(plan.schema().fields());
         let meta_data = plan.schema().as_ref().metadata().clone();
         let schema: Schema =
-            DFSchema::from_unqualifed_fields(fields.into(), meta_data)?.into();
+            DFSchema::from_unqualified_fields(fields.into(), meta_data)?.into();
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
@@ -2229,6 +2208,38 @@ impl Filter {
             }
         }
         false
+    }
+
+    /// Remove aliases from a predicate for use in a `Filter`
+    ///
+    /// filter predicates should not contain aliased expressions so we remove
+    /// any aliases.
+    ///
+    /// before this logic was added we would have aliases within filters such as
+    /// for benchmark q6:
+    ///
+    /// ```sql
+    /// lineitem.l_shipdate >= Date32(\"8766\")
+    /// AND lineitem.l_shipdate < Date32(\"9131\")
+    /// AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
+    /// Decimal128(Some(49999999999999),30,15)
+    /// AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
+    /// Decimal128(Some(69999999999999),30,15)
+    /// AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
+    /// ```
+    pub fn remove_aliases(predicate: Expr) -> Result<Transformed<Expr>> {
+        predicate.transform_down(|expr| {
+            match expr {
+                Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_) => {
+                    // subqueries could contain aliases so we don't recurse into those
+                    Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
+                }
+                Expr::Alias(Alias { expr, .. }) => {
+                    Ok(Transformed::new(*expr, true, TreeNodeRecursion::Jump))
+                }
+                _ => Ok(Transformed::no(expr)),
+            }
+        })
     }
 }
 

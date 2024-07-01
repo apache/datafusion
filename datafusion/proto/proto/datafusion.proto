@@ -251,13 +251,7 @@ message DistinctOnNode {
 message CopyToNode {
     LogicalPlanNode input = 1;
     string output_url = 2;
-    oneof format_options {
-      datafusion_common.CsvOptions csv = 8;
-      datafusion_common.JsonOptions json = 9;
-      datafusion_common.TableParquetOptions parquet = 10;
-      datafusion_common.AvroOptions avro = 11;
-      datafusion_common.ArrowOptions arrow = 12;
-    }
+    bytes file_type = 3;
     repeated string partition_by = 7;
 }
 
@@ -369,7 +363,7 @@ message LogicalExprNode {
 }
 
 message Wildcard {
-  string qualifier = 1;
+  TableReference qualifier = 1;
 }
 
 message PlaceholderNode {
@@ -475,7 +469,7 @@ enum AggregateFunction {
   MIN = 0;
   MAX = 1;
   // SUM = 2;
-  AVG = 3;
+  // AVG = 3;
   // COUNT = 4;
   // APPROX_DISTINCT = 5;
   ARRAY_AGG = 6;
@@ -485,7 +479,7 @@ enum AggregateFunction {
   // COVARIANCE_POP = 10;
   // STDDEV = 11;
   // STDDEV_POP = 12;
-  CORRELATION = 13;
+  // CORRELATION = 13;
   // APPROX_PERCENTILE_CONT = 14;
   // APPROX_MEDIAN = 15;
   // APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
@@ -494,8 +488,8 @@ enum AggregateFunction {
   // BIT_AND = 19;
   // BIT_OR = 20;
   // BIT_XOR = 21;
-  BOOL_AND = 22;
-  BOOL_OR = 23;
+//  BOOL_AND = 22;
+//  BOOL_OR = 23;
   // REGR_SLOPE = 26;
   // REGR_INTERCEPT = 27;
   // REGR_COUNT = 28;
@@ -675,9 +669,11 @@ message PlanType {
     datafusion_common.EmptyMessage FinalLogicalPlan = 3;
     datafusion_common.EmptyMessage InitialPhysicalPlan = 4;
     datafusion_common.EmptyMessage InitialPhysicalPlanWithStats = 9;
+    datafusion_common.EmptyMessage InitialPhysicalPlanWithSchema = 11;
     OptimizedPhysicalPlanType OptimizedPhysicalPlan = 5;
     datafusion_common.EmptyMessage FinalPhysicalPlan = 6;
     datafusion_common.EmptyMessage FinalPhysicalPlanWithStats = 10;
+    datafusion_common.EmptyMessage FinalPhysicalPlanWithSchema = 12;
   }
 }
 
@@ -760,6 +756,7 @@ message FileSinkConfig {
   datafusion_common.Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool overwrite = 8;
+  bool keep_partition_by_columns = 9;
 }
 
 message JsonSink {

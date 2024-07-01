@@ -54,7 +54,7 @@ impl RowGroupAccessPlanFilter {
         Self { access_plan }
     }
 
-    /// Return true if there are no row groups to scan
+    /// Return true if there are no row groups
     pub fn is_empty(&self) -> bool {
         self.access_plan.is_empty()
     }
@@ -404,15 +404,19 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Rem;
+    use std::sync::Arc;
+
     use super::*;
     use crate::datasource::physical_plan::parquet::reader::ParquetFileReader;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
+
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{Result, ToDFSchema};
-    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_common::Result;
     use datafusion_expr::{cast, col, lit, Expr};
-    use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
+    use datafusion_physical_expr::planner::logical2physical;
+
     use parquet::arrow::arrow_to_parquet_schema;
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
@@ -422,8 +426,6 @@ mod tests {
         basic::Type as PhysicalType, file::statistics::Statistics as ParquetStatistics,
         schema::types::SchemaDescPtr,
     };
-    use std::ops::Rem;
-    use std::sync::Arc;
 
     struct PrimitiveTypeField {
         name: &'static str,
@@ -1109,12 +1111,6 @@ mod tests {
     fn parquet_file_metrics() -> ParquetFileMetrics {
         let metrics = Arc::new(ExecutionPlanMetricsSet::new());
         ParquetFileMetrics::new(0, "file.parquet", &metrics)
-    }
-
-    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-        let df_schema = schema.clone().to_dfschema().unwrap();
-        let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 
     #[tokio::test]

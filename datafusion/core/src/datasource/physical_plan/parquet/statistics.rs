@@ -22,19 +22,20 @@
 use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
-    new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
-    StringArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    new_empty_array, new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+    LargeStringArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 use half::f16;
+use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
-use parquet::file::page_index::index::Index;
+use parquet::file::page_index::index::{Index, PageIndex};
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use paste::paste;
@@ -66,7 +67,7 @@ pub(crate) fn from_bytes_to_f16(b: &[u8]) -> Option<f16> {
 // Copy from arrow-rs
 // https://github.com/apache/arrow-rs/blob/198af7a3f4aa20f9bd003209d9f04b0f37bb120e/parquet/src/arrow/buffer/bit_util.rs#L54
 // Convert the byte slice to fixed length byte array with the length of N.
-pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
+fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     assert!(b.len() <= N, "Array too large, expected less than {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
     let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
@@ -353,32 +354,11 @@ macro_rules! get_statistics {
             ))),
             DataType::Timestamp(unit, timezone) =>{
                 let iter = [<$stat_type_prefix Int64StatsIterator>]::new($iterator).map(|x| x.copied());
-
                 Ok(match unit {
-                    TimeUnit::Second => {
-                        Arc::new(match timezone {
-                            Some(tz) => TimestampSecondArray::from_iter(iter).with_timezone(tz.clone()),
-                            None => TimestampSecondArray::from_iter(iter),
-                        })
-                    }
-                    TimeUnit::Millisecond => {
-                        Arc::new(match timezone {
-                            Some(tz) => TimestampMillisecondArray::from_iter(iter).with_timezone(tz.clone()),
-                            None => TimestampMillisecondArray::from_iter(iter),
-                        })
-                    }
-                    TimeUnit::Microsecond => {
-                        Arc::new(match timezone {
-                            Some(tz) => TimestampMicrosecondArray::from_iter(iter).with_timezone(tz.clone()),
-                            None => TimestampMicrosecondArray::from_iter(iter),
-                        })
-                    }
-                    TimeUnit::Nanosecond => {
-                        Arc::new(match timezone {
-                            Some(tz) => TimestampNanosecondArray::from_iter(iter).with_timezone(tz.clone()),
-                            None => TimestampNanosecondArray::from_iter(iter),
-                        })
-                    }
+                    TimeUnit::Second => Arc::new(TimestampSecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
+                    TimeUnit::Millisecond => Arc::new(TimestampMillisecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
+                    TimeUnit::Microsecond => Arc::new(TimestampMicrosecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
+                    TimeUnit::Nanosecond => Arc::new(TimestampNanosecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
                 })
             },
             DataType::Time32(unit) => {
@@ -495,7 +475,7 @@ macro_rules! get_statistics {
 }
 
 macro_rules! make_data_page_stats_iterator {
-    ($iterator_type: ident, $func: ident, $index_type: path, $stat_value_type: ty) => {
+    ($iterator_type: ident, $func: expr, $index_type: path, $stat_value_type: ty) => {
         struct $iterator_type<'a, I>
         where
             I: Iterator<Item = (usize, &'a Index)>,
@@ -526,7 +506,7 @@ macro_rules! make_data_page_stats_iterator {
                             native_index
                                 .indexes
                                 .iter()
-                                .map(|x| x.$func)
+                                .map(|x| $func(x))
                                 .collect::<Vec<_>>(),
                         ),
                         // No matching `Index` found;
@@ -548,15 +528,259 @@ macro_rules! make_data_page_stats_iterator {
     };
 }
 
-make_data_page_stats_iterator!(MinInt32DataPageStatsIterator, min, Index::INT32, i32);
-make_data_page_stats_iterator!(MaxInt32DataPageStatsIterator, max, Index::INT32, i32);
-make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min, Index::INT64, i64);
-make_data_page_stats_iterator!(MaxInt64DataPageStatsIterator, max, Index::INT64, i64);
+make_data_page_stats_iterator!(
+    MinBooleanDataPageStatsIterator,
+    |x: &PageIndex<bool>| { x.min },
+    Index::BOOLEAN,
+    bool
+);
+make_data_page_stats_iterator!(
+    MaxBooleanDataPageStatsIterator,
+    |x: &PageIndex<bool>| { x.max },
+    Index::BOOLEAN,
+    bool
+);
+make_data_page_stats_iterator!(
+    MinInt32DataPageStatsIterator,
+    |x: &PageIndex<i32>| { x.min },
+    Index::INT32,
+    i32
+);
+make_data_page_stats_iterator!(
+    MaxInt32DataPageStatsIterator,
+    |x: &PageIndex<i32>| { x.max },
+    Index::INT32,
+    i32
+);
+make_data_page_stats_iterator!(
+    MinInt64DataPageStatsIterator,
+    |x: &PageIndex<i64>| { x.min },
+    Index::INT64,
+    i64
+);
+make_data_page_stats_iterator!(
+    MaxInt64DataPageStatsIterator,
+    |x: &PageIndex<i64>| { x.max },
+    Index::INT64,
+    i64
+);
+make_data_page_stats_iterator!(
+    MinFloat16DataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
+make_data_page_stats_iterator!(
+    MaxFloat16DataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
+make_data_page_stats_iterator!(
+    MinFloat32DataPageStatsIterator,
+    |x: &PageIndex<f32>| { x.min },
+    Index::FLOAT,
+    f32
+);
+make_data_page_stats_iterator!(
+    MaxFloat32DataPageStatsIterator,
+    |x: &PageIndex<f32>| { x.max },
+    Index::FLOAT,
+    f32
+);
+make_data_page_stats_iterator!(
+    MinFloat64DataPageStatsIterator,
+    |x: &PageIndex<f64>| { x.min },
+    Index::DOUBLE,
+    f64
+);
+make_data_page_stats_iterator!(
+    MaxFloat64DataPageStatsIterator,
+    |x: &PageIndex<f64>| { x.max },
+    Index::DOUBLE,
+    f64
+);
+
+macro_rules! get_decimal_page_stats_iterator {
+    ($iterator_type: ident, $func: ident, $stat_value_type: ident, $convert_func: ident) => {
+        struct $iterator_type<'a, I>
+        where
+            I: Iterator<Item = (usize, &'a Index)>,
+        {
+            iter: I,
+        }
+
+        impl<'a, I> $iterator_type<'a, I>
+        where
+            I: Iterator<Item = (usize, &'a Index)>,
+        {
+            fn new(iter: I) -> Self {
+                Self { iter }
+            }
+        }
+
+        impl<'a, I> Iterator for $iterator_type<'a, I>
+        where
+            I: Iterator<Item = (usize, &'a Index)>,
+        {
+            type Item = Vec<Option<$stat_value_type>>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                let next = self.iter.next();
+                match next {
+                    Some((len, index)) => match index {
+                        Index::INT32(native_index) => Some(
+                            native_index
+                                .indexes
+                                .iter()
+                                .map(|x| {
+                                    Some($stat_value_type::from(
+                                        x.$func.unwrap_or_default(),
+                                    ))
+                                })
+                                .collect::<Vec<_>>(),
+                        ),
+                        Index::INT64(native_index) => Some(
+                            native_index
+                                .indexes
+                                .iter()
+                                .map(|x| {
+                                    Some($stat_value_type::from(
+                                        x.$func.unwrap_or_default(),
+                                    ))
+                                })
+                                .collect::<Vec<_>>(),
+                        ),
+                        Index::BYTE_ARRAY(native_index) => Some(
+                            native_index
+                                .indexes
+                                .iter()
+                                .map(|x| {
+                                    Some($convert_func(
+                                        x.clone().$func.unwrap_or_default().data(),
+                                    ))
+                                })
+                                .collect::<Vec<_>>(),
+                        ),
+                        Index::FIXED_LEN_BYTE_ARRAY(native_index) => Some(
+                            native_index
+                                .indexes
+                                .iter()
+                                .map(|x| {
+                                    Some($convert_func(
+                                        x.clone().$func.unwrap_or_default().data(),
+                                    ))
+                                })
+                                .collect::<Vec<_>>(),
+                        ),
+                        _ => Some(vec![None; len]),
+                    },
+                    _ => None,
+                }
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                self.iter.size_hint()
+            }
+        }
+    };
+}
+
+get_decimal_page_stats_iterator!(
+    MinDecimal128DataPageStatsIterator,
+    min,
+    i128,
+    from_bytes_to_i128
+);
+
+get_decimal_page_stats_iterator!(
+    MaxDecimal128DataPageStatsIterator,
+    max,
+    i128,
+    from_bytes_to_i128
+);
+
+get_decimal_page_stats_iterator!(
+    MinDecimal256DataPageStatsIterator,
+    min,
+    i256,
+    from_bytes_to_i256
+);
+
+get_decimal_page_stats_iterator!(
+    MaxDecimal256DataPageStatsIterator,
+    max,
+    i256,
+    from_bytes_to_i256
+);
+make_data_page_stats_iterator!(
+    MinByteArrayDataPageStatsIterator,
+    |x: &PageIndex<ByteArray>| { x.min.clone() },
+    Index::BYTE_ARRAY,
+    ByteArray
+);
+make_data_page_stats_iterator!(
+    MaxByteArrayDataPageStatsIterator,
+    |x: &PageIndex<ByteArray>| { x.max.clone() },
+    Index::BYTE_ARRAY,
+    ByteArray
+);
 
 macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
         paste! {
             match $data_type {
+                Some(DataType::Boolean) => Ok(Arc::new(
+                    BooleanArray::from_iter(
+                        [<$stat_type_prefix BooleanDataPageStatsIterator>]::new($iterator)
+                            .flatten()
+                            // BooleanArray::from_iter required a sized iterator, so collect into Vec first
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                    )
+                )),
+                Some(DataType::UInt8) => Ok(Arc::new(
+                    UInt8Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u8::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::UInt16) => Ok(Arc::new(
+                    UInt16Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u16::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::UInt32) => Ok(Arc::new(
+                    UInt32Array::from_iter(
+                        [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u32::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                ))),
+                Some(DataType::UInt64) => Ok(Arc::new(
+                    UInt64Array::from_iter(
+                        [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| u64::try_from(x).ok())
+                                })
+                            })
+                            .flatten()
+                ))),
                 Some(DataType::Int8) => Ok(Arc::new(
                     Int8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
@@ -581,6 +805,105 @@ macro_rules! get_data_page_statistics {
                 )),
                 Some(DataType::Int32) => Ok(Arc::new(Int32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Float16) => Ok(Arc::new(
+                    Float16Array::from_iter(
+                        [<$stat_type_prefix Float16DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter().filter_map(|x| {
+                                    x.and_then(|x| Some(from_bytes_to_f16(x.data())))
+                                })
+                            })
+                            .flatten()
+                    )
+                )),
+                Some(DataType::Float32) => Ok(Arc::new(Float32Array::from_iter([<$stat_type_prefix Float32DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter([<$stat_type_prefix Float64DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Binary) => Ok(Arc::new(BinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::LargeBinary) => Ok(Arc::new(LargeBinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Utf8) => Ok(Arc::new(StringArray::from(
+                    [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
+                        x.into_iter().filter_map(|x| {
+                        x.and_then(|x| {
+                            let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
+                            if res.is_none() {
+                                log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                            }
+                            res
+                        })
+                    })
+                    }).flatten().collect::<Vec<_>>(),
+                ))),
+                Some(DataType::LargeUtf8) => Ok(Arc::new(LargeStringArray::from(
+                    [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
+                        x.into_iter().filter_map(|x| {
+                            x.and_then(|x| {
+                                let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
+                                if res.is_none() {
+                                    log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
+                                }
+                                res
+                            })
+                    })
+                    }).flatten().collect::<Vec<_>>(),
+                ))),
+                Some(DataType::Dictionary(_, value_type)) => {
+                    [<$stat_type_prefix:lower _ page_statistics>](Some(value_type), $iterator)
+                },
+                Some(DataType::Timestamp(unit, timezone)) => {
+                    let iter = [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten();
+                    Ok(match unit {
+                        TimeUnit::Second => Arc::new(TimestampSecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
+                        TimeUnit::Millisecond => Arc::new(TimestampMillisecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
+                        TimeUnit::Microsecond => Arc::new(TimestampMicrosecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
+                        TimeUnit::Nanosecond => Arc::new(TimestampNanosecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
+                    })
+                },
+                Some(DataType::Date32) => Ok(Arc::new(Date32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
+                Some(DataType::Date64) => Ok(
+                    Arc::new(
+                        Date64Array::from([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                            .map(|x| {
+                                x.into_iter()
+                                .filter_map(|x| {
+                                    x.and_then(|x| i64::try_from(x).ok())
+                                })
+                                .map(|x| x * 24 * 60 * 60 * 1000)
+                            }).flatten().collect::<Vec<_>>()
+                        )
+                    )
+                ),
+                Some(DataType::Decimal128(precision, scale)) => Ok(Arc::new(
+                    Decimal128Array::from_iter([<$stat_type_prefix Decimal128DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
+                Some(DataType::Decimal256(precision, scale)) => Ok(Arc::new(
+                    Decimal256Array::from_iter([<$stat_type_prefix Decimal256DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
+                Some(DataType::Time32(unit)) => {
+                    Ok(match unit {
+                        TimeUnit::Second =>  Arc::new(Time32SecondArray::from_iter(
+                            [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        TimeUnit::Millisecond => Arc::new(Time32MillisecondArray::from_iter(
+                            [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        _ => {
+                            // don't know how to extract statistics, so return an empty array
+                            new_empty_array(&DataType::Time32(unit.clone()))
+                        }
+                    })
+                }
+                Some(DataType::Time64(unit)) => {
+                    Ok(match unit {
+                        TimeUnit::Microsecond =>  Arc::new(Time64MicrosecondArray::from_iter(
+                            [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        TimeUnit::Nanosecond => Arc::new(Time64NanosecondArray::from_iter(
+                            [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        _ => {
+                            // don't know how to extract statistics, so return an empty array
+                            new_empty_array(&DataType::Time64(unit.clone()))
+                        }
+                    })
+                }
                 _ => unimplemented!()
             }
         }
@@ -667,12 +990,37 @@ where
 {
     let iter = iterator.flat_map(|(len, index)| match index {
         Index::NONE => vec![None; len],
+        Index::BOOLEAN(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
         Index::INT32(native_index) => native_index
             .indexes
             .iter()
             .map(|x| x.null_count.map(|x| x as u64))
             .collect::<Vec<_>>(),
         Index::INT64(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::FLOAT(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::DOUBLE(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::FIXED_LEN_BYTE_ARRAY(native_index) => native_index
+            .indexes
+            .iter()
+            .map(|x| x.null_count.map(|x| x as u64))
+            .collect::<Vec<_>>(),
+        Index::BYTE_ARRAY(native_index) => native_index
             .indexes
             .iter()
             .map(|x| x.null_count.map(|x| x as u64))

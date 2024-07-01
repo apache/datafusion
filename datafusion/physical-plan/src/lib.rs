@@ -19,6 +19,9 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
@@ -28,15 +31,18 @@ use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 use arrow::datatypes::SchemaRef;
+use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
+use datafusion_common::{exec_datafusion_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use futures::stream::TryStreamExt;
+use log::debug;
+use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 
 mod ordering;
@@ -87,8 +93,13 @@ pub use datafusion_physical_expr::{
 };
 
 // Backwards compatibility
+use crate::common::IPCWriter;
 pub use crate::stream::EmptyRecordBatchStream;
+use crate::stream::RecordBatchReceiverStream;
+use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::memory_pool::human_readable_size;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+
 pub mod udaf {
     pub use datafusion_physical_expr_common::aggregate::{
         create_aggregate_expr, AggregateFunctionExpr,
@@ -116,12 +127,13 @@ pub mod udaf {
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'ParquetExec'.
-    fn name(&self) -> &'static str
-    where
-        Self: Sized,
-    {
-        Self::static_name()
-    }
+    ///
+    /// Implementation note: this method can just proxy to
+    /// [`static_name`](ExecutionPlan::static_name) if no special action is
+    /// needed. It doesn't provide a default implementation like that because
+    /// this method doesn't require the `Sized` constrain to allow a wilder
+    /// range of use cases.
+    fn name(&self) -> &str;
 
     /// Short name for the ExecutionPlan, such as 'ParquetExec'.
     /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
@@ -798,6 +810,57 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     actual.iter().map(|elem| elem.to_string()).collect()
 }
 
+/// Read spilled batches from the disk
+///
+/// `path` - temp file
+/// `schema` - batches schema, should be the same across batches
+/// `buffer` - internal buffer of capacity batches
+pub fn read_spill_as_stream(
+    path: RefCountedTempFile,
+    schema: SchemaRef,
+    buffer: usize,
+) -> Result<SendableRecordBatchStream> {
+    let mut builder = RecordBatchReceiverStream::builder(schema, buffer);
+    let sender = builder.tx();
+
+    builder.spawn_blocking(move || read_spill(sender, path.path()));
+
+    Ok(builder.build())
+}
+
+/// Spills in-memory `batches` to disk.
+///
+/// Returns total number of the rows spilled to disk.
+pub fn spill_record_batches(
+    batches: Vec<RecordBatch>,
+    path: PathBuf,
+    schema: SchemaRef,
+) -> Result<usize> {
+    let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
+    for batch in batches {
+        writer.write(&batch)?;
+    }
+    writer.finish()?;
+    debug!(
+        "Spilled {} batches of total {} rows to disk, memory released {}",
+        writer.num_batches,
+        writer.num_rows,
+        human_readable_size(writer.num_bytes),
+    );
+    Ok(writer.num_rows)
+}
+
+fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
+    let file = BufReader::new(File::open(path)?);
+    let reader = FileReader::try_new(file, None)?;
+    for batch in reader {
+        sender
+            .blocking_send(batch.map_err(Into::into))
+            .map_err(|e| exec_datafusion_err!("{e}"))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::any::Any;
@@ -829,6 +892,10 @@ mod tests {
     }
 
     impl ExecutionPlan for EmptyExec {
+        fn name(&self) -> &'static str {
+            Self::static_name()
+        }
+
         fn as_any(&self) -> &dyn Any {
             self
         }
@@ -881,6 +948,10 @@ mod tests {
     }
 
     impl ExecutionPlan for RenamedEmptyExec {
+        fn name(&self) -> &'static str {
+            Self::static_name()
+        }
+
         fn static_name() -> &'static str
         where
             Self: Sized,
@@ -930,6 +1001,14 @@ mod tests {
         let renamed_exec = RenamedEmptyExec::new(schema2);
         assert_eq!(renamed_exec.name(), "MyRenamedEmptyExec");
         assert_eq!(RenamedEmptyExec::static_name(), "MyRenamedEmptyExec");
+    }
+
+    /// A compilation test to ensure that the `ExecutionPlan::name()` method can
+    /// be called from a trait object.
+    /// Related ticket: https://github.com/apache/datafusion/pull/11047
+    #[allow(dead_code)]
+    fn use_execution_plan_as_trait_object(plan: &dyn ExecutionPlan) {
+        let _ = plan.name();
     }
 }
 

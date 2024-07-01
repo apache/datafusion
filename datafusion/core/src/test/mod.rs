@@ -24,9 +24,9 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::datasource::file_format::file_compression_type::{
-    FileCompressionType, FileTypeExt,
-};
+use crate::datasource::file_format::csv::CsvFormat;
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
@@ -40,7 +40,7 @@ use crate::test_util::{aggr_test_schema, arrow_test_data};
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, FileType, Statistics};
+use datafusion_common::{DataFusionError, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
@@ -87,7 +87,7 @@ pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<Cs
         path.as_str(),
         filename,
         partitions,
-        FileType::CSV,
+        Arc::new(CsvFormat::default()),
         FileCompressionType::UNCOMPRESSED,
         work_dir,
     )?;
@@ -108,7 +108,7 @@ pub fn partitioned_file_groups(
     path: &str,
     filename: &str,
     partitions: usize,
-    file_type: FileType,
+    file_format: Arc<dyn FileFormat>,
     file_compression_type: FileCompressionType,
     work_dir: &Path,
 ) -> Result<Vec<Vec<PartitionedFile>>> {
@@ -120,9 +120,8 @@ pub fn partitioned_file_groups(
         let filename = format!(
             "partition-{}{}",
             i,
-            file_type
-                .to_owned()
-                .get_ext_with_compression(file_compression_type.to_owned())
+            file_format
+                .get_ext_with_compression(&file_compression_type)
                 .unwrap()
         );
         let filename = work_dir.join(filename);
@@ -167,7 +166,7 @@ pub fn partitioned_file_groups(
     for (i, line) in f.lines().enumerate() {
         let line = line.unwrap();
 
-        if i == 0 && file_type == FileType::CSV {
+        if i == 0 && file_format.get_ext() == CsvFormat::default().get_ext() {
             // write header to all partitions
             for w in writers.iter_mut() {
                 w.write_all(line.as_bytes()).unwrap();
@@ -399,6 +398,10 @@ impl DisplayAs for StatisticsExec {
 }
 
 impl ExecutionPlan for StatisticsExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

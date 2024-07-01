@@ -26,12 +26,15 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field};
 use datafusion_expr::TypeSignature;
 
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 
 use std::any::{type_name, Any};
 
 use crate::utils::{downcast_arg, make_scalar_function};
-use arrow_schema::DataType::{FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8};
+use arrow::compute::cast;
+use arrow_schema::DataType::{
+    Dictionary, FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8,
+};
 use datafusion_common::cast::{
     as_generic_string_array, as_large_list_array, as_list_array, as_string_array,
 };
@@ -76,7 +79,7 @@ macro_rules! call_array_function {
             DataType::UInt16 => array_function!(UInt16Array),
             DataType::UInt32 => array_function!(UInt32Array),
             DataType::UInt64 => array_function!(UInt64Array),
-            _ => unreachable!(),
+            dt => not_impl_err!("Unsupported data type in array_to_string: {dt}"),
         }
     };
     ($DATATYPE:expr, $INCLUDE_LIST:expr) => {{
@@ -95,7 +98,7 @@ macro_rules! call_array_function {
             DataType::UInt16 => array_function!(UInt16Array),
             DataType::UInt32 => array_function!(UInt32Array),
             DataType::UInt64 => array_function!(UInt64Array),
-            _ => unreachable!(),
+            dt => not_impl_err!("Unsupported data type in array_to_string: {dt}"),
         }
     }};
 }
@@ -245,6 +248,8 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         with_null_string = true;
     }
 
+    /// Creates a single string from single element of a ListArray (which is
+    /// itself another Array)
     fn compute_array_to_string(
         arg: &mut String,
         arr: ArrayRef,
@@ -280,6 +285,22 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
 
                 Ok(arg)
+            }
+            Dictionary(_key_type, value_type) => {
+                // Call cast to unwrap the dictionary. This could be optimized if we wanted
+                // to accept the overhead of extra code
+                let values = cast(&arr, value_type.as_ref()).map_err(|e| {
+                    DataFusionError::from(e).context(
+                        "Casting dictionary to values in compute_array_to_string",
+                    )
+                })?;
+                compute_array_to_string(
+                    arg,
+                    values,
+                    delimiter,
+                    null_string,
+                    with_null_string,
+                )
             }
             Null => Ok(arg),
             data_type => {

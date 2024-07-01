@@ -166,6 +166,23 @@ physical_plan
 01)DataSinkExec: sink=ParquetSink(file_groups=[])
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
+# Copy to directory as partitioned files with keep_partition_by_columns enabled
+query TT
+COPY (values ('1', 'a'), ('2', 'b'), ('3', 'c')) TO 'test_files/scratch/copy/partitioned_table4/' STORED AS parquet PARTITIONED BY (column1)
+OPTIONS (execution.keep_partition_by_columns true);
+----
+3
+
+# validate generated file contains tables
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet4 STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_table4/column1=1/*.parquet';
+
+query TT
+select column1, column2 from validate_partitioned_parquet4 order by column1,column2;
+----
+1 a
+
 # Copy more files to directory via query
 query IT
 COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/copy/table/' STORED AS PARQUET;
@@ -589,3 +606,7 @@ COPY (select col2, sum(col1) from source_table
 # Copy from table with non literal
 query error DataFusion error: SQL error: ParserError\("Unexpected token \("\)
 COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);
+
+# Copy using execution.keep_partition_by_columns with an invalid value
+query error DataFusion error: Invalid or Unsupported Configuration: provided value for 'execution.keep_partition_by_columns' was not recognized: "invalid_value"
+COPY source_table  to '/tmp/table.parquet' OPTIONS (execution.keep_partition_by_columns invalid_value);

@@ -36,6 +36,9 @@ use datafusion_expr::{
 };
 use datafusion_proto_common::{from_proto::FromOptionalField, FromProtoError as Error};
 
+use crate::protobuf::plan_type::PlanTypeEnum::{
+    FinalPhysicalPlanWithSchema, InitialPhysicalPlanWithSchema,
+};
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
@@ -121,6 +124,7 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 FinalLogicalPlan(_) => PlanType::FinalLogicalPlan,
                 InitialPhysicalPlan(_) => PlanType::InitialPhysicalPlan,
                 InitialPhysicalPlanWithStats(_) => PlanType::InitialPhysicalPlanWithStats,
+                InitialPhysicalPlanWithSchema(_) => PlanType::InitialPhysicalPlanWithSchema,
                 OptimizedPhysicalPlan(OptimizedPhysicalPlanType { optimizer_name }) => {
                     PlanType::OptimizedPhysicalPlan {
                         optimizer_name: optimizer_name.clone(),
@@ -128,6 +132,7 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 }
                 FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan,
                 FinalPhysicalPlanWithStats(_) => PlanType::FinalPhysicalPlanWithStats,
+                FinalPhysicalPlanWithSchema(_) => PlanType::FinalPhysicalPlanWithSchema,
             },
             plan: Arc::new(stringified_plan.plan.clone()),
         }
@@ -139,11 +144,7 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
         match agg_fun {
             protobuf::AggregateFunction::Min => Self::Min,
             protobuf::AggregateFunction::Max => Self::Max,
-            protobuf::AggregateFunction::Avg => Self::Avg,
-            protobuf::AggregateFunction::BoolAnd => Self::BoolAnd,
-            protobuf::AggregateFunction::BoolOr => Self::BoolOr,
             protobuf::AggregateFunction::ArrayAgg => Self::ArrayAgg,
-            protobuf::AggregateFunction::Correlation => Self::Correlation,
             protobuf::AggregateFunction::Grouping => Self::Grouping,
             protobuf::AggregateFunction::NthValueAgg => Self::NthValue,
         }
@@ -270,7 +271,11 @@ pub fn parse_expr(
             Ok(operands
                 .into_iter()
                 .reduce(|left, right| {
-                    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+                    Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(left),
+                        op.clone(),
+                        Box::new(right),
+                    ))
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
         }
@@ -595,13 +600,10 @@ pub fn parse_expr(
             parse_exprs(&in_list.list, registry, codec)?,
             in_list.negated,
         ))),
-        ExprType::Wildcard(protobuf::Wildcard { qualifier }) => Ok(Expr::Wildcard {
-            qualifier: if qualifier.is_empty() {
-                None
-            } else {
-                Some(qualifier.clone())
-            },
-        }),
+        ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
+            let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
+            Ok(Expr::Wildcard { qualifier })
+        }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
             fun_name,
             args,
