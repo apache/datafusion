@@ -1139,7 +1139,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[tokio::test]
-    async fn test_cast_args() -> Result<()> {}
 }
