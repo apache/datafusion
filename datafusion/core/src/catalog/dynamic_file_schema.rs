@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(feature = "dirs")]
 use dirs::home_dir;
 
 use datafusion_common::plan_datafusion_err;
@@ -87,6 +88,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 }
 
 /// Substitute the tilde character in the file path with the user home directory.
+#[cfg(feature = "dirs")]
 pub fn substitute_tilde(cur: String) -> String {
     if let Some(usr_dir_path) = home_dir() {
         if let Some(usr_dir) = usr_dir_path.to_str() {
@@ -95,6 +97,12 @@ pub fn substitute_tilde(cur: String) -> String {
             }
         }
     }
+    cur
+}
+
+/// Do nothing if the feature "dirs" is disabled.
+#[cfg(not(feature = "dirs"))]
+pub fn substitute_tilde(cur: String) -> String {
     cur
 }
 
@@ -144,7 +152,7 @@ impl UrlTableFactory for DynamicListTableFactory {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(feature = "dirs")))]
 #[cfg(test)]
 mod tests {
     use crate::catalog::dynamic_file_schema::substitute_tilde;
