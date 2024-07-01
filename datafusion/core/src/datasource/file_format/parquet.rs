@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
-use super::{FileFormat, FileScanConfig};
+use super::{FileFormat, FileFormatFactory, FileScanConfig};
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -39,11 +39,13 @@ use crate::physical_plan::{
 };
 
 use arrow::compute::sum;
-use datafusion_common::config::TableParquetOptions;
+use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError,
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
+    DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -53,6 +55,7 @@ use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
+use hashbrown::HashMap;
 use log::debug;
 use object_store::buffered::BufWriter;
 use parquet::arrow::arrow_writer::{
@@ -75,7 +78,6 @@ use crate::datasource::physical_plan::parquet::{
     ParquetExecBuilder, StatisticsConverter,
 };
 use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashMap;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 
@@ -86,6 +88,65 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 /// When writing parquet files in parallel, if the buffered Parquet data exceeds
 /// this size, it is flushed to object store
 const BUFFER_FLUSH_BYTES: usize = 1024000;
+
+#[derive(Default)]
+/// Factory struct used to create [ParquetFormat]
+pub struct ParquetFormatFactory {
+    options: Option<TableParquetOptions>,
+}
+
+impl ParquetFormatFactory {
+    /// Creates an instance of [ParquetFormatFactory]
+    pub fn new() -> Self {
+        Self { options: None }
+    }
+
+    /// Creates an instance of [ParquetFormatFactory] with customized default options
+    pub fn new_with_options(options: TableParquetOptions) -> Self {
+        Self {
+            options: Some(options),
+        }
+    }
+}
+
+impl FileFormatFactory for ParquetFormatFactory {
+    fn create(
+        &self,
+        state: &SessionState,
+        format_options: &std::collections::HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        let parquet_options = match &self.options {
+            None => {
+                let mut table_options = state.default_table_options();
+                table_options.set_config_format(ConfigFileType::PARQUET);
+                table_options.alter_with_string_hash_map(format_options)?;
+                table_options.parquet
+            }
+            Some(parquet_options) => {
+                let mut parquet_options = parquet_options.clone();
+                for (k, v) in format_options {
+                    parquet_options.set(k, v)?;
+                }
+                parquet_options
+            }
+        };
+
+        Ok(Arc::new(
+            ParquetFormat::default().with_options(parquet_options),
+        ))
+    }
+
+    fn default(&self) -> Arc<dyn FileFormat> {
+        Arc::new(ParquetFormat::default())
+    }
+}
+
+impl GetExt for ParquetFormatFactory {
+    fn get_ext(&self) -> String {
+        // Removes the dot, i.e. ".parquet" -> "parquet"
+        DEFAULT_PARQUET_EXTENSION[1..].to_string()
+    }
+}
 
 /// The Apache Parquet `FileFormat` implementation
 #[derive(Debug, Default)]
@@ -186,6 +247,23 @@ async fn fetch_schema_with_location(
 impl FileFormat for ParquetFormat {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn get_ext(&self) -> String {
+        ParquetFormatFactory::new().get_ext()
+    }
+
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
+        let ext = self.get_ext();
+        match file_compression_type.get_variant() {
+            CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
+            _ => Err(DataFusionError::Internal(
+                "Parquet FileFormat does not support compression.".into(),
+            )),
+        }
     }
 
     async fn infer_schema(
@@ -548,7 +626,9 @@ impl ParquetSink {
     /// of hive style partitioning where some columns are removed from the
     /// underlying files.
     fn get_writer_schema(&self) -> Arc<Schema> {
-        if !self.config.table_partition_cols.is_empty() {
+        if !self.config.table_partition_cols.is_empty()
+            && !self.config.keep_partition_by_columns
+        {
             let schema = self.config.output_schema();
             let partition_names: Vec<_> = self
                 .config
@@ -638,6 +718,7 @@ impl DataSink for ParquetSink {
             part_col,
             self.config.table_paths[0].clone(),
             "parquet".into(),
+            self.config.keep_partition_by_columns,
         );
 
         let mut file_write_tasks: JoinSet<
@@ -1071,7 +1152,8 @@ mod tests {
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow_array::Int64Array;
+    use arrow_array::types::Int32Type;
+    use arrow_array::{DictionaryArray, Int32Array, Int64Array};
     use arrow_schema::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_common::cast::{
@@ -1080,6 +1162,7 @@ mod tests {
     };
     use datafusion_common::config::ParquetOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_common::ScalarValue::Utf8;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -1357,6 +1440,48 @@ mod tests {
             .expect("error reading metadata with hint");
 
         assert_eq!(store.request_count(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistics_from_parquet_metadata_dictionary() -> Result<()> {
+        // Data for column c_dic: ["a", "b", "c", "d"]
+        let values = StringArray::from_iter_values(["a", "b", "c", "d"]);
+        let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
+        let dic_array =
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        let c_dic: ArrayRef = Arc::new(dic_array);
+
+        let batch1 = RecordBatch::try_from_iter(vec![("c_dic", c_dic)]).unwrap();
+
+        // Use store_parquet to write each batch to its own file
+        // . batch1 written into first file and includes:
+        //    - column c_dic that has 4 rows with no null. Stats min and max of dictionary column is available.
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let (files, _file_names) = store_parquet(vec![batch1], false).await?;
+
+        let state = SessionContext::new().state();
+        let format = ParquetFormat::default();
+        let schema = format.infer_schema(&state, &store, &files).await.unwrap();
+
+        // Fetch statistics for first file
+        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
+        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        assert_eq!(stats.num_rows, Precision::Exact(4));
+
+        // column c_dic
+        let c_dic_stats = &stats.column_statistics[0];
+
+        assert_eq!(c_dic_stats.null_count, Precision::Exact(0));
+        assert_eq!(
+            c_dic_stats.max_value,
+            Precision::Exact(Utf8(Some("d".into())))
+        );
+        assert_eq!(
+            c_dic_stats.min_value,
+            Precision::Exact(Utf8(Some("a".into())))
+        );
 
         Ok(())
     }
@@ -1875,6 +2000,7 @@ mod tests {
             output_schema: schema.clone(),
             table_partition_cols: vec![],
             overwrite: true,
+            keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
@@ -1969,6 +2095,7 @@ mod tests {
             output_schema: schema.clone(),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
             overwrite: true,
+            keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,

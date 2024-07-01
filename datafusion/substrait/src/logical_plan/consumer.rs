@@ -1449,6 +1449,36 @@ fn from_substrait_type(
                     )?,
                 }
             }
+            r#type::Kind::Map(map) => {
+                let key_type = map.key.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("Map type must have key type")
+                })?;
+                let value_type = map.value.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("Map type must have value type")
+                })?;
+                let key_field = Arc::new(Field::new(
+                    "key",
+                    from_substrait_type(key_type, dfs_names, name_idx)?,
+                    false,
+                ));
+                let value_field = Arc::new(Field::new(
+                    "value",
+                    from_substrait_type(value_type, dfs_names, name_idx)?,
+                    true,
+                ));
+                match map.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
+                        Ok(DataType::Map(Arc::new(Field::new_struct(
+                            "entries",
+                            [key_field, value_field],
+                            false, // The inner map field is always non-nullable (Arrow #1697),
+                        )), false))
+                    },
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    )?,
+                }
+            }
             r#type::Kind::Decimal(d) => match d.type_variation_reference {
                 DECIMAL_128_TYPE_VARIATION_REF => {
                     Ok(DataType::Decimal128(d.precision as u8, d.scale as i8))
@@ -1499,7 +1529,7 @@ fn from_substrait_struct_type(
         let field = Field::new(
             next_struct_field_name(i, dfs_names, name_idx)?,
             from_substrait_type(f, dfs_names, name_idx)?,
-            is_substrait_type_nullable(f)?,
+            true, // We assume everything to be nullable since that's easier than ensuring it matches
         );
         fields.push(field);
     }
@@ -1541,47 +1571,6 @@ fn from_substrait_named_struct(base_schema: &NamedStruct) -> Result<DFSchemaRef>
                             );
     }
     Ok(DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?))
-}
-
-fn is_substrait_type_nullable(dtype: &Type) -> Result<bool> {
-    fn is_nullable(nullability: i32) -> bool {
-        nullability != substrait::proto::r#type::Nullability::Required as i32
-    }
-
-    let nullable = match dtype
-        .kind
-        .as_ref()
-        .ok_or_else(|| substrait_datafusion_err!("Type must contain Kind"))?
-    {
-        r#type::Kind::Bool(val) => is_nullable(val.nullability),
-        r#type::Kind::I8(val) => is_nullable(val.nullability),
-        r#type::Kind::I16(val) => is_nullable(val.nullability),
-        r#type::Kind::I32(val) => is_nullable(val.nullability),
-        r#type::Kind::I64(val) => is_nullable(val.nullability),
-        r#type::Kind::Fp32(val) => is_nullable(val.nullability),
-        r#type::Kind::Fp64(val) => is_nullable(val.nullability),
-        r#type::Kind::String(val) => is_nullable(val.nullability),
-        r#type::Kind::Binary(val) => is_nullable(val.nullability),
-        r#type::Kind::Timestamp(val) => is_nullable(val.nullability),
-        r#type::Kind::Date(val) => is_nullable(val.nullability),
-        r#type::Kind::Time(val) => is_nullable(val.nullability),
-        r#type::Kind::IntervalYear(val) => is_nullable(val.nullability),
-        r#type::Kind::IntervalDay(val) => is_nullable(val.nullability),
-        r#type::Kind::TimestampTz(val) => is_nullable(val.nullability),
-        r#type::Kind::Uuid(val) => is_nullable(val.nullability),
-        r#type::Kind::FixedChar(val) => is_nullable(val.nullability),
-        r#type::Kind::Varchar(val) => is_nullable(val.nullability),
-        r#type::Kind::FixedBinary(val) => is_nullable(val.nullability),
-        r#type::Kind::Decimal(val) => is_nullable(val.nullability),
-        r#type::Kind::PrecisionTimestamp(val) => is_nullable(val.nullability),
-        r#type::Kind::PrecisionTimestampTz(val) => is_nullable(val.nullability),
-        r#type::Kind::Struct(val) => is_nullable(val.nullability),
-        r#type::Kind::List(val) => is_nullable(val.nullability),
-        r#type::Kind::Map(val) => is_nullable(val.nullability),
-        r#type::Kind::UserDefined(val) => is_nullable(val.nullability),
-        r#type::Kind::UserDefinedTypeReference(_) => true, // not implemented, assume nullable
-    };
-    Ok(nullable)
 }
 
 fn from_substrait_bound(
@@ -1763,8 +1752,9 @@ fn from_substrait_literal(
             for (i, field) in s.fields.iter().enumerate() {
                 let name = next_struct_field_name(i, dfs_names, name_idx)?;
                 let sv = from_substrait_literal(field, dfs_names, name_idx)?;
-                builder = builder
-                    .with_scalar(Field::new(name, sv.data_type(), field.nullable), sv);
+                // We assume everything to be nullable, since Arrow's strict about things matching
+                // and it's hard to match otherwise.
+                builder = builder.with_scalar(Field::new(name, sv.data_type(), true), sv);
             }
             builder.build()?
         }

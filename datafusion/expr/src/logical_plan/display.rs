@@ -425,7 +425,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
             LogicalPlan::Copy(CopyTo {
                 input: _,
                 output_url,
-                format_options,
+                file_type,
                 partition_by: _,
                 options,
             }) => {
@@ -437,7 +437,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 json!({
                     "Node Type": "CopyTo",
                     "Output URL": output_url,
-                    "Format Options": format!("{}", format_options),
+                    "File Type": format!("{}", file_type.get_ext()),
                     "Options": op_str
                 })
             }

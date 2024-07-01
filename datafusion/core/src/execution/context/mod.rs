@@ -1490,13 +1490,13 @@ impl SQLOptions {
         Default::default()
     }
 
-    /// Should DML data modification commands  (e.g. `INSERT and COPY`) be run? Defaults to `true`.
+    /// Should DDL data definition commands  (e.g. `CREATE TABLE`) be run? Defaults to `true`.
     pub fn with_allow_ddl(mut self, allow: bool) -> Self {
         self.allow_ddl = allow;
         self
     }
 
-    /// Should DML data modification commands (e.g. `INSERT and COPY`) be run? Defaults to `true`
+    /// Should DML data modification commands (e.g. `INSERT` and `COPY`) be run? Defaults to `true`
     pub fn with_allow_dml(mut self, allow: bool) -> Self {
         self.allow_dml = allow;
         self
