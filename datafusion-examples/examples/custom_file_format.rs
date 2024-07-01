@@ -17,7 +17,10 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::array::{RecordBatch, StringArray, UInt8Array};
+use arrow::{
+    array::{AsArray, RecordBatch, StringArray, UInt8Array},
+    datatypes::UInt64Type,
+};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::{
     datasource::{
@@ -198,7 +201,14 @@ async fn main() -> Result<()> {
         .await?;
 
     let results = d.collect().await?;
-    println!("Number of inserted rows: {:?}", results[0]);
+    println!(
+        "Number of inserted rows: {:?}",
+        (results[0]
+            .column_by_name("count")
+            .unwrap()
+            .as_primitive::<UInt64Type>()
+            .value(0))
+    );
 
     Ok(())
 }
