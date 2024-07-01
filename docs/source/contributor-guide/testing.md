@@ -49,6 +49,31 @@ You can run these tests individually using `cargo` as normal command such as
 cargo test -p datafusion --test parquet_exec
 ```
 
+## Documentation Examples
+
+We use Rust [doctest] to verify examples from the documentation are correct and
+up-to-date. These tests are run as part of our CI and you can run them them
+locally with the following command:
+
+```shell
+cargo test --doc
+```
+
+### API Documentation Examples
+
+As with other Rust projects, examples in doc comments in `.rs` files are
+automatically checked to ensure they work and evolve along with the code.
+
+### User Guide Documentation
+
+Rust example code from the user guide (anything marked with \`\`\`rust) is also
+tested in the same way using the [doc_comment] crate. See the end of
+[core/src/lib.rs] for more details.
+
+[doctest]: https://doc.rust-lang.org/rust-by-example/testing/doc_testing.html
+[doc_comment]: https://docs.rs/doc-comment/latest/doc_comment
+[core/src/lib.rs]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs#L583
+
 ## Benchmarks
 
 ### Criterion Benchmarks
