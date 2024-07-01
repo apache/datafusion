@@ -258,10 +258,10 @@ fn create_built_in_window_expr(
             }
 
             if n.is_unsigned() {
-                let n: u64 = n.try_into()?;
+                let n: u64 = n.cast_to(&DataType::UInt64)?.try_into()?;
                 Arc::new(Ntile::new(name, n, out_data_type))
             } else {
-                let n: i64 = n.try_into()?;
+                let n: i64 = n.cast_to(&DataType::Int64)?.try_into()?;
                 if n <= 0 {
                     return exec_err!("NTILE requires a positive integer");
                 }
@@ -271,7 +271,7 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::Lag => {
             let arg = args[0].clone();
             let shift_offset = get_scalar_value_from_args(args, 1)?
-                .map(|v| v.try_into())
+                .map(|v| v.cast_to(&DataType::Int64)?.try_into())
                 .and_then(|v| v.ok());
             let default_value =
                 get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
@@ -287,7 +287,7 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::Lead => {
             let arg = args[0].clone();
             let shift_offset = get_scalar_value_from_args(args, 1)?
-                .map(|v| v.try_into())
+                .map(|v| v.cast_to(&DataType::Int64)?.try_into())
                 .and_then(|v| v.ok());
             let default_value =
                 get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
@@ -305,6 +305,7 @@ fn create_built_in_window_expr(
             let n = args[1].as_any().downcast_ref::<Literal>().unwrap().value();
             let n: i64 = n
                 .clone()
+                .cast_to(&DataType::Int64)?
                 .try_into()
                 .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
             Arc::new(NthValue::nth(
@@ -1138,4 +1139,7 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_cast_args() -> Result<()> {}
 }
