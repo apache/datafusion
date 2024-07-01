@@ -37,11 +37,10 @@ use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 use itertools::izip;
 
 /// The SanityCheckPlan rule rejects the following query plans:
-/// i) Plans that use pipeline-breaking operators on infinite input(s),
-///    these queries cannot be executed.
-/// ii) Plans in which their order and distribution requirements are not
-///     satisfied by its children, these queries will most likely yield
-///     incorrect results.
+/// 1. Invalid plans containing nodes whose order and/or distribution requirements
+///    are not satisfied by their children.
+/// 2. Plans that use pipeline-breaking operators on infinite input(s),
+///    it is impossible to execute such queries.
 #[derive(Default)]
 pub struct SanityCheckPlan {}
 
