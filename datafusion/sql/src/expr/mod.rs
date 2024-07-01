@@ -109,7 +109,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut binary_expr = datafusion_expr::planner::RawBinaryExpr { op, left, right };
         for planner in self.planners.iter() {
             match planner.plan_binary_op(binary_expr, schema)? {
-                PlannerResult::Simplified(expr) => {
+                PlannerResult::Planned(expr) => {
                     return Ok(expr);
                 }
                 PlannerResult::Original(expr) => {
@@ -281,7 +281,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut field_access_expr = RawFieldAccessExpr { expr, field_access };
                 for planner in self.planners.iter() {
                     match planner.plan_field_access(field_access_expr, schema)? {
-                        PlannerResult::Simplified(expr) => return Ok(expr),
+                        PlannerResult::Planned(expr) => return Ok(expr),
                         PlannerResult::Original(expr) => {
                             field_access_expr = expr;
                         }

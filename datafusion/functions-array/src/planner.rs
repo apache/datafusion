@@ -60,11 +60,11 @@ impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
                 // TODO: concat function ignore null, but string concat takes null into consideration
                 // we can rewrite it to concat if we can configure the behaviour of concat function to the one like `string concat operator`
             } else if left_list_ndims == right_list_ndims {
-                return Ok(PlannerResult::Simplified(array_concat(vec![left, right])));
+                return Ok(PlannerResult::Planned(array_concat(vec![left, right])));
             } else if left_list_ndims > right_list_ndims {
-                return Ok(PlannerResult::Simplified(array_append(left, right)));
+                return Ok(PlannerResult::Planned(array_append(left, right)));
             } else if left_list_ndims < right_list_ndims {
-                return Ok(PlannerResult::Simplified(array_prepend(left, right)));
+                return Ok(PlannerResult::Planned(array_prepend(left, right)));
             }
         } else if matches!(
             op,
@@ -79,10 +79,10 @@ impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
             if left_list_ndims > 0 && right_list_ndims > 0 {
                 if op == sqlparser::ast::BinaryOperator::AtArrow {
                     // array1 @> array2 -> array_has_all(array1, array2)
-                    return Ok(PlannerResult::Simplified(array_has_all(left, right)));
+                    return Ok(PlannerResult::Planned(array_has_all(left, right)));
                 } else {
                     // array1 <@ array2 -> array_has_all(array2, array1)
-                    return Ok(PlannerResult::Simplified(array_has_all(right, left)));
+                    return Ok(PlannerResult::Planned(array_has_all(right, left)));
                 }
             }
         }
@@ -95,7 +95,7 @@ impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
         exprs: Vec<Expr>,
         _schema: &DFSchema,
     ) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Simplified(make_array(exprs)))
+        Ok(PlannerResult::Planned(make_array(exprs)))
     }
 }
 
@@ -113,14 +113,14 @@ impl UserDefinedSQLPlanner for FieldAccessPlanner {
         match field_access {
             // expr["field"] => get_field(expr, "field")
             GetFieldAccess::NamedStructField { name } => {
-                Ok(PlannerResult::Simplified(get_field(expr, name)))
+                Ok(PlannerResult::Planned(get_field(expr, name)))
             }
             // expr[idx] ==> array_element(expr, idx)
             GetFieldAccess::ListIndex { key: index } => {
                 match expr {
                     // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
                     Expr::AggregateFunction(agg_func) if is_array_agg(&agg_func) => {
-                        Ok(PlannerResult::Simplified(Expr::AggregateFunction(
+                        Ok(PlannerResult::Planned(Expr::AggregateFunction(
                             datafusion_expr::expr::AggregateFunction::new(
                                 AggregateFunction::NthValue,
                                 agg_func
@@ -135,7 +135,7 @@ impl UserDefinedSQLPlanner for FieldAccessPlanner {
                             ),
                         )))
                     }
-                    _ => Ok(PlannerResult::Simplified(array_element(expr, *index))),
+                    _ => Ok(PlannerResult::Planned(array_element(expr, *index))),
                 }
             }
             // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
@@ -143,7 +143,7 @@ impl UserDefinedSQLPlanner for FieldAccessPlanner {
                 start,
                 stop,
                 stride,
-            } => Ok(PlannerResult::Simplified(array_slice(
+            } => Ok(PlannerResult::Planned(array_slice(
                 expr,
                 *start,
                 *stop,
