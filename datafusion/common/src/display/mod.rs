@@ -56,11 +56,11 @@ pub enum PlanType {
         /// The name of the optimizer which produced this plan
         optimizer_name: String,
     },
-    /// The final, fully optimized physical which would be executed
+    /// The final, fully optimized physical plan which would be executed
     FinalPhysicalPlan,
     /// The final with stats, fully optimized physical plan which would be executed
     FinalPhysicalPlanWithStats,
-    /// The final with stats, fully optimized physical plan which would be executed
+    /// The final with schema, fully optimized physical plan which would be executed
     FinalPhysicalPlanWithSchema,
 }
 
