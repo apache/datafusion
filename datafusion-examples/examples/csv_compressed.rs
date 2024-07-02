@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
-/// This example demonstrates executing a simple query against an Arrow data source (CSV) and
-/// fetching results
+/// This example demonstrates executing a simple query against a compressed CSV file
 #[tokio::main]
 async fn main() -> Result<()> {
     // create local execution context
@@ -35,17 +35,21 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // execute the query
+    // query compressed CSV with specific options
+    let csv_options = CsvReadOptions::default()
+        .has_header(true)
+        .file_compression_type(FileCompressionType::GZIP)
+        .file_extension("csv.gz");
     let df = ctx
-        .sql(
-            "SELECT c1, MIN(c12), MAX(c12) \
-        FROM aggregate_test_100 \
-        WHERE c11 > 0.1 AND c11 < 0.9 \
-        GROUP BY c1",
+        .read_csv(
+            &format!("{testdata}/csv/aggregate_test_100.csv.gz"),
+            csv_options,
         )
         .await?;
+    let df = df
+        .filter(col("c1").eq(lit("a")))?
+        .select_columns(&["c2", "c3"])?;
 
-    // print the results
     df.show().await?;
 
     Ok(())
