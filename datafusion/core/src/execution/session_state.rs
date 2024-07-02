@@ -60,6 +60,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
+use datafusion_expr::planner::UserDefinedSQLPlanner;
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
@@ -99,6 +100,8 @@ pub struct SessionState {
     session_id: String,
     /// Responsible for analyzing and rewrite a logical plan before optimization
     analyzer: Analyzer,
+    /// Provides support for customising the SQL planner, e.g. to add support for custom operators like `->>` or `?`
+    user_defined_sql_planners: Vec<Arc<dyn UserDefinedSQLPlanner>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
@@ -231,6 +234,7 @@ impl SessionState {
         let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
+            user_defined_sql_planners: vec![],
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
@@ -605,7 +609,7 @@ impl SessionState {
             }
         }
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
+        let query = self.build_sql_query_planner(&provider);
         query.statement_to_plan(statement)
     }
 
@@ -658,8 +662,7 @@ impl SessionState {
             tables: HashMap::new(),
         };
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-
+        let query = self.build_sql_query_planner(&provider);
         query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
@@ -943,6 +946,36 @@ impl SessionState {
         let udtf = self.table_functions.remove(name);
         Ok(udtf.map(|x| x.function().clone()))
     }
+
+    fn build_sql_query_planner<'a, S>(&self, provider: &'a S) -> SqlToRel<'a, S>
+    where
+        S: ContextProvider,
+    {
+        let mut query = SqlToRel::new_with_options(provider, self.get_parser_options());
+
+        // custom planners are registered first, so they're run first and take precedence over built-in planners
+        for planner in self.user_defined_sql_planners.iter() {
+            query = query.with_user_defined_planner(planner.clone());
+        }
+
+        // register crate of array expressions (if enabled)
+        #[cfg(feature = "array_expressions")]
+        {
+            let array_planner =
+                Arc::new(functions_array::planner::ArrayFunctionPlanner) as _;
+
+            let field_access_planner =
+                Arc::new(functions_array::planner::FieldAccessPlanner) as _;
+
+            query
+                .with_user_defined_planner(array_planner)
+                .with_user_defined_planner(field_access_planner)
+        }
+        #[cfg(not(feature = "array_expressions"))]
+        {
+            query
+        }
+    }
 }
 
 struct SessionContextProvider<'a> {
@@ -1150,6 +1183,15 @@ impl FunctionRegistry for SessionState {
         rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
     ) -> datafusion_common::Result<()> {
         self.analyzer.add_function_rewrite(rewrite);
+        Ok(())
+    }
+
+    fn register_user_defined_sql_planner(
+        &mut self,
+        user_defined_sql_planner: Arc<dyn UserDefinedSQLPlanner>,
+    ) -> datafusion_common::Result<()> {
+        self.user_defined_sql_planners
+            .push(user_defined_sql_planner);
         Ok(())
     }
 }

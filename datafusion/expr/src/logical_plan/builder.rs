@@ -223,7 +223,7 @@ impl LogicalPlanBuilder {
                 Field::new(name, data_type.clone(), true)
             })
             .collect::<Vec<_>>();
-        let dfschema = DFSchema::from_unqualifed_fields(fields.into(), HashMap::new())?;
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
@@ -279,9 +279,9 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
+            partition_by,
             file_type,
             options,
-            partition_by,
         })))
     }
 
@@ -1455,7 +1455,6 @@ pub fn project(
             _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
         }
     }
-
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
