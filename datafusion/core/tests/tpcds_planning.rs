@@ -1044,7 +1044,10 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
     for table in &tables {
         ctx.register_table(
             table.name.as_str(),
-            Arc::new(MemTable::try_new(Arc::new(table.schema.clone()), vec![])?),
+            Arc::new(MemTable::try_new(
+                Arc::new(table.schema.clone()),
+                vec![vec![]],
+            )?),
         )?;
     }
 

@@ -18,21 +18,60 @@
 //! [`AvroFormat`] Apache Avro [`FileFormat`] abstractions
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::DataFusionError;
+use datafusion_common::GetExt;
+use datafusion_common::DEFAULT_AVRO_EXTENSION;
 use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
+use super::file_compression_type::FileCompressionType;
 use super::FileFormat;
+use super::FileFormatFactory;
 use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
 use crate::datasource::physical_plan::{AvroExec, FileScanConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
+
+#[derive(Default)]
+/// Factory struct used to create [AvroFormat]
+pub struct AvroFormatFactory;
+
+impl AvroFormatFactory {
+    /// Creates an instance of [AvroFormatFactory]
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl FileFormatFactory for AvroFormatFactory {
+    fn create(
+        &self,
+        _state: &SessionState,
+        _format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        Ok(Arc::new(AvroFormat))
+    }
+
+    fn default(&self) -> Arc<dyn FileFormat> {
+        Arc::new(AvroFormat)
+    }
+}
+
+impl GetExt for AvroFormatFactory {
+    fn get_ext(&self) -> String {
+        // Removes the dot, i.e. ".parquet" -> "parquet"
+        DEFAULT_AVRO_EXTENSION[1..].to_string()
+    }
+}
 
 /// Avro `FileFormat` implementation.
 #[derive(Default, Debug)]
@@ -42,6 +81,23 @@ pub struct AvroFormat;
 impl FileFormat for AvroFormat {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn get_ext(&self) -> String {
+        AvroFormatFactory::new().get_ext()
+    }
+
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
+        let ext = self.get_ext();
+        match file_compression_type.get_variant() {
+            CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
+            _ => Err(DataFusionError::Internal(
+                "Avro FileFormat does not support compression.".into(),
+            )),
+        }
     }
 
     async fn infer_schema(

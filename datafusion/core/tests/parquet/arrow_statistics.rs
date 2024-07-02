@@ -1181,7 +1181,7 @@ async fn test_dates_32_diff_rg_sizes() {
         // row counts are [13, 7]
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
         column_name: "date32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1204,7 +1204,7 @@ async fn test_time32_second_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
         column_name: "second",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1231,7 +1231,7 @@ async fn test_time32_millisecond_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
         column_name: "millisecond",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1264,7 +1264,7 @@ async fn test_time64_microsecond_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
         column_name: "microsecond",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1297,7 +1297,7 @@ async fn test_time64_nanosecond_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
         column_name: "nanosecond",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1324,7 +1324,7 @@ async fn test_dates_64_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
         column_name: "date64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1683,7 +1683,7 @@ async fn test_decimal() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "decimal_col",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1721,7 +1721,7 @@ async fn test_decimal_256() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "decimal256_col",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1752,7 +1752,7 @@ async fn test_dictionary() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "string_dict_i32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1801,7 +1801,7 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "name",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1821,7 +1821,7 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "service_string",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1840,7 +1840,7 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "service_binary",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1882,7 +1882,7 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "service_large_binary",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -2003,7 +2003,7 @@ async fn test_utf8() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5])),
         column_name: "utf8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -2015,7 +2015,7 @@ async fn test_utf8() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5])),
         column_name: "large_utf8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }

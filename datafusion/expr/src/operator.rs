@@ -25,7 +25,7 @@ use std::ops;
 use std::ops::Not;
 
 /// Operators applied to expressions
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Operator {
     /// Expressions are equal
     Eq,

@@ -17,22 +17,21 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
+use crate::scalar_function;
+use crate::{
+    expressions::{self, binary, like, Column, Literal},
+    PhysicalExpr,
+};
 
+use arrow::datatypes::Schema;
 use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
+    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{binary_expr, Between, BinaryExpr, Expr, Like, Operator, TryCast};
-
-use crate::scalar_function;
-use crate::{
-    expressions::{self, binary, like, Column, Literal},
-    PhysicalExpr,
-};
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
 /// AS int)`.
@@ -196,7 +195,7 @@ pub fn create_physical_expr(
             //
             // There should be no coercion during physical
             // planning.
-            binary(lhs, *op, rhs, input_schema)
+            binary(lhs, op.clone(), rhs, input_schema)
         }
         Expr::Like(Like {
             negated,
@@ -356,6 +355,13 @@ where
         .into_iter()
         .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
         .collect::<Result<Vec<_>>>()
+}
+
+/// Convert a logical expression to a physical expression (without any simplification, etc)
+pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
+    let df_schema = schema.clone().to_dfschema().unwrap();
+    let execution_props = ExecutionProps::new();
+    create_physical_expr(expr, &df_schema, &execution_props).unwrap()
 }
 
 #[cfg(test)]
