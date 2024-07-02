@@ -23,6 +23,7 @@ use datafusion_expr::{
     sqlparser, AggregateFunction, Expr, ExprSchemable, GetFieldAccess,
 };
 use datafusion_functions::expr_fn::get_field;
+use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 
 use crate::{
     array_has::array_has_all,
@@ -119,8 +120,8 @@ impl UserDefinedSQLPlanner for FieldAccessPlanner {
                     // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
                     Expr::AggregateFunction(agg_func) if is_array_agg(&agg_func) => {
                         Ok(PlannerResult::Planned(Expr::AggregateFunction(
-                            datafusion_expr::expr::AggregateFunction::new(
-                                AggregateFunction::NthValue,
+                            datafusion_expr::expr::AggregateFunction::new_udf(
+                                nth_value_udaf(),
                                 agg_func
                                     .args
                                     .into_iter()
