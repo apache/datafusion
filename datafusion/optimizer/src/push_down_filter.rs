@@ -424,8 +424,9 @@ fn push_down_all_join(
         }
     }
 
+    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type)?;
+
     if !on_filter.is_empty() {
-        let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type)?;
         for on in on_filter {
             if on_left_preserved && can_pushdown_join_predicate(&on, left_schema)? {
                 left_push.push(on)
@@ -441,11 +442,11 @@ fn push_down_all_join(
 
     // Extract from OR clause, generate new predicates for both side of join if possible.
     // We only track the unpushable predicates above.
-    if left_preserved {
+    if on_left_preserved {
         left_push.extend(extract_or_clauses_for_join(&keep_predicates, left_schema));
         left_push.extend(extract_or_clauses_for_join(&join_conditions, left_schema));
     }
-    if right_preserved {
+    if on_right_preserved {
         right_push.extend(extract_or_clauses_for_join(&keep_predicates, right_schema));
         right_push.extend(extract_or_clauses_for_join(&join_conditions, right_schema));
     }
