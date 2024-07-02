@@ -624,7 +624,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut keys = vec![];
                 let mut values = vec![];
                 for field in fields {
-                    // convert ident to literal
                     let key = lit(field.key.value);
                     let value = self.sql_expr_to_logical_expr(
                         *field.value,
