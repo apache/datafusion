@@ -1813,23 +1813,21 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let extracted_short_circuit = col("a").eq(lit(0)).or(col("b").eq(lit(0)));
-        let not_extracted_short_circuit_leg = (col("a") + col("b")).eq(lit(0));
+        let not_extracted_short_circuit_leg_1 = (col("a") + col("b")).eq(lit(0));
+        let not_extracted_short_circuit_leg_2 = (col("a") - col("b")).eq(lit(0));
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .project(vec![
                 extracted_short_circuit.clone().alias("c1"),
                 extracted_short_circuit.alias("c2"),
-                col("c")
-                    .gt(lit(0))
-                    .or(not_extracted_short_circuit_leg.clone())
-                    .alias("c3"),
-                col("c")
-                    .gt(lit(1))
-                    .or(not_extracted_short_circuit_leg)
-                    .alias("c4"),
+                not_extracted_short_circuit_leg_1.clone().alias("c3"),
+                not_extracted_short_circuit_leg_2.clone().alias("c4"),
+                not_extracted_short_circuit_leg_1
+                    .or(not_extracted_short_circuit_leg_2)
+                    .alias("c5"),
             ])?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, test.c > Int32(0) OR test.a + test.b = Int32(0) AS c3, test.c > Int32(1) OR test.a + test.b = Int32(0) AS c4\
+        let expected = "Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, test.a + test.b = Int32(0) AS c3, test.a - test.b = Int32(0) AS c4, test.a + test.b = Int32(0) OR test.a - test.b = Int32(0) AS c5\
         \n  Projection: test.a = Int32(0) OR test.b = Int32(0) AS __common_expr_1, test.a, test.b, test.c\
         \n    TableScan: test";
 
