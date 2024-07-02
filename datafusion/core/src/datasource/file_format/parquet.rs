@@ -547,7 +547,10 @@ pub fn statistics_from_parquet_meta_calc(
 /// Use [`statistics_from_parquet_meta_calc`] instead.
 /// This method was deprecated because it didn't need to be async so a new method was created
 /// that exposes a synchronous API.
-#[deprecated(since="40.0.0", note="please use `statistics_from_parquet_meta_calc` instead")]
+#[deprecated(
+    since = "40.0.0",
+    note = "please use `statistics_from_parquet_meta_calc` instead"
+)]
 pub async fn statistics_from_parquet_meta(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
@@ -1479,7 +1482,7 @@ mod tests {
 
         // Fetch statistics for first file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
 
         // column c_dic
