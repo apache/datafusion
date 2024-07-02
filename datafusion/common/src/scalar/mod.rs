@@ -3695,7 +3695,7 @@ mod tests {
 
     use super::*;
     use crate::cast::{
-        as_string_array, as_struct_array, as_uint32_array, as_uint64_array, as_map_array,
+        as_map_array, as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
     };
 
     use crate::assert_batches_eq;
@@ -3727,7 +3727,6 @@ mod tests {
         builder.append(false).unwrap();
 
         let expected = builder.finish();
-
 
         let sv = ScalarValue::Map(Arc::new(expected.clone()));
         let map_arr = sv.to_array().unwrap();
