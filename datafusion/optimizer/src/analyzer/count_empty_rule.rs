@@ -28,7 +28,7 @@ use datafusion_expr::{lit, Expr};
 use crate::utils::NamePreserver;
 use crate::AnalyzerRule;
 
-/// Rewrite `Count()` to `Count(Expr:Literal(1))` if the expression is empty.
+/// Rewrite `Count()` to `Count(Expr:Literal(1))`.
 #[derive(Default)]
 pub struct CountEmptyRule {}
 
@@ -55,14 +55,14 @@ fn is_count_empty_aggregate(aggregate_function: &AggregateFunction) -> bool {
             func_def: AggregateFunctionDefinition::UDF(udf),
             args,
             ..
-        } if udf.name() == "count" && args.len() == 0)
+        } if udf.name() == "count" && args.is_empty())
 }
 
 fn is_count_empty_window_aggregate(window_function: &WindowFunction) -> bool {
     let args = &window_function.args;
     matches!(window_function.fun,
         WindowFunctionDefinition::AggregateUDF(ref udaf)
-            if udaf.name() == "count" && args.len() == 1)
+            if udaf.name() == "count" && args.is_empty())
 }
 
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
