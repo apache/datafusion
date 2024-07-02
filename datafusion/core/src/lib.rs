@@ -182,7 +182,7 @@
 //! In order to achieve this, DataFusion supports extension at many points:
 //!
 //! * read from any datasource ([`TableProvider`])
-//! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
+//! * define your own catalogs, schemas, and table lists ([`catalog`] and [`CatalogProvider`])
 //! * build your own query language or plans ([`LogicalPlanBuilder`])
 //! * declare and use user-defined functions ([`ScalarUDF`], and [`AggregateUDF`], [`WindowUDF`])
 //! * add custom plan rewrite passes ([`AnalyzerRule`], [`OptimizerRule`]  and [`PhysicalOptimizerRule`])
