@@ -960,8 +960,7 @@ impl SessionState {
 
         let core_function_planner =
             Arc::new(functions::core::planner::CoreFunctionPlanner::default()) as _;
-        let query = query
-            .with_user_defined_planner(core_function_planner);
+        let query = query.with_user_defined_planner(core_function_planner);
 
         // register crate of array expressions (if enabled)
         #[cfg(feature = "array_expressions")]
