@@ -607,7 +607,7 @@ impl SessionState {
             }
         }
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
+        let query = self.build_sql_query_planner(&provider);
         query.statement_to_plan(statement)
     }
 
@@ -660,8 +660,7 @@ impl SessionState {
             tables: HashMap::new(),
         };
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-
+        let query = self.build_sql_query_planner(&provider);
         query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
@@ -944,6 +943,31 @@ impl SessionState {
     ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
         let udtf = self.table_functions.remove(name);
         Ok(udtf.map(|x| x.function().clone()))
+    }
+
+    fn build_sql_query_planner<'a, S>(&self, provider: &'a S) -> SqlToRel<'a, S>
+    where
+        S: ContextProvider,
+    {
+        let query = SqlToRel::new_with_options(provider, self.get_parser_options());
+
+        // register crate of array expressions (if enabled)
+        #[cfg(feature = "array_expressions")]
+        {
+            let array_planner =
+                Arc::new(functions_array::planner::ArrayFunctionPlanner::default()) as _;
+
+            let field_access_planner =
+                Arc::new(functions_array::planner::FieldAccessPlanner::default()) as _;
+
+            query
+                .with_user_defined_planner(array_planner)
+                .with_user_defined_planner(field_access_planner)
+        }
+        #[cfg(not(feature = "array_expressions"))]
+        {
+            query
+        }
     }
 }
 

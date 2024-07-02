@@ -613,6 +613,9 @@ config_namespace! {
 
         /// When set to true, the explain statement will print the partition sizes
         pub show_sizes: bool, default = true
+
+        /// When set to true, the explain statement will print schema information
+        pub show_schema: bool, default = false
     }
 }
 

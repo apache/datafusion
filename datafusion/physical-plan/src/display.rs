@@ -21,11 +21,13 @@
 use std::fmt;
 use std::fmt::Formatter;
 
-use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
-
 use arrow_schema::SchemaRef;
+
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
+use datafusion_expr::display_schema;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+
+use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
 #[derive(Debug, Clone, Copy)]
@@ -37,12 +39,15 @@ pub enum DisplayFormatType {
 }
 
 /// Wraps an `ExecutionPlan` with various ways to display this plan
+#[derive(Debug, Clone)]
 pub struct DisplayableExecutionPlan<'a> {
     inner: &'a dyn ExecutionPlan,
     /// How to show metrics
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    /// If schema should be displayed. See [`Self::set_show_schema`]
+    show_schema: bool,
 }
 
 impl<'a> DisplayableExecutionPlan<'a> {
@@ -53,6 +58,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             inner,
             show_metrics: ShowMetrics::None,
             show_statistics: false,
+            show_schema: false,
         }
     }
 
@@ -64,6 +70,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             inner,
             show_metrics: ShowMetrics::Aggregated,
             show_statistics: false,
+            show_schema: false,
         }
     }
 
@@ -75,7 +82,17 @@ impl<'a> DisplayableExecutionPlan<'a> {
             inner,
             show_metrics: ShowMetrics::Full,
             show_statistics: false,
+            show_schema: false,
         }
+    }
+
+    /// Enable display of schema
+    ///
+    /// If true, plans will be displayed with schema information at the end
+    /// of each line. The format is `schema=[[a:Int32;N, b:Int32;N, c:Int32;N]]`
+    pub fn set_show_schema(mut self, show_schema: bool) -> Self {
+        self.show_schema = show_schema;
+        self
     }
 
     /// Enable display of statistics
@@ -105,6 +122,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            show_schema: bool,
         }
         impl<'a> fmt::Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -114,6 +132,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     indent: 0,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    show_schema: self.show_schema,
                 };
                 accept(self.plan, &mut visitor)
             }
@@ -123,6 +142,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            show_schema: self.show_schema,
         }
     }
 
@@ -179,6 +199,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            show_schema: bool,
         }
 
         impl<'a> fmt::Display for Wrapper<'a> {
@@ -189,6 +210,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     indent: 0,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    show_schema: self.show_schema,
                 };
                 visitor.pre_visit(self.plan)?;
                 Ok(())
@@ -199,6 +221,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            show_schema: self.show_schema,
         }
     }
 
@@ -221,6 +244,14 @@ enum ShowMetrics {
 }
 
 /// Formats plans with a single line per node.
+///
+/// # Example
+///
+/// ```text
+/// ProjectionExec: expr=[column1@0 + 2 as column1 + Int64(2)]
+///   FilterExec: column1@0 = 5
+///     ValuesExec
+/// ```
 struct IndentVisitor<'a, 'b> {
     /// How to format each node
     t: DisplayFormatType,
@@ -232,6 +263,8 @@ struct IndentVisitor<'a, 'b> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    /// If schema should be displayed
+    show_schema: bool,
 }
 
 impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
@@ -264,6 +297,13 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
         if self.show_statistics {
             let stats = plan.statistics().map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{}]", stats)?;
+        }
+        if self.show_schema {
+            write!(
+                self.f,
+                ", schema={}",
+                display_schema(plan.schema().as_ref())
+            )?;
         }
         writeln!(self.f)?;
         self.indent += 1;
@@ -465,11 +505,12 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use super::DisplayableExecutionPlan;
-    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
-
     use datafusion_common::{DataFusionError, Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+
+    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
+
+    use super::DisplayableExecutionPlan;
 
     #[derive(Debug, Clone, Copy)]
     enum TestStatsExecPlan {

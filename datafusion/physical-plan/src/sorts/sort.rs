@@ -586,7 +586,7 @@ impl Debug for ExternalSorter {
     }
 }
 
-pub(crate) fn sort_batch(
+pub fn sort_batch(
     batch: &RecordBatch,
     expressions: &[PhysicalSortExpr],
     fetch: Option<usize>,
