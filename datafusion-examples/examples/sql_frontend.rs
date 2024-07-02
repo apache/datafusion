@@ -72,7 +72,7 @@ pub fn main() -> Result<()> {
     // The initial LogicalPlan is a mechanical translation from the parsed SQL
     // and often can not run without the Analyzer passes.
     //
-    // In this example, `person.age` is actually a different data type (Int32)
+    // In this example, `person.age` is actually a different data type (Int8)
     // than the values to which it is compared to which are Int64. Most
     // execution engines, including DataFusion's, will fail if you provide such
     // a plan.
