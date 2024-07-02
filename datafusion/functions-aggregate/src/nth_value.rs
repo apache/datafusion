@@ -54,6 +54,8 @@ make_udaf_expr_and_func!(
 #[derive(Debug)]
 pub struct NthValueAgg {
     signature: Signature,
+    /// If `N` needs to be reversed for aggregation
+    reverse_n: bool,
     /// If the input expression can have `NULL`s
     input_nullable: bool,
 }
@@ -63,12 +65,18 @@ impl NthValueAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
+            reverse_n: false,
             input_nullable: false,
         }
     }
 
     pub fn with_input_nullable(mut self, input_nullable: bool) -> Self {
         self.input_nullable = input_nullable;
+        self
+    }
+
+    pub fn with_reverse_n(mut self, reverse_n: bool) -> Self {
+        self.reverse_n = reverse_n;
         self
     }
 }
@@ -98,7 +106,13 @@ impl AggregateUDFImpl for NthValueAgg {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let n = match acc_args.input_exprs[1] {
-            Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
+            Expr::Literal(ScalarValue::Int64(Some(value))) => {
+                if self.reverse_n {
+                    Ok(-value)
+                } else {
+                    Ok(value)
+                }
+            }
             _ => not_impl_err!(
                 "{} not supported for n: {}",
                 self.name(),
@@ -145,8 +159,11 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
-        let nth_value =
-            AggregateUDF::from(Self::new().with_input_nullable(self.input_nullable));
+        let nth_value = AggregateUDF::from(
+            Self::new()
+                .with_input_nullable(self.input_nullable)
+                .with_reverse_n(!self.reverse_n),
+        );
 
         ReversedUDAF::Reversed(Arc::from(nth_value))
     }
