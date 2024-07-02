@@ -126,7 +126,7 @@ pub use struct_builder::ScalarStructBuilder;
 ///
 /// # Nested Types
 ///
-/// `List` / `LargeList` / `FixedSizeList` / `Struct` are represented as a
+/// `List` / `LargeList` / `FixedSizeList` / `Struct` / `Map` are represented as a
 /// single element array of the corresponding type.
 ///
 /// ## Example: Creating [`ScalarValue::Struct`] using [`ScalarStructBuilder`]
@@ -3452,9 +3452,6 @@ impl fmt::Display for ScalarValue {
                 )?
             }
             ScalarValue::Map(map_arr) => {
-                // ScalarValue Map should always have a single element
-                assert_eq!(map_arr.len(), 1);
-
                 if map_arr.null_count() == map_arr.len() {
                     write!(f, "NULL")?;
                     return Ok(());
@@ -3563,9 +3560,6 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::List(_) => write!(f, "List({self})"),
             ScalarValue::LargeList(_) => write!(f, "LargeList({self})"),
             ScalarValue::Struct(struct_arr) => {
-                // ScalarValue Struct should always have a single element
-                assert_eq!(struct_arr.len(), 1);
-
                 let columns = struct_arr.columns();
                 let fields = struct_arr.fields();
 
@@ -3601,7 +3595,7 @@ impl fmt::Debug for ScalarValue {
                                         let value =
                                             array_value_to_string(arr.column(1), i)
                                                 .unwrap();
-                                        format!("{}:{}", key, value)
+                                        format!("{key:?}:{value:?}")
                                     })
                                     .collect();
                                 format!("{{{}}}", buffer.join(","))
@@ -6342,6 +6336,46 @@ mod tests {
             "+---+",
             "|   |",
             "+---+",
+        ];
+        assert_batches_eq!(&expected, &[batch]);
+    }
+
+    #[test]
+    fn test_map_display() {
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::with_capacity(4);
+        let mut builder = MapBuilder::new(None, string_builder, int_builder);
+        builder.keys().append_value("joe");
+        builder.values().append_value(1);
+        builder.append(true).unwrap();
+
+        builder.keys().append_value("blogs");
+        builder.values().append_value(2);
+        builder.keys().append_value("foo");
+        builder.values().append_value(4);
+        builder.append(true).unwrap();
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+
+        let map_value = ScalarValue::Map(Arc::new(builder.finish()));
+
+        assert_eq!(map_value.to_string(), "[{joe:1},{blogs:2,foo:4},{},NULL]");
+
+        let ScalarValue::Map(arr) = map_value else {
+            panic!("Expected map");
+        };
+
+        //verify compared to arrow display
+        let batch = RecordBatch::try_from_iter(vec![("m", arr as _)]).unwrap();
+        let expected = [
+            "+--------------------+",
+            "| m                  |",
+            "+--------------------+",
+            "| {joe: 1}           |",
+            "| {blogs: 2, foo: 4} |",
+            "| {}                 |",
+            "|                    |",
+            "+--------------------+",
         ];
         assert_batches_eq!(&expected, &[batch]);
     }
