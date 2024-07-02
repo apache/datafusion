@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Implements the SQL [Information Schema] for DataFusion.
+//! [`InformationSchemaProvider`] that implements the SQL [Information Schema] for DataFusion.
 //!
 //! [Information Schema]: https://en.wikipedia.org/wiki/Information_schema
 

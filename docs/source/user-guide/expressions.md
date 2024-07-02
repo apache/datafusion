@@ -26,8 +26,10 @@ available for creating logical expressions. These are documented below.
 Most functions and methods may receive and return an `Expr`, which can be chained together using a fluent-style API:
 
 ```rust
+use datafusion::prelude::*;
 // create the expression `(a > 6) AND (b < 7)`
-col("a").gt(lit(6)).and(col("b").lt(lit(7)))
+col("a").gt(lit(6)).and(col("b").lt(lit(7)));
+
 ```
 
 :::
