@@ -21,13 +21,11 @@ use std::sync::Arc;
 use datafusion::common::{assert_batches_eq, DFSchema};
 use datafusion::error::Result;
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{
-    Operator
-};
+use datafusion::logical_expr::Operator;
 use datafusion::prelude::*;
 use datafusion::sql::sqlparser::ast::BinaryOperator;
-use datafusion_expr::BinaryExpr;
 use datafusion_expr::planner::{PlannerResult, RawBinaryExpr, UserDefinedSQLPlanner};
+use datafusion_expr::BinaryExpr;
 
 struct MyCustomPlanner;
 
@@ -42,14 +40,14 @@ impl UserDefinedSQLPlanner for MyCustomPlanner {
                 Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
                     left: Box::new(expr.left.clone()),
                     right: Box::new(expr.right.clone()),
-                    op: Operator::StringConcat
+                    op: Operator::StringConcat,
                 })))
             }
             BinaryOperator::LongArrow => {
                 Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
                     left: Box::new(expr.left.clone()),
                     right: Box::new(expr.right.clone()),
-                    op: Operator::Plus
+                    op: Operator::Plus,
                 })))
             }
             _ => Ok(PlannerResult::Original(expr)),

@@ -1190,7 +1190,8 @@ impl FunctionRegistry for SessionState {
         &mut self,
         user_defined_sql_planner: Arc<dyn UserDefinedSQLPlanner>,
     ) -> datafusion_common::Result<()> {
-        self.user_defined_sql_planners.push(user_defined_sql_planner);
+        self.user_defined_sql_planners
+            .push(user_defined_sql_planner);
         Ok(())
     }
 }
