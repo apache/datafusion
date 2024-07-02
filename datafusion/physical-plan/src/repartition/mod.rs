@@ -1296,7 +1296,11 @@ mod tests {
         let input = Arc::new(make_barrier_exec());
 
         // partition into two output streams
-        let exec = RepartitionExec::try_new(Arc::clone(&input) as Arc<dyn ExecutionPlan>, partitioning).unwrap();
+        let exec = RepartitionExec::try_new(
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            partitioning,
+        )
+        .unwrap();
 
         let output_stream0 = exec.execute(0, Arc::clone(&task_ctx)).unwrap();
         let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
@@ -1344,8 +1348,11 @@ mod tests {
 
         // We first collect the results without droping the output stream.
         let input = Arc::new(make_barrier_exec());
-        let exec =
-            RepartitionExec::try_new(Arc::clone(&input) as Arc<dyn ExecutionPlan>, partitioning.clone()).unwrap();
+        let exec = RepartitionExec::try_new(
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            partitioning.clone(),
+        )
+        .unwrap();
         let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
         let mut background_task = JoinSet::new();
         background_task.spawn(async move {
@@ -1366,7 +1373,11 @@ mod tests {
 
         // Now do the same but dropping the stream before waiting for the barrier
         let input = Arc::new(make_barrier_exec());
-        let exec = RepartitionExec::try_new(Arc::clone(&input) as Arc<dyn ExecutionPlan>, partitioning).unwrap();
+        let exec = RepartitionExec::try_new(
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            partitioning,
+        )
+        .unwrap();
         let output_stream0 = exec.execute(0, Arc::clone(&task_ctx)).unwrap();
         let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
         // now, purposely drop output stream 0

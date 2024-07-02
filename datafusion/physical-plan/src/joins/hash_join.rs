@@ -1682,7 +1682,7 @@ mod tests {
 
         let (left_expr, right_expr) = on
             .iter()
-            .map(|(l, r)| (Arc::clone(&l), Arc::clone(r)))
+            .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
             .unzip();
 
         let left_repartitioned: Arc<dyn ExecutionPlan> = match partition_mode {
@@ -2140,7 +2140,7 @@ mod tests {
         assert_batches_eq!(expected, &batches);
 
         // second part
-        let stream = join.execute(1, task_ctx.clone())?;
+        let stream = join.execute(1, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         // expected joined records = 2 (second right batch)

@@ -1469,7 +1469,7 @@ mod tests {
             }
 
             let batch = RecordBatch::try_new(
-                Arc::clone(&schema),
+                Arc::clone(schema),
                 vec![Arc::new(sn1_array.finish()), Arc::new(hash_array.finish())],
             )?;
             batches.push(batch);

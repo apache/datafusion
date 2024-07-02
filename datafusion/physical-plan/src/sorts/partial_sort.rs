@@ -965,8 +965,11 @@ mod tests {
             *partial_sort_exec.schema().field(2).data_type()
         );
 
-        let result: Vec<RecordBatch> =
-            collect(Arc::clone(&partial_sort_exec) as Arc<dyn ExecutionPlan>, task_ctx).await?;
+        let result: Vec<RecordBatch> = collect(
+            Arc::clone(&partial_sort_exec) as Arc<dyn ExecutionPlan>,
+            task_ctx,
+        )
+        .await?;
         assert_batches_eq!(expected, &result);
         assert_eq!(result.len(), 2);
         let metrics = partial_sort_exec.metrics().unwrap();

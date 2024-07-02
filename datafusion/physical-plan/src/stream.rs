@@ -562,7 +562,11 @@ mod test {
         let mut builder =
             RecordBatchReceiverStream::builder(input.schema(), num_partitions);
         for partition in 0..num_partitions {
-            builder.run_input(Arc::clone(&input) as Arc<dyn ExecutionPlan>, partition, Arc::clone(&task_ctx));
+            builder.run_input(
+                Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+                partition,
+                Arc::clone(&task_ctx),
+            );
         }
         let mut stream = builder.build();
 

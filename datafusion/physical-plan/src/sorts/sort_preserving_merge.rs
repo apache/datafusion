@@ -883,7 +883,9 @@ mod tests {
         let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
-        let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx).await.unwrap();
+        let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx)
+            .await
+            .unwrap();
         let expected = [
             "+----+---+",
             "| a  | b |",

@@ -1079,7 +1079,11 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
 
-        let result = collect(Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>, Arc::clone(&task_ctx)).await?;
+        let result = collect(
+            Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
 
         assert_eq!(result.len(), 2);
 
@@ -1155,7 +1159,11 @@ mod tests {
                 .with_fetch(fetch),
             );
 
-            let result = collect(Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>, Arc::clone(&task_ctx)).await?;
+            let result = collect(
+                Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
+                Arc::clone(&task_ctx),
+            )
+            .await?;
             assert_eq!(result.len(), 1);
 
             let metrics = sort_exec.metrics().unwrap();
@@ -1271,7 +1279,8 @@ mod tests {
             *sort_exec.schema().field(1).data_type()
         );
 
-        let result: Vec<RecordBatch> = collect(Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>, task_ctx).await?;
+        let result: Vec<RecordBatch> =
+            collect(Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>, task_ctx).await?;
         let metrics = sort_exec.metrics().unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
         assert_eq!(metrics.output_rows().unwrap(), 4);
@@ -1353,7 +1362,8 @@ mod tests {
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());
         assert_eq!(DataType::Float64, *sort_exec.schema().field(1).data_type());
 
-        let result: Vec<RecordBatch> = collect(Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>, task_ctx).await?;
+        let result: Vec<RecordBatch> =
+            collect(Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>, task_ctx).await?;
         let metrics = sort_exec.metrics().unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
         assert_eq!(metrics.output_rows().unwrap(), 8);

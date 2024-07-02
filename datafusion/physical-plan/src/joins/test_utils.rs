@@ -487,9 +487,18 @@ pub fn build_sides_record_batches(
         ("lt1", Arc::clone(&time) as ArrayRef),
         ("la2", Arc::clone(&ordered)),
         ("la1_des", Arc::clone(&ordered_des) as ArrayRef),
-        ("l_asc_null_first", Arc::clone(&ordered_asc_null_first) as ArrayRef),
-        ("l_asc_null_last", Arc::clone(&ordered_asc_null_last) as ArrayRef),
-        ("l_desc_null_first", Arc::clone(&ordered_desc_null_first) as ArrayRef),
+        (
+            "l_asc_null_first",
+            Arc::clone(&ordered_asc_null_first) as ArrayRef,
+        ),
+        (
+            "l_asc_null_last",
+            Arc::clone(&ordered_asc_null_last) as ArrayRef,
+        ),
+        (
+            "l_desc_null_first",
+            Arc::clone(&ordered_desc_null_first) as ArrayRef,
+        ),
         ("li1", Arc::clone(&interval_time)),
         ("l_float", Arc::clone(&float_asc) as ArrayRef),
     ])?;

@@ -188,8 +188,10 @@ mod tests {
 
         let placeholder = Arc::new(PlaceholderRowExec::new(schema));
 
-        let placeholder_2 =
-            with_new_children_if_necessary(Arc::clone(&placeholder) as Arc<dyn ExecutionPlan>, vec![])?;
+        let placeholder_2 = with_new_children_if_necessary(
+            Arc::clone(&placeholder) as Arc<dyn ExecutionPlan>,
+            vec![],
+        )?;
         assert_eq!(placeholder.schema(), placeholder_2.schema());
 
         let too_many_kids = vec![placeholder_2];
