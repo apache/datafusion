@@ -32,7 +32,7 @@ use crate::{
 };
 
 #[derive(Default)]
-pub struct ArrayFunctionPlanner {}
+pub struct ArrayFunctionPlanner;
 
 impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
     fn plan_binary_op(
