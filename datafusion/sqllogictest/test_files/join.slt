@@ -943,6 +943,44 @@ WHERE (e.name = 'Alice' OR e.name = 'Carol');
 1 Alice HR
 3 Carol Engineering
 
+# Push down OR conditions on Filter through LEFT JOIN if possible
+query TT
+EXPLAIN SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON e.emp_id = d.emp_id
+WHERE ((dept_name != 'Engineering' AND e.name = 'Alice') OR (name != 'Alice' AND e.name = 'Carol'));
+----
+logical_plan
+01)Filter: d.dept_name != Utf8("Engineering") AND e.name = Utf8("Alice") OR e.name != Utf8("Alice") AND e.name = Utf8("Carol")
+02)--Projection: e.emp_id, e.name, d.dept_name
+03)----Left Join: e.emp_id = d.emp_id
+04)------SubqueryAlias: e
+05)--------Filter: employees.name = Utf8("Alice") OR employees.name != Utf8("Alice") AND employees.name = Utf8("Carol")
+06)----------TableScan: employees projection=[emp_id, name]
+07)------SubqueryAlias: d
+08)--------TableScan: department projection=[emp_id, dept_name]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: dept_name@2 != Engineering AND name@1 = Alice OR name@1 != Alice AND name@1 = Carol
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(emp_id@0, emp_id@0)], projection=[emp_id@0, name@1, dept_name@3]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------FilterExec: name@1 = Alice OR name@1 != Alice AND name@1 = Carol
+08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+09)----------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON e.emp_id = d.emp_id
+WHERE ((dept_name != 'Engineering' AND e.name = 'Alice') OR (name != 'Alice' AND e.name = 'Carol'));
+----
+1 Alice HR
+3 Carol Engineering
+
 statement ok
 DROP TABLE employees
 
