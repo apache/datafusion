@@ -142,15 +142,17 @@ impl AggregateUDFImpl for NthValueAgg {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new_list(
             format_state_name(self.name(), "nth_value"),
-            Field::new("item", args.input_type.clone(), self.input_nullable),
-            false,
+            Field::new("item", args.input_type.clone(), true),
+            self.input_nullable, // This should be the same as field()
         )];
         let orderings = args.ordering_fields.to_vec();
-        fields.push(Field::new_list(
-            format_state_name(self.name(), "nth_value_orderings"),
-            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
-            self.input_nullable,
-        ));
+        if !orderings.is_empty() {
+            fields.push(Field::new_list(
+                format_state_name(self.name(), "nth_value_orderings"),
+                Field::new("item", DataType::Struct(Fields::from(orderings)), true),
+                self.input_nullable,
+            ));
+        }
         Ok(fields)
     }
 
