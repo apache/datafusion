@@ -218,13 +218,13 @@ impl Operator {
     }
 
     /// Get the operator precedence
-    /// use <https://www.postgresql.org/docs/7.0/operators.htm#AEN2026> as a reference
+    /// use <https://www.postgresql.org/docs/7.2/sql-precedence.html> as a reference
     pub fn precedence(&self) -> u8 {
         match self {
             Operator::Or => 5,
             Operator::And => 10,
-            Operator::Eq => 15,
-            Operator::NotEq => 20,
+            Operator::Eq | Operator::NotEq | Operator::LtEq | Operator::GtEq => 15,
+            Operator::Lt | Operator::Gt => 20,
             Operator::LikeMatch
             | Operator::NotLikeMatch
             | Operator::ILikeMatch
@@ -243,7 +243,6 @@ impl Operator {
             | Operator::StringConcat
             | Operator::AtArrow
             | Operator::ArrowAt => 30,
-            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => 35,
             Operator::Plus | Operator::Minus => 40,
             Operator::Multiply | Operator::Divide | Operator::Modulo => 45,
         }
