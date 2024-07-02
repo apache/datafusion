@@ -506,9 +506,7 @@ impl PartialOrd for ScalarValue {
                 partial_cmp_struct(struct_arr1, struct_arr2)
             }
             (Struct(_), _) => None,
-            (Map(map_arr1), Map(map_arr2)) => {
-                partial_cmp_map(map_arr1, map_arr2)
-            },
+            (Map(map_arr1), Map(map_arr2)) => partial_cmp_map(map_arr1, map_arr2),
             (Map(_), _) => None,
             (Date32(v1), Date32(v2)) => v1.partial_cmp(v2),
             (Date32(_), _) => None,
@@ -649,8 +647,8 @@ fn partial_cmp_map(m1: &Arc<MapArray>, m2: &Arc<MapArray>) -> Option<Ordering> {
     }
 
     for col_index in 0..m1.len() {
-        let arr1 = m1.column(col_index);
-        let arr2 = m2.column(col_index);
+        let arr1 = m1.entries().column(col_index);
+        let arr2 = m2.entries().column(col_index);
 
         let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
         let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
@@ -3305,6 +3303,12 @@ impl TryFrom<&DataType> for ScalarValue {
                     .to_owned()
                     .into(),
             ),
+            DataType::Map(fields, sorted) => ScalarValue::Map(
+                new_null_array(&DataType::Map(fields.to_owned(), sorted.to_owned()), 1)
+                    .as_map()
+                    .to_owned()
+                    .into(),
+            ),
             DataType::Union(fields, mode) => {
                 ScalarValue::Union(None, fields.clone(), *mode)
             }
@@ -3444,18 +3448,35 @@ impl fmt::Display for ScalarValue {
                     return Ok(());
                 }
 
-                // TODO: check
                 write!(
                     f,
-                    "{{{}}}",
-                    map_arr.iter().map(|struct_array| {
-                        if let Some(arr) = struct_array {
-                            array_value_to_string(arr.column(0), 0)?.to_string()
-                        }
-                        else {
-                            "NULL".to_string()
-                        }
-                    }).collect::<Vec<_>>().join(",")
+                    "[{}]",
+                    map_arr
+                        .iter()
+                        .map(|struct_array| {
+                            if let Some(arr) = struct_array {
+                                let mut buffer = VecDeque::new();
+                                for i in 0..arr.len() {
+                                    let key =
+                                        array_value_to_string(arr.column(0), i).unwrap();
+                                    let value =
+                                        array_value_to_string(arr.column(1), i).unwrap();
+                                    buffer.push_back(format!("{}:{}", key, value));
+                                }
+                                format!(
+                                    "{{{}}}",
+                                    buffer
+                                        .into_iter()
+                                        .collect::<Vec<_>>()
+                                        .join(",")
+                                        .as_str()
+                                )
+                            } else {
+                                "NULL".to_string()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
                 )?
             }
             ScalarValue::Union(val, _fields, _mode) => match val {
@@ -3551,10 +3572,35 @@ impl fmt::Debug for ScalarValue {
                         .join(",")
                 )
             }
-            ScalarValue::Map(_) => {
-                // TODO:
-                write!(f, "Map({self}")
-            },
+            ScalarValue::Map(map_arr) => {
+                // ScalarValue Map should always have a single element
+                assert_eq!(map_arr.len(), 1);
+                write!(
+                    f,
+                    "Map([{}])",
+                    map_arr
+                        .iter()
+                        .map(|struct_array| {
+                            if let Some(arr) = struct_array {
+                                let buffer: Vec<String> = (0..arr.len())
+                                    .map(|i| {
+                                        let key = array_value_to_string(arr.column(0), i)
+                                            .unwrap();
+                                        let value =
+                                            array_value_to_string(arr.column(1), i)
+                                                .unwrap();
+                                        format!("{}:{}", key, value)
+                                    })
+                                    .collect();
+                                format!("{{{}}}", buffer.join(","))
+                            } else {
+                                "NULL".to_string()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            }
             ScalarValue::Date32(_) => write!(f, "Date32(\"{self}\")"),
             ScalarValue::Date64(_) => write!(f, "Date64(\"{self}\")"),
             ScalarValue::Time32Second(_) => write!(f, "Time32Second(\"{self}\")"),
@@ -3643,7 +3689,7 @@ mod tests {
 
     use super::*;
     use crate::cast::{
-        as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
+        as_string_array, as_struct_array, as_uint32_array, as_uint64_array, as_map_array,
     };
 
     use crate::assert_batches_eq;
@@ -3656,6 +3702,32 @@ mod tests {
     use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;
+
+    #[test]
+    fn test_scalar_value_from_for_map() {
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::with_capacity(4);
+        let mut builder = MapBuilder::new(None, string_builder, int_builder);
+        builder.keys().append_value("joe");
+        builder.values().append_value(1);
+        builder.append(true).unwrap();
+
+        builder.keys().append_value("blogs");
+        builder.values().append_value(2);
+        builder.keys().append_value("foo");
+        builder.values().append_value(4);
+        builder.append(true).unwrap();
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+
+        let expected = builder.finish();
+
+
+        let sv = ScalarValue::Map(Arc::new(expected.clone()));
+        let map_arr = sv.to_array().unwrap();
+        let actual = as_map_array(&map_arr).unwrap();
+        assert_eq!(actual, &expected);
+    }
 
     #[test]
     fn test_scalar_value_from_for_struct() {

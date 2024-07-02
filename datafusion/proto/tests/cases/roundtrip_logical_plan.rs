@@ -1219,6 +1219,30 @@ fn round_trip_scalar_values() {
             ),
         ])))
         .unwrap(),
+        ScalarValue::try_from(&DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int32, true),
+                    Field::new("value", DataType::Utf8, false),
+                ])),
+                false,
+            )),
+            false,
+        ))
+        .unwrap(),
+        ScalarValue::try_from(&DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int32, true),
+                    Field::new("value", DataType::Utf8, true),
+                ])),
+                false,
+            )),
+            true,
+        ))
+        .unwrap(),
         ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
         ScalarValue::FixedSizeBinary(0, None),
         ScalarValue::FixedSizeBinary(5, None),
