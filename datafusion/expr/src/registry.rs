@@ -18,6 +18,7 @@
 //! FunctionRegistry trait
 
 use crate::expr_rewriter::FunctionRewrite;
+use crate::planner::UserDefinedSQLPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
 use std::collections::HashMap;
@@ -107,6 +108,14 @@ pub trait FunctionRegistry {
         _rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
     ) -> Result<()> {
         not_impl_err!("Registering FunctionRewrite")
+    }
+
+    /// Registers a new [`UserDefinedSQLPlanner`] with the registry.
+    fn register_user_defined_sql_planner(
+        &mut self,
+        _user_defined_sql_planner: Arc<dyn UserDefinedSQLPlanner>,
+    ) -> Result<()> {
+        not_impl_err!("Registering UserDefinedSQLPlanner")
     }
 }
 

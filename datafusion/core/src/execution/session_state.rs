@@ -25,6 +25,13 @@ use crate::catalog::{
     MemoryCatalogProviderList,
 };
 use crate::datasource::cte_worktable::CteWorkTable;
+use crate::datasource::file_format::arrow::ArrowFormatFactory;
+use crate::datasource::file_format::avro::AvroFormatFactory;
+use crate::datasource::file_format::csv::CsvFormatFactory;
+use crate::datasource::file_format::json::JsonFormatFactory;
+#[cfg(feature = "parquet")]
+use crate::datasource::file_format::parquet::ParquetFormatFactory;
+use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use crate::datasource::function::{TableFunction, TableFunctionImpl};
 use crate::datasource::provider::{DefaultTableFactory, TableProviderFactory};
 use crate::datasource::provider_as_source;
@@ -41,10 +48,11 @@ use chrono::{DateTime, Utc};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, DFSchema, DataFusionError, ResolvedTableReference,
-    TableReference,
+    config_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
+    ResolvedTableReference, TableReference,
 };
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -52,6 +60,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
+use datafusion_expr::planner::UserDefinedSQLPlanner;
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
@@ -91,6 +100,8 @@ pub struct SessionState {
     session_id: String,
     /// Responsible for analyzing and rewrite a logical plan before optimization
     analyzer: Analyzer,
+    /// Provides support for customising the SQL planner, e.g. to add support for custom operators like `->>` or `?`
+    user_defined_sql_planners: Vec<Arc<dyn UserDefinedSQLPlanner>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
@@ -109,6 +120,8 @@ pub struct SessionState {
     window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
+    /// Holds registered external FileFormat implementations
+    file_formats: HashMap<String, Arc<dyn FileFormatFactory>>,
     /// Session configuration
     config: SessionConfig,
     /// Table options
@@ -221,6 +234,7 @@ impl SessionState {
         let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
+            user_defined_sql_planners: vec![],
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
@@ -230,12 +244,44 @@ impl SessionState {
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: Arc::new(EmptySerializerRegistry),
+            file_formats: HashMap::new(),
             table_options: TableOptions::default_from_session_config(config.options()),
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
             table_factories,
             function_factory: None,
+        };
+
+        #[cfg(feature = "parquet")]
+        if let Err(e) =
+            new_self.register_file_format(Arc::new(ParquetFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default ParquetFormat: {e}")
+        };
+
+        if let Err(e) =
+            new_self.register_file_format(Arc::new(JsonFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default JsonFormat: {e}")
+        };
+
+        if let Err(e) =
+            new_self.register_file_format(Arc::new(CsvFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default CsvFormat: {e}")
+        };
+
+        if let Err(e) =
+            new_self.register_file_format(Arc::new(ArrowFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default ArrowFormat: {e}")
+        };
+
+        if let Err(e) =
+            new_self.register_file_format(Arc::new(AvroFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default AvroFormat: {e}")
         };
 
         // register built in functions
@@ -563,7 +609,7 @@ impl SessionState {
             }
         }
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
+        let query = self.build_sql_query_planner(&provider);
         query.statement_to_plan(statement)
     }
 
@@ -573,6 +619,7 @@ impl SessionState {
         ParserOptions {
             parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
             enable_ident_normalization: sql_parser_options.enable_ident_normalization,
+            support_varchar_with_length: sql_parser_options.support_varchar_with_length,
         }
     }
 
@@ -615,8 +662,7 @@ impl SessionState {
             tables: HashMap::new(),
         };
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-
+        let query = self.build_sql_query_planner(&provider);
         query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
@@ -811,6 +857,31 @@ impl SessionState {
         self.table_options.extensions.insert(extension)
     }
 
+    /// Adds or updates a [FileFormatFactory] which can be used with COPY TO or CREATE EXTERNAL TABLE statements for reading
+    /// and writing files of custom formats.
+    pub fn register_file_format(
+        &mut self,
+        file_format: Arc<dyn FileFormatFactory>,
+        overwrite: bool,
+    ) -> Result<(), DataFusionError> {
+        let ext = file_format.get_ext().to_lowercase();
+        match (self.file_formats.entry(ext.clone()), overwrite){
+            (Entry::Vacant(e), _) => {e.insert(file_format);},
+            (Entry::Occupied(mut e), true)  => {e.insert(file_format);},
+            (Entry::Occupied(_), false) => return config_err!("File type already registered for extension {ext}. Set overwrite to true to replace this extension."),
+        };
+        Ok(())
+    }
+
+    /// Retrieves a [FileFormatFactory] based on file extension which has been registered
+    /// via SessionContext::register_file_format. Extensions are not case sensitive.
+    pub fn get_file_format_factory(
+        &self,
+        ext: &str,
+    ) -> Option<Arc<dyn FileFormatFactory>> {
+        self.file_formats.get(&ext.to_lowercase()).cloned()
+    }
+
     /// Get a new TaskContext to run in this session
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))
@@ -874,6 +945,36 @@ impl SessionState {
     ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
         let udtf = self.table_functions.remove(name);
         Ok(udtf.map(|x| x.function().clone()))
+    }
+
+    fn build_sql_query_planner<'a, S>(&self, provider: &'a S) -> SqlToRel<'a, S>
+    where
+        S: ContextProvider,
+    {
+        let mut query = SqlToRel::new_with_options(provider, self.get_parser_options());
+
+        // custom planners are registered first, so they're run first and take precedence over built-in planners
+        for planner in self.user_defined_sql_planners.iter() {
+            query = query.with_user_defined_planner(planner.clone());
+        }
+
+        // register crate of array expressions (if enabled)
+        #[cfg(feature = "array_expressions")]
+        {
+            let array_planner =
+                Arc::new(functions_array::planner::ArrayFunctionPlanner) as _;
+
+            let field_access_planner =
+                Arc::new(functions_array::planner::FieldAccessPlanner) as _;
+
+            query
+                .with_user_defined_planner(array_planner)
+                .with_user_defined_planner(field_access_planner)
+        }
+        #[cfg(not(feature = "array_expressions"))]
+        {
+            query
+        }
     }
 }
 
@@ -966,6 +1067,16 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
 
     fn udwf_names(&self) -> Vec<String> {
         self.state.window_functions().keys().cloned().collect()
+    }
+
+    fn get_file_type(&self, ext: &str) -> datafusion_common::Result<Arc<dyn FileType>> {
+        self.state
+            .file_formats
+            .get(&ext.to_lowercase())
+            .ok_or(plan_datafusion_err!(
+                "There is no registered file format with ext {ext}"
+            ))
+            .map(|file_type| format_as_file_type(file_type.clone()))
     }
 }
 
@@ -1072,6 +1183,15 @@ impl FunctionRegistry for SessionState {
         rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
     ) -> datafusion_common::Result<()> {
         self.analyzer.add_function_rewrite(rewrite);
+        Ok(())
+    }
+
+    fn register_user_defined_sql_planner(
+        &mut self,
+        user_defined_sql_planner: Arc<dyn UserDefinedSQLPlanner>,
+    ) -> datafusion_common::Result<()> {
+        self.user_defined_sql_planners
+            .push(user_defined_sql_planner);
         Ok(())
     }
 }

@@ -224,6 +224,7 @@ pub(crate) async fn stateless_multipart_put(
         part_cols,
         base_output_path.clone(),
         file_extension,
+        config.keep_partition_by_columns,
     );
 
     let rb_buffer_size = &context

@@ -18,14 +18,8 @@
 //! Factory for creating ListingTables with default options
 
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
-#[cfg(feature = "parquet")]
-use crate::datasource::file_format::parquet::ParquetFormat;
-use crate::datasource::file_format::{
-    arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat, json::JsonFormat, FileFormat,
-};
 use crate::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
@@ -34,8 +28,8 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::Result;
-use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
+use datafusion_common::{arrow_datafusion_err, DataFusionError};
+use datafusion_common::{config_datafusion_err, Result};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -58,28 +52,15 @@ impl TableProviderFactory for ListingTableFactory {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
-        let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
-            DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
-        })?;
-        let mut table_options = state.default_table_options();
-        table_options.set_file_format(file_type.clone());
-        table_options.alter_with_string_hash_map(&cmd.options)?;
+        let file_format = state
+            .get_file_format_factory(cmd.file_type.as_str())
+            .ok_or(config_datafusion_err!(
+                "Unable to create table with format {}! Could not find FileFormat.",
+                cmd.file_type
+            ))?
+            .create(state, &cmd.options)?;
 
         let file_extension = get_extension(cmd.location.as_str());
-        let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::CSV => {
-                Arc::new(CsvFormat::default().with_options(table_options.csv))
-            }
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => {
-                Arc::new(ParquetFormat::default().with_options(table_options.parquet))
-            }
-            FileType::AVRO => Arc::new(AvroFormat),
-            FileType::JSON => {
-                Arc::new(JsonFormat::default().with_options(table_options.json))
-            }
-            FileType::ARROW => Arc::new(ArrowFormat),
-        };
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
             (
@@ -166,7 +147,9 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::execution::context::SessionContext;
+    use crate::{
+        datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
+    };
 
     use datafusion_common::{Constraints, DFSchema, TableReference};
 

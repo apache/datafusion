@@ -345,9 +345,12 @@ impl CommonSubexprEliminate {
         self.try_unary_plan(expr, input, config)?
             .transform_data(|(mut new_expr, new_input)| {
                 assert_eq!(new_expr.len(), 1); // passed in vec![predicate]
-                let new_predicate = new_expr.pop().unwrap();
-                Ok(Filter::remove_aliases(new_predicate)?
-                    .update_data(|new_predicate| (new_predicate, new_input)))
+                let new_predicate = new_expr
+                    .pop()
+                    .unwrap()
+                    .unalias_nested()
+                    .update_data(|new_predicate| (new_predicate, new_input));
+                Ok(new_predicate)
             })?
             .map_data(|(new_predicate, new_input)| {
                 Filter::try_new(new_predicate, Arc::new(new_input))
@@ -1702,7 +1705,7 @@ mod test {
     fn test_extract_expressions_from_grouping_set() -> Result<()> {
         let mut result = Vec::with_capacity(3);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
-        let schema = DFSchema::from_unqualifed_fields(
+        let schema = DFSchema::from_unqualified_fields(
             vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
@@ -1721,7 +1724,7 @@ mod test {
     fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
         let mut result = Vec::with_capacity(2);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
-        let schema = DFSchema::from_unqualifed_fields(
+        let schema = DFSchema::from_unqualified_fields(
             vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
@@ -1790,7 +1793,7 @@ mod test {
     #[test]
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
-        let schema = DFSchema::from_unqualifed_fields(
+        let schema = DFSchema::from_unqualified_fields(
             vec![Field::new("a", DataType::Int32, false)].into(),
             HashMap::default(),
         )?;

@@ -36,6 +36,9 @@ use datafusion_expr::{
 };
 use datafusion_proto_common::{from_proto::FromOptionalField, FromProtoError as Error};
 
+use crate::protobuf::plan_type::PlanTypeEnum::{
+    FinalPhysicalPlanWithSchema, InitialPhysicalPlanWithSchema,
+};
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
@@ -121,6 +124,7 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 FinalLogicalPlan(_) => PlanType::FinalLogicalPlan,
                 InitialPhysicalPlan(_) => PlanType::InitialPhysicalPlan,
                 InitialPhysicalPlanWithStats(_) => PlanType::InitialPhysicalPlanWithStats,
+                InitialPhysicalPlanWithSchema(_) => PlanType::InitialPhysicalPlanWithSchema,
                 OptimizedPhysicalPlan(OptimizedPhysicalPlanType { optimizer_name }) => {
                     PlanType::OptimizedPhysicalPlan {
                         optimizer_name: optimizer_name.clone(),
@@ -128,6 +132,7 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 }
                 FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan,
                 FinalPhysicalPlanWithStats(_) => PlanType::FinalPhysicalPlanWithStats,
+                FinalPhysicalPlanWithSchema(_) => PlanType::FinalPhysicalPlanWithSchema,
             },
             plan: Arc::new(stringified_plan.plan.clone()),
         }
@@ -140,7 +145,6 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Min => Self::Min,
             protobuf::AggregateFunction::Max => Self::Max,
             protobuf::AggregateFunction::ArrayAgg => Self::ArrayAgg,
-            protobuf::AggregateFunction::Grouping => Self::Grouping,
             protobuf::AggregateFunction::NthValueAgg => Self::NthValue,
         }
     }
