@@ -16137,6 +16137,9 @@ impl serde::Serialize for PlanType {
                 plan_type::PlanTypeEnum::InitialPhysicalPlanWithStats(v) => {
                     struct_ser.serialize_field("InitialPhysicalPlanWithStats", v)?;
                 }
+                plan_type::PlanTypeEnum::InitialPhysicalPlanWithSchema(v) => {
+                    struct_ser.serialize_field("InitialPhysicalPlanWithSchema", v)?;
+                }
                 plan_type::PlanTypeEnum::OptimizedPhysicalPlan(v) => {
                     struct_ser.serialize_field("OptimizedPhysicalPlan", v)?;
                 }
@@ -16145,6 +16148,9 @@ impl serde::Serialize for PlanType {
                 }
                 plan_type::PlanTypeEnum::FinalPhysicalPlanWithStats(v) => {
                     struct_ser.serialize_field("FinalPhysicalPlanWithStats", v)?;
+                }
+                plan_type::PlanTypeEnum::FinalPhysicalPlanWithSchema(v) => {
+                    struct_ser.serialize_field("FinalPhysicalPlanWithSchema", v)?;
                 }
             }
         }
@@ -16165,9 +16171,11 @@ impl<'de> serde::Deserialize<'de> for PlanType {
             "FinalLogicalPlan",
             "InitialPhysicalPlan",
             "InitialPhysicalPlanWithStats",
+            "InitialPhysicalPlanWithSchema",
             "OptimizedPhysicalPlan",
             "FinalPhysicalPlan",
             "FinalPhysicalPlanWithStats",
+            "FinalPhysicalPlanWithSchema",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16179,9 +16187,11 @@ impl<'de> serde::Deserialize<'de> for PlanType {
             FinalLogicalPlan,
             InitialPhysicalPlan,
             InitialPhysicalPlanWithStats,
+            InitialPhysicalPlanWithSchema,
             OptimizedPhysicalPlan,
             FinalPhysicalPlan,
             FinalPhysicalPlanWithStats,
+            FinalPhysicalPlanWithSchema,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16210,9 +16220,11 @@ impl<'de> serde::Deserialize<'de> for PlanType {
                             "FinalLogicalPlan" => Ok(GeneratedField::FinalLogicalPlan),
                             "InitialPhysicalPlan" => Ok(GeneratedField::InitialPhysicalPlan),
                             "InitialPhysicalPlanWithStats" => Ok(GeneratedField::InitialPhysicalPlanWithStats),
+                            "InitialPhysicalPlanWithSchema" => Ok(GeneratedField::InitialPhysicalPlanWithSchema),
                             "OptimizedPhysicalPlan" => Ok(GeneratedField::OptimizedPhysicalPlan),
                             "FinalPhysicalPlan" => Ok(GeneratedField::FinalPhysicalPlan),
                             "FinalPhysicalPlanWithStats" => Ok(GeneratedField::FinalPhysicalPlanWithStats),
+                            "FinalPhysicalPlanWithSchema" => Ok(GeneratedField::FinalPhysicalPlanWithSchema),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16284,6 +16296,13 @@ impl<'de> serde::Deserialize<'de> for PlanType {
                             plan_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::InitialPhysicalPlanWithStats)
 ;
                         }
+                        GeneratedField::InitialPhysicalPlanWithSchema => {
+                            if plan_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("InitialPhysicalPlanWithSchema"));
+                            }
+                            plan_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::InitialPhysicalPlanWithSchema)
+;
+                        }
                         GeneratedField::OptimizedPhysicalPlan => {
                             if plan_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("OptimizedPhysicalPlan"));
@@ -16303,6 +16322,13 @@ impl<'de> serde::Deserialize<'de> for PlanType {
                                 return Err(serde::de::Error::duplicate_field("FinalPhysicalPlanWithStats"));
                             }
                             plan_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::FinalPhysicalPlanWithStats)
+;
+                        }
+                        GeneratedField::FinalPhysicalPlanWithSchema => {
+                            if plan_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("FinalPhysicalPlanWithSchema"));
+                            }
+                            plan_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::FinalPhysicalPlanWithSchema)
 ;
                         }
                     }

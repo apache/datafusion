@@ -22,13 +22,13 @@
 use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
-    new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
-    StringArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    new_empty_array, new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+    LargeStringArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
@@ -846,6 +846,9 @@ macro_rules! get_data_page_statistics {
                     })
                     }).flatten().collect::<Vec<_>>(),
                 ))),
+                Some(DataType::Dictionary(_, value_type)) => {
+                    [<$stat_type_prefix:lower _ page_statistics>](Some(value_type), $iterator)
+                },
                 Some(DataType::Timestamp(unit, timezone)) => {
                     let iter = [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten();
                     Ok(match unit {
@@ -873,6 +876,34 @@ macro_rules! get_data_page_statistics {
                     Decimal128Array::from_iter([<$stat_type_prefix Decimal128DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
                 Some(DataType::Decimal256(precision, scale)) => Ok(Arc::new(
                     Decimal256Array::from_iter([<$stat_type_prefix Decimal256DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
+                Some(DataType::Time32(unit)) => {
+                    Ok(match unit {
+                        TimeUnit::Second =>  Arc::new(Time32SecondArray::from_iter(
+                            [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        TimeUnit::Millisecond => Arc::new(Time32MillisecondArray::from_iter(
+                            [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        _ => {
+                            // don't know how to extract statistics, so return an empty array
+                            new_empty_array(&DataType::Time32(unit.clone()))
+                        }
+                    })
+                }
+                Some(DataType::Time64(unit)) => {
+                    Ok(match unit {
+                        TimeUnit::Microsecond =>  Arc::new(Time64MicrosecondArray::from_iter(
+                            [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        TimeUnit::Nanosecond => Arc::new(Time64NanosecondArray::from_iter(
+                            [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        _ => {
+                            // don't know how to extract statistics, so return an empty array
+                            new_empty_array(&DataType::Time64(unit.clone()))
+                        }
+                    })
+                }
                 _ => unimplemented!()
             }
         }

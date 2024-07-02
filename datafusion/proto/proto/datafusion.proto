@@ -669,9 +669,11 @@ message PlanType {
     datafusion_common.EmptyMessage FinalLogicalPlan = 3;
     datafusion_common.EmptyMessage InitialPhysicalPlan = 4;
     datafusion_common.EmptyMessage InitialPhysicalPlanWithStats = 9;
+    datafusion_common.EmptyMessage InitialPhysicalPlanWithSchema = 11;
     OptimizedPhysicalPlanType OptimizedPhysicalPlan = 5;
     datafusion_common.EmptyMessage FinalPhysicalPlan = 6;
     datafusion_common.EmptyMessage FinalPhysicalPlanWithStats = 10;
+    datafusion_common.EmptyMessage FinalPhysicalPlanWithSchema = 12;
   }
 }
 

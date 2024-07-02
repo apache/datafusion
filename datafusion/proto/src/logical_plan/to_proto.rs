@@ -34,9 +34,9 @@ use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
-        FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
-        InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
-        OptimizedPhysicalPlan,
+        FinalPhysicalPlan, FinalPhysicalPlanWithSchema, FinalPhysicalPlanWithStats,
+        InitialLogicalPlan, InitialPhysicalPlan, InitialPhysicalPlanWithSchema,
+        InitialPhysicalPlanWithStats, OptimizedLogicalPlan, OptimizedPhysicalPlan,
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
@@ -96,8 +96,14 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
                 PlanType::InitialPhysicalPlanWithStats => Some(protobuf::PlanType {
                     plan_type_enum: Some(InitialPhysicalPlanWithStats(EmptyMessage {})),
                 }),
+                PlanType::InitialPhysicalPlanWithSchema => Some(protobuf::PlanType {
+                    plan_type_enum: Some(InitialPhysicalPlanWithSchema(EmptyMessage {})),
+                }),
                 PlanType::FinalPhysicalPlanWithStats => Some(protobuf::PlanType {
                     plan_type_enum: Some(FinalPhysicalPlanWithStats(EmptyMessage {})),
+                }),
+                PlanType::FinalPhysicalPlanWithSchema => Some(protobuf::PlanType {
+                    plan_type_enum: Some(FinalPhysicalPlanWithSchema(EmptyMessage {})),
                 }),
             },
             plan: stringified_plan.plan.to_string(),
