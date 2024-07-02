@@ -103,6 +103,7 @@ pub mod expr_fn {
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
     pub use super::first_last::last_value;
+    pub use super::grouping::grouping;
     pub use super::median::median;
     pub use super::regr::regr_avgx;
     pub use super::regr::regr_avgy;
