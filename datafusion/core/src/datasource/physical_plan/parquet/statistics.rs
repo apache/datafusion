@@ -922,13 +922,13 @@ macro_rules! get_data_page_statistics {
                     Ok(Arc::new(
                         FixedSizeBinaryArray::from(
                             [<$stat_type_prefix FixedLenByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                                x.into_iter().filter_map(|x| x).map(|x| {
+                                x.into_iter().filter_map(|x| x.and_then(|x| {
                                     if x.len().try_into() == Ok(*size) {
-                                            Some(x.data().to_vec())
-                                        } else {
-                                            None
-                                        }
-                                })
+                                        Some(x.data().to_vec())
+                                    } else {
+                                        None
+                                    }
+                                }))
                             }).flatten().collect::<Vec<_>>()
                         )
                     ))
