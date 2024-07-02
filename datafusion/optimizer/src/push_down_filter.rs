@@ -424,6 +424,7 @@ fn push_down_all_join(
         }
     }
 
+    let mut on_filter_join_conditions = vec![];
     let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type)?;
 
     if !on_filter.is_empty() {
@@ -435,20 +436,35 @@ fn push_down_all_join(
             {
                 right_push.push(on)
             } else {
-                join_conditions.push(on)
+                on_filter_join_conditions.push(on)
             }
         }
     }
 
     // Extract from OR clause, generate new predicates for both side of join if possible.
     // We only track the unpushable predicates above.
-    if on_left_preserved {
+    if left_preserved {
         left_push.extend(extract_or_clauses_for_join(&keep_predicates, left_schema));
         left_push.extend(extract_or_clauses_for_join(&join_conditions, left_schema));
     }
-    if on_right_preserved {
+    if left_preserved {
         right_push.extend(extract_or_clauses_for_join(&keep_predicates, right_schema));
         right_push.extend(extract_or_clauses_for_join(&join_conditions, right_schema));
+    }
+
+    // For predicates from join filter, we should check with if a join side is preserved
+    // in term of join filtering.
+    if on_left_preserved {
+        left_push.extend(extract_or_clauses_for_join(
+            &on_filter_join_conditions,
+            left_schema,
+        ));
+    }
+    if on_right_preserved {
+        right_push.extend(extract_or_clauses_for_join(
+            &on_filter_join_conditions,
+            right_schema,
+        ));
     }
 
     if let Some(predicate) = conjunction(left_push) {
@@ -460,6 +476,7 @@ fn push_down_all_join(
     }
 
     // Add any new join conditions as the non join predicates
+    join_conditions.extend(on_filter_join_conditions);
     join.filter = conjunction(join_conditions);
 
     // wrap the join on the filter whose predicates must be kept, if any
