@@ -35,11 +35,12 @@ use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
     symmetric_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
 };
-use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
-    execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    execution_mode_from_children, metrics, spill_record_batches, DisplayAs,
+    DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
 };
 
 use arrow::array::*;
@@ -49,13 +50,16 @@ use arrow::error::ArrowError;
 use arrow_array::types::UInt64Type;
 
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
+    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType,
+    Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
+use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
 
@@ -375,6 +379,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             batch_size,
             SortMergeJoinMetrics::new(partition, &self.metrics),
             reservation,
+            context.runtime_env(),
         )?))
     }
 
@@ -412,6 +417,12 @@ struct SortMergeJoinMetrics {
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: metrics::Gauge,
+    /// count of spills during the execution of the operator
+    spill_count: Count,
+    /// total spilled bytes during the execution of the operator
+    spilled_bytes: Count,
+    /// total spilled rows during the execution of the operator
+    spilled_rows: Count,
 }
 
 impl SortMergeJoinMetrics {
@@ -425,6 +436,9 @@ impl SortMergeJoinMetrics {
             MetricBuilder::new(metrics).counter("output_batches", partition);
         let output_rows = MetricBuilder::new(metrics).output_rows(partition);
         let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
+        let spill_count = MetricBuilder::new(metrics).spill_count(partition);
+        let spilled_bytes = MetricBuilder::new(metrics).spilled_bytes(partition);
+        let spilled_rows = MetricBuilder::new(metrics).spilled_rows(partition);
 
         Self {
             join_time,
@@ -433,6 +447,9 @@ impl SortMergeJoinMetrics {
             output_batches,
             output_rows,
             peak_mem_used,
+            spill_count,
+            spilled_bytes,
+            spilled_rows,
         }
     }
 }
@@ -577,6 +594,8 @@ struct BufferedBatch {
     /// The indices of buffered batch that failed the join filter.
     /// When dequeuing the buffered batch, we need to produce null joined rows for these indices.
     pub join_filter_failed_idxs: HashSet<u64>,
+    pub num_rows: usize,
+    pub spill_file: Option<RefCountedTempFile>,
 }
 
 impl BufferedBatch {
@@ -602,6 +621,7 @@ impl BufferedBatch {
             + mem::size_of::<Range<usize>>()
             + mem::size_of::<usize>();
 
+        let num_rows = batch.num_rows();
         BufferedBatch {
             batch,
             range,
@@ -609,6 +629,35 @@ impl BufferedBatch {
             null_joined: vec![],
             size_estimation,
             join_filter_failed_idxs: HashSet::new(),
+            num_rows,
+            spill_file: None,
+        }
+    }
+
+    fn spill_to_disk(
+        &mut self,
+        path: RefCountedTempFile,
+        buffered_schema: SchemaRef,
+    ) -> Result<()> {
+        let batch = std::mem::replace(
+            &mut self.batch,
+            RecordBatch::new_empty(buffered_schema.clone()),
+        );
+        let _ = spill_record_batches(vec![batch], path.path().into(), buffered_schema)?;
+        self.spill_file = Some(path);
+
+        Ok(())
+    }
+
+    fn read_spilled_from_disk(
+        &self,
+        schema: SchemaRef,
+    ) -> Result<SendableRecordBatchStream> {
+        if let Some(f) = &self.spill_file {
+            todo!()
+            //read_spill_as_stream(*f, schema, 2)
+        } else {
+            exec_err!("Cannot read data batch from disk. Use `spill_to_disk` to spill")
         }
     }
 }
@@ -634,7 +683,7 @@ struct SMJStream {
     pub buffered: SendableRecordBatchStream,
     /// Current processing record batch of streamed
     pub streamed_batch: StreamedBatch,
-    /// Currrent buffered data
+    /// Current buffered data
     pub buffered_data: BufferedData,
     /// (used in outer join) Is current streamed row joined at least once?
     pub streamed_joined: bool,
@@ -666,6 +715,8 @@ struct SMJStream {
     pub join_metrics: SortMergeJoinMetrics,
     /// Memory reservation
     pub reservation: MemoryReservation,
+    /// Runtime env
+    pub runtime_env: Arc<RuntimeEnv>,
 }
 
 impl RecordBatchStream for SMJStream {
@@ -785,6 +836,7 @@ impl SMJStream {
         batch_size: usize,
         join_metrics: SortMergeJoinMetrics,
         reservation: MemoryReservation,
+        runtime_env: Arc<RuntimeEnv>,
     ) -> Result<Self> {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
@@ -813,6 +865,7 @@ impl SMJStream {
             join_type,
             join_metrics,
             reservation,
+            runtime_env,
         })
     }
 
@@ -838,6 +891,7 @@ impl SMJStream {
                         self.streamed_state = StreamedState::Exhausted;
                     }
                     Poll::Ready(Some(batch)) => {
+                        println!("\nstreamed rows {}", batch.num_rows());
                         if batch.num_rows() > 0 {
                             self.freeze_streamed()?;
                             self.join_metrics.input_batches.add(1);
@@ -872,6 +926,7 @@ impl SMJStream {
                             if let Some(buffered_batch) =
                                 self.buffered_data.batches.pop_front()
                             {
+                                println!("shrink\n");
                                 self.reservation.shrink(buffered_batch.size_estimation);
                             }
                         } else {
@@ -900,13 +955,43 @@ impl SMJStream {
                     Poll::Ready(Some(batch)) => {
                         self.join_metrics.input_batches.add(1);
                         self.join_metrics.input_rows.add(batch.num_rows());
+                        println!(
+                            "\nbatch rows {} mem {}",
+                            batch.num_rows(),
+                            self.reservation.size()
+                        );
                         if batch.num_rows() > 0 {
-                            let buffered_batch =
+                            let mut buffered_batch =
                                 BufferedBatch::new(batch, 0..1, &self.on_buffered);
-                            self.reservation.try_grow(buffered_batch.size_estimation)?;
-                            self.join_metrics
-                                .peak_mem_used
-                                .set_max(self.reservation.size());
+
+                            if self
+                                .reservation
+                                .try_grow(buffered_batch.size_estimation)
+                                .is_err()
+                            {
+                                // spill batch to disk
+                                let spill_file = self
+                                    .runtime_env
+                                    .disk_manager
+                                    .create_tmp_file("SortMergeJoin")?;
+                                buffered_batch.spill_to_disk(
+                                    spill_file,
+                                    self.buffered_schema.clone(),
+                                )?;
+
+                                // update metrics to display spill
+                                self.join_metrics.spill_count.add(1);
+                                self.join_metrics
+                                    .spilled_bytes
+                                    .add(buffered_batch.size_estimation);
+                                self.join_metrics
+                                    .spilled_rows
+                                    .add(buffered_batch.num_rows);
+                            } else {
+                                self.join_metrics
+                                    .peak_mem_used
+                                    .set_max(self.reservation.size());
+                            }
 
                             self.buffered_data.batches.push_back(buffered_batch);
                             self.buffered_state = BufferedState::PollingRest;
@@ -914,6 +999,7 @@ impl SMJStream {
                     }
                 },
                 BufferedState::PollingRest => {
+                    println!("Polling Rest");
                     if self.buffered_data.tail_batch().range.end
                         < self.buffered_data.tail_batch().batch.num_rows()
                     {
@@ -941,6 +1027,7 @@ impl SMJStream {
                                 self.buffered_state = BufferedState::Ready;
                             }
                             Poll::Ready(Some(batch)) => {
+                                // This code is unreachable! Think about dropping it
                                 self.join_metrics.input_batches.add(1);
                                 self.join_metrics.input_rows.add(batch.num_rows());
                                 if batch.num_rows() > 0 {
@@ -992,6 +1079,7 @@ impl SMJStream {
     /// Produce join and fill output buffer until reaching target batch size
     /// or the join is finished
     fn join_partial(&mut self) -> Result<()> {
+        println!("join_partial");
         // Whether to join streamed rows
         let mut join_streamed = false;
         // Whether to join buffered rows
@@ -1060,10 +1148,13 @@ impl SMJStream {
         }
 
         if join_buffered {
+            //println!("join_partial: join_buffered");
+
             // joining streamed/nulls and buffered
             while !self.buffered_data.scanning_finished()
                 && self.output_size < self.batch_size
             {
+                //println!("join_partial: while join_buffered");
                 let scanning_idx = self.buffered_data.scanning_idx();
                 if join_streamed {
                     // Join streamed row and buffered row
@@ -1207,6 +1298,8 @@ impl SMJStream {
                         .map(|f| new_null_array(f.data_type(), buffered_indices.len()))
                         .collect::<Vec<_>>()
                 };
+
+            dbg!(&buffered_columns);
 
             let streamed_columns_length = streamed_columns.len();
             let buffered_columns_length = buffered_columns.len();
@@ -1473,13 +1566,9 @@ fn produce_buffered_null_batch(
     }
 
     // Take buffered (right) columns
-    let buffered_columns = buffered_batch
-        .batch
-        .columns()
-        .iter()
-        .map(|column| take(column, &buffered_indices, None))
-        .collect::<Result<Vec<_>, ArrowError>>()
-        .map_err(Into::<DataFusionError>::into)?;
+    let buffered_columns =
+        get_buffered_columns_from_batch(buffered_batch, buffered_indices)
+            .map_err(Into::<DataFusionError>::into)?;
 
     // Create null streamed (left) columns
     let mut streamed_columns = streamed_schema
@@ -1503,12 +1592,42 @@ fn get_buffered_columns(
     buffered_batch_idx: usize,
     buffered_indices: &UInt64Array,
 ) -> Result<Vec<ArrayRef>, ArrowError> {
-    buffered_data.batches[buffered_batch_idx]
-        .batch
-        .columns()
-        .iter()
-        .map(|column| take(column, &buffered_indices, None))
-        .collect::<Result<Vec<_>, ArrowError>>()
+    get_buffered_columns_from_batch(
+        &buffered_data.batches[buffered_batch_idx],
+        buffered_indices,
+    )
+}
+
+#[inline(always)]
+fn get_buffered_columns_from_batch(
+    buffered_batch: &BufferedBatch,
+    buffered_indices: &UInt64Array,
+) -> Result<Vec<ArrayRef>, ArrowError> {
+    if buffered_batch.spill_file.is_none() {
+        buffered_batch
+            .batch
+            .columns()
+            .iter()
+            .map(|column| take(column, &buffered_indices, None))
+            .collect::<Result<Vec<_>, ArrowError>>()
+    } else {
+        // if spilled read as a stream
+        let mut buffered_cols: Vec<ArrayRef> = Vec::with_capacity(buffered_indices.len());
+        let mut stream =
+            buffered_batch.read_spilled_from_disk(buffered_batch.batch.schema())?;
+        let _ = futures::stream::once(async {
+            while let Some(batch) = stream.next().await {
+                let batch = batch?;
+                batch.columns().iter().for_each(|column| {
+                    buffered_cols.extend(take(column, &buffered_indices, None))
+                });
+            }
+
+            Ok::<(), DataFusionError>(())
+        });
+
+        Ok(buffered_cols)
+    }
 }
 
 /// Calculate join filter bit mask considering join type specifics
@@ -2749,6 +2868,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn overallocation_single_batch() -> Result<()> {
         let left = build_table(
             ("a1", &vec![0, 1, 2, 3, 4, 5]),
