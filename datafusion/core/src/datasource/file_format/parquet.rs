@@ -460,14 +460,14 @@ async fn fetch_statistics(
     metadata_size_hint: Option<usize>,
 ) -> Result<Statistics> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
-    statistics_from_parquet_meta(&metadata, table_schema).await
+    statistics_from_parquet_meta_calc(&metadata, table_schema)
 }
 
 /// Convert statistics in  [`ParquetMetaData`] into [`Statistics`] using ['StatisticsConverter`]
 ///
 /// The statistics are calculated for each column in the table schema
 /// using the row group statistics in the parquet metadata.
-pub async fn statistics_from_parquet_meta(
+pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
 ) -> Result<Statistics> {
@@ -541,6 +541,21 @@ pub async fn statistics_from_parquet_meta(
     };
 
     Ok(statistics)
+}
+
+/// Deprecated
+/// Use [`statistics_from_parquet_meta_calc`] instead.
+/// This method was deprecated because it didn't need to be async so a new method was created
+/// that exposes a synchronous API.
+#[deprecated(
+    since = "40.0.0",
+    note = "please use `statistics_from_parquet_meta_calc` instead"
+)]
+pub async fn statistics_from_parquet_meta(
+    metadata: &ParquetMetaData,
+    table_schema: SchemaRef,
+) -> Result<Statistics> {
+    statistics_from_parquet_meta_calc(metadata, table_schema)
 }
 
 fn summarize_min_max_null_counts(
@@ -1467,7 +1482,7 @@ mod tests {
 
         // Fetch statistics for first file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
 
         // column c_dic
@@ -1514,7 +1529,7 @@ mod tests {
 
         // Fetch statistics for first file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         //
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
@@ -1536,7 +1551,7 @@ mod tests {
 
         // Fetch statistics for second file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[1], None).await?;
-        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1: missing from the file so the table treats all 3 rows as null
         let c1_stats = &stats.column_statistics[0];
