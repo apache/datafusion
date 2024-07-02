@@ -27,6 +27,7 @@ use arrow_array::types::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_array::{Date32Array, Date64Array, PrimitiveArray};
+use datafusion_common::logical_type::signature::LogicalType;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
     self, Expr as AstExpr, Function, FunctionArg, Ident, Interval, TimezoneInfo,
@@ -37,7 +38,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
     ScalarValue,
 };
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
@@ -957,8 +958,8 @@ impl Unparser<'_> {
         }
     }
 
-    fn arrow_dtype_to_ast_dtype(&self, data_type: &LogicalType) -> Result<ast::DataType> {
-        match data_type {
+    fn arrow_dtype_to_ast_dtype(&self, data_type: &TypeRelation) -> Result<ast::DataType> {
+        match data_type.logical() {
             LogicalType::Null => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -979,8 +980,7 @@ impl Unparser<'_> {
             LogicalType::Timestamp(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            LogicalType::Date32 => Ok(ast::DataType::Date),
-            LogicalType::Date64 => Ok(ast::DataType::Datetime(None)),
+            LogicalType::Date => Ok(ast::DataType::Date),
             LogicalType::Time32(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -996,24 +996,14 @@ impl Unparser<'_> {
             LogicalType::Binary => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            LogicalType::FixedSizeBinary(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            LogicalType::LargeBinary => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
             LogicalType::Utf8 => Ok(ast::DataType::Varchar(None)),
-            LogicalType::LargeUtf8 => Ok(ast::DataType::Text),
             LogicalType::List(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            LogicalType::FixedSizeList(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            LogicalType::LargeList(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
             LogicalType::Struct(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            LogicalType::Union(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
             LogicalType::Decimal128(precision, scale)
@@ -1030,9 +1020,6 @@ impl Unparser<'_> {
                 ))
             }
             LogicalType::Map(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
-            LogicalType::Extension(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
         }
@@ -1134,14 +1121,14 @@ mod tests {
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: LogicalType::Date64,
+                    data_type: DataType::Date64.into(),
                 }),
                 r#"CAST(a AS DATETIME)"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: LogicalType::UInt32,
+                    data_type: DataType::UInt32.into(),
                 }),
                 r#"CAST(a AS INTEGER UNSIGNED)"#,
             ),
@@ -1367,27 +1354,27 @@ mod tests {
                 r#"NOT EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
             ),
             (
-                try_cast(col("a"), LogicalType::Date64),
+                try_cast(col("a"), DataType::Date64),
                 r#"TRY_CAST(a AS DATETIME)"#,
             ),
             (
-                try_cast(col("a"), LogicalType::UInt32),
+                try_cast(col("a"), DataType::UInt32),
                 r#"TRY_CAST(a AS INTEGER UNSIGNED)"#,
             ),
             (
-                Expr::ScalarVariable(LogicalType::Int8, vec![String::from("@a")]),
+                Expr::ScalarVariable(DataType::Int8.into(), vec![String::from("@a")]),
                 r#"@a"#,
             ),
             (
                 Expr::ScalarVariable(
-                    LogicalType::Int8,
+                    DataType::Int8.into(),
                     vec![String::from("@root"), String::from("foo")],
                 ),
                 r#"@root.foo"#,
             ),
             (col("x").eq(placeholder("$1")), r#"(x = $1)"#),
             (
-                out_ref_col(LogicalType::Int32, "t.a").gt(lit(1)),
+                out_ref_col(DataType::Int32, "t.a").gt(lit(1)),
                 r#"(t.a > 1)"#,
             ),
             (
@@ -1462,7 +1449,7 @@ mod tests {
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
-                    data_type: LogicalType::Decimal128(10, -2),
+                    data_type: DataType::Decimal128(10, -2).into(),
                 }),
                 r#"CAST(a AS DECIMAL(12,0))"#,
             ),

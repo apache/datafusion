@@ -26,7 +26,7 @@ use crate::{Expr, LogicalPlan, Volatility};
 
 use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReference};
 use sqlparser::ast::Ident;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::TypeRelation;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -322,7 +322,7 @@ pub struct CreateFunction {
     pub temporary: bool,
     pub name: String,
     pub args: Option<Vec<OperateFunctionArg>>,
-    pub return_type: Option<LogicalType>,
+    pub return_type: Option<TypeRelation>,
     pub params: CreateFunctionBody,
     /// Dummy schema
     pub schema: DFSchemaRef,
@@ -332,7 +332,7 @@ pub struct OperateFunctionArg {
     // TODO: figure out how to support mode
     // pub mode: Option<ArgMode>,
     pub name: Option<Ident>,
-    pub data_type: LogicalType,
+    pub data_type: TypeRelation,
     pub default_expr: Option<Expr>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]

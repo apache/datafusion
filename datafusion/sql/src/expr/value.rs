@@ -27,13 +27,13 @@ use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
 use std::borrow::Cow;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::TypeRelation;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn parse_value(
         &self,
         value: Value,
-        param_data_types: &[LogicalType],
+        param_data_types: &[TypeRelation],
     ) -> Result<Expr> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
@@ -96,7 +96,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// number 1, 2, ... etc. For example, `$1` is the first placeholder; $2 is the second one and so on.
     fn create_placeholder_expr(
         param: String,
-        param_data_types: &[LogicalType],
+        param_data_types: &[TypeRelation],
     ) -> Result<Expr> {
         // Parse the placeholder as a number because it is the only support from sqlparser and postgres
         let index = param[1..].parse::<usize>();

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_common::logical_type::signature::LogicalType;
 use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     Dependency, Result,
@@ -35,7 +36,7 @@ use sqlparser::ast::{
 };
 use std::str::FromStr;
 use strum::IntoEnumIterator;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::ExtensionType;
 
 /// Suggest a valid function based on an invalid input function name
 pub fn suggest_valid_function(
@@ -473,11 +474,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     pub(crate) fn check_unnest_arg(arg: &Expr, schema: &DFSchema) -> Result<()> {
         // Check argument type, array types are supported
-        match arg.get_type(schema)? {
+        match arg.get_type(schema)?.logical() {
             LogicalType::List(_)
-            | LogicalType::LargeList(_)
-            | LogicalType::FixedSizeList(_, _)
-            | LogicalType::Struct(_) => Ok(()),
+            |   LogicalType::Struct(_) => Ok(()),
             LogicalType::Null => {
                 not_impl_err!("unnest() does not support null yet")
             }

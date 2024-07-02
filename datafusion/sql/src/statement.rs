@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
-
+use arrow_schema::SchemaRef;
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
     LexOrdering, Statement as DFStatement,
@@ -60,7 +60,7 @@ use sqlparser::ast::{
 };
 use sqlparser::parser::ParserError::ParserError;
 use datafusion_common::logical_type::fields::LogicalFields;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::logical_type::schema::LogicalSchema;
 
 fn ident_to_string(ident: &Ident) -> String {
@@ -455,7 +455,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 statement,
             } => {
                 // Convert parser data types to DataFusion data types
-                let data_types: Vec<LogicalType> = data_types
+                let data_types: Vec<TypeRelation> = data_types
                     .into_iter()
                     .map(|t| self.convert_data_type(&t))
                     .collect::<Result<_>>()?;
@@ -856,7 +856,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let output_schema = DFSchema::try_from(LogicalPlan::describe_schema()).unwrap();
 
         Ok(LogicalPlan::DescribeTable(DescribeTable {
-            schema,
+            schema: SchemaRef::new(schema.as_ref().clone().into()),
             output_schema: Arc::new(output_schema),
         }))
     }

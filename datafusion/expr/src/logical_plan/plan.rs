@@ -41,6 +41,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::logical_type::signature::LogicalType;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -56,7 +57,7 @@ use crate::logical_plan::tree_node::unwrap_arc;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
 
 /// A `LogicalPlan` is a node in a tree of relational operators (such as
@@ -1391,8 +1392,8 @@ impl LogicalPlan {
     /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
     pub fn get_parameter_types(
         &self,
-    ) -> Result<HashMap<String, Option<LogicalType>>, DataFusionError> {
-        let mut param_types: HashMap<String, Option<LogicalType>> = HashMap::new();
+    ) -> Result<HashMap<String, Option<TypeRelation>>, DataFusionError> {
+        let mut param_types: HashMap<String, Option<TypeRelation>> = HashMap::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
@@ -1654,7 +1655,7 @@ impl LogicalPlan {
                                 let schema = source.schema();
                                 let names: Vec<&str> = indices
                                     .iter()
-                                    .map(|i| schema.field(*i).name().as_str())
+                                    .map(|i| schema.field(*i).name())
                                     .collect();
                                 format!(" projection=[{}]", names.join(", "))
                             }
@@ -1910,7 +1911,7 @@ impl LogicalPlan {
                             .map(|i| &input_columns[*i])
                             .collect::<Vec<&Column>>();
                         // get items from input_columns indexed by list_col_indices
-                        write!(f, "Unnest: lists[{}] structs[{}]", 
+                        write!(f, "Unnest: lists[{}] structs[{}]",
                         expr_vec_fmt!(list_type_columns),
                         expr_vec_fmt!(struct_type_columns))
                     }
@@ -2127,7 +2128,7 @@ impl Filter {
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            if predicate_type != LogicalType::Boolean {
+            if *predicate_type.logical() != LogicalType::Boolean {
                 return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 );
@@ -2401,7 +2402,7 @@ impl TableScan {
         if table_name.table().is_empty() {
             return plan_err!("table_name cannot be empty");
         }
-        let schema: LogicalSchema = table_source.schema().as_ref().clone().into();
+        let schema = table_source.schema();
         let func_dependencies = FunctionalDependencies::new_from_constraints(
             table_source.constraints(),
             schema.fields.len(),
@@ -2476,7 +2477,7 @@ pub struct Prepare {
     /// The name of the statement
     pub name: String,
     /// Data types of the parameters ([`Expr::Placeholder`])
-    pub data_types: Vec<LogicalType>,
+    pub data_types: Vec<TypeRelation>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,
 }

@@ -31,7 +31,6 @@ use datafusion::prelude::*;
 
 use datafusion::assert_batches_eq;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_common::logical_type::LogicalType;
 use datafusion_expr::expr::Alias;
 use datafusion_expr::ExprSchemable;
 use datafusion_functions_aggregate::expr_fn::{approx_median, approx_percentile_cont};
@@ -377,7 +376,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
 
     // the arg2 parameter is a complex expr, but it can be evaluated to the literal value
     let alias_expr = Expr::Alias(Alias::new(
-        cast(lit(0.5), LogicalType::Float32),
+        cast(lit(0.5), DataType::Float32),
         None::<&str>,
         "arg_2".to_string(),
     ));
@@ -950,7 +949,7 @@ async fn test_fn_substr() -> Result<()> {
 
 #[tokio::test]
 async fn test_cast() -> Result<()> {
-    let expr = cast(col("b"), LogicalType::Float64);
+    let expr = cast(col("b"), DataType::Float64);
     let expected = [
         "+--------+",
         "| test.b |",
@@ -1053,7 +1052,7 @@ async fn test_fn_decode() -> Result<()> {
     let expr = decode(encode(col("a"), lit("hex")), lit("hex"))
         // need to cast to utf8 otherwise the default display of binary array is hex
         // so it looks like nothing is done
-        .cast_to(&LogicalType::Utf8, &df_schema)?;
+        .cast_to(&DataType::Utf8.into(), &df_schema)?;
 
     let expected = [
         "+------------------------------------------------+",

@@ -30,7 +30,6 @@ use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
 use datafusion::prelude::*;
 use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::logical_type::schema::LogicalSchema;
-use datafusion_common::logical_type::LogicalType;
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::BinaryExpr;
@@ -214,7 +213,7 @@ fn simplify_demo() -> Result<()> {
     // String --> Date simplification
     // `cast('2020-09-01' as date)` --> 18500
     assert_eq!(
-        simplifier.simplify(lit("2020-09-01").cast_to(&LogicalType::Date32, &schema)?)?,
+        simplifier.simplify(lit("2020-09-01").cast_to(&DataType::Date32.into(), &schema)?)?,
         lit(ScalarValue::Date32(Some(18506)))
     );
 
@@ -296,14 +295,14 @@ fn expression_type_demo() -> Result<()> {
     // a schema. In this case we create a schema where the column `c` is of
     // type Utf8 (a String / VARCHAR)
     let schema = DFSchema::from_unqualified_fields(
-        vec![LogicalField::new("c", LogicalType::Utf8, true)].into(),
+        vec![LogicalField::new("c", DataType::Utf8, true)].into(),
         HashMap::new(),
     )?;
     assert_eq!("Utf8", format!("{}", expr.get_type(&schema).unwrap()));
 
     // Using a schema where the column `foo` is of type Int32
     let schema = DFSchema::from_unqualified_fields(
-        vec![LogicalField::new("c", LogicalType::Int32, true)].into(),
+        vec![LogicalField::new("c", DataType::Int32, true)].into(),
         HashMap::new(),
     )?;
     assert_eq!("Int32", format!("{}", expr.get_type(&schema).unwrap()));
@@ -313,8 +312,8 @@ fn expression_type_demo() -> Result<()> {
     let expr = col("c1") + col("c2");
     let schema = DFSchema::from_unqualified_fields(
         vec![
-            LogicalField::new("c1", LogicalType::Int32, true),
-            LogicalField::new("c2", LogicalType::Float32, true),
+            LogicalField::new("c1", DataType::Int32, true),
+            LogicalField::new("c2", DataType::Float32, true),
         ]
         .into(),
         HashMap::new(),

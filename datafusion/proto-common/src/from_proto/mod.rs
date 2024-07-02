@@ -43,7 +43,7 @@ use datafusion_common::{
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
 };
 use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::TypeRelation;
 
 #[derive(Debug)]
 pub enum Error {
@@ -192,7 +192,7 @@ impl TryFrom<protobuf::DfSchema> for DFSchemaRef {
     }
 }
 
-impl TryFrom<&protobuf::ArrowType> for LogicalType {
+impl TryFrom<&protobuf::ArrowType> for TypeRelation {
     type Error = Error;
 
     fn try_from(

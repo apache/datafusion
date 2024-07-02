@@ -36,53 +36,54 @@ pub mod binary;
 pub mod functions;
 pub mod other;
 
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::{signature::LogicalType, TypeRelation, ExtensionType};
 
 /// Determine whether the given data type `dt` represents signed numeric values.
-pub fn is_signed_numeric(dt: &LogicalType) -> bool {
+pub fn is_signed_numeric(dt: &TypeRelation) -> bool {
+    use LogicalType::*;
     matches!(
-        dt,
-        LogicalType::Int8
-            | LogicalType::Int16
-            | LogicalType::Int32
-            | LogicalType::Int64
-            | LogicalType::Float16
-            | LogicalType::Float32
-            | LogicalType::Float64
-            | LogicalType::Decimal128(_, _)
-            | LogicalType::Decimal256(_, _),
+        dt.logical(),
+        Int8
+            | Int16
+            | Int32
+            | Int64
+            | Float16
+            | Float32
+            | Float64
+            | Decimal128(_, _)
+            | Decimal256(_, _),
     )
 }
 
 /// Determine whether the given data type `dt` is `Null`.
-pub fn is_null(dt: &LogicalType) -> bool {
-    *dt == LogicalType::Null
+pub fn is_null(dt: &TypeRelation) -> bool {
+    *dt.logical() == LogicalType::Null
 }
 
 /// Determine whether the given data type `dt` is a `Timestamp`.
-pub fn is_timestamp(dt: &LogicalType) -> bool {
-    matches!(dt, LogicalType::Timestamp(_, _))
+pub fn is_timestamp(dt: &TypeRelation) -> bool {
+    matches!(dt.logical(), LogicalType::Timestamp(_, _))
 }
 
 /// Determine whether the given data type 'dt' is a `Interval`.
-pub fn is_interval(dt: &LogicalType) -> bool {
-    matches!(dt, LogicalType::Interval(_))
+pub fn is_interval(dt: &TypeRelation) -> bool {
+    matches!(dt.logical(), LogicalType::Interval(_))
 }
 
 /// Determine whether the given data type `dt` is a `Date` or `Timestamp`.
-pub fn is_datetime(dt: &LogicalType) -> bool {
+pub fn is_datetime(dt: &TypeRelation) -> bool {
     matches!(
-        dt,
-        LogicalType::Date32 | LogicalType::Date64 | LogicalType::Timestamp(_, _)
+        dt.logical(),
+        LogicalType::Date | LogicalType::Timestamp(_, _)
     )
 }
 
 /// Determine whether the given data type `dt` is a `Utf8` or `LargeUtf8`.
-pub fn is_utf8_or_large_utf8(dt: &LogicalType) -> bool {
-    matches!(dt, LogicalType::Utf8 | LogicalType::LargeUtf8)
+pub fn is_utf8_or_large_utf8(dt: &TypeRelation) -> bool {
+    matches!(dt.logical(), LogicalType::Utf8)
 }
 
 /// Determine whether the given data type `dt` is a `Decimal`.
-pub fn is_decimal(dt: &LogicalType) -> bool {
-    matches!(dt, LogicalType::Decimal128(_, _) | LogicalType::Decimal256(_, _))
+pub fn is_decimal(dt: &TypeRelation) -> bool {
+    matches!(dt.logical(), LogicalType::Decimal128(_, _) | LogicalType::Decimal256(_, _))
 }

@@ -286,8 +286,8 @@ mod test {
     use super::*;
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
+    use arrow::datatypes::DataType;
     use datafusion_common::logical_type::field::LogicalField;
-    use datafusion_common::logical_type::LogicalType;
     use datafusion_common::logical_type::schema::LogicalSchema;
     use datafusion_common::ScalarValue;
 
@@ -409,7 +409,7 @@ mod test {
     ) -> DFSchema {
         let fields = fields
             .iter()
-            .map(|f| Arc::new(LogicalField::new(f.to_string(), LogicalType::Int8, false)))
+            .map(|f| Arc::new(LogicalField::new(f.to_string(), DataType::Int8, false)))
             .collect::<Vec<_>>();
         let schema = Arc::new(LogicalSchema::new(fields));
         DFSchema::from_field_specific_qualified_schema(qualifiers, &schema.into()).unwrap()
@@ -442,7 +442,7 @@ mod test {
         // cast data types
         test_rewrite(
             col("a"),
-            Expr::Cast(Cast::new(Box::new(col("a")), LogicalType::Int32)),
+            Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int32)),
         );
 
         // change literal type from i32 to i64

@@ -1571,7 +1571,6 @@ mod tests {
     use datafusion_expr::expr::InList;
     use datafusion_expr::{cast, is_null, try_cast, Expr};
     use datafusion_physical_expr::planner::logical2physical;
-    use datafusion_common::logical_type::LogicalType;
 
     #[derive(Debug, Default)]
     /// Mock statistic provider for tests
@@ -2608,13 +2607,13 @@ mod tests {
 
         // test cast(c1 as int64) = 1
         // test column on the left
-        let expr = cast(col("c1"), LogicalType::Int64).eq(lit(ScalarValue::Int64(Some(1))));
+        let expr = cast(col("c1"), DataType::Int64).eq(lit(ScalarValue::Int64(Some(1))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr = lit(ScalarValue::Int64(Some(1))).eq(cast(col("c1"), LogicalType::Int64));
+        let expr = lit(ScalarValue::Int64(Some(1))).eq(cast(col("c1"), DataType::Int64));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2626,14 +2625,14 @@ mod tests {
 
         // test column on the left
         let expr =
-            try_cast(col("c1"), LogicalType::Int64).gt(lit(ScalarValue::Int64(Some(1))));
+            try_cast(col("c1"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(1))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
         let expr =
-            lit(ScalarValue::Int64(Some(1))).lt(try_cast(col("c1"), LogicalType::Int64));
+            lit(ScalarValue::Int64(Some(1))).lt(try_cast(col("c1"), DataType::Int64));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2646,7 +2645,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         // test cast(c1 as int64) in int64(1, 2, 3)
         let expr = Expr::InList(InList::new(
-            Box::new(cast(col("c1"), LogicalType::Int64)),
+            Box::new(cast(col("c1"), DataType::Int64)),
             vec![
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(2))),
@@ -2671,7 +2670,7 @@ mod tests {
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         let expr = Expr::InList(InList::new(
-            Box::new(cast(col("c1"), LogicalType::Int64)),
+            Box::new(cast(col("c1"), DataType::Int64)),
             vec![
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(2))),
@@ -2725,7 +2724,7 @@ mod tests {
 
         prune_with_expr(
             // with cast column to other type
-            cast(col("s1"), LogicalType::Decimal128(14, 3))
+            cast(col("s1"), DataType::Decimal128(14, 3))
                 .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3))),
             &schema,
             &TestStatistics::new().with(
@@ -2740,7 +2739,7 @@ mod tests {
 
         prune_with_expr(
             // with try cast column to other type
-            try_cast(col("s1"), LogicalType::Decimal128(14, 3))
+            try_cast(col("s1"), DataType::Decimal128(14, 3))
                 .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3))),
             &schema,
             &TestStatistics::new().with(
@@ -2827,7 +2826,7 @@ mod tests {
 
         prune_with_expr(
             // filter with cast
-            cast(col("s2"), LogicalType::Int64).gt(lit(ScalarValue::Int64(Some(5)))),
+            cast(col("s2"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(5)))),
             &schema,
             &statistics,
             &[false, true, true, true],
@@ -3055,7 +3054,7 @@ mod tests {
 
         prune_with_expr(
             // cast(i as utf8) <= 0
-            cast(col("i"), LogicalType::Utf8).lt_eq(lit("0")),
+            cast(col("i"), DataType::Utf8).lt_eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3063,7 +3062,7 @@ mod tests {
 
         prune_with_expr(
             // try_cast(i as utf8) <= 0
-            try_cast(col("i"), LogicalType::Utf8).lt_eq(lit("0")),
+            try_cast(col("i"), DataType::Utf8).lt_eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3071,7 +3070,7 @@ mod tests {
 
         prune_with_expr(
             // cast(-i as utf8) >= 0
-            cast(Expr::Negative(Box::new(col("i"))), LogicalType::Utf8).gt_eq(lit("0")),
+            cast(Expr::Negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3079,7 +3078,7 @@ mod tests {
 
         prune_with_expr(
             // try_cast(-i as utf8) >= 0
-            try_cast(Expr::Negative(Box::new(col("i"))), LogicalType::Utf8).gt_eq(lit("0")),
+            try_cast(Expr::Negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3120,14 +3119,14 @@ mod tests {
         let expected_ret = &[true, false, false, true, false];
 
         prune_with_expr(
-            cast(col("i"), LogicalType::Int64).eq(lit(0i64)),
+            cast(col("i"), DataType::Int64).eq(lit(0i64)),
             &schema,
             &statistics,
             expected_ret,
         );
 
         prune_with_expr(
-            try_cast(col("i"), LogicalType::Int64).eq(lit(0i64)),
+            try_cast(col("i"), DataType::Int64).eq(lit(0i64)),
             &schema,
             &statistics,
             expected_ret,
@@ -3150,7 +3149,7 @@ mod tests {
         let expected_ret = &[true, true, true, true, true];
 
         prune_with_expr(
-            cast(col("i"), LogicalType::Utf8).eq(lit("0")),
+            cast(col("i"), DataType::Utf8).eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3305,7 +3304,7 @@ mod tests {
 
         prune_with_expr(
             // i > int64(0)
-            col("i").gt(cast(lit(ScalarValue::Int64(Some(0))), LogicalType::Int32)),
+            col("i").gt(cast(lit(ScalarValue::Int64(Some(0))), DataType::Int32)),
             &schema,
             &statistics,
             expected_ret,
@@ -3313,7 +3312,7 @@ mod tests {
 
         prune_with_expr(
             // cast(i as int64) > int64(0)
-            cast(col("i"), LogicalType::Int64).gt(lit(ScalarValue::Int64(Some(0)))),
+            cast(col("i"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(0)))),
             &schema,
             &statistics,
             expected_ret,
@@ -3321,7 +3320,7 @@ mod tests {
 
         prune_with_expr(
             // try_cast(i as int64) > int64(0)
-            try_cast(col("i"), LogicalType::Int64).gt(lit(ScalarValue::Int64(Some(0)))),
+            try_cast(col("i"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(0)))),
             &schema,
             &statistics,
             expected_ret,
@@ -3329,7 +3328,7 @@ mod tests {
 
         prune_with_expr(
             // `-cast(i as int64) < 0` convert to `cast(i as int64) > -0`
-            Expr::Negative(Box::new(cast(col("i"), LogicalType::Int64)))
+            Expr::Negative(Box::new(cast(col("i"), DataType::Int64)))
                 .lt(lit(ScalarValue::Int64(Some(0)))),
             &schema,
             &statistics,
@@ -3358,7 +3357,7 @@ mod tests {
         assert_eq!(result_right.to_string(), right_input.to_string());
 
         // cast op lit
-        let left_input = cast(col("a"), LogicalType::Decimal128(20, 3));
+        let left_input = cast(col("a"), DataType::Decimal128(20, 3));
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Decimal128(Some(12), 20, 3));
         let right_input = logical2physical(&right_input, &schema);
@@ -3373,7 +3372,7 @@ mod tests {
         assert_eq!(result_right.to_string(), right_input.to_string());
 
         // try_cast op lit
-        let left_input = try_cast(col("a"), LogicalType::Int64);
+        let left_input = try_cast(col("a"), DataType::Int64);
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
@@ -3392,7 +3391,7 @@ mod tests {
         // this cast is not supported
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let df_schema = DFSchema::try_from(schema.clone()).unwrap();
-        let left_input = cast(col("a"), LogicalType::Int64);
+        let left_input = cast(col("a"), DataType::Int64);
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);

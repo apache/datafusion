@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_schema::DataType;
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::{DFSchemaRef, Result, ToDFSchema};
 use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::LogicalType;
 use datafusion_common::logical_type::schema::LogicalSchema;
 use datafusion_expr::Expr;
 use datafusion_sql::unparser::Unparser;
@@ -30,9 +30,9 @@ use datafusion_sql::unparser::Unparser;
 /// s: Float32
 fn schema() -> DFSchemaRef {
     LogicalSchema::new(vec![
-        LogicalField::new("a", LogicalType::Int32, true),
-        LogicalField::new("b", LogicalType::Int32, false),
-        LogicalField::new("c", LogicalType::Float32, false),
+        LogicalField::new("a", DataType::Int32, true),
+        LogicalField::new("b", DataType::Int32, false),
+        LogicalField::new("c", DataType::Float32, false),
     ])
     .to_dfschema_ref()
     .unwrap()

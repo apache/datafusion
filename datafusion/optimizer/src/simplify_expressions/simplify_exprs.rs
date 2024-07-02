@@ -151,7 +151,6 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, Utc};
-    use datafusion_common::logical_type::LogicalType;
     use crate::optimizer::Optimizer;
     use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
@@ -445,7 +444,7 @@ mod tests {
     #[test]
     fn cast_expr() -> Result<()> {
         let table_scan = test_table_scan();
-        let proj = vec![Expr::Cast(Cast::new(Box::new(lit("0")), LogicalType::Int32))];
+        let proj = vec![Expr::Cast(Cast::new(Box::new(lit("0")), DataType::Int32))];
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)?
             .build()?;
@@ -703,9 +702,9 @@ mod tests {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        let left_key = col("t1.a") + lit(1i64).cast_to(&LogicalType::UInt32, t1.schema())?;
+        let left_key = col("t1.a") + lit(1i64).cast_to(&DataType::UInt32.into(), t1.schema())?;
         let right_key =
-            col("t2.a") + lit(2i64).cast_to(&LogicalType::UInt32, t2.schema())?;
+            col("t2.a") + lit(2i64).cast_to(&DataType::UInt32.into(), t2.schema())?;
         let plan = LogicalPlanBuilder::from(t1)
             .join_with_expr_keys(
                 t2,

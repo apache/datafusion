@@ -31,10 +31,9 @@ use crate::{
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use crate::logical_type::extension::ExtensionType;
 use crate::logical_type::field::{LogicalField, LogicalFieldRef};
 use crate::logical_type::fields::LogicalFields;
-use crate::logical_type::LogicalType;
+use crate::logical_type::{TypeRelation, ExtensionType};
 use crate::logical_type::schema::{LogicalSchema, LogicalSchemaBuilder, LogicalSchemaRef};
 
 /// A reference-counted reference to a [DFSchema].
@@ -165,7 +164,7 @@ impl DFSchema {
     /// Create a new `DFSchema` from a list of Arrow [Field]s
     #[allow(deprecated)]
     pub fn from_unqualified_fields(
-        fields: Fields,
+        fields: LogicalFields,
         metadata: HashMap<String, String>,
     ) -> Result<Self> {
         Self::from_unqualifed_fields(fields, metadata)
@@ -675,7 +674,7 @@ impl DFSchema {
         self_fields.zip(other_fields).all(|((q1, f1), (q2, f2))| {
             q1 == q2
                 && f1.name() == f2.name()
-                && Self::datatype_is_semantically_equal(&f1.data_type().physical_type(), &f2.data_type().physical_type())
+                && Self::datatype_is_semantically_equal(&f1.data_type().physical(), &f2.data_type().physical())
         })
     }
 
@@ -683,7 +682,7 @@ impl DFSchema {
     /// than datatype_is_semantically_equal in that a Dictionary<K,V> type is logically
     /// equal to a plain V type, but not semantically equal. Dictionary<K1, V1> is also
     /// logically equal to Dictionary<K2, V1>.
-    pub fn datatype_is_logically_equal(dt1: &LogicalType, dt2: &LogicalType) -> bool {
+    pub fn datatype_is_logically_equal(dt1: &TypeRelation, dt2: &TypeRelation) -> bool {
         dt1 == dt2
     }
 
@@ -916,13 +915,13 @@ pub trait ExprSchema: std::fmt::Debug {
     fn nullable(&self, col: &Column) -> Result<bool>;
 
     /// What is the datatype of this column?
-    fn data_type(&self, col: &Column) -> Result<&LogicalType>;
+    fn data_type(&self, col: &Column) -> Result<&TypeRelation>;
 
     /// Returns the column's optional metadata.
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>>;
 
     /// Return the coulmn's datatype and nullability
-    fn data_type_and_nullable(&self, col: &Column) -> Result<(&LogicalType, bool)>;
+    fn data_type_and_nullable(&self, col: &Column) -> Result<(&TypeRelation, bool)>;
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -931,7 +930,7 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
         self.as_ref().nullable(col)
     }
 
-    fn data_type(&self, col: &Column) -> Result<&LogicalType> {
+    fn data_type(&self, col: &Column) -> Result<&TypeRelation> {
         self.as_ref().data_type(col)
     }
 
@@ -939,7 +938,7 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
         ExprSchema::metadata(self.as_ref(), col)
     }
 
-    fn data_type_and_nullable(&self, col: &Column) -> Result<(&LogicalType, bool)> {
+    fn data_type_and_nullable(&self, col: &Column) -> Result<(&TypeRelation, bool)> {
         self.as_ref().data_type_and_nullable(col)
     }
 }
@@ -949,7 +948,7 @@ impl ExprSchema for DFSchema {
         Ok(self.field_from_column(col)?.is_nullable())
     }
 
-    fn data_type(&self, col: &Column) -> Result<&LogicalType> {
+    fn data_type(&self, col: &Column) -> Result<&TypeRelation> {
         Ok(self.field_from_column(col)?.data_type())
     }
 
@@ -957,7 +956,7 @@ impl ExprSchema for DFSchema {
         Ok(self.field_from_column(col)?.metadata())
     }
 
-    fn data_type_and_nullable(&self, col: &Column) -> Result<(&LogicalType, bool)> {
+    fn data_type_and_nullable(&self, col: &Column) -> Result<(&TypeRelation, bool)> {
         let field = self.field_from_column(col)?;
         Ok((field.data_type(), field.is_nullable()))
     }
@@ -1080,8 +1079,8 @@ mod tests {
         let schema = DFSchema::from_field_specific_qualified_schema(
             vec![Some("t1".into()), None],
             &Arc::new(LogicalSchema::new(vec![
-                LogicalField::new("c0", LogicalType::Boolean, true),
-                LogicalField::new("c1", LogicalType::Boolean, true),
+                LogicalField::new("c0", DataType::Boolean, true),
+                LogicalField::new("c1", DataType::Boolean, true),
             ])),
         )?;
         assert_eq!("fields:[t1.c0, c1], metadata:{}", schema.to_string());
@@ -1333,8 +1332,8 @@ mod tests {
 
     fn test_schema_2() -> LogicalSchema {
         LogicalSchema::new(vec![
-            LogicalField::new("c100", LogicalType::Boolean, true),
-            LogicalField::new("c101", LogicalType::Boolean, true),
+            LogicalField::new("c100", DataType::Boolean, true),
+            LogicalField::new("c101", DataType::Boolean, true),
         ])
     }
 

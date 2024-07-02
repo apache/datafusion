@@ -1,18 +1,34 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use arrow_schema::{DataType, Field};
-use crate::logical_type::extension::ExtensionType;
-use crate::logical_type::fields::LogicalFields;
-use crate::logical_type::LogicalType;
-use crate::logical_type::type_signature::TypeSignature;
+
+use arrow_schema::{Field, FieldRef};
+
+use super::{ExtensionType, TypeRelation};
 
 pub type LogicalFieldRef = Arc<LogicalField>;
 
 #[derive(Debug, Clone)]
 pub struct LogicalField {
     name: String,
-    data_type: LogicalType,
+    data_type: TypeRelation,
     nullable: bool,
     metadata: HashMap<String, String>,
 }
@@ -34,9 +50,25 @@ impl From<Field> for LogicalField {
     }
 }
 
+impl From<&FieldRef> for LogicalField {
+    fn from(value: &FieldRef) -> Self {
+        Self::from(value.as_ref())
+    }
+}
+
+impl From<FieldRef> for LogicalField {
+    fn from(value: FieldRef) -> Self {
+        Self::from(value.as_ref())
+    }
+}
+
 impl Into<Field> for LogicalField {
     fn into(self) -> Field {
-       Field::new(self.name, self.data_type.physical_type(), self.nullable).with_metadata(self.metadata)
+       Field::new(
+           self.name,
+           self.data_type.physical().clone(),
+           self.nullable
+       ).with_metadata(self.metadata)
     }
 }
 
@@ -67,59 +99,25 @@ impl Hash for LogicalField {
     }
 }
 
-impl ExtensionType for LogicalField {
-    fn display_name(&self) -> &str {
-       &self.name
-    }
-
-    fn type_signature(&self) -> TypeSignature {
-        TypeSignature::new(self.name())
-    }
-
-    fn physical_type(&self) -> DataType {
-        self.data_type.physical_type()
-    }
-
-    fn is_comparable(&self) -> bool {
-        self.data_type.is_comparable()
-    }
-
-    fn is_orderable(&self) -> bool {
-        self.data_type.is_orderable()
-    }
-
-    fn is_numeric(&self) -> bool {
-        self.data_type.is_numeric()
-    }
-
-    fn is_floating(&self) -> bool {
-       self.data_type.is_floating()
-    }
-}
-
 impl LogicalField {
-    pub fn new(name: impl Into<String>, data_type: LogicalType, nullable: bool) -> Self {
+    pub fn new(name: impl Into<String>, data_type: impl Into<TypeRelation>, nullable: bool) -> Self {
         LogicalField {
             name: name.into(),
-            data_type,
+            data_type: data_type.into(),
             nullable,
             metadata: HashMap::default(),
         }
     }
 
-    pub fn new_list_field(data_type: LogicalType, nullable: bool) -> Self {
+    pub fn new_list_field(data_type: impl Into<TypeRelation>, nullable: bool) -> Self {
         Self::new("item", data_type, nullable)
-    }
-
-    pub fn new_struct(name: impl Into<String>, fields: impl Into<LogicalFields>, nullable: bool) -> Self {
-        Self::new(name, LogicalType::Struct(fields.into()), nullable)
     }
 
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn data_type(&self) -> &LogicalType {
+    pub fn data_type(&self) -> &TypeRelation {
         &self.data_type
     }
 
@@ -150,7 +148,7 @@ impl LogicalField {
     }
 
     #[inline]
-    pub fn with_data_type(mut self, data_type: LogicalType) -> Self {
+    pub fn with_data_type(mut self, data_type: TypeRelation) -> Self {
         self.data_type = data_type;
         self
     }

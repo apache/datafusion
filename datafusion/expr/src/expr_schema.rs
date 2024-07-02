@@ -26,20 +26,21 @@ use crate::type_coercion::functions::{
 };
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
+use arrow::datatypes::DataType;
+use datafusion_common::logical_type::signature::LogicalType;
 use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema,
     Result, TableReference,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use datafusion_common::logical_type::extension::ExtensionType;
 use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 
 /// trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
     /// given a schema, return the type of the expr
-    fn get_type(&self, schema: &dyn ExprSchema) -> Result<LogicalType>;
+    fn get_type(&self, schema: &dyn ExprSchema) -> Result<TypeRelation>;
 
     /// given a schema, return the nullability of the expr
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool>;
@@ -54,11 +55,11 @@ pub trait ExprSchemable {
     ) -> Result<(Option<TableReference>, Arc<LogicalField>)>;
 
     /// cast to a type with respect to a schema
-    fn cast_to(self, cast_to_type: &LogicalType, schema: &dyn ExprSchema) -> Result<Expr>;
+    fn cast_to(self, cast_to_type: &TypeRelation, schema: &dyn ExprSchema) -> Result<Expr>;
 
     /// given a schema, return the type and nullability of the expr
     fn data_type_and_nullable(&self, schema: &dyn ExprSchema)
-        -> Result<(LogicalType, bool)>;
+        -> Result<(TypeRelation, bool)>;
 }
 
 impl ExprSchemable for Expr {
@@ -100,7 +101,7 @@ impl ExprSchemable for Expr {
     /// expression refers to a column that does not exist in the
     /// schema, or when the expression is incorrectly typed
     /// (e.g. `[utf8] + [bool]`).
-    fn get_type(&self, schema: &dyn ExprSchema) -> Result<LogicalType> {
+    fn get_type(&self, schema: &dyn ExprSchema) -> Result<TypeRelation> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
                 Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
@@ -120,8 +121,8 @@ impl ExprSchemable for Expr {
             Expr::Unnest(Unnest { expr }) => {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
-                match arg_data_type{
-                    LogicalType::List(field) | LogicalType::LargeList(field) | LogicalType::FixedSizeList(field, _) =>{
+                match arg_data_type.logical() {
+                    LogicalType::List(field) =>{
                         Ok(field.data_type().clone())
                     }
                     LogicalType::Struct(_) => {
@@ -144,7 +145,7 @@ impl ExprSchemable for Expr {
                 // TODO(@notfilippo): not convert to DataType
                 let arg_data_types = arg_data_types
                     .into_iter()
-                    .map(|e| e.physical_type())
+                    .map(|e| e.physical().clone())
                     .collect::<Vec<_>>();
 
                 // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
@@ -172,7 +173,7 @@ impl ExprSchemable for Expr {
                 // TODO(@notfilippo): not convert to DataType
                 let data_types = data_types
                     .into_iter()
-                    .map(|e| e.physical_type())
+                    .map(|e| e.physical().clone())
                     .collect::<Vec<_>>();
                 let nullability = args
                     .iter()
@@ -210,7 +211,7 @@ impl ExprSchemable for Expr {
                 // TODO(@notfilippo): not convert to DataType
                 let data_types = data_types
                     .into_iter()
-                    .map(|e| e.physical_type())
+                    .map(|e| e.physical().clone())
                     .collect::<Vec<_>>();
                 match func_def {
                     AggregateFunctionDefinition::BuiltIn(fun) => {
@@ -244,7 +245,7 @@ impl ExprSchemable for Expr {
             | Expr::IsUnknown(_)
             | Expr::IsNotTrue(_)
             | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_) => Ok(LogicalType::Boolean),
+            | Expr::IsNotUnknown(_) => Ok(DataType::Boolean.into()),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).data_type().clone())
             }
@@ -253,8 +254,8 @@ impl ExprSchemable for Expr {
                 ref right,
                 ref op,
                 // TODO(@notfilippo): do not convert to physical type
-            }) => Ok(get_result_type(&left.get_type(schema)?.physical_type(), op, &right.get_type(schema)?.physical_type())?.into()),
-            Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(LogicalType::Boolean),
+            }) => Ok(get_result_type(&left.get_type(schema)?.physical(), op, &right.get_type(schema)?.physical())?.into()),
+            Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean.into()),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 data_type.clone().ok_or_else(|| {
                     plan_datafusion_err!("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values.")
@@ -264,12 +265,12 @@ impl ExprSchemable for Expr {
                 // Wildcard do not really have a type and do not appear in projections
                 match qualifier {
                     Some(_) => internal_err!("QualifiedWildcard expressions are not valid in a logical query plan"),
-                    None => Ok(LogicalType::Null)
+                    None => Ok(DataType::Null.into())
                 }
             }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have a type and do not appear in projections
-                Ok(LogicalType::Null)
+                Ok(DataType::Null.into())
             }
         }
     }
@@ -412,7 +413,7 @@ impl ExprSchemable for Expr {
     fn data_type_and_nullable(
         &self,
         schema: &dyn ExprSchema,
-    ) -> Result<(LogicalType, bool)> {
+    ) -> Result<(TypeRelation, bool)> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
                 Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
@@ -440,7 +441,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotTrue(_)
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
-            | Expr::Exists { .. } => Ok((LogicalType::Boolean, false)),
+            | Expr::Exists { .. } => Ok((DataType::Boolean.into(), false)),
             Expr::ScalarSubquery(subquery) => Ok((
                 subquery.subquery.schema().field(0).data_type().clone(),
                 subquery.subquery.schema().field(0).is_nullable(),
@@ -453,7 +454,7 @@ impl ExprSchemable for Expr {
                 let left = left.data_type_and_nullable(schema)?;
                 let right = right.data_type_and_nullable(schema)?;
                 // TODO(@notfilippo): do not convert to physical type
-                Ok((get_result_type(&left.0.physical_type(), op, &right.0.physical_type())?.into(), left.1 || right.1))
+                Ok((get_result_type(&left.0.physical(), op, &right.0.physical())?.into(), left.1 || right.1))
             }
             _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
         }
@@ -504,7 +505,7 @@ impl ExprSchemable for Expr {
     ///
     /// This function errors when it is impossible to cast the
     /// expression to the target [arrow::datatypes::DataType].
-    fn cast_to(self, cast_to_type: &LogicalType, schema: &dyn ExprSchema) -> Result<Expr> {
+    fn cast_to(self, cast_to_type: &TypeRelation, schema: &dyn ExprSchema) -> Result<Expr> {
         let this_type = self.get_type(schema)?;
         if this_type == *cast_to_type {
             return Ok(self);
@@ -515,7 +516,7 @@ impl ExprSchemable for Expr {
         // type of the expression?
 
         // TODO(@notfilippo): The basis for whether cast can be executed should be the logical type
-        if can_cast_types(&this_type.physical_type(), &cast_to_type.physical_type()) {
+        if can_cast_types(&this_type.physical(), &cast_to_type.physical()) {
             match self {
                 Expr::ScalarSubquery(subquery) => {
                     Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
@@ -529,7 +530,7 @@ impl ExprSchemable for Expr {
 }
 
 /// cast subquery in InSubquery/ScalarSubquery to a given type.
-pub fn cast_subquery(subquery: Subquery, cast_to_type: &LogicalType) -> Result<Subquery> {
+pub fn cast_subquery(subquery: Subquery, cast_to_type: &TypeRelation) -> Result<Subquery> {
     if subquery.subquery.schema().field(0).data_type() == cast_to_type {
         return Ok(subquery);
     }
@@ -596,7 +597,7 @@ mod tests {
     fn test_between_nullability() {
         let get_schema = |nullable| {
             MockExprSchema::new()
-                .with_data_type(LogicalType::Int32)
+                .with_data_type(DataType::Int32.into())
                 .with_nullable(nullable)
         };
 
@@ -620,7 +621,7 @@ mod tests {
     fn test_inlist_nullability() {
         let get_schema = |nullable| {
             MockExprSchema::new()
-                .with_data_type(LogicalType::Int32)
+                .with_data_type(DataType::Int32.into())
                 .with_nullable(nullable)
         };
 
@@ -645,7 +646,7 @@ mod tests {
     fn test_like_nullability() {
         let get_schema = |nullable| {
             MockExprSchema::new()
-                .with_data_type(LogicalType::Utf8)
+                .with_data_type(DataType::Utf8.into())
                 .with_nullable(nullable)
         };
 
@@ -661,9 +662,9 @@ mod tests {
     fn expr_schema_data_type() {
         let expr = col("foo");
         assert_eq!(
-            LogicalType::Utf8,
-            expr.get_type(&MockExprSchema::new().with_data_type(LogicalType::Utf8))
-                .unwrap()
+            &LogicalType::Utf8,
+            expr.get_type(&MockExprSchema::new().with_data_type(DataType::Utf8.into()))
+                .unwrap().logical()
         );
     }
 
@@ -673,7 +674,7 @@ mod tests {
         meta.insert("bar".to_string(), "buzz".to_string());
         let expr = col("foo");
         let schema = MockExprSchema::new()
-            .with_data_type(LogicalType::Int32)
+            .with_data_type(DataType::Int32.into())
             .with_metadata(meta.clone());
 
         // col and alias should be metadata-preserving
@@ -684,14 +685,14 @@ mod tests {
         assert_eq!(
             HashMap::new(),
             expr.clone()
-                .cast_to(&LogicalType::Int64, &schema)
+                .cast_to(&DataType::Int64.into(), &schema)
                 .unwrap()
                 .metadata(&schema)
                 .unwrap()
         );
 
         let schema = DFSchema::from_unqualified_fields(
-            vec![LogicalField::new("foo", LogicalType::Int32, true).with_metadata(meta.clone())]
+            vec![LogicalField::new("foo", DataType::Int32, true).with_metadata(meta.clone())]
                 .into(),
             HashMap::new(),
         )
@@ -704,7 +705,7 @@ mod tests {
     #[derive(Debug)]
     struct MockExprSchema {
         nullable: bool,
-        data_type: LogicalType,
+        data_type: TypeRelation,
         error_on_nullable: bool,
         metadata: HashMap<String, String>,
     }
@@ -713,7 +714,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 nullable: false,
-                data_type: LogicalType::Null,
+                data_type: DataType::Null.into(),
                 error_on_nullable: false,
                 metadata: HashMap::new(),
             }
@@ -724,7 +725,7 @@ mod tests {
             self
         }
 
-        fn with_data_type(mut self, data_type: LogicalType) -> Self {
+        fn with_data_type(mut self, data_type: TypeRelation) -> Self {
             self.data_type = data_type;
             self
         }
@@ -749,7 +750,7 @@ mod tests {
             }
         }
 
-        fn data_type(&self, _col: &Column) -> Result<&LogicalType> {
+        fn data_type(&self, _col: &Column) -> Result<&TypeRelation> {
             Ok(&self.data_type)
         }
 
@@ -757,7 +758,7 @@ mod tests {
             Ok(&self.metadata)
         }
 
-        fn data_type_and_nullable(&self, col: &Column) -> Result<(&LogicalType, bool)> {
+        fn data_type_and_nullable(&self, col: &Column) -> Result<(&TypeRelation, bool)> {
             Ok((self.data_type(col)?, self.nullable(col)?))
         }
     }

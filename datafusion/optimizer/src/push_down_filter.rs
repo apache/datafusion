@@ -1147,9 +1147,10 @@ mod tests {
     use std::any::Any;
     use std::fmt::{Debug, Formatter};
 
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{DataType, Field, Schema};
     use async_trait::async_trait;
-    use datafusion_common::logical_type::schema::LogicalSchema;
+    use datafusion_common::logical_type::field::LogicalField;
+    use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
@@ -2355,10 +2356,10 @@ mod tests {
 
     #[async_trait]
     impl TableSource for PushDownProvider {
-        fn schema(&self) -> SchemaRef {
-            Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Int32, true),
-                Field::new("b", DataType::Int32, true),
+        fn schema(&self) -> LogicalSchemaRef {
+            Arc::new(LogicalSchema::new(vec![
+                LogicalField::new("a", DataType::Int32, true),
+                LogicalField::new("b", DataType::Int32, true),
             ]))
         }
 

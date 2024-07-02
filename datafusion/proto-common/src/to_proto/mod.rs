@@ -36,8 +36,7 @@ use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, JoinSide, ScalarValue, Statistics,
 };
-use datafusion_common::logical_type::extension::ExtensionType;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 
 #[derive(Debug)]
 pub enum Error {
@@ -111,11 +110,11 @@ impl TryFrom<&DataType> for protobuf::ArrowType {
     }
 }
 
-impl TryFrom<&LogicalType> for protobuf::ArrowType {
+impl TryFrom<&TypeRelation> for protobuf::ArrowType {
     type Error = Error;
 
-    fn try_from(val: &LogicalType) -> Result<Self, Self::Error> {
-        let arrow_type_enum: ArrowTypeEnum = (&val.physical_type()).try_into()?;
+    fn try_from(val: &TypeRelation) -> Result<Self, Self::Error> {
+        let arrow_type_enum: ArrowTypeEnum = val.physical().try_into()?;
         Ok(Self {
             arrow_type_enum: Some(arrow_type_enum),
         })

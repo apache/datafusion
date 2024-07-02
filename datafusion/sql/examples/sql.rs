@@ -30,7 +30,7 @@ use datafusion_sql::{
     TableReference,
 };
 use std::{collections::HashMap, sync::Arc};
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::TypeRelation;
 
 fn main() {
     let sql = "SELECT \
@@ -133,7 +133,7 @@ impl ContextProvider for MyContextProvider {
         self.udafs.get(name).cloned()
     }
 
-    fn get_variable_type(&self, _variable_names: &[String]) -> Option<LogicalType> {
+    fn get_variable_type(&self, _variable_names: &[String]) -> Option<TypeRelation> {
         None
     }
 

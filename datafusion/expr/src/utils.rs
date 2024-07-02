@@ -28,7 +28,8 @@ use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
 };
 
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::DataType;
+use datafusion_common::logical_type::signature::LogicalType;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -38,10 +39,10 @@ use datafusion_common::{
     ScalarValue, TableReference,
 };
 
-use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::LogicalType;
 use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::{TypeRelation, ExtensionType};
+use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
@@ -833,37 +834,29 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
 /// can this data type be used in hash join equal conditions??
 /// data types here come from function 'equal_rows', if more data types are supported
 /// in equal_rows(hash join), add those data types here to generate join logical plan.
-pub fn can_hash(data_type: &LogicalType) -> bool {
-    match data_type {
-        LogicalType::Null => true,
-        LogicalType::Boolean => true,
-        LogicalType::Int8 => true,
-        LogicalType::Int16 => true,
-        LogicalType::Int32 => true,
-        LogicalType::Int64 => true,
-        LogicalType::UInt8 => true,
-        LogicalType::UInt16 => true,
-        LogicalType::UInt32 => true,
-        LogicalType::UInt64 => true,
-        LogicalType::Float32 => true,
-        LogicalType::Float64 => true,
-        LogicalType::Timestamp(time_unit, _) => match time_unit {
-            TimeUnit::Second => true,
-            TimeUnit::Millisecond => true,
-            TimeUnit::Microsecond => true,
-            TimeUnit::Nanosecond => true,
-        },
-        LogicalType::Utf8 => true,
-        LogicalType::LargeUtf8 => true,
-        LogicalType::Decimal128(_, _) => true,
-        LogicalType::Date32 => true,
-        LogicalType::Date64 => true,
-        LogicalType::FixedSizeBinary(_) => true,
-        LogicalType::List(_) => true,
-        LogicalType::LargeList(_) => true,
-        LogicalType::FixedSizeList(_, _) => true,
-        _ => false,
-    }
+pub fn can_hash(data_type: &TypeRelation) -> bool {
+    use LogicalType::*;
+    matches!(
+        data_type.logical(),
+        Null
+            | Boolean
+            | Int8
+            | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float16
+            | Float32
+            | Float64
+            | Timestamp(_, _)
+            | Utf8
+            | Decimal128(_, _)
+            | Date
+            | List(_)
+    )
 }
 
 /// Check whether all columns are from the schema.
@@ -1247,7 +1240,6 @@ impl AggregateOrderSensitivity {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::logical_type::LogicalType;
     use super::*;
     use crate::{
         col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup,
@@ -1702,11 +1694,11 @@ mod tests {
     fn test_collect_expr() -> Result<()> {
         let mut accum: HashSet<Column> = HashSet::new();
         expr_to_columns(
-            &Expr::Cast(Cast::new(Box::new(col("a")), LogicalType::Float64)),
+            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
             &mut accum,
         )?;
         expr_to_columns(
-            &Expr::Cast(Cast::new(Box::new(col("a")), LogicalType::Float64)),
+            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
             &mut accum,
         )?;
         assert_eq!(1, accum.len());

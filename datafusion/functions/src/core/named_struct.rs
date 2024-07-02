@@ -17,12 +17,12 @@
 
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
+use datafusion_common::logical_type::ExtensionType;
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
-use datafusion_common::logical_type::extension::ExtensionType;
 
 /// put values in a struct array.
 fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -140,7 +140,7 @@ impl ScalarUDFImpl for NamedStructFunc {
                 let value = &chunk[1];
 
                 if let Expr::Literal(ScalarValue::Utf8(Some(name))) = name {
-                    Ok(Field::new(name, value.get_type(schema)?.physical_type(), true))
+                    Ok(Field::new(name, value.get_type(schema)?.physical().clone(), true))
                 } else {
                     exec_err!("named_struct even arguments must be string literals, got {name} instead at position {}", i * 2)
                 }

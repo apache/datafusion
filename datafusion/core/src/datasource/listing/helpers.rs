@@ -265,7 +265,7 @@ async fn prune_partitions(
     let df_schema = DFSchema::from_unqualified_fields(
         partition_cols
             .iter()
-            .map(|(n, d)| LogicalField::new(n, d.clone().into(), true))
+            .map(|(n, d)| LogicalField::new(n, d.clone(), true))
             .collect(),
         Default::default(),
     )?;

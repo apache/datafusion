@@ -47,7 +47,7 @@ use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::test_util::{parquet_test_data, populate_csv_partitions};
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_common::{assert_contains, DataFusionError, ScalarValue, UnnestOptions};
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort};
@@ -257,7 +257,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
             scalar_subquery(Arc::new(
                 ctx.table("t2")
                     .await?
-                    .filter(out_ref_col(LogicalType::UInt32, "t1.a").eq(col("t2.a")))?
+                    .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
                     .aggregate(vec![], vec![count(wildcard())])?
                     .select(vec![col(count(wildcard()).to_string())])?
                     .into_unoptimized_plan(),
@@ -747,8 +747,8 @@ async fn join_with_alias_filter() -> Result<()> {
 
     // filter: t1.a + CAST(Int64(1), UInt32) = t2.a + CAST(Int64(2), UInt32) as t1.a + 1 = t2.a + 2
     let filter = Expr::eq(
-        col("t1.a") + lit(3i64).cast_to(&LogicalType::UInt32, &t1_schema)?,
-        col("t2.a") + lit(1i32).cast_to(&LogicalType::UInt32, &t2_schema)?,
+        col("t1.a") + lit(3i64).cast_to(&DataType::UInt32.into(), &t1_schema)?,
+        col("t2.a") + lit(1i32).cast_to(&DataType::UInt32.into(), &t2_schema)?,
     )
     .alias("t1.b + 1 = t2.a + 2");
 
@@ -1623,7 +1623,7 @@ async fn consecutive_projection_same_schema() -> Result<()> {
 
     // Add `t` column full of nulls
     let df = df
-        .with_column("t", cast(Expr::Literal(ScalarValue::Null), LogicalType::Int32))
+        .with_column("t", cast(Expr::Literal(ScalarValue::Null), DataType::Int32))
         .unwrap();
     df.clone().show().await.unwrap();
 
@@ -1926,8 +1926,8 @@ impl VarProvider for HardcodedIntProvider {
         Ok(ScalarValue::Int64(Some(1234)))
     }
 
-    fn get_type(&self, _: &[String]) -> Option<LogicalType> {
-        Some(LogicalType::Int64)
+    fn get_type(&self, _: &[String]) -> Option<TypeRelation> {
+        Some(DataType::Int64.into())
     }
 }
 

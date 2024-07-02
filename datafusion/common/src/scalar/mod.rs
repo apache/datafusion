@@ -54,11 +54,10 @@ use arrow::{
     },
 };
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
-use arrow_schema::{FieldRef, UnionFields, UnionMode};
+use arrow_schema::{UnionFields, UnionMode};
 
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
-use crate::logical_type::LogicalType;
 
 /// A dynamically typed, nullable single value.
 ///
@@ -3262,118 +3261,6 @@ impl TryFrom<&DataType> for ScalarValue {
                 ScalarValue::Union(None, fields.clone(), *mode)
             }
             DataType::Null => ScalarValue::Null,
-            _ => {
-                return _not_impl_err!(
-                    "Can't create a scalar from data_type \"{data_type:?}\""
-                );
-            }
-        })
-    }
-}
-
-
-impl TryFrom<LogicalType> for ScalarValue {
-    type Error = DataFusionError;
-
-    /// Create a Null instance of ScalarValue for this datatype
-    fn try_from(datatype: LogicalType) -> Result<Self> {
-        (&datatype).try_into()
-    }
-}
-
-impl TryFrom<&LogicalType> for ScalarValue {
-    type Error = DataFusionError;
-
-    /// Create a Null instance of ScalarValue for this datatype
-    fn try_from(data_type: &LogicalType) -> Result<Self> {
-        Ok(match data_type {
-            LogicalType::Boolean => ScalarValue::Boolean(None),
-            LogicalType::Float16 => ScalarValue::Float16(None),
-            LogicalType::Float64 => ScalarValue::Float64(None),
-            LogicalType::Float32 => ScalarValue::Float32(None),
-            LogicalType::Int8 => ScalarValue::Int8(None),
-            LogicalType::Int16 => ScalarValue::Int16(None),
-            LogicalType::Int32 => ScalarValue::Int32(None),
-            LogicalType::Int64 => ScalarValue::Int64(None),
-            LogicalType::UInt8 => ScalarValue::UInt8(None),
-            LogicalType::UInt16 => ScalarValue::UInt16(None),
-            LogicalType::UInt32 => ScalarValue::UInt32(None),
-            LogicalType::UInt64 => ScalarValue::UInt64(None),
-            LogicalType::Decimal128(precision, scale) => {
-                ScalarValue::Decimal128(None, *precision, *scale)
-            }
-            LogicalType::Decimal256(precision, scale) => {
-                ScalarValue::Decimal256(None, *precision, *scale)
-            }
-            LogicalType::Utf8 => ScalarValue::Utf8(None),
-            LogicalType::LargeUtf8 => ScalarValue::LargeUtf8(None),
-            LogicalType::Binary => ScalarValue::Binary(None),
-            LogicalType::FixedSizeBinary(len) => ScalarValue::FixedSizeBinary(*len, None),
-            LogicalType::LargeBinary => ScalarValue::LargeBinary(None),
-            LogicalType::Date32 => ScalarValue::Date32(None),
-            LogicalType::Date64 => ScalarValue::Date64(None),
-            LogicalType::Time32(TimeUnit::Second) => ScalarValue::Time32Second(None),
-            LogicalType::Time32(TimeUnit::Millisecond) => {
-                ScalarValue::Time32Millisecond(None)
-            }
-            LogicalType::Time64(TimeUnit::Microsecond) => {
-                ScalarValue::Time64Microsecond(None)
-            }
-            LogicalType::Time64(TimeUnit::Nanosecond) => ScalarValue::Time64Nanosecond(None),
-            LogicalType::Timestamp(TimeUnit::Second, tz_opt) => {
-                ScalarValue::TimestampSecond(None, tz_opt.clone())
-            }
-            LogicalType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
-                ScalarValue::TimestampMillisecond(None, tz_opt.clone())
-            }
-            LogicalType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
-                ScalarValue::TimestampMicrosecond(None, tz_opt.clone())
-            }
-            LogicalType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
-                ScalarValue::TimestampNanosecond(None, tz_opt.clone())
-            }
-            LogicalType::Interval(IntervalUnit::YearMonth) => {
-                ScalarValue::IntervalYearMonth(None)
-            }
-            LogicalType::Interval(IntervalUnit::DayTime) => {
-                ScalarValue::IntervalDayTime(None)
-            }
-            LogicalType::Interval(IntervalUnit::MonthDayNano) => {
-                ScalarValue::IntervalMonthDayNano(None)
-            }
-            LogicalType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(None),
-            LogicalType::Duration(TimeUnit::Millisecond) => {
-                ScalarValue::DurationMillisecond(None)
-            }
-            LogicalType::Duration(TimeUnit::Microsecond) => {
-                ScalarValue::DurationMicrosecond(None)
-            }
-            LogicalType::Duration(TimeUnit::Nanosecond) => {
-                ScalarValue::DurationNanosecond(None)
-            }
-            // `ScalaValue::List` contains single element `ListArray`.
-            LogicalType::List(field_ref) => ScalarValue::List(Arc::new(
-                GenericListArray::new_null(FieldRef::new(field_ref.as_ref().clone().into()), 1),
-            )),
-            // `ScalarValue::LargeList` contains single element `LargeListArray`.
-            LogicalType::LargeList(field_ref) => ScalarValue::LargeList(Arc::new(
-                GenericListArray::new_null(FieldRef::new(field_ref.as_ref().clone().into()), 1),
-            )),
-            // `ScalaValue::FixedSizeList` contains single element `FixedSizeList`.
-            LogicalType::FixedSizeList(field_ref, fixed_length) => {
-                ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::new_null(
-                    FieldRef::new(field_ref.as_ref().clone().into()),
-                    *fixed_length,
-                    1,
-                )))
-            }
-            LogicalType::Struct(fields) => ScalarValue::Struct(
-                new_null_array(&DataType::Struct(fields.clone().into()), 1)
-                    .as_struct()
-                    .to_owned()
-                    .into(),
-            ),
-            LogicalType::Null => ScalarValue::Null,
             _ => {
                 return _not_impl_err!(
                     "Can't create a scalar from data_type \"{data_type:?}\""

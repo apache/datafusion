@@ -41,10 +41,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
-use datafusion_common::{
-    config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
-    SchemaExt, ToDFSchema,
-};
+use datafusion_common::{config_datafusion_err, internal_err, plan_err, project_schema, Constraints, ToDFSchema, SchemaExt};
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_physical_expr::{
@@ -55,7 +52,7 @@ use async_trait::async_trait;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
-use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
 
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
@@ -723,8 +720,8 @@ impl TableProvider for ListingTable {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.table_schema)
+    fn schema(&self) -> LogicalSchemaRef {
+        LogicalSchemaRef::new(self.table_schema.clone().into())
     }
 
     fn constraints(&self) -> Option<&Constraints> {
@@ -747,7 +744,8 @@ impl TableProvider for ListingTable {
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
-            let projected_schema = project_schema(&self.schema(), projection)?;
+            let schema = SchemaRef::new(self.schema().as_ref().clone().into());
+            let projected_schema = project_schema(&schema, projection)?;
             return Ok(Arc::new(EmptyExec::new(projected_schema)));
         }
 
@@ -857,9 +855,9 @@ impl TableProvider for ListingTable {
         input: Arc<dyn ExecutionPlan>,
         overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = SchemaRef::new(self.schema().as_ref().clone().into());
         // Check that the schema of the plan matches the schema of this table.
-        if !self
-            .schema()
+        if !schema
             .logically_equivalent_names_and_types(&input.schema())
         {
             return plan_err!(
@@ -898,7 +896,7 @@ impl TableProvider for ListingTable {
             object_store_url: self.table_paths()[0].object_store(),
             table_paths: self.table_paths().clone(),
             file_groups,
-            output_schema: self.schema(),
+            output_schema: SchemaRef::new(self.schema().as_ref().clone().into()),
             table_partition_cols: self.options.table_partition_cols.clone(),
             overwrite,
             keep_partition_by_columns,
@@ -981,9 +979,10 @@ impl ListingTable {
             .boxed()
             .buffered(ctx.config_options().execution.meta_fetch_concurrency);
 
+        let schema = SchemaRef::new(self.schema().as_ref().clone().into());
         let (files, statistics) = get_statistics_with_limit(
             files,
-            self.schema(),
+            schema,
             limit,
             self.options.collect_stat,
         )
@@ -1252,8 +1251,9 @@ mod tests {
             .with_schema(file_schema);
         let table = ListingTable::try_new(config)?;
 
+        let table_schema = table.schema().as_ref().clone().into();
         assert_eq!(
-            columns(&table.schema()),
+            columns(&table_schema),
             vec!["a".to_owned(), "p1".to_owned()]
         );
 

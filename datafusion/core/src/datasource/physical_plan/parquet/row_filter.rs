@@ -425,7 +425,6 @@ mod test {
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use rand::prelude::*;
 
-    use datafusion_common::logical_type::LogicalType;
 
 
     // We should ignore predicate that read non-primitive columns
@@ -474,10 +473,10 @@ mod test {
         ]);
 
         // The parquet file with `file_schema` just has `bigint_col` and `float_col` column, and don't have the `int_col`
-        let expr = col("bigint_col").eq(cast(col("int_col"), LogicalType::Int64));
+        let expr = col("bigint_col").eq(cast(col("int_col"), DataType::Int64));
         let expr = logical2physical(&expr, &table_schema);
         let expected_candidate_expr =
-            col("bigint_col").eq(cast(lit(ScalarValue::Int32(None)), LogicalType::Int64));
+            col("bigint_col").eq(cast(lit(ScalarValue::Int32(None)), DataType::Int64));
         let expected_candidate_expr =
             logical2physical(&expected_candidate_expr, &table_schema);
 

@@ -46,8 +46,9 @@ use crate::prelude::SessionContext;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
-use arrow_schema::{Schema, SchemaRef};
+use arrow_schema::Schema;
 use datafusion_common::config::{CsvOptions, JsonOptions};
+use datafusion_common::logical_type::signature::LogicalType;
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
@@ -58,8 +59,8 @@ use datafusion_expr::{
 use datafusion_functions_aggregate::expr_fn::{avg, count, median, stddev, sum};
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::extension::ExtensionType;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -613,7 +614,7 @@ impl DataFrame {
         //define describe column
         let mut describe_schemas = vec![Field::new("describe", DataType::Utf8, false)];
         describe_schemas.extend(original_schema_fields.clone().map(|field| {
-            if field.data_type().is_numeric() {
+            if field.data_type().logical().is_numeric() {
                 Field::new(field.name(), DataType::Float64, true)
             } else {
                 Field::new(field.name(), DataType::Utf8, true)
@@ -649,7 +650,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| f.data_type().is_numeric())
+                    .filter(|f| f.data_type().logical().is_numeric())
                     .map(|f| avg(col(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
@@ -658,7 +659,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| f.data_type().is_numeric())
+                    .filter(|f| f.data_type().logical().is_numeric())
                     .map(|f| stddev(col(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
@@ -668,7 +669,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| {
-                        !matches!(f.data_type(), LogicalType::Binary | LogicalType::Boolean)
+                        !matches!(f.data_type().logical(), LogicalType::Binary | LogicalType::Boolean)
                     })
                     .map(|f| min(col(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
@@ -679,7 +680,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| {
-                        !matches!(f.data_type(), LogicalType::Binary | LogicalType::Boolean)
+                        !matches!(f.data_type().logical(), LogicalType::Binary | LogicalType::Boolean)
                     })
                     .map(|f| max(col(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
@@ -689,7 +690,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| f.data_type().is_numeric())
+                    .filter(|f| f.data_type().logical().is_numeric())
                     .map(|f| median(col(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
@@ -714,7 +715,7 @@ impl DataFrame {
                             {
                                 let column =
                                     batchs[0].column_by_name(field.name()).unwrap();
-                                if field.data_type().is_numeric() {
+                                if field.data_type().logical().is_numeric() {
                                     cast(column, &DataType::Float64)?
                                 } else {
                                     cast(column, &DataType::Utf8)?
@@ -1474,7 +1475,7 @@ impl DataFrame {
     ///
     /// The method supports case sensitive rename with wrapping column name into one of following symbols (  "  or  '  or  `  )
     ///
-    /// Alternatively setting Datafusion param `datafusion.sql_parser.enable_ident_normalization` to `false` will enable  
+    /// Alternatively setting Datafusion param `datafusion.sql_parser.enable_ident_normalization` to `false` will enable
     /// case sensitive rename without need to wrap column name into special symbols
     ///
     /// # Example
@@ -1649,9 +1650,8 @@ impl TableProvider for DataFrameTableProvider {
         Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 
-    fn schema(&self) -> SchemaRef {
-        let schema: Schema = self.plan.schema().as_ref().into();
-        Arc::new(schema)
+    fn schema(&self) -> LogicalSchemaRef {
+        self.plan.schema().inner().clone()
     }
 
     fn table_type(&self) -> TableType {
@@ -1696,8 +1696,8 @@ mod tests {
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
     use arrow::array::{self, Int32Array};
+    use arrow_schema::SchemaRef;
     use datafusion_common::{Constraint, Constraints};
-    use datafusion_common::logical_type::LogicalType;
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
         array_agg, cast, create_udf, expr, lit, BuiltInWindowFunction,
@@ -2365,7 +2365,7 @@ mod tests {
         let field = df.schema().field(0);
         // There are two columns named 'c', one from the input of the aggregate and the other from the output.
         // Select should return the column from the output of the aggregate, which is a list.
-        assert!(matches!(field.data_type(), LogicalType::List(_)));
+        assert!(matches!(field.data_type().logical(), LogicalType::List(_)));
 
         Ok(())
     }
@@ -3172,7 +3172,7 @@ mod tests {
             .await?
             .select_columns(&["c2", "c3"])?
             .limit(0, Some(1))?
-            .with_column("sum", cast(col("c2") + col("c3"), LogicalType::Int64))?;
+            .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
 
         let df_results = df.clone().collect().await?;
         df.clone().show().await?;
@@ -3274,7 +3274,7 @@ mod tests {
             .await?
             .select_columns(&["c2", "c3"])?
             .limit(0, Some(1))?
-            .with_column("sum", cast(col("c2") + col("c3"), LogicalType::Int64))?;
+            .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
 
         let cached_df = df.clone().cache().await?;
 

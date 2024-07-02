@@ -1,10 +1,27 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::Schema;
+use arrow_schema::{Schema, SchemaRef};
 
-use crate::logical_type::field::{LogicalField, LogicalFieldRef};
-use crate::logical_type::fields::LogicalFields;
+use super::field::{LogicalField, LogicalFieldRef};
+use super::fields::LogicalFields;
 
 #[derive(Debug, Default)]
 pub struct LogicalSchemaBuilder {
@@ -130,6 +147,34 @@ impl From<Schema> for LogicalSchema {
     }
 }
 
+impl From<&Schema> for LogicalSchema {
+    fn from(value: &Schema) -> Self {
+        Self::from(value.clone())
+    }
+}
+
+impl From<SchemaRef> for LogicalSchema {
+    fn from(value: SchemaRef) -> Self {
+        Self::from(value.as_ref())
+    }
+}
+
+impl From<&SchemaRef> for LogicalSchema {
+    fn from(value: &SchemaRef) -> Self {
+        Self::from(value.as_ref())
+    }
+}
+
+impl Into<Schema> for LogicalSchema {
+    fn into(self) -> Schema {
+        Schema {
+            fields: self.fields.into(),
+            metadata: self.metadata,
+        }
+    }
+}
+
+
 impl LogicalSchema {
     pub fn new(fields: impl Into<LogicalFields>) -> Self {
         Self::new_with_metadata(fields, HashMap::new())
@@ -155,5 +200,9 @@ impl LogicalSchema {
 
     pub fn field(&self, i: usize) -> &LogicalFieldRef {
         &self.fields[i]
+    }
+
+    pub fn fields(&self) -> &LogicalFields {
+        &self.fields
     }
 }

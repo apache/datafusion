@@ -26,7 +26,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_schema::{Fields, SchemaBuilder};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::logical_type::schema::LogicalSchemaRef;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{plan_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
@@ -205,7 +205,7 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
-    fn get_variable_type(&self, _variable_names: &[String]) -> Option<LogicalType> {
+    fn get_variable_type(&self, _variable_names: &[String]) -> Option<TypeRelation> {
         None
     }
 
@@ -239,8 +239,8 @@ impl TableSource for MyTableSource {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn schema(&self) -> LogicalSchemaRef {
+        LogicalSchemaRef::new(self.schema.clone().into())
     }
 }
 

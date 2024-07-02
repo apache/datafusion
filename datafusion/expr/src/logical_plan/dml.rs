@@ -20,10 +20,10 @@ use std::fmt::{self, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::LogicalType;
 use datafusion_common::logical_type::schema::LogicalSchema;
 use crate::LogicalPlan;
 
@@ -131,6 +131,6 @@ impl Display for WriteOp {
 
 fn make_count_schema() -> DFSchemaRef {
     Arc::new(
-        LogicalSchema::new(vec![LogicalField::new("count", LogicalType::UInt64, false)]).try_into().unwrap()
+        LogicalSchema::new(vec![LogicalField::new("count", DataType::UInt64, false)]).try_into().unwrap()
     )
 }

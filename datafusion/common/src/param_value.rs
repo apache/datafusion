@@ -18,7 +18,7 @@
 use crate::error::{_plan_datafusion_err, _plan_err};
 use crate::{Result, ScalarValue};
 use std::collections::HashMap;
-use crate::logical_type::LogicalType;
+use crate::logical_type::TypeRelation;
 
 /// The parameter value corresponding to the placeholder
 #[derive(Debug, Clone)]
@@ -31,7 +31,7 @@ pub enum ParamValues {
 
 impl ParamValues {
     /// Verify parameter list length and type
-    pub fn verify(&self, expect: &[LogicalType]) -> Result<()> {
+    pub fn verify(&self, expect: &[TypeRelation]) -> Result<()> {
         match self {
             ParamValues::List(list) => {
                 // Verify if the number of params matches the number of values

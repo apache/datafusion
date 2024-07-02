@@ -17,85 +17,136 @@
 
 use std::{fmt::Display, sync::Arc};
 
-use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use arrow_schema::DataType;
 
-use crate::logical_type::extension::{ExtensionType, ExtensionTypeRef};
-use crate::logical_type::field::{LogicalField, LogicalFieldRef};
-use crate::logical_type::fields::LogicalFields;
+use field::{LogicalField, LogicalFieldRef};
+use fields::LogicalFields;
+use signature::LogicalType;
 
-pub mod type_signature;
-pub mod extension;
-pub mod registry;
-pub mod schema;
 pub mod field;
 pub mod fields;
+pub mod schema;
+pub mod signature;
+
+pub type ExtensionTypeRef = Arc<dyn ExtensionType + Send + Sync>;
+
+pub trait ExtensionType: std::fmt::Debug {
+    fn logical(&self) -> &LogicalType;
+    fn physical(&self) -> &DataType;
+}
 
 #[derive(Clone, Debug)]
-pub enum LogicalType {
-    Null,
-    Boolean,
-    Int8,
-    Int16,
-    Int32,
-    Int64,
-    UInt8,
-    UInt16,
-    UInt32,
-    UInt64,
-    Float16,
-    Float32,
-    Float64,
-    Date32,
-    Date64,
-    Time32(TimeUnit),
-    Time64(TimeUnit),
-    Timestamp(TimeUnit, Option<Arc<str>>),
-    Duration(TimeUnit),
-    Interval(IntervalUnit),
-    Binary,
-    FixedSizeBinary(i32),
-    LargeBinary,
-    Utf8,
-    LargeUtf8,
-    List(LogicalFieldRef),
-    FixedSizeList(LogicalFieldRef, i32),
-    LargeList(LogicalFieldRef),
-    Struct(LogicalFields),
-    Map(LogicalFieldRef, bool),
-    Decimal128(u8, i8),
-    Decimal256(u8, i8),
-    Extension(ExtensionTypeRef),
-    // TODO: tbd union
+pub struct TypeRelation(ExtensionTypeRef);
+
+impl TypeRelation {
+    pub fn new_list(inner: TypeRelation, nullable: bool) -> Self {
+        Self(Arc::new(NativeType::new_list(inner, nullable)))
+    }
+
+    pub fn new_struct(fields: LogicalFields) -> Self {
+        Self(Arc::new(NativeType::new_struct(fields)))
+    }
 }
 
-impl PartialEq for LogicalType {
+pub type NativeTypeRef = Arc<NativeType>;
+
+#[derive(Clone, Debug)]
+pub struct NativeType {
+    logical: LogicalType,
+    physical: DataType,
+}
+
+impl ExtensionType for NativeType {
+    fn logical(&self) -> &LogicalType {
+        &self.logical
+    }
+
+    fn physical(&self) -> &DataType {
+        &self.physical
+    }
+}
+
+impl NativeType {
+    pub fn new_list(inner: TypeRelation, nullable: bool) -> Self {
+        Self {
+            physical: DataType::new_list(inner.physical().clone(), nullable),
+            logical: LogicalType::List(LogicalFieldRef::new(LogicalField::new_list_field(inner, nullable))),
+        }
+    }
+
+    pub fn new_struct(fields: LogicalFields) -> Self {
+        Self {
+            physical: DataType::Struct(fields.clone().into()),
+            logical: LogicalType::Struct(fields),
+        }
+    }
+}
+
+impl ExtensionType for TypeRelation {
+    fn logical(&self) -> &LogicalType {
+        self.0.logical()
+    }
+
+    fn physical(&self) -> &DataType {
+        self.0.physical()
+    }
+}
+
+impl PartialEq for TypeRelation {
     fn eq(&self, other: &Self) -> bool {
-        self.type_signature() == other.type_signature()
+        self.logical() == other.logical()
     }
 }
 
-impl Eq for LogicalType {}
+impl Eq for TypeRelation {}
 
-impl std::hash::Hash for LogicalType {
+impl std::hash::Hash for TypeRelation {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.type_signature().hash(state)
+        self.logical().hash(state)
     }
 }
 
-impl Display for LogicalType {
+impl Display for TypeRelation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
     }
 }
 
-impl From<&DataType> for LogicalType {
+impl From<DataType> for NativeType {
+    fn from(value: DataType) -> Self {
+        Self {
+            logical: (&value).into(),
+            physical: value,
+        }
+    }
+}
+
+impl From<ExtensionTypeRef> for TypeRelation {
+    fn from(value: ExtensionTypeRef) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&DataType> for TypeRelation {
     fn from(value: &DataType) -> Self {
         value.clone().into()
     }
 }
 
+impl From<DataType> for TypeRelation {
+    fn from(value: DataType) -> Self {
+        Self(NativeTypeRef::new(value.into()))
+    }
+}
+
 impl From<DataType> for LogicalType {
     fn from(value: DataType) -> Self {
+        (&value).into()
+    }
+}
+
+impl From<&DataType> for LogicalType {
+    fn from(value: &DataType) -> Self {
         match value {
             DataType::Null => LogicalType::Null,
             DataType::Boolean => LogicalType::Boolean,
@@ -110,47 +161,42 @@ impl From<DataType> for LogicalType {
             DataType::Float16 => LogicalType::Float16,
             DataType::Float32 => LogicalType::Float32,
             DataType::Float64 => LogicalType::Float64,
-            DataType::Timestamp(tu, z) => LogicalType::Timestamp(tu, z),
-            DataType::Date32 => LogicalType::Date32,
-            DataType::Date64 => LogicalType::Date64,
-            DataType::Time32(tu) => LogicalType::Time32(tu),
-            DataType::Time64(tu) => LogicalType::Time64(tu),
-            DataType::Duration(tu) => LogicalType::Duration(tu),
-            DataType::Interval(iu) => LogicalType::Interval(iu),
-            DataType::Binary | DataType::BinaryView => LogicalType::Binary,
-            DataType::FixedSizeBinary(len) => LogicalType::FixedSizeBinary(len),
-            DataType::LargeBinary => LogicalType::LargeBinary,
-            DataType::Utf8 | DataType::Utf8View => LogicalType::Utf8,
-            DataType::LargeUtf8 => LogicalType::LargeUtf8,
-            DataType::List(f) | DataType::ListView(f) => LogicalType::List(LogicalFieldRef::new(f.as_ref().into())),
-            DataType::FixedSizeList(f, len) => LogicalType::FixedSizeList(LogicalFieldRef::new(f.as_ref().into()), len),
-            DataType::LargeList(f) | DataType::LargeListView(f) => LogicalType::LargeList(LogicalFieldRef::new(f.as_ref().into())),
-            DataType::Struct(fields) => LogicalType::Struct(fields.into()),
-            DataType::Dictionary(_, dt) => dt.as_ref().into(),
-            DataType::Decimal128(p, s) => LogicalType::Decimal128(p, s),
-            DataType::Decimal256(p, s) => LogicalType::Decimal256(p, s),
-            DataType::Map(f, sorted) => LogicalType::Map(LogicalFieldRef::new(f.as_ref().into()), sorted),
+            DataType::Timestamp(tu, tz) => {
+                LogicalType::Timestamp(tu.clone(), tz.clone())
+            }
+            DataType::Date32 | DataType::Date64 => LogicalType::Date,
+            DataType::Time32(tu) => LogicalType::Time32(tu.clone()),
+            DataType::Time64(tu) => LogicalType::Time64(tu.clone()),
+            DataType::Duration(tu) => LogicalType::Duration(tu.clone()),
+            DataType::Interval(iu) => LogicalType::Interval(iu.clone()),
+            DataType::Binary
+            | DataType::FixedSizeBinary(_)
+            | DataType::LargeBinary
+            | DataType::BinaryView => LogicalType::Binary,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                LogicalType::Utf8
+            }
+            DataType::List(f)
+            | DataType::ListView(f)
+            | DataType::FixedSizeList(f, _)
+            | DataType::LargeList(f)
+            | DataType::LargeListView(f) => {
+                LogicalType::List(LogicalFieldRef::new(f.as_ref().clone().into()))
+            }
+            DataType::Struct(f) => LogicalType::Struct(f.clone().into()),
+            DataType::Dictionary(_, t) => t.as_ref().into(),
+            DataType::Decimal128(precision, scale) => {
+                LogicalType::Decimal128(precision.clone(), scale.clone())
+            }
+            DataType::Decimal256(precision, scale) => {
+                LogicalType::Decimal256(precision.clone(), scale.clone())
+            }
+            DataType::Map(f, sorted) => LogicalType::Map(
+                LogicalFieldRef::new(f.as_ref().clone().into()),
+                sorted.clone(),
+            ),
             DataType::RunEndEncoded(_, f) => f.data_type().into(),
-            DataType::Union(_, _) => unimplemented!(), // TODO: tbd union
+            DataType::Union(f, _) => LogicalType::Union(f.into()),
         }
-    }
-}
-
-impl LogicalType {
-
-    pub fn new_list(data_type: LogicalType, nullable: bool) -> Self {
-        LogicalType::List(Arc::new(LogicalField::new_list_field(data_type, nullable)))
-    }
-
-    pub fn new_large_list(data_type: LogicalType, nullable: bool) -> Self {
-        LogicalType::LargeList(Arc::new(LogicalField::new_list_field(data_type, nullable)))
-    }
-
-    pub fn new_fixed_size_list(data_type: LogicalType, size: i32, nullable: bool) -> Self {
-        LogicalType::FixedSizeList(Arc::new(LogicalField::new_list_field(data_type, nullable)), size)
-    }
-
-    pub fn is_floating(&self) -> bool {
-        matches!(self, Self::Float16 | Self::Float32 | Self::Float64)
     }
 }

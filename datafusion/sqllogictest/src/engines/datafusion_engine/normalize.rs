@@ -19,7 +19,8 @@ use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::logical_type::fields::LogicalFields;
-use datafusion_common::logical_type::LogicalType;
+use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::ExtensionType;
 use datafusion_common::DataFusionError;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -248,7 +249,7 @@ pub(crate) fn convert_schema_to_types(columns: &LogicalFields) -> Vec<DFColumnTy
     columns
         .iter()
         .map(|f| f.data_type())
-        .map(|data_type| match data_type {
+        .map(|data_type| match data_type.logical() {
             LogicalType::Boolean => DFColumnType::Boolean,
             LogicalType::Int8
             | LogicalType::Int16
@@ -263,9 +264,8 @@ pub(crate) fn convert_schema_to_types(columns: &LogicalFields) -> Vec<DFColumnTy
             | LogicalType::Float64
             | LogicalType::Decimal128(_, _)
             | LogicalType::Decimal256(_, _) => DFColumnType::Float,
-            LogicalType::Utf8 | LogicalType::LargeUtf8 => DFColumnType::Text,
-            LogicalType::Date32
-            | LogicalType::Date64
+            LogicalType::Utf8 => DFColumnType::Text,
+            LogicalType::Date
             | LogicalType::Time32(_)
             | LogicalType::Time64(_) => DFColumnType::DateTime,
             LogicalType::Timestamp(_, _) => DFColumnType::Timestamp,
