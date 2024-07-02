@@ -57,16 +57,16 @@ pub fn main() -> Result<()> {
     //
     // To invoke SqlToRel we must provide it schema and function information
     // via an object that implements the `ContextProvider` trait
-    //
-    // Projection: person.name
-    //   Filter: person.age BETWEEN Int64(21) AND Int64(32)
-    //     TableScan: person
     let context_provider = MyContextProvider::default();
     let sql_to_rel = SqlToRel::new(&context_provider);
     let logical_plan = sql_to_rel.sql_statement_to_plan(statements[0].clone())?;
-    println!(
-        "Unoptimized Logical Plan:\n\n{}\n",
-        logical_plan.display_indent()
+
+    // Here is the logical plan that was generated:
+    assert_eq!(
+        logical_plan.display_indent().to_string(),
+        "Projection: person.name\
+        \n  Filter: person.age BETWEEN Int64(21) AND Int64(32)\
+        \n    TableScan: person"
     );
 
     // The initial LogicalPlan is a mechanical translation from the parsed SQL
@@ -80,19 +80,18 @@ pub fn main() -> Result<()> {
     // To prepare it to run, we must apply type coercion to align types, and
     // check for other semantic errors. In DataFusion this is done by a
     // component called the Analyzer.
-    //
-    // Projection: person.name
-    //   Filter: CAST(person.age AS Int64) BETWEEN Int64(21) AND Int64(32)
-    //     TableScan: person
     let config = OptimizerContext::default().with_skip_failing_rules(false);
     let analyzed_plan = Analyzer::new().execute_and_check(
         logical_plan,
         config.options(),
         observe_analyzer,
     )?;
-    println!(
-        "Analyzed Logical Plan:\n\n{}\n",
-        analyzed_plan.display_indent()
+    // Note that the Analyzer has added a CAST to the plan to align the types
+    assert_eq!(
+        analyzed_plan.display_indent().to_string(),
+        "Projection: person.name\
+        \n  Filter: CAST(person.age AS Int64) BETWEEN Int64(21) AND Int64(32)\
+        \n    TableScan: person",
     );
 
     // As we can see, the Analyzer added a CAST so the types are the same
@@ -104,20 +103,20 @@ pub fn main() -> Result<()> {
     // Query optimization is handled in DataFusion by a component called the
     // Optimizer, which we now invoke
     //
-    // This results in a fully optimized plan:
-    //
-    // TableScan: person projection=[name], full_filters=[person.age >= UInt8(21), person.age <= UInt8(32)]
-    //
-    // The optimizer did several things to this plan:
-    // 1. Removed casts from person.age as we described above
-    // 2. Converted BETWEEN to two single columns  inequalities (which are typically faster to execute)
-    // 3. Pushed the projection of `name` down to the scan (so the scan only returns that column)
-    // 4. Pushed the filter into the scan
     let optimized_plan =
         Optimizer::new().optimize(analyzed_plan, &config, observe_optimizer)?;
-    println!(
-        "Optimized Logical Plan:\n\n{}\n",
-        optimized_plan.display_indent()
+
+    // Show the fully optimized plan. Note that the optimizer did several things
+    // to prepare this plan for execution:
+    //
+    // 1. Removed casts from person.age as we described above
+    // 2. Converted BETWEEN to two single column inequalities (which are typically faster to execute)
+    // 3. Pushed the projection of `name` down to the scan (so the scan only returns that column)
+    // 4. Pushed the filter into the scan
+    // 5. Removed the projection as it was only serving to pass through the name column
+    assert_eq!(
+        optimized_plan.display_indent().to_string(),
+        "TableScan: person projection=[name], full_filters=[person.age >= UInt8(21), person.age <= UInt8(32)]"
     );
 
     Ok(())
