@@ -83,7 +83,7 @@ pub trait ContextProvider {
 }
 
 /// This trait allows users to customize the behavior of the SQL planner
-pub trait UserDefinedSQLPlanner {
+pub trait UserDefinedSQLPlanner: Send + Sync {
     /// Plan the binary operation between two expressions, returns OriginalBinaryExpr if not possible
     fn plan_binary_op(
         &self,
