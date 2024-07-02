@@ -22,9 +22,8 @@ use crate::planner::{
     idents_to_table_reference, ContextProvider, PlannerContext, SqlToRel,
 };
 use crate::utils::{
-    check_columns_satisfy_exprs, extract_aliases, rebase_expr,
-    recursive_transform_unnest, resolve_aliases_to_exprs, resolve_columns,
-    resolve_positions_to_exprs,
+    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
+    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnest,
 };
 
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
@@ -298,46 +297,61 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
-        let mut unnest_columns = vec![];
-        // from which column used for projection, before the unnest happen
-        // including non unnest column and unnest column
-        let mut inner_projection_exprs = vec![];
+        let mut intermediate_plan = input;
+        let mut intermediate_select_exprs = select_exprs;
+        // Each expr in select_exprs can contains multiple unnest stage
+        // The transformation happen bottom up, one at a time for each iteration
+        // Ony exaust the loop if no more unnest transformation is found
+        for i in 0.. {
+            let mut unnest_columns = vec![];
+            // from which column used for projection, before the unnest happen
+            // including non unnest column and unnest column
+            let mut inner_projection_exprs = vec![];
 
-        // expr returned here maybe different from the originals in inner_projection_exprs
-        // for example:
-        // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
-        // - unnest(array_col) will be transformed into unnest(array_col).element
-        // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
-        let outer_projection_exprs: Vec<Expr> = select_exprs
-            .into_iter()
-            .map(|expr| {
-                recursive_transform_unnest(
-                    &input,
-                    &mut unnest_columns,
-                    &mut inner_projection_exprs,
-                    expr,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect();
+            // expr returned here maybe different from the originals in inner_projection_exprs
+            // for example:
+            // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
+            // - unnest(array_col) will be transformed into unnest(array_col).element
+            // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
+            let outer_projection_exprs: Vec<Expr> = intermediate_select_exprs
+                .iter()
+                .map(|expr| {
+                    transform_bottom_unnest(
+                        &intermediate_plan,
+                        &mut unnest_columns,
+                        &mut inner_projection_exprs,
+                        expr,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect();
 
-        // Do the final projection
-        if unnest_columns.is_empty() {
-            LogicalPlanBuilder::from(input)
-                .project(inner_projection_exprs)?
-                .build()
-        } else {
-            let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
-            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
-            let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-            LogicalPlanBuilder::from(input)
-                .project(inner_projection_exprs)?
-                .unnest_columns_with_options(columns, unnest_options)?
-                .project(outer_projection_exprs)?
-                .build()
+            // No more unnest is possible
+            if unnest_columns.is_empty() {
+                // The original expr does not contain any unnest
+                if i == 0 {
+                    return LogicalPlanBuilder::from(intermediate_plan)
+                        .project(inner_projection_exprs)?
+                        .build();
+                }
+                break;
+            } else {
+                let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
+                // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
+                let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+                let plan = LogicalPlanBuilder::from(intermediate_plan)
+                    .project(inner_projection_exprs)?
+                    .unnest_columns_with_options(columns, unnest_options)?
+                    .build()?;
+                intermediate_plan = plan;
+                intermediate_select_exprs = outer_projection_exprs;
+            }
         }
+        LogicalPlanBuilder::from(intermediate_plan)
+            .project(intermediate_select_exprs)?
+            .build()
     }
 
     fn plan_selection(
