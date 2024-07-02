@@ -39,6 +39,7 @@ pub mod extract;
 pub mod flatten;
 pub mod length;
 pub mod make_array;
+pub mod planner;
 pub mod position;
 pub mod range;
 pub mod remove;
@@ -50,7 +51,6 @@ pub mod set_ops;
 pub mod sort;
 pub mod string;
 pub mod utils;
-
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::ScalarUDF;
