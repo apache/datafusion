@@ -338,8 +338,8 @@ fn test_pretty_roundtrip() -> Result<()> {
         ("((3 + (5 + 6)) * 3)", "(3 + 5 + 6) * 3"),
         ("((3 + (5 + 6)) + 3)", "3 + 5 + 6 + 3"),
         (
-            "((id > 10) AND (age BETWEEN 10 AND 20))",
-            "id > 10 AND age BETWEEN 10 AND 20",
+            "((id > 10) || (age BETWEEN 10 AND 20))",
+            "id > 10 || age BETWEEN 10 AND 20",
         ),
         (
             "((id > 10) * (age BETWEEN 10 AND 20))",

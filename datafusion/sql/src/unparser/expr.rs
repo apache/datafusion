@@ -657,8 +657,10 @@ impl Unparser<'_> {
         match expr {
             ast::Expr::Nested(_) | ast::Expr::Identifier(_) | ast::Expr::Value(_) => 100,
             ast::Expr::BinaryOp { op, .. } => self.sql_op_precedence(op),
+            // closest precedence we currently have to Between is PGLikeMatch
+            // (https://www.postgresql.org/docs/7.2/sql-precedence.html)
             ast::Expr::Between { .. } => {
-                self.sql_op_precedence(&ast::BinaryOperator::And)
+                self.sql_op_precedence(&ast::BinaryOperator::PGLikeMatch)
             }
             _ => 0,
         }
