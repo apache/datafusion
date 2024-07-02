@@ -625,7 +625,7 @@ mod tests {
         in_data
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
-                expr: (*expr).clone(),
+                expr: Arc::clone(*expr),
                 options: *options,
             })
             .collect::<Vec<_>>()
@@ -810,11 +810,11 @@ mod tests {
                 .map(|ordering| convert_to_sort_exprs(ordering))
                 .collect::<Vec<_>>();
             let child1 = Arc::new(
-                MemoryExec::try_new(&[], schema.clone(), None)?
+                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .with_sort_information(first_orderings),
             );
             let child2 = Arc::new(
-                MemoryExec::try_new(&[], schema.clone(), None)?
+                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .with_sort_information(second_orderings),
             );
 

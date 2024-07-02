@@ -1634,13 +1634,13 @@ mod tests {
         task_ctx: Arc<TaskContext>,
     ) -> Result<()> {
         let first_batches = partitioned_sym_join_with_filter(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             filter.clone(),
             &join_type,
             false,
-            task_ctx.clone(),
+            Arc::clone(&task_ctx),
         )
         .await?;
         let second_batches = partitioned_hash_join_with_filter(

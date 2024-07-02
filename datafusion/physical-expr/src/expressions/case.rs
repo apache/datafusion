@@ -906,7 +906,7 @@ mod tests {
 
         let expr3 = generate_case_when_with_type_coercion(
             Some(col("a", &schema)?),
-            vec![(when1.clone(), Arc::clone(&then1)), (when2, then2)],
+            vec![(Arc::clone(&when1), Arc::clone(&then1)), (when2, then2)],
             None,
             &schema,
         )?;

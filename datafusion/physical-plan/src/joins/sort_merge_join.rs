@@ -1942,7 +1942,7 @@ mod tests {
             Field::new(c.0, DataType::Int32, true),
         ]));
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![
                 Arc::new(Int32Array::from(a.1.clone())),
                 Arc::new(Int32Array::from(b.1.clone())),
@@ -2786,8 +2786,8 @@ mod tests {
             let task_ctx = Arc::new(task_ctx);
 
             let join = join_with_options(
-                left.clone(),
-                right.clone(),
+                Arc::clone(&left),
+                Arc::clone(&right),
                 on.clone(),
                 join_type,
                 sort_options.clone(),
@@ -2864,8 +2864,8 @@ mod tests {
                 .with_runtime(runtime);
             let task_ctx = Arc::new(task_ctx);
             let join = join_with_options(
-                left.clone(),
-                right.clone(),
+                Arc::clone(&left),
+                Arc::clone(&right),
                 on.clone(),
                 join_type,
                 sort_options.clone(),

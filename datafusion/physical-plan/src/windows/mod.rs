@@ -675,7 +675,7 @@ mod tests {
         let sort_exprs = sort_exprs.into_iter().collect();
 
         Ok(Arc::new(StreamingTableExec::try_new(
-            schema.clone(),
+            Arc::clone(schema),
             vec![],
             None,
             Some(sort_exprs),

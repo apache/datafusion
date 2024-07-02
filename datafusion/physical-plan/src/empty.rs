@@ -170,7 +170,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test::aggr_test_schema();
 
-        let empty = EmptyExec::new(schema.clone());
+        let empty = EmptyExec::new(Arc::clone(&schema));
         assert_eq!(empty.schema(), schema);
 
         // we should have no results
@@ -184,9 +184,9 @@ mod tests {
     #[test]
     fn with_new_children() -> Result<()> {
         let schema = test::aggr_test_schema();
-        let empty = Arc::new(EmptyExec::new(schema.clone()));
+        let empty = Arc::new(EmptyExec::new(Arc::clone(&schema)));
 
-        let empty2 = with_new_children_if_necessary(empty.clone(), vec![])?;
+        let empty2 = with_new_children_if_necessary(Arc::clone(&empty) as Arc<dyn ExecutionPlan>, vec![])?;
         assert_eq!(empty.schema(), empty2.schema());
 
         let too_many_kids = vec![empty2];
@@ -204,7 +204,7 @@ mod tests {
         let empty = EmptyExec::new(schema);
 
         // ask for the wrong partition
-        assert!(empty.execute(1, task_ctx.clone()).is_err());
+        assert!(empty.execute(1, Arc::clone(&task_ctx)).is_err());
         assert!(empty.execute(20, task_ctx).is_err());
         Ok(())
     }

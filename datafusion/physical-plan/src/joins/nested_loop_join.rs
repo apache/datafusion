@@ -753,7 +753,7 @@ mod tests {
         let columns = columns(&nested_loop_join.schema());
         let mut batches = vec![];
         for i in 0..partition_count {
-            let stream = nested_loop_join.execute(i, context.clone())?;
+            let stream = nested_loop_join.execute(i, Arc::clone(&context))?;
             let more_batches = common::collect(stream).await?;
             batches.extend(
                 more_batches
@@ -1038,8 +1038,8 @@ mod tests {
             let task_ctx = Arc::new(task_ctx);
 
             let err = multi_partitioned_join_collect(
-                left.clone(),
-                right.clone(),
+                Arc::clone(&left),
+                Arc::clone(&right),
                 &join_type,
                 Some(filter.clone()),
                 task_ctx,

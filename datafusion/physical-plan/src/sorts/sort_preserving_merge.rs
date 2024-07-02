@@ -582,8 +582,9 @@ mod tests {
             },
         }];
 
-        let basic = basic_sort(csv.clone(), sort.clone(), task_ctx.clone()).await;
-        let partition = partition_sort(csv, sort, task_ctx.clone()).await;
+        let basic =
+            basic_sort(Arc::clone(&csv), sort.clone(), Arc::clone(&task_ctx)).await;
+        let partition = partition_sort(csv, sort, Arc::clone(&task_ctx)).await;
 
         let basic = arrow::util::pretty::pretty_format_batches(&[basic])
             .unwrap()
@@ -649,10 +650,11 @@ mod tests {
         }];
 
         let input =
-            sorted_partitioned_input(sort.clone(), &[10, 3, 11], task_ctx.clone())
+            sorted_partitioned_input(sort.clone(), &[10, 3, 11], Arc::clone(&task_ctx))
                 .await?;
-        let basic = basic_sort(input.clone(), sort.clone(), task_ctx.clone()).await;
-        let partition = sorted_merge(input, sort, task_ctx.clone()).await;
+        let basic =
+            basic_sort(Arc::clone(&input), sort.clone(), Arc::clone(&task_ctx)).await;
+        let partition = sorted_merge(input, sort, Arc::clone(&task_ctx)).await;
 
         assert_eq!(basic.num_rows(), 1200);
         assert_eq!(partition.num_rows(), 1200);
@@ -680,9 +682,9 @@ mod tests {
         // Test streaming with default batch size
         let task_ctx = Arc::new(TaskContext::default());
         let input =
-            sorted_partitioned_input(sort.clone(), &[10, 5, 13], task_ctx.clone())
+            sorted_partitioned_input(sort.clone(), &[10, 5, 13], Arc::clone(&task_ctx))
                 .await?;
-        let basic = basic_sort(input.clone(), sort.clone(), task_ctx).await;
+        let basic = basic_sort(Arc::clone(&input), sort.clone(), task_ctx).await;
 
         // batch size of 23
         let task_ctx = TaskContext::default()
@@ -800,17 +802,18 @@ mod tests {
         }];
 
         let batches =
-            sorted_partitioned_input(sort.clone(), &[5, 7, 3], task_ctx.clone()).await?;
+            sorted_partitioned_input(sort.clone(), &[5, 7, 3], Arc::clone(&task_ctx))
+                .await?;
 
         let partition_count = batches.output_partitioning().partition_count();
         let mut streams = Vec::with_capacity(partition_count);
 
         for partition in 0..partition_count {
-            let mut builder = RecordBatchReceiverStream::builder(schema.clone(), 1);
+            let mut builder = RecordBatchReceiverStream::builder(Arc::clone(&schema), 1);
 
             let sender = builder.tx();
 
-            let mut stream = batches.execute(partition, task_ctx.clone()).unwrap();
+            let mut stream = batches.execute(partition, Arc::clone(&task_ctx)).unwrap();
             builder.spawn(async move {
                 while let Some(batch) = stream.next().await {
                     sender.send(batch).await.unwrap();
@@ -844,7 +847,7 @@ mod tests {
 
         assert_eq!(merged.len(), 1);
         let merged = merged.remove(0);
-        let basic = basic_sort(batches, sort.clone(), task_ctx.clone()).await;
+        let basic = basic_sort(batches, sort.clone(), Arc::clone(&task_ctx)).await;
 
         let basic = arrow::util::pretty::pretty_format_batches(&[basic])
             .unwrap()
@@ -880,7 +883,7 @@ mod tests {
         let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
-        let collected = collect(merge.clone(), task_ctx).await.unwrap();
+        let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx).await.unwrap();
         let expected = [
             "+----+---+",
             "| a  | b |",

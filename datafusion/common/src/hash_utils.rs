@@ -622,19 +622,19 @@ mod tests {
             vec![
                 (
                     Arc::new(Field::new("bool", DataType::Boolean, false)),
-                    boolarr.clone() as ArrayRef,
+                    Arc::clone(&boolarr) as ArrayRef,
                 ),
                 (
                     Arc::new(Field::new("i32", DataType::Int32, false)),
-                    i32arr.clone() as ArrayRef,
+                    Arc::clone(&i32arr) as ArrayRef,
                 ),
                 (
                     Arc::new(Field::new("i32", DataType::Int32, false)),
-                    i32arr.clone() as ArrayRef,
+                    Arc::clone(&i32arr) as ArrayRef,
                 ),
                 (
                     Arc::new(Field::new("bool", DataType::Boolean, false)),
-                    boolarr.clone() as ArrayRef,
+                    Arc::clone(&boolarr) as ArrayRef,
                 ),
             ],
             Buffer::from(&[0b001011]),
@@ -710,7 +710,12 @@ mod tests {
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
         let mut one_col_hashes = vec![0; strings1.len()];
-        create_hashes(&[dict_array.clone()], &random_state, &mut one_col_hashes).unwrap();
+        create_hashes(
+            &[Arc::clone(&dict_array) as ArrayRef],
+            &random_state,
+            &mut one_col_hashes,
+        )
+        .unwrap();
 
         let mut two_col_hashes = vec![0; strings1.len()];
         create_hashes(

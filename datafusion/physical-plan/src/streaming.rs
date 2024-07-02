@@ -327,7 +327,7 @@ mod test {
         /// Set the batches for the stream
         fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
             let stream = TestPartitionStream::new_with_batches(batches);
-            self.schema = Some(stream.schema().clone());
+            self.schema = Some(Arc::clone(stream.schema()));
             self.partitions = vec![Arc::new(stream)];
             self
         }

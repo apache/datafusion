@@ -1227,10 +1227,10 @@ mod tests {
 
         // define data.
         (
-            schema.clone(),
+            Arc::clone(&schema),
             vec![
                 RecordBatch::try_new(
-                    schema.clone(),
+                    Arc::clone(&schema),
                     vec![
                         Arc::new(UInt32Array::from(vec![2, 3, 4, 4])),
                         Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
@@ -1262,10 +1262,10 @@ mod tests {
         // the expected result by accident, but merging actually works properly;
         // i.e. it doesn't depend on the data insertion order.
         (
-            schema.clone(),
+            Arc::clone(&schema),
             vec![
                 RecordBatch::try_new(
-                    schema.clone(),
+                    Arc::clone(&schema),
                     vec![
                         Arc::new(UInt32Array::from(vec![2, 3, 4, 4])),
                         Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
@@ -1273,7 +1273,7 @@ mod tests {
                 )
                 .unwrap(),
                 RecordBatch::try_new(
-                    schema.clone(),
+                    Arc::clone(&schema),
                     vec![
                         Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
                         Arc::new(Float64Array::from(vec![0.0, 1.0, 2.0, 3.0])),
@@ -1281,7 +1281,7 @@ mod tests {
                 )
                 .unwrap(),
                 RecordBatch::try_new(
-                    schema.clone(),
+                    Arc::clone(&schema),
                     vec![
                         Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
                         Arc::new(Float64Array::from(vec![3.0, 4.0, 5.0, 6.0])),
@@ -1361,11 +1361,11 @@ mod tests {
             aggregates.clone(),
             vec![None],
             input,
-            input_schema.clone(),
+            Arc::clone(&input_schema),
         )?);
 
         let result =
-            common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
+            common::collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         let expected = if spill {
             vec![
@@ -1443,7 +1443,7 @@ mod tests {
         )?);
 
         let result =
-            common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
+            common::collect(merged_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 3);
         assert_eq!(batch.num_rows(), 12);
@@ -1511,11 +1511,11 @@ mod tests {
             aggregates.clone(),
             vec![None],
             input,
-            input_schema.clone(),
+            Arc::clone(&input_schema),
         )?);
 
         let result =
-            common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
+            common::collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         let expected = if spill {
             vec![
@@ -1565,7 +1565,7 @@ mod tests {
             // enlarge memory limit to let the final aggregation finish
             new_spill_ctx(2, 2600)
         } else {
-            task_ctx.clone()
+            Arc::clone(&task_ctx)
         };
         let result = common::collect(merged_aggregate.execute(0, task_ctx)?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
@@ -1848,11 +1848,11 @@ mod tests {
                 groups,
                 aggregates,
                 vec![None; n_aggr],
-                input.clone(),
-                input_schema.clone(),
+                Arc::clone(&input),
+                Arc::clone(&input_schema),
             )?);
 
-            let stream = partial_aggregate.execute_typed(0, task_ctx.clone())?;
+            let stream = partial_aggregate.execute_typed(0, Arc::clone(&task_ctx))?;
 
             // ensure that we really got the version we wanted
             match version {
@@ -2104,7 +2104,7 @@ mod tests {
                 vec![partition3],
                 vec![partition4],
             ],
-            schema.clone(),
+            Arc::clone(&schema),
             None,
         )?);
         let aggregate_exec = Arc::new(AggregateExec::try_new(
@@ -2113,7 +2113,7 @@ mod tests {
             aggregates.clone(),
             vec![None],
             memory_exec,
-            schema.clone(),
+            Arc::clone(&schema),
         )?);
         let coalesce = if use_coalesce_batches {
             let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
@@ -2178,41 +2178,41 @@ mod tests {
         let order_by_exprs = vec![
             None,
             Some(vec![PhysicalSortExpr {
-                expr: col_a.clone(),
+                expr: Arc::clone(col_a),
                 options: options1,
             }]),
             Some(vec![
                 PhysicalSortExpr {
-                    expr: col_a.clone(),
+                    expr: Arc::clone(col_a),
                     options: options1,
                 },
                 PhysicalSortExpr {
-                    expr: col_b.clone(),
+                    expr: Arc::clone(col_b),
                     options: options1,
                 },
                 PhysicalSortExpr {
-                    expr: col_c.clone(),
+                    expr: Arc::clone(col_c),
                     options: options1,
                 },
             ]),
             Some(vec![
                 PhysicalSortExpr {
-                    expr: col_a.clone(),
+                    expr: Arc::clone(col_a),
                     options: options1,
                 },
                 PhysicalSortExpr {
-                    expr: col_b.clone(),
+                    expr: Arc::clone(col_b),
                     options: options1,
                 },
             ]),
         ];
         let common_requirement = vec![
             PhysicalSortExpr {
-                expr: col_a.clone(),
+                expr: Arc::clone(col_a),
                 options: options1,
             },
             PhysicalSortExpr {
-                expr: col_c.clone(),
+                expr: Arc::clone(col_c),
                 options: options1,
             },
         ];
@@ -2220,7 +2220,7 @@ mod tests {
             .into_iter()
             .map(|order_by_expr| {
                 Arc::new(OrderSensitiveArrayAgg::new(
-                    col_a.clone(),
+                    Arc::clone(col_a),
                     "array_agg",
                     DataType::Int32,
                     false,
@@ -2265,12 +2265,11 @@ mod tests {
             groups,
             aggregates.clone(),
             vec![None, None],
-            blocking_exec.clone(),
+            Arc::clone(&blocking_exec) as Arc<dyn ExecutionPlan>,
             schema,
         )?);
-        let new_agg = aggregate_exec
-            .clone()
-            .with_new_children(vec![blocking_exec])?;
+        let new_agg =
+            Arc::clone(&aggregate_exec).with_new_children(vec![blocking_exec])?;
         assert_eq!(new_agg.schema(), aggregate_exec.schema());
         Ok(())
     }

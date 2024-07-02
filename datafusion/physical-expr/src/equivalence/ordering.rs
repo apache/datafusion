@@ -311,7 +311,7 @@ mod tests {
         let a_plus_b = Arc::new(BinaryExpr::new(
             Arc::clone(col_a),
             Operator::Plus,
-            col_b.clone(),
+            Arc::clone(col_b),
         )) as Arc<dyn PhysicalExpr>;
         let options = SortOptions {
             descending: false,

@@ -864,11 +864,11 @@ mod tests {
         // Adding a "GROUP BY i" changes the input stats from Exact to Inexact.
         let agg = AggregateExec::try_new(
             AggregateMode::Final,
-            build_group_by(&csv.schema().clone(), vec!["i".to_string()]),
+            build_group_by(&csv.schema(), vec!["i".to_string()]),
             vec![],
             vec![],
-            csv.clone(),
-            csv.schema().clone(),
+            Arc::clone(&csv),
+            Arc::clone(&csv.schema()),
         )?;
         let agg_exec: Arc<dyn ExecutionPlan> = Arc::new(agg);
 

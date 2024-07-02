@@ -1289,7 +1289,7 @@ mod tests {
 
     impl RecordBatchStream for TestStreamPartition {
         fn schema(&self) -> SchemaRef {
-            self.schema.clone()
+            Arc::clone(&self.schema)
         }
     }
 
@@ -1469,7 +1469,7 @@ mod tests {
             }
 
             let batch = RecordBatch::try_new(
-                schema.clone(),
+                Arc::clone(&schema),
                 vec![Arc::new(sn1_array.finish()), Arc::new(hash_array.finish())],
             )?;
             batches.push(batch);
@@ -1502,7 +1502,7 @@ mod tests {
         // Source has 2 partitions
         let partitions = vec![
             Arc::new(TestStreamPartition {
-                schema: schema.clone(),
+                schema: Arc::clone(&schema),
                 batches: batches.clone(),
                 idx: 0,
                 state: PolingState::BatchReturn,
@@ -1512,7 +1512,7 @@ mod tests {
             n_partition
         ];
         let source = Arc::new(StreamingTableExec::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             partitions,
             None,
             orderings,
@@ -1535,28 +1535,38 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
         let memory_exec = MemoryExec::try_new(
             &[vec![batch.clone(), batch.clone(), batch.clone()]],
-            schema.clone(),
+            Arc::clone(&schema),
             None,
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
         let col_a = col("a", &schema)?;
-        let nth_value_func1 =
-            NthValue::nth("nth_value(-1)", col_a.clone(), DataType::Int32, 1, false)?
-                .reverse_expr()
-                .unwrap();
-        let nth_value_func2 =
-            NthValue::nth("nth_value(-2)", col_a.clone(), DataType::Int32, 2, false)?
-                .reverse_expr()
-                .unwrap();
+        let nth_value_func1 = NthValue::nth(
+            "nth_value(-1)",
+            Arc::clone(&col_a),
+            DataType::Int32,
+            1,
+            false,
+        )?
+        .reverse_expr()
+        .unwrap();
+        let nth_value_func2 = NthValue::nth(
+            "nth_value(-2)",
+            Arc::clone(&col_a),
+            DataType::Int32,
+            2,
+            false,
+        )?
+        .reverse_expr()
+        .unwrap();
         let last_value_func = Arc::new(NthValue::last(
             "last",
-            col_a.clone(),
+            Arc::clone(&col_a),
             DataType::Int32,
             false,
         )) as _;

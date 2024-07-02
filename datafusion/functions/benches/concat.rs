@@ -21,12 +21,13 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 use datafusion_functions::string::concat;
 use std::sync::Arc;
+use arrow::array::ArrayRef;
 
 fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
     let array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, str_len));
     let scalar = ScalarValue::Utf8(Some(", ".to_string()));
     vec![
-        ColumnarValue::Array(array.clone()),
+        ColumnarValue::Array(Arc::clone(&array) as ArrayRef),
         ColumnarValue::Scalar(scalar),
         ColumnarValue::Array(array),
     ]

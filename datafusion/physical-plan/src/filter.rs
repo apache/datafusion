@@ -1116,7 +1116,7 @@ mod tests {
                 binary(col("c1", &schema)?, Operator::LtEq, lit(4i32), &schema)?,
                 &schema,
             )?,
-            Arc::new(EmptyExec::new(schema.clone())),
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
         )?;
 
         exec.statistics().unwrap();

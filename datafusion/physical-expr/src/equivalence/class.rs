@@ -583,7 +583,7 @@ mod tests {
         let eq_group = eq_properties.eq_group();
         for (expr, expected_eq) in expressions {
             assert!(
-                expected_eq.eq(&eq_group.normalize_expr(expr.clone())),
+                expected_eq.eq(&eq_group.normalize_expr(Arc::clone(expr))),
                 "error in test: expr: {expr:?}"
             );
         }

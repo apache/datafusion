@@ -818,9 +818,9 @@ pub mod tests {
             &intermediate_schema,
         )?;
         let filter_expr = binary(
-            filter_left.clone(),
+            Arc::clone(&filter_left),
             Operator::Gt,
-            filter_right.clone(),
+            Arc::clone(&filter_right),
             &intermediate_schema,
         )?;
         let column_indices = vec![

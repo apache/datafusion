@@ -813,27 +813,27 @@ mod tests {
         // Test with single ListArray
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         let list_array = Arc::new(make_generic_array::<i32>()) as ArrayRef;
-        verify_longest_length(&[list_array.clone()], false, vec![3, 0, 0, 1, 0, 2])?;
-        verify_longest_length(&[list_array.clone()], true, vec![3, 0, 1, 1, 1, 2])?;
+        verify_longest_length(&[Arc::clone(&list_array)], false, vec![3, 0, 0, 1, 0, 2])?;
+        verify_longest_length(&[Arc::clone(&list_array)], true, vec![3, 0, 1, 1, 1, 2])?;
 
         // Test with single LargeListArray
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         let list_array = Arc::new(make_generic_array::<i64>()) as ArrayRef;
-        verify_longest_length(&[list_array.clone()], false, vec![3, 0, 0, 1, 0, 2])?;
-        verify_longest_length(&[list_array.clone()], true, vec![3, 0, 1, 1, 1, 2])?;
+        verify_longest_length(&[Arc::clone(&list_array)], false, vec![3, 0, 0, 1, 0, 2])?;
+        verify_longest_length(&[Arc::clone(&list_array)], true, vec![3, 0, 1, 1, 1, 2])?;
 
         // Test with single FixedSizeListArray
         //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
         let list_array = Arc::new(make_fixed_list()) as ArrayRef;
-        verify_longest_length(&[list_array.clone()], false, vec![2, 0, 2, 0, 2, 2])?;
-        verify_longest_length(&[list_array.clone()], true, vec![2, 1, 2, 1, 2, 2])?;
+        verify_longest_length(&[Arc::clone(&list_array)], false, vec![2, 0, 2, 0, 2, 2])?;
+        verify_longest_length(&[Arc::clone(&list_array)], true, vec![2, 1, 2, 1, 2, 2])?;
 
         // Test with multiple list arrays
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
         let list1 = Arc::new(make_generic_array::<i32>()) as ArrayRef;
         let list2 = Arc::new(make_fixed_list()) as ArrayRef;
-        let list_arrays = vec![list1.clone(), list2.clone()];
+        let list_arrays = vec![Arc::clone(&list1), Arc::clone(&list2)];
         verify_longest_length(&list_arrays, false, vec![3, 0, 2, 1, 2, 2])?;
         verify_longest_length(&list_arrays, true, vec![3, 1, 2, 1, 2, 2])?;
 

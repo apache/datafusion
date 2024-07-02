@@ -1877,7 +1877,7 @@ mod tests {
                 .iter()
                 .flat_map(|ordering| ordering.first().cloned())
                 .collect::<Vec<_>>();
-            let expr_props = eq_properties.get_expr_properties(expr.clone());
+            let expr_props = eq_properties.get_expr_properties(Arc::clone(&expr));
             let err_msg = format!(
                 "expr:{:?}, expected: {:?}, actual: {:?}, leading_orderings: {leading_orderings:?}",
                 expr, expected, expr_props.sort_properties
@@ -1982,7 +1982,7 @@ mod tests {
         let col_h = &col("h", &test_schema)?;
         // a + d
         let a_plus_d = Arc::new(BinaryExpr::new(
-            col_a.clone(),
+            Arc::clone(col_a),
             Operator::Plus,
             Arc::clone(col_d),
         )) as Arc<dyn PhysicalExpr>;

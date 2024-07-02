@@ -277,10 +277,12 @@ mod tests {
                 Some(vec![Some(6), Some(7), Some(8)]),
             ]));
 
-        let array2d_1 =
-            Arc::new(array_into_list_array_nullable(array1d_1.clone())) as ArrayRef;
-        let array2d_2 =
-            Arc::new(array_into_list_array_nullable(array1d_2.clone())) as ArrayRef;
+        let array2d_1 = Arc::new(array_into_list_array_nullable(
+            Arc::clone(&array1d_1) as ArrayRef
+        )) as ArrayRef;
+        let array2d_2 = Arc::new(array_into_list_array_nullable(
+            Arc::clone(&array1d_2) as ArrayRef
+        )) as ArrayRef;
 
         let res = align_array_dimensions::<i32>(vec![
             array1d_1.to_owned(),

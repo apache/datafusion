@@ -370,10 +370,12 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
 
         let exec = test::scan_partitioned(1);
-        let expected = collect(exec.execute(0, task_ctx.clone())?).await.unwrap();
+        let expected = collect(exec.execute(0, Arc::clone(&task_ctx))?)
+            .await
+            .unwrap();
 
         let projection = ProjectionExec::try_new(vec![], exec)?;
-        let stream = projection.execute(0, task_ctx.clone())?;
+        let stream = projection.execute(0, Arc::clone(&task_ctx))?;
         let output = collect(stream).await.unwrap();
         assert_eq!(output.len(), expected.len());
 
