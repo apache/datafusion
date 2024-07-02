@@ -924,7 +924,7 @@ macro_rules! get_data_page_statistics {
                             [<$stat_type_prefix FixedLenByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
                                 x.into_iter().filter_map(|x| x.and_then(|x| {
                                     if x.len().try_into() == Ok(*size) {
-                                        Some(x.data().to_vec())
+                                        Some(x.data())
                                     } else {
                                         None
                                     }
