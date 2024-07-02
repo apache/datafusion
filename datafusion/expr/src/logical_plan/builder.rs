@@ -39,7 +39,8 @@ use crate::logical_plan::{
 use crate::type_coercion::binary::{comparison_coercion, values_coercion};
 use crate::utils::{
     can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
-    expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
+    group_window_expr_by_sort_keys,
 };
 use crate::{
     and, binary_expr, logical_plan::tree_node::unwrap_arc, DmlStatement, Expr,
@@ -48,8 +49,8 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -222,7 +223,7 @@ impl LogicalPlanBuilder {
                 Field::new(name, data_type.clone(), true)
             })
             .collect::<Vec<_>>();
-        let dfschema = DFSchema::from_unqualifed_fields(fields.into(), HashMap::new())?;
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
@@ -271,16 +272,16 @@ impl LogicalPlanBuilder {
     pub fn copy_to(
         input: LogicalPlan,
         output_url: String,
-        format_options: FormatOptions,
+        file_type: Arc<dyn FileType>,
         options: HashMap<String, String>,
         partition_by: Vec<String>,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
-            format_options,
-            options,
             partition_by,
+            file_type,
+            options,
         })))
     }
 
@@ -1070,14 +1071,16 @@ impl LogicalPlanBuilder {
                 let left_key = l.into();
                 let right_key = r.into();
 
-                let left_using_columns = left_key.to_columns()?;
+                let mut left_using_columns = HashSet::new();
+                expr_to_columns(&left_key, &mut left_using_columns)?;
                 let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
                     &[&[self.plan.schema(), right.schema()]],
                     &[left_using_columns],
                 )?;
 
-                let right_using_columns = right_key.to_columns()?;
+                let mut right_using_columns = HashSet::new();
+                expr_to_columns(&right_key, &mut right_using_columns)?;
                 let normalized_right_key = normalize_col_with_schemas_and_ambiguity_check(
                     right_key,
                     &[&[self.plan.schema(), right.schema()]],
@@ -1452,7 +1455,6 @@ pub fn project(
             _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
         }
     }
-
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)

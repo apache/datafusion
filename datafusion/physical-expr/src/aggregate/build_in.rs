@@ -60,11 +60,6 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
         (AggregateFunction::ArrayAgg, false) => {
             let expr = input_phy_exprs[0].clone();
             let nullable = expr.nullable(input_schema)?;
@@ -172,7 +167,7 @@ mod tests {
                         Field::new_list(
                             "c1",
                             Field::new("item", data_type.clone(), true),
-                            true,
+                            false,
                         ),
                         result_agg_phy_exprs.field().unwrap()
                     );
@@ -192,7 +187,7 @@ mod tests {
                         Field::new_list(
                             "c1",
                             Field::new("item", data_type.clone(), true),
-                            true,
+                            false,
                         ),
                         result_agg_phy_exprs.field().unwrap()
                     );
@@ -253,20 +248,20 @@ mod tests {
 
     #[test]
     fn test_min_max() -> Result<()> {
-        let observed = AggregateFunction::Min.return_type(&[DataType::Utf8])?;
+        let observed = AggregateFunction::Min.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = AggregateFunction::Max.return_type(&[DataType::Int32])?;
+        let observed = AggregateFunction::Max.return_type(&[DataType::Int32], &[true])?;
         assert_eq!(DataType::Int32, observed);
 
         // test decimal for min
-        let observed =
-            AggregateFunction::Min.return_type(&[DataType::Decimal128(10, 6)])?;
+        let observed = AggregateFunction::Min
+            .return_type(&[DataType::Decimal128(10, 6)], &[true])?;
         assert_eq!(DataType::Decimal128(10, 6), observed);
 
         // test decimal for max
-        let observed =
-            AggregateFunction::Max.return_type(&[DataType::Decimal128(28, 13)])?;
+        let observed = AggregateFunction::Max
+            .return_type(&[DataType::Decimal128(28, 13)], &[true])?;
         assert_eq!(DataType::Decimal128(28, 13), observed);
 
         Ok(())

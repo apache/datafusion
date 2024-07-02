@@ -20,6 +20,7 @@ use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+use arrow_schema::DataType;
 
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
@@ -156,12 +157,16 @@ pub(crate) fn create_max_min_accs(
     let max_values: Vec<Option<MaxAccumulator>> = schema
         .fields()
         .iter()
-        .map(|field| MaxAccumulator::try_new(field.data_type()).ok())
+        .map(|field| {
+            MaxAccumulator::try_new(min_max_aggregate_data_type(field.data_type())).ok()
+        })
         .collect();
     let min_values: Vec<Option<MinAccumulator>> = schema
         .fields()
         .iter()
-        .map(|field| MinAccumulator::try_new(field.data_type()).ok())
+        .map(|field| {
+            MinAccumulator::try_new(min_max_aggregate_data_type(field.data_type())).ok()
+        })
         .collect();
     (max_values, min_values)
 }
@@ -216,6 +221,18 @@ pub(crate) fn get_col_stats(
             }
         })
         .collect()
+}
+
+// Min/max aggregation can take Dictionary encode input but always produces unpacked
+// (aka non Dictionary) output. We need to adjust the output data type to reflect this.
+// The reason min/max aggregate produces unpacked output because there is only one
+// min/max value per group; there is no needs to keep them Dictionary encode
+fn min_max_aggregate_data_type(input_type: &DataType) -> &DataType {
+    if let DataType::Dictionary(_, value_type) = input_type {
+        value_type.as_ref()
+    } else {
+        input_type
+    }
 }
 
 /// If the given value is numerically greater than the original maximum value,

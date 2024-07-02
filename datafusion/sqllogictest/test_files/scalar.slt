@@ -448,86 +448,6 @@ select floor(a), floor(b), floor(c) from signed_integers;
 2 -1000 123
 4 NULL NULL
 
-## gcd
-
-# gcd scalar function
-query III rowsort
-select gcd(0, 0), gcd(2, 3), gcd(15, 10);
-----
-0 1 5
-
-# gcd scalar nulls
-query I rowsort
-select gcd(null, 64);
-----
-NULL
-
-# gcd scalar nulls #1
-query I rowsort
-select gcd(2, null);
-----
-NULL
-
-# gcd scalar nulls #2
-query I rowsort
-select gcd(null, null);
-----
-NULL
-
-# scalar maxes and/or negative 1
-query III rowsort
-select 
-  gcd(9223372036854775807, -9223372036854775808), -- i64::MIN, i64::MAX
-  -- wait till fix, cause it fails gcd(-9223372036854775808, -9223372036854775808), -- -i64::MIN, i64::MIN
-  gcd(9223372036854775807, -1), -- i64::MAX, -1
-  gcd(-9223372036854775808, -1); -- i64::MIN, -1
-----
-1 1 1
-
-# gcd with columns
-query III rowsort
-select gcd(a, b), gcd(c, d), gcd(e, f) from signed_integers;
-----
-1 1 2
-1 2 6
-2 1 1
-NULL NULL NULL
-
-## lcm
-
-# lcm scalar function
-query III rowsort
-select lcm(0, 0), lcm(2, 3), lcm(15, 10);
-----
-0 6 30
-
-# lcm scalar nulls
-query I rowsort
-select lcm(null, 64);
-----
-NULL
-
-# lcm scalar nulls #1
-query I rowsort
-select lcm(2, null);
-----
-NULL
-
-# lcm scalar nulls #2
-query I rowsort
-select lcm(null, null);
-----
-NULL
-
-# lcm with columns
-query III rowsort
-select lcm(a, b), lcm(c, d), lcm(e, f) from signed_integers;
-----
-100 580608 20
-1000 31488 55
-30000 1001472 12
-NULL NULL NULL
-
 ## ln
 
 # ln scalar function
@@ -857,6 +777,16 @@ select round(a), round(b), round(c) from small_floats;
 -1 NULL NULL
 0 0 1
 1 0 0
+
+# round with too large
+#  max Int32 is 2147483647
+query error DataFusion error: Execution error: Invalid values for decimal places: Cast error: Can't cast value 2147483648 to type Int32
+select round(3.14, 2147483648);
+
+# with array
+query error DataFusion error: Execution error: Invalid values for decimal places: Cast error: Can't cast value 2147483649 to type Int32
+select round(column1, column2) from values (3.14, 2), (3.14, 3), (3.14, 2147483649);
+
 
 ## signum
 
