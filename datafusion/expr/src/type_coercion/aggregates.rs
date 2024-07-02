@@ -102,7 +102,6 @@ pub fn coerce_types(
             get_min_max_result_type(input_types)
         }
         AggregateFunction::NthValue => Ok(input_types.to_vec()),
-        AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
     }
 }
 

@@ -73,6 +73,7 @@ pub mod approx_percentile_cont_with_weight;
 pub mod average;
 pub mod bit_and_or_xor;
 pub mod bool_and_or;
+pub mod grouping;
 pub mod string_agg;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
@@ -154,6 +155,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         bool_and_or::bool_and_udaf(),
         bool_and_or::bool_or_udaf(),
         average::avg_udaf(),
+        grouping::grouping_udaf(),
     ]
 }
 
