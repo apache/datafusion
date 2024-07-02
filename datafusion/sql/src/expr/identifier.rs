@@ -135,7 +135,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let nested_name = nested_names[0].to_string();
 
                     let col = Expr::Column(Column::from((qualifier, field)));
-                    println!("col: {:?} nested_name: {:?}", col, nested_name);
                     if let Some(udf) =
                         self.context_provider.get_function_meta("get_field")
                     {
