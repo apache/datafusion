@@ -914,7 +914,9 @@ struct ExprIdentifierVisitor<'a, 'n> {
 
 /// Record item that used when traversing an expression tree.
 enum VisitRecord<'n> {
-    /// `usize` postorder index assigned in `f-down`(). Starts from 0.
+    /// Contains the post-order index assigned in during the first, visiting traversal and
+    /// a boolean flag to indicate if the record marks an expression subtree (not just a
+    /// single node).
     EnterMark(usize, bool),
     /// Accumulated identifier of sub expression.
     ExprItem(Identifier<'n>),
@@ -948,6 +950,8 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_, 'n> {
 
         // If an expression can short circuit its children then don't consider its
         // children for CSE (https://github.com/apache/arrow-datafusion/issues/8814).
+        // This means that we don't recurse into its children, but handle the expression
+        // as a subtree when we calculate its identifier.
         // TODO: consider surely executed children of "short circuited"s for CSE
         let is_tree = expr.short_circuits();
         let tnr = if is_tree {
