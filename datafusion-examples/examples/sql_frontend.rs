@@ -145,7 +145,7 @@ impl ContextProvider for MyContextProvider {
                 ])),
             }))
         } else {
-            plan_err!("table not found")
+            plan_err!("Table {} not found", name.table())
         }
     }
 
