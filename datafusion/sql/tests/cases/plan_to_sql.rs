@@ -337,9 +337,14 @@ fn test_pretty_roundtrip() -> Result<()> {
         ("((3 AND (5 OR 6)) * 3)", "(3 AND (5 OR 6)) * 3"),
         ("((3 + (5 + 6)) * 3)", "(3 + 5 + 6) * 3"),
         ("((3 + (5 + 6)) + 3)", "3 + 5 + 6 + 3"),
+        ("3 + 5 + 6 + 3", "3 + 5 + 6 + 3"),
+        ("3 + (5 + (6 + 3))", "3 + 5 + 6 + 3"),
+        ("3 + ((5 + 6) + 3)", "3 + 5 + 6 + 3"),
+        ("(3 + 5) + (6 + 3)", "3 + 5 + 6 + 3"),
+        ("((3 + 5) + (6 + 3))", "3 + 5 + 6 + 3"),
         (
-            "((id > 10) || (age BETWEEN 10 AND 20))",
-            "id > 10 || age BETWEEN 10 AND 20",
+            "((id > 10) OR (age BETWEEN 10 AND 20))",
+            "id > 10 OR age BETWEEN 10 AND 20",
         ),
         (
             "((id > 10) * (age BETWEEN 10 AND 20))",
@@ -360,6 +365,19 @@ fn test_pretty_roundtrip() -> Result<()> {
             sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
         let round_trip_sql = unparser.pretty_expr_to_sql(&expr)?.to_string();
         assert_eq!(pretty.to_string(), round_trip_sql);
+
+        // verify that the pretty string parses to the same underlying Expr
+        let pretty_sql_expr = Parser::new(&GenericDialect {})
+            .try_with_sql(pretty)?
+            .parse_expr()?;
+
+        let pretty_expr = sql_to_rel.sql_to_expr(
+            pretty_sql_expr,
+            &df_schema,
+            &mut PlannerContext::new(),
+        )?;
+
+        assert_eq!(expr.to_string(), pretty_expr.to_string());
     }
 
     Ok(())

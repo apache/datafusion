@@ -101,7 +101,7 @@ pub fn expr_to_unparsed(expr: &Expr) -> Result<Unparsed> {
     unparser.expr_to_unparsed(expr)
 }
 
-const LOWEST: &BinaryOperator = &BinaryOperator::BitwiseOr;
+const LOWEST: &BinaryOperator = &BinaryOperator::Or;
 
 impl Unparser<'_> {
     /// Try to unparse the expression into a more human-readable format
