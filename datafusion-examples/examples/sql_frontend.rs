@@ -98,8 +98,8 @@ pub fn main() -> Result<()> {
     // As we can see, the Analyzer added a CAST so the types are the same
     // (Int64). However, this plan is not as efficient as it could be, as it
     // will require casting *each row* of the input to UInt64 before comparison
-    // to 21 and 32. To optimize this query's performance, it is  better to cast
-    // the constants once at plan time to Int32.
+    // to 21 and 32. To optimize this query's performance, it is better to cast
+    // the constants once at plan time to UInt8.
     //
     // Query optimization is handled in DataFusion by a component called the
     // Optimizer, which we now invoke
