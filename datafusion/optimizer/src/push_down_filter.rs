@@ -447,7 +447,7 @@ fn push_down_all_join(
         left_push.extend(extract_or_clauses_for_join(&keep_predicates, left_schema));
         left_push.extend(extract_or_clauses_for_join(&join_conditions, left_schema));
     }
-    if left_preserved {
+    if right_preserved {
         right_push.extend(extract_or_clauses_for_join(&keep_predicates, right_schema));
         right_push.extend(extract_or_clauses_for_join(&join_conditions, right_schema));
     }

@@ -932,6 +932,16 @@ ON (e.name = 'Alice' OR e.name = 'Bob');
 2 Bob Engineering
 2 Bob Sales
 
+# OR conditions on Filter (not join filter)
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON e.emp_id = d.emp_id
+WHERE (e.name = 'Alice' OR e.name = 'Carol');
+----
+1 Alice HR
+3 Carol Engineering
 
 statement ok
 DROP TABLE employees
