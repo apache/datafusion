@@ -962,10 +962,10 @@ impl SessionState {
         #[cfg(feature = "array_expressions")]
         {
             let array_planner =
-                Arc::new(functions_array::planner::ArrayFunctionPlanner::default()) as _;
+                Arc::new(functions_array::planner::ArrayFunctionPlanner) as _;
 
             let field_access_planner =
-                Arc::new(functions_array::planner::FieldAccessPlanner::default()) as _;
+                Arc::new(functions_array::planner::FieldAccessPlanner) as _;
 
             query
                 .with_user_defined_planner(array_planner)
