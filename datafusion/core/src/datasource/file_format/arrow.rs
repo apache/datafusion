@@ -277,6 +277,7 @@ impl DataSink for ArrowFileSink {
             part_col,
             self.config.table_paths[0].clone(),
             "arrow".into(),
+            self.config.keep_partition_by_columns,
         );
 
         let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =

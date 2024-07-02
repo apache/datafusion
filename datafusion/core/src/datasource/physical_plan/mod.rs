@@ -85,6 +85,8 @@ pub struct FileSinkConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
+    /// Controls whether partition columns are kept for the file
+    pub keep_partition_by_columns: bool,
 }
 
 impl FileSinkConfig {

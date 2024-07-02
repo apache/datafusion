@@ -744,10 +744,9 @@ impl TableProvider for ListingTable {
         let (mut partitioned_file_lists, statistics) =
             self.list_files_for_scan(state, filters, limit).await?;
 
-        let projected_schema = project_schema(&self.schema(), projection)?;
-
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
+            let projected_schema = project_schema(&self.schema(), projection)?;
             return Ok(Arc::new(EmptyExec::new(projected_schema)));
         }
 
@@ -890,6 +889,8 @@ impl TableProvider for ListingTable {
         .await?;
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
+        let keep_partition_by_columns =
+            state.config().options().execution.keep_partition_by_columns;
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
@@ -899,6 +900,7 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             overwrite,
+            keep_partition_by_columns,
         };
 
         let unsorted: Vec<Vec<Expr>> = vec![];

@@ -52,7 +52,7 @@ use datafusion_common::config::TableOptions;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -134,6 +134,9 @@ pub struct TestTableProto {
     /// URL of the table root
     #[prost(string, tag = "1")]
     pub url: String,
+    /// Qualified table name
+    #[prost(string, tag = "2")]
+    pub table_name: String,
 }
 
 #[derive(Debug)]
@@ -156,12 +159,14 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
     fn try_decode_table_provider(
         &self,
         buf: &[u8],
+        table_ref: &TableReference,
         schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
         let msg = TestTableProto::decode(buf).map_err(|_| {
             DataFusionError::Internal("Error decoding test table".to_string())
         })?;
+        assert_eq!(msg.table_name, table_ref.to_string());
         let provider = TestTableProvider {
             url: msg.url,
             schema,
@@ -171,6 +176,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
 
     fn try_encode_table_provider(
         &self,
+        table_ref: &TableReference,
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -181,6 +187,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             .expect("Can't encode non-test tables");
         let msg = TestTableProto {
             url: table.url.clone(),
+            table_name: table_ref.to_string(),
         };
         msg.encode(buf).map_err(|_| {
             DataFusionError::Internal("Error encoding test table".to_string())
@@ -866,6 +873,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -874,6 +882,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -943,6 +952,7 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -951,6 +961,7 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {

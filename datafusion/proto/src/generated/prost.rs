@@ -947,7 +947,10 @@ pub struct OptimizedPhysicalPlanType {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlanType {
-    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 9, 5, 6, 10")]
+    #[prost(
+        oneof = "plan_type::PlanTypeEnum",
+        tags = "1, 7, 8, 2, 3, 4, 9, 11, 5, 6, 10, 12"
+    )]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
 /// Nested message and enum types in `PlanType`.
@@ -969,12 +972,16 @@ pub mod plan_type {
         InitialPhysicalPlan(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "9")]
         InitialPhysicalPlanWithStats(super::super::datafusion_common::EmptyMessage),
+        #[prost(message, tag = "11")]
+        InitialPhysicalPlanWithSchema(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "5")]
         OptimizedPhysicalPlan(super::OptimizedPhysicalPlanType),
         #[prost(message, tag = "6")]
         FinalPhysicalPlan(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "10")]
         FinalPhysicalPlanWithStats(super::super::datafusion_common::EmptyMessage),
+        #[prost(message, tag = "12")]
+        FinalPhysicalPlanWithSchema(super::super::datafusion_common::EmptyMessage),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1128,6 +1135,8 @@ pub struct FileSinkConfig {
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(bool, tag = "8")]
     pub overwrite: bool,
+    #[prost(bool, tag = "9")]
+    pub keep_partition_by_columns: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

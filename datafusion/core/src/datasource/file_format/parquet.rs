@@ -626,7 +626,9 @@ impl ParquetSink {
     /// of hive style partitioning where some columns are removed from the
     /// underlying files.
     fn get_writer_schema(&self) -> Arc<Schema> {
-        if !self.config.table_partition_cols.is_empty() {
+        if !self.config.table_partition_cols.is_empty()
+            && !self.config.keep_partition_by_columns
+        {
             let schema = self.config.output_schema();
             let partition_names: Vec<_> = self
                 .config
@@ -716,6 +718,7 @@ impl DataSink for ParquetSink {
             part_col,
             self.config.table_paths[0].clone(),
             "parquet".into(),
+            self.config.keep_partition_by_columns,
         );
 
         let mut file_write_tasks: JoinSet<
@@ -1157,7 +1160,8 @@ mod tests {
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow_array::Int64Array;
+    use arrow_array::types::Int32Type;
+    use arrow_array::{DictionaryArray, Int32Array, Int64Array};
     use arrow_schema::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_common::cast::{
@@ -1166,6 +1170,7 @@ mod tests {
     };
     use datafusion_common::config::ParquetOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_common::ScalarValue::Utf8;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -1443,6 +1448,48 @@ mod tests {
             .expect("error reading metadata with hint");
 
         assert_eq!(store.request_count(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistics_from_parquet_metadata_dictionary() -> Result<()> {
+        // Data for column c_dic: ["a", "b", "c", "d"]
+        let values = StringArray::from_iter_values(["a", "b", "c", "d"]);
+        let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
+        let dic_array =
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        let c_dic: ArrayRef = Arc::new(dic_array);
+
+        let batch1 = RecordBatch::try_from_iter(vec![("c_dic", c_dic)]).unwrap();
+
+        // Use store_parquet to write each batch to its own file
+        // . batch1 written into first file and includes:
+        //    - column c_dic that has 4 rows with no null. Stats min and max of dictionary column is available.
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let (files, _file_names) = store_parquet(vec![batch1], false).await?;
+
+        let state = SessionContext::new().state();
+        let format = ParquetFormat::default();
+        let schema = format.infer_schema(&state, &store, &files).await.unwrap();
+
+        // Fetch statistics for first file
+        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
+        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        assert_eq!(stats.num_rows, Precision::Exact(4));
+
+        // column c_dic
+        let c_dic_stats = &stats.column_statistics[0];
+
+        assert_eq!(c_dic_stats.null_count, Precision::Exact(0));
+        assert_eq!(
+            c_dic_stats.max_value,
+            Precision::Exact(Utf8(Some("d".into())))
+        );
+        assert_eq!(
+            c_dic_stats.min_value,
+            Precision::Exact(Utf8(Some("a".into())))
+        );
 
         Ok(())
     }
@@ -1961,6 +2008,7 @@ mod tests {
             output_schema: schema.clone(),
             table_partition_cols: vec![],
             overwrite: true,
+            keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
@@ -2055,6 +2103,7 @@ mod tests {
             output_schema: schema.clone(),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
             overwrite: true,
+            keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,

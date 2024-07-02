@@ -20,9 +20,10 @@ use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{BinaryExpr, Placeholder, ScalarFunction};
+use datafusion_expr::expr::{BinaryExpr, Placeholder};
+use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
@@ -130,6 +131,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )))
     }
 
+    // IMPORTANT: Keep sql_array_literal's function body small to prevent stack overflow
+    // This function is recursively called, potentially leading to deep call stacks.
     pub(super) fn sql_array_literal(
         &self,
         elements: Vec<SQLExpr>,
@@ -142,13 +145,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        if let Some(udf) = self.context_provider.get_function_meta("make_array") {
-            Ok(Expr::ScalarFunction(ScalarFunction::new_udf(udf, values)))
-        } else {
-            not_impl_err!(
-                "array_expression featrue is disable, So should implement make_array UDF by yourself"
-            )
+        self.try_plan_array_literal(values, schema)
+    }
+
+    fn try_plan_array_literal(
+        &self,
+        values: Vec<Expr>,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        let mut exprs = values;
+        for planner in self.planners.iter() {
+            match planner.plan_array_literal(exprs, schema)? {
+                PlannerResult::Planned(expr) => {
+                    return Ok(expr);
+                }
+                PlannerResult::Original(values) => exprs = values,
+            }
         }
+
+        internal_err!("Expected a simplified result, but none was found")
     }
 
     /// Convert a SQL interval expression to a DataFusion logical plan

@@ -40,6 +40,7 @@ pub mod extract;
 pub mod flatten;
 pub mod length;
 pub mod make_array;
+pub mod planner;
 pub mod position;
 pub mod range;
 pub mod remove;
@@ -47,12 +48,10 @@ pub mod repeat;
 pub mod replace;
 pub mod resize;
 pub mod reverse;
-pub mod rewrite;
 pub mod set_ops;
 pub mod sort;
 pub mod string;
 pub mod utils;
-
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::ScalarUDF;
@@ -153,7 +152,6 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         }
         Ok(()) as Result<()>
     })?;
-    registry.register_function_rewrite(Arc::new(rewrite::ArrayFunctionRewriter {}))?;
 
     Ok(())
 }

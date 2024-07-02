@@ -3005,7 +3005,7 @@ mod tests {
 
     fn expr_test_schema() -> DFSchemaRef {
         Arc::new(
-            DFSchema::from_unqualifed_fields(
+            DFSchema::from_unqualified_fields(
                 vec![
                     Field::new("c1", DataType::Utf8, true),
                     Field::new("c2", DataType::Boolean, true),

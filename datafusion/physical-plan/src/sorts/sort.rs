@@ -22,45 +22,38 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::fs::File;
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::common::{spawn_buffered, IPCWriter};
+use crate::common::spawn_buffered;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use crate::sorts::streaming_merge::streaming_merge;
-use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
+use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
-    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics,
+    read_spill_as_stream, spill_record_batches, DisplayAs, DisplayFormatType,
+    Distribution, EmptyRecordBatchStream, ExecutionMode, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+    Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn};
 use arrow::datatypes::SchemaRef;
-use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use arrow_array::{Array, RecordBatchOptions, UInt32Array};
 use arrow_schema::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_common_runtime::SpawnedTask;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
-use datafusion_execution::memory_pool::{
-    human_readable_size, MemoryConsumer, MemoryReservation,
-};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 
 use futures::{StreamExt, TryStreamExt};
-use log::{debug, error, trace};
-use tokio::sync::mpsc::Sender;
+use log::{debug, trace};
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -345,7 +338,7 @@ impl ExternalSorter {
                         spill.path()
                     )));
                 }
-                let stream = read_spill_as_stream(spill, Arc::clone(&self.schema))?;
+                let stream = read_spill_as_stream(spill, Arc::clone(&self.schema), 2)?;
                 streams.push(stream);
             }
 
@@ -403,9 +396,11 @@ impl ExternalSorter {
 
         let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let batches = std::mem::take(&mut self.in_mem_batches);
-        let spilled_rows =
-            spill_sorted_batches(batches, spill_file.path(), Arc::clone(&self.schema))
-                .await?;
+        let spilled_rows = spill_record_batches(
+            batches,
+            spill_file.path().into(),
+            Arc::clone(&self.schema),
+        )?;
         let used = self.reservation.free();
         self.metrics.spill_count.add(1);
         self.metrics.spilled_bytes.add(used);
@@ -596,7 +591,7 @@ impl Debug for ExternalSorter {
     }
 }
 
-pub(crate) fn sort_batch(
+pub fn sort_batch(
     batch: &RecordBatch,
     expressions: &[PhysicalSortExpr],
     fetch: Option<usize>,
@@ -670,70 +665,6 @@ pub(crate) fn lexsort_to_indices_multi_columns(
     Ok(indices)
 }
 
-/// Spills sorted `in_memory_batches` to disk.
-///
-/// Returns number of the rows spilled to disk.
-async fn spill_sorted_batches(
-    batches: Vec<RecordBatch>,
-    path: &Path,
-    schema: SchemaRef,
-) -> Result<usize> {
-    let path: PathBuf = path.into();
-    let task = SpawnedTask::spawn_blocking(move || write_sorted(batches, path, schema));
-    match task.join().await {
-        Ok(r) => r,
-        Err(e) => exec_err!("Error occurred while spilling {e}"),
-    }
-}
-
-pub(crate) fn read_spill_as_stream(
-    path: RefCountedTempFile,
-    schema: SchemaRef,
-) -> Result<SendableRecordBatchStream> {
-    let mut builder = RecordBatchReceiverStream::builder(schema, 2);
-    let sender = builder.tx();
-
-    builder.spawn_blocking(move || {
-        let result = read_spill(sender, path.path());
-        if let Err(e) = &result {
-            error!("Failure while reading spill file: {:?}. Error: {}", path, e);
-        }
-        result
-    });
-
-    Ok(builder.build())
-}
-
-fn write_sorted(
-    batches: Vec<RecordBatch>,
-    path: PathBuf,
-    schema: SchemaRef,
-) -> Result<usize> {
-    let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
-    for batch in batches {
-        writer.write(&batch)?;
-    }
-    writer.finish()?;
-    debug!(
-        "Spilled {} batches of total {} rows to disk, memory released {}",
-        writer.num_batches,
-        writer.num_rows,
-        human_readable_size(writer.num_bytes),
-    );
-    Ok(writer.num_rows)
-}
-
-fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
-    let file = BufReader::new(File::open(path)?);
-    let reader = FileReader::try_new(file, None)?;
-    for batch in reader {
-        sender
-            .blocking_send(batch.map_err(Into::into))
-            .map_err(|e| DataFusionError::Execution(format!("{e}")))?;
-    }
-    Ok(())
-}
-
 /// Sort execution plan.
 ///
 /// Support sorting datasets that are larger than the memory allotted
@@ -779,7 +710,7 @@ impl SortExec {
     /// Specify the partitioning behavior of this sort exec
     ///
     /// If `preserve_partitioning` is true, sorts each partition
-    /// individually, producing one sorted strema for each input partition.
+    /// individually, producing one sorted stream for each input partition.
     ///
     /// If `preserve_partitioning` is false, sorts and merges all
     /// input partitions producing a single, sorted partition.
