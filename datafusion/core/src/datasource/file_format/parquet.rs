@@ -545,7 +545,7 @@ pub fn statistics_from_parquet_meta_calc(
 
 /// Deprecated
 /// Use [`statistics_from_parquet_meta_calc`] instead
-/// #[deprecated(since="0.40.0", note="please use `statistics_from_parquet_meta_calc` instead")]
+/// #[deprecated(since="40.0.0", note="please use `statistics_from_parquet_meta_calc` instead")]
 pub async fn statistics_from_parquet_meta(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
