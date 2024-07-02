@@ -16,10 +16,11 @@
 // under the License.
 
 use datafusion::error::Result;
+use datafusion::functions_aggregate::count::count;
 use datafusion::prelude::*;
 
-/// This example demonstrates executing a simple query against an Arrow data source (CSV) and
-/// fetching results. See `csv_dataframe.rs` for a DataFrame version of this example.
+/// This example demonstrates executing a DataFrame operation against an Arrow data source (CSV) and
+/// fetching results. See `csv_sql.rs` for a SQL version of this example.
 #[tokio::main]
 async fn main() -> Result<()> {
     // create local execution context
@@ -27,23 +28,18 @@ async fn main() -> Result<()> {
 
     let testdata = datafusion::test_util::arrow_test_data();
 
-    // register csv file with the execution context
-    ctx.register_csv(
-        "aggregate_test_100",
-        &format!("{testdata}/csv/aggregate_test_100.csv"),
-        CsvReadOptions::new(),
-    )
-    .await?;
-
     // execute the query
     let df = ctx
-        .sql(
-            "SELECT c1, MIN(c12), MAX(c12), COUNT(*) \
-        FROM aggregate_test_100 \
-        WHERE c11 > 0.1 AND c11 < 0.9 \
-        GROUP BY c1",
+        .read_csv(
+            &format!("{testdata}/csv/aggregate_test_100.csv"),
+            CsvReadOptions::new(),
         )
-        .await?;
+        .await?
+        .filter(col("c11").gt(lit(0.1)).and(col("c11").lt(lit(0.9))))?
+        .aggregate(
+            vec![col("c1")],
+            vec![min(col("c12")), max(col("c12")), count(wildcard())],
+        )?;
 
     // print the results
     df.show().await?;
