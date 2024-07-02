@@ -223,24 +223,18 @@ impl Operator {
         match self {
             Operator::Or => 5,
             Operator::And => 10,
-            Operator::NotEq
-            | Operator::Eq
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::Gt
-            | Operator::GtEq => 20,
-            Operator::Plus | Operator::Minus => 30,
-            Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
+            Operator::Eq => 15,
+            Operator::NotEq => 20,
+            Operator::LikeMatch
+            | Operator::NotLikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotILikeMatch => 25,
             Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
             | Operator::RegexMatch
             | Operator::RegexNotMatch
             | Operator::RegexIMatch
             | Operator::RegexNotIMatch
-            | Operator::LikeMatch
-            | Operator::ILikeMatch
-            | Operator::NotLikeMatch
-            | Operator::NotILikeMatch
             | Operator::BitwiseAnd
             | Operator::BitwiseOr
             | Operator::BitwiseShiftLeft
@@ -248,7 +242,10 @@ impl Operator {
             | Operator::BitwiseXor
             | Operator::StringConcat
             | Operator::AtArrow
-            | Operator::ArrowAt => 0,
+            | Operator::ArrowAt => 30,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => 35,
+            Operator::Plus | Operator::Minus => 40,
+            Operator::Multiply | Operator::Divide | Operator::Modulo => 45,
         }
     }
 }
