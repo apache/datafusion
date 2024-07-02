@@ -17,7 +17,8 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use datafusion_common::utils::list_ndims;
+use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::planner::RawFieldAccessExpr;
 use sqlparser::ast::{CastKind, Expr as SQLExpr, Subscript, TrimWhereField, Value};
 
 use datafusion_common::{
@@ -27,8 +28,8 @@ use datafusion_common::{
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    lit, AggregateFunction, Between, BinaryExpr, Cast, Expr, ExprSchemable,
-    GetFieldAccess, Like, Literal, Operator, TryCast,
+    lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
+    Operator, TryCast,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -52,7 +53,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         enum StackEntry {
             SQLExpr(Box<SQLExpr>),
-            Operator(Operator),
+            Operator(sqlparser::ast::BinaryOperator),
         }
 
         // Virtual stack machine to convert SQLExpr to Expr
@@ -69,7 +70,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         SQLExpr::BinaryOp { left, op, right } => {
                             // Note the order that we push the entries to the stack
                             // is important. We want to visit the left node first.
-                            let op = self.parse_sql_binary_op(op)?;
                             stack.push(StackEntry::Operator(op));
                             stack.push(StackEntry::SQLExpr(right));
                             stack.push(StackEntry::SQLExpr(left));
@@ -100,91 +100,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn build_logical_expr(
         &self,
-        op: Operator,
+        op: sqlparser::ast::BinaryOperator,
         left: Expr,
         right: Expr,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        // Rewrite string concat operator to function based on types
-        // if we get list || list then we rewrite it to array_concat()
-        // if we get list || non-list then we rewrite it to array_append()
-        // if we get non-list || list then we rewrite it to array_prepend()
-        // if we get string || string then we rewrite it to concat()
-        if op == Operator::StringConcat {
-            let left_type = left.get_type(schema)?;
-            let right_type = right.get_type(schema)?;
-            let left_list_ndims = list_ndims(&left_type);
-            let right_list_ndims = list_ndims(&right_type);
-
-            // We determine the target function to rewrite based on the list n-dimension, the check is not exact but sufficient.
-            // The exact validity check is handled in the actual function, so even if there is 3d list appended with 1d list, it is also fine to rewrite.
-            if left_list_ndims + right_list_ndims == 0 {
-                // TODO: concat function ignore null, but string concat takes null into consideration
-                // we can rewrite it to concat if we can configure the behaviour of concat function to the one like `string concat operator`
-            } else if left_list_ndims == right_list_ndims {
-                if let Some(udf) = self.context_provider.get_function_meta("array_concat")
-                {
-                    return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![left, right],
-                    )));
-                } else {
-                    return internal_err!("array_concat not found");
+        // try extension planers
+        let mut binary_expr = datafusion_expr::planner::RawBinaryExpr { op, left, right };
+        for planner in self.planners.iter() {
+            match planner.plan_binary_op(binary_expr, schema)? {
+                PlannerResult::Planned(expr) => {
+                    return Ok(expr);
                 }
-            } else if left_list_ndims > right_list_ndims {
-                if let Some(udf) = self.context_provider.get_function_meta("array_append")
-                {
-                    return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![left, right],
-                    )));
-                } else {
-                    return internal_err!("array_append not found");
-                }
-            } else if left_list_ndims < right_list_ndims {
-                if let Some(udf) =
-                    self.context_provider.get_function_meta("array_prepend")
-                {
-                    return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![left, right],
-                    )));
-                } else {
-                    return internal_err!("array_prepend not found");
-                }
-            }
-        } else if matches!(op, Operator::AtArrow | Operator::ArrowAt) {
-            let left_type = left.get_type(schema)?;
-            let right_type = right.get_type(schema)?;
-            let left_list_ndims = list_ndims(&left_type);
-            let right_list_ndims = list_ndims(&right_type);
-            // if both are list
-            if left_list_ndims > 0 && right_list_ndims > 0 {
-                if let Some(udf) =
-                    self.context_provider.get_function_meta("array_has_all")
-                {
-                    // array1 @> array2 -> array_has_all(array1, array2)
-                    if op == Operator::AtArrow {
-                        return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                            udf,
-                            vec![left, right],
-                        )));
-                    // array1 <@ array2 -> array_has_all(array2, array1)
-                    } else {
-                        return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                            udf,
-                            vec![right, left],
-                        )));
-                    }
-                } else {
-                    return internal_err!("array_has_all not found");
+                PlannerResult::Original(expr) => {
+                    binary_expr = expr;
                 }
             }
         }
 
+        let datafusion_expr::planner::RawBinaryExpr { op, left, right } = binary_expr;
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
-            op,
+            self.parse_sql_binary_op(op)?,
             Box::new(right),
         )))
     }
@@ -272,7 +209,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let expr =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
 
-                let get_field_access = match *subscript {
+                let field_access = match *subscript {
                     Subscript::Index { index } => {
                         // index can be a name, in which case it is a named field access
                         match index {
@@ -341,7 +278,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 };
 
-                self.plan_field_access(expr, get_field_access)
+                let mut field_access_expr = RawFieldAccessExpr { expr, field_access };
+                for planner in self.planners.iter() {
+                    match planner.plan_field_access(field_access_expr, schema)? {
+                        PlannerResult::Planned(expr) => return Ok(expr),
+                        PlannerResult::Original(expr) => {
+                            field_access_expr = expr;
+                        }
+                    }
+                }
+
+                not_impl_err!("GetFieldAccess not supported by UserDefinedExtensionPlanners: {field_access_expr:?}")
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
@@ -676,36 +623,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    /// Simplifies an expression like `ARRAY_AGG(expr)[index]` to `NTH_VALUE(expr, index)`
-    ///
-    /// returns Some(Expr) if the expression was simplified, otherwise None
-    /// TODO: this should likely be done in ArrayAgg::simplify when it is moved to a UDAF
-    fn simplify_array_index_expr(expr: &Expr, index: &Expr) -> Option<Expr> {
-        fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
-            agg_func.func_def
-                == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(
-                    AggregateFunction::ArrayAgg,
-                )
-        }
-        match expr {
-            Expr::AggregateFunction(agg_func) if is_array_agg(agg_func) => {
-                let mut new_args = agg_func.args.clone();
-                new_args.push(index.clone());
-                Some(Expr::AggregateFunction(
-                    datafusion_expr::expr::AggregateFunction::new(
-                        AggregateFunction::NthValue,
-                        new_args,
-                        agg_func.distinct,
-                        agg_func.filter.clone(),
-                        agg_func.order_by.clone(),
-                        agg_func.null_treatment,
-                    ),
-                ))
-            }
-            _ => None,
-        }
-    }
-
     /// Parses a struct(..) expression
     fn parse_struct(
         &self,
@@ -990,58 +907,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let fullstr = self.sql_expr_to_logical_expr(str_expr, schema, planner_context)?;
         let args = vec![fullstr, substr];
         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
-    }
-
-    /// Given an expression and the field to access, creates a new expression for accessing that field
-    fn plan_field_access(
-        &self,
-        expr: Expr,
-        get_field_access: GetFieldAccess,
-    ) -> Result<Expr> {
-        match get_field_access {
-            GetFieldAccess::NamedStructField { name } => {
-                if let Some(udf) = self.context_provider.get_function_meta("get_field") {
-                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![expr, lit(name)],
-                    )))
-                } else {
-                    internal_err!("get_field not found")
-                }
-            }
-            // expr[idx] ==> array_element(expr, idx)
-            GetFieldAccess::ListIndex { key } => {
-                // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
-                if let Some(simplified) = Self::simplify_array_index_expr(&expr, &key) {
-                    Ok(simplified)
-                } else if let Some(udf) =
-                    self.context_provider.get_function_meta("array_element")
-                {
-                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![expr, *key],
-                    )))
-                } else {
-                    internal_err!("get_field not found")
-                }
-            }
-            // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
-            GetFieldAccess::ListRange {
-                start,
-                stop,
-                stride,
-            } => {
-                if let Some(udf) = self.context_provider.get_function_meta("array_slice")
-                {
-                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        udf,
-                        vec![expr, *start, *stop, *stride],
-                    )))
-                } else {
-                    internal_err!("array_slice not found")
-                }
-            }
-        }
     }
 }
 
