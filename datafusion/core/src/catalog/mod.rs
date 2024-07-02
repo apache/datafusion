@@ -27,6 +27,7 @@
 //! * Information schema: [`information_schema`]
 //! * Listing schema: [`listing_schema`]
 
+pub mod dynamic_file_schema;
 pub mod information_schema;
 pub mod listing_schema;
 mod memory;
