@@ -486,6 +486,23 @@
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#documentation-examples">
+   Documentation Examples
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#api-documentation-examples">
+     API Documentation Examples
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#user-guide-documentation">
+     User Guide Documentation
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#benchmarks">
    Benchmarks
   </a>
@@ -582,6 +599,26 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>parquet_exec
 </pre></div>
 </div>
+</section>
+</section>
+<section id="documentation-examples">
+<h2>Documentation Examples<a class="headerlink" href="#documentation-examples" title="Link to this heading">¶</a></h2>
+<p>We use Rust <a class="reference external" href="https://doc.rust-lang.org/rust-by-example/testing/doc_testing.html">doctest</a> to verify examples from the documentation are correct and
+up-to-date. These tests are run as part of our CI and you can run them them
+locally with the following command:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--doc
+</pre></div>
+</div>
+<section id="api-documentation-examples">
+<h3>API Documentation Examples<a class="headerlink" href="#api-documentation-examples" title="Link to this heading">¶</a></h3>
+<p>As with other Rust projects, examples in doc comments in <code class="docutils literal notranslate"><span class="pre">.rs</span></code> files are
+automatically checked to ensure they work and evolve along with the code.</p>
+</section>
+<section id="user-guide-documentation">
+<h3>User Guide Documentation<a class="headerlink" href="#user-guide-documentation" title="Link to this heading">¶</a></h3>
+<p>Rust example code from the user guide (anything marked with ```rust) is also
+tested in the same way using the <a class="reference external" href="https://docs.rs/doc-comment/latest/doc_comment">doc_comment</a> crate. See the end of
+<a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs#L583">core/src/lib.rs</a> for more details.</p>
 </section>
 </section>
 <section id="benchmarks">

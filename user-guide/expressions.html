@@ -606,8 +606,9 @@ available for creating logical expressions. These are documented below.</p>
 <div class="admonition tip">
 <p class="admonition-title">Tip</p>
 <p>Most functions and methods may receive and return an <code class="docutils literal notranslate"><span class="pre">Expr</span></code>, which can be chained together using a fluent-style API:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// create the expression `(a &gt; 6) AND (b &lt; 7)`</span>
-<span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">).</span><span class="n">gt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">6</span><span class="p">)).</span><span class="n">and</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">).</span><span class="n">lt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">7</span><span class="p">)))</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="c1">// create the expression `(a &gt; 6) AND (b &lt; 7)`</span>
+<span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">).</span><span class="n">gt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">6</span><span class="p">)).</span><span class="n">and</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">).</span><span class="n">lt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">7</span><span class="p">)));</span>
 </pre></div>
 </div>
 </div>
