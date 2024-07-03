@@ -124,7 +124,7 @@ from aggregate_test_100
 order by c9
 
 # WindowFunction with BuiltInWindowFunction wrong signature
-statement error DataFusion error: Error during planning: Error during planning: The function expected 2 arguments but received 3 No function matches the given name and argument types 'nth_value\(Int32, Int64, Int64\)'\. You might need to add explicit type casts\.\n\tCandidate functions:\n\tnth_value\(Any, Any\)
+statement error Error during planning: The function expected 2 arguments but received 3
 select
 c9,
 nth_value(c5, 2, 3) over (order by c9) as nv1
