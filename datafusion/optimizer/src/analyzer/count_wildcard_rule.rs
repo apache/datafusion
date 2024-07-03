@@ -127,9 +127,9 @@ mod tests {
             .project(vec![count(wildcard())])?
             .sort(vec![count(wildcard()).sort(true, false)])?
             .build()?;
-        let expected = "Sort: count(*) ASC NULLS LAST [count(*):Int64;N]\
-        \n  Projection: count(*) [count(*):Int64;N]\
-        \n    Aggregate: groupBy=[[test.b]], aggr=[[count(Int64(1)) AS count(*)]] [b:UInt32, count(*):Int64;N]\
+        let expected = "Sort: count(*) ASC NULLS LAST [count(*):Int64]\
+        \n  Projection: count(*) [count(*):Int64]\
+        \n    Aggregate: groupBy=[[test.b]], aggr=[[count(Int64(1)) AS count(*)]] [b:UInt32, count(*):Int64]\
         \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
     }
@@ -152,9 +152,9 @@ mod tests {
             .build()?;
 
         let expected = "Filter: t1.a IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
-        \n  Subquery: [count(*):Int64;N]\
-        \n    Projection: count(*) [count(*):Int64;N]\
-        \n      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] [count(*):Int64;N]\
+        \n  Subquery: [count(*):Int64]\
+        \n    Projection: count(*) [count(*):Int64]\
+        \n      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] [count(*):Int64]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
@@ -175,9 +175,9 @@ mod tests {
             .build()?;
 
         let expected = "Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
-        \n  Subquery: [count(*):Int64;N]\
-        \n    Projection: count(*) [count(*):Int64;N]\
-        \n      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] [count(*):Int64;N]\
+        \n  Subquery: [count(*):Int64]\
+        \n    Projection: count(*) [count(*):Int64]\
+        \n      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] [count(*):Int64]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
@@ -207,9 +207,9 @@ mod tests {
 
         let expected = "Projection: t1.a, t1.b [a:UInt32, b:UInt32]\
               \n  Filter: (<subquery>) > UInt8(0) [a:UInt32, b:UInt32, c:UInt32]\
-              \n    Subquery: [count(Int64(1)):Int64;N]\
-              \n      Projection: count(Int64(1)) [count(Int64(1)):Int64;N]\
-              \n        Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] [count(Int64(1)):Int64;N]\
+              \n    Subquery: [count(Int64(1)):Int64]\
+              \n      Projection: count(Int64(1)) [count(Int64(1)):Int64]\
+              \n        Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] [count(Int64(1)):Int64]\
               \n          Filter: outer_ref(t1.a) = t2.a [a:UInt32, b:UInt32, c:UInt32]\
               \n            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
               \n    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
@@ -235,7 +235,7 @@ mod tests {
             .project(vec![count(wildcard())])?
             .build()?;
 
-        let expected = "Projection: count(Int64(1)) AS count(*) [count(*):Int64;N]\
+        let expected = "Projection: count(Int64(1)) AS count(*) [count(*):Int64]\
         \n  WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS count(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]] [a:UInt32, b:UInt32, c:UInt32, count(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING:Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
@@ -249,8 +249,8 @@ mod tests {
             .project(vec![count(wildcard())])?
             .build()?;
 
-        let expected = "Projection: count(*) [count(*):Int64;N]\
-        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] [count(*):Int64;N]\
+        let expected = "Projection: count(*) [count(*):Int64]\
+        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] [count(*):Int64]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
     }
@@ -272,7 +272,7 @@ mod tests {
             .project(vec![count(wildcard())])?
             .build()?;
 
-        let expected = "Projection: count(Int64(1)) AS count(*) [count(*):Int64;N]\
+        let expected = "Projection: count(Int64(1)) AS count(*) [count(*):Int64]\
         \n  Aggregate: groupBy=[[]], aggr=[[MAX(count(Int64(1))) AS MAX(count(*))]] [MAX(count(*)):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
