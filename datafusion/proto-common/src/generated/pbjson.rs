@@ -6409,6 +6409,9 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::StructValue(v) => {
                     struct_ser.serialize_field("structValue", v)?;
                 }
+                scalar_value::Value::MapValue(v) => {
+                    struct_ser.serialize_field("mapValue", v)?;
+                }
                 scalar_value::Value::Decimal128Value(v) => {
                     struct_ser.serialize_field("decimal128Value", v)?;
                 }
@@ -6525,6 +6528,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "fixedSizeListValue",
             "struct_value",
             "structValue",
+            "map_value",
+            "mapValue",
             "decimal128_value",
             "decimal128Value",
             "decimal256_value",
@@ -6586,6 +6591,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             ListValue,
             FixedSizeListValue,
             StructValue,
+            MapValue,
             Decimal128Value,
             Decimal256Value,
             Date64Value,
@@ -6646,6 +6652,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "listValue" | "list_value" => Ok(GeneratedField::ListValue),
                             "fixedSizeListValue" | "fixed_size_list_value" => Ok(GeneratedField::FixedSizeListValue),
                             "structValue" | "struct_value" => Ok(GeneratedField::StructValue),
+                            "mapValue" | "map_value" => Ok(GeneratedField::MapValue),
                             "decimal128Value" | "decimal128_value" => Ok(GeneratedField::Decimal128Value),
                             "decimal256Value" | "decimal256_value" => Ok(GeneratedField::Decimal256Value),
                             "date64Value" | "date_64_value" => Ok(GeneratedField::Date64Value),
@@ -6816,6 +6823,13 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                                 return Err(serde::de::Error::duplicate_field("structValue"));
                             }
                             value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::StructValue)
+;
+                        }
+                        GeneratedField::MapValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("mapValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::MapValue)
 ;
                         }
                         GeneratedField::Decimal128Value => {
