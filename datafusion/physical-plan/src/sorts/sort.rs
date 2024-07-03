@@ -396,8 +396,11 @@ impl ExternalSorter {
 
         let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let batches = std::mem::take(&mut self.in_mem_batches);
-        let spilled_rows =
-            spill_record_batches(batches, spill_file.path().into(), Arc::clone(&self.schema))?;
+        let spilled_rows = spill_record_batches(
+            batches,
+            spill_file.path().into(),
+            Arc::clone(&self.schema),
+        )?;
         let used = self.reservation.free();
         self.metrics.spill_count.add(1);
         self.metrics.spilled_bytes.add(used);
