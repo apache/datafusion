@@ -191,24 +191,19 @@ impl CommonSubexprEliminate {
         id_array: &mut IdArray<'n>,
         expr_mask: ExprMask,
     ) -> Result<bool> {
-        // Don't consider volatile expressions for CSE.
-        Ok(if expr.is_volatile()? {
-            false
-        } else {
-            let mut visitor = ExprIdentifierVisitor {
-                expr_stats,
-                id_array,
-                visit_stack: vec![],
-                down_index: 0,
-                up_index: 0,
-                expr_mask,
-                random_state: &self.random_state,
-                found_common: false,
-            };
-            expr.visit(&mut visitor)?;
+        let mut visitor = ExprIdentifierVisitor {
+            expr_stats,
+            id_array,
+            visit_stack: vec![],
+            down_index: 0,
+            up_index: 0,
+            expr_mask,
+            random_state: &self.random_state,
+            found_common: false,
+        };
+        expr.visit(&mut visitor)?;
 
-            visitor.found_common
-        })
+        Ok(visitor.found_common)
     }
 
     /// Rewrites `exprs_list` with common sub-expressions replaced with a new
@@ -917,27 +912,36 @@ struct ExprIdentifierVisitor<'a, 'n> {
 
 /// Record item that used when traversing an expression tree.
 enum VisitRecord<'n> {
-    /// Contains the post-order index assigned in during the first, visiting traversal and
-    /// a boolean flag to indicate if the record marks an expression subtree (not just a
-    /// single node).
+    /// Marks the beginning of expression. It contains:
+    /// - The post-order index assigned during the first, visiting traversal.
+    /// - A boolean flag if the record marks an expression subtree (not just a single
+    ///   node).
     EnterMark(usize, bool),
-    /// Accumulated identifier of sub expression.
-    ExprItem(Identifier<'n>),
+
+    /// Marks an accumulated subexpression tree. It contains:
+    /// - The accumulated identifier of a subexpression.
+    /// - A boolean flag if the expression is valid for subexpression elimination.
+    ///   The flag is propagated up from children to parent. (E.g. volatile expressions
+    ///   are not valid and can't be extracted, but non-volatile children of volatile
+    ///   expressions can be extracted.)
+    ExprItem(Identifier<'n>, bool),
 }
 
 impl<'n> ExprIdentifierVisitor<'_, 'n> {
     /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
     /// before it.
-    fn pop_enter_mark(&mut self) -> (usize, bool, Option<Identifier<'n>>) {
+    fn pop_enter_mark(&mut self) -> (usize, bool, Option<Identifier<'n>>, bool) {
         let mut expr_id = None;
+        let mut is_valid = true;
 
         while let Some(item) = self.visit_stack.pop() {
             match item {
-                VisitRecord::EnterMark(down_index, tree) => {
-                    return (down_index, tree, expr_id);
+                VisitRecord::EnterMark(down_index, is_tree) => {
+                    return (down_index, is_tree, expr_id, is_valid);
                 }
-                VisitRecord::ExprItem(id) => {
-                    expr_id = Some(id.combine(expr_id));
+                VisitRecord::ExprItem(sub_expr_id, sub_expr_is_valid) => {
+                    expr_id = Some(sub_expr_id.combine(expr_id));
+                    is_valid &= sub_expr_is_valid;
                 }
             }
         }
@@ -949,8 +953,6 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_, 'n> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
-        // TODO: consider non-volatile sub-expressions for CSE
-
         // If an expression can short circuit its children then don't consider its
         // children for CSE (https://github.com/apache/arrow-datafusion/issues/8814).
         // This means that we don't recurse into its children, but handle the expression
@@ -972,13 +974,14 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_, 'n> {
     }
 
     fn f_up(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
-        let (down_index, is_tree, sub_expr_id) = self.pop_enter_mark();
+        let (down_index, is_tree, sub_expr_id, sub_expr_is_valid) = self.pop_enter_mark();
 
         let expr_id =
             Identifier::new(expr, is_tree, self.random_state).combine(sub_expr_id);
+        let is_valid = !expr.is_volatile_node() && sub_expr_is_valid;
 
         self.id_array[down_index].0 = self.up_index;
-        if !self.expr_mask.ignores(expr) {
+        if is_valid && !self.expr_mask.ignores(expr) {
             self.id_array[down_index].1 = Some(expr_id);
             let count = self.expr_stats.entry(expr_id).or_insert(0);
             *count += 1;
@@ -986,7 +989,8 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_, 'n> {
                 self.found_common = true;
             }
         }
-        self.visit_stack.push(VisitRecord::ExprItem(expr_id));
+        self.visit_stack
+            .push(VisitRecord::ExprItem(expr_id, is_valid));
         self.up_index += 1;
 
         Ok(TreeNodeRecursion::Continue)
@@ -1105,13 +1109,14 @@ mod test {
     use std::iter;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::expr::AggregateFunction;
+    use datafusion_expr::expr::{AggregateFunction, ScalarFunction};
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
         grouping_set, AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Signature,
         SimpleAggregateUDF, Volatility,
     };
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
+    use datafusion_functions::math;
 
     use crate::optimizer::OptimizerContext;
     use crate::test::*;
@@ -1832,6 +1837,29 @@ mod test {
 
         let expected = "Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, test.a + test.b = Int32(0) AS c3, test.a - test.b = Int32(0) AS c4, test.a + test.b = Int32(0) OR test.a - test.b = Int32(0) AS c5\
         \n  Projection: test.a = Int32(0) OR test.b = Int32(0) AS __common_expr_1, test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_volatile() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let extracted_child = col("a") + col("b");
+        let rand = Expr::ScalarFunction(ScalarFunction::new_udf(math::random(), vec![]));
+        let not_extracted_volatile = extracted_child + rand;
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![
+                not_extracted_volatile.clone().alias("c1"),
+                not_extracted_volatile.alias("c2"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: __common_expr_1 + random() AS c1, __common_expr_1 + random() AS c2\
+        \n  Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, plan, None);
