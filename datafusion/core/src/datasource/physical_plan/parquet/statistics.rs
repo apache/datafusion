@@ -766,7 +766,7 @@ macro_rules! get_data_page_statistics {
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
                                 x.into_iter().filter_map(|x| {
-                                    x.and_then(|x| u32::try_from(x).ok())
+                                    x.and_then(|x| Some(x as u32))
                                 })
                             })
                             .flatten()
@@ -776,7 +776,7 @@ macro_rules! get_data_page_statistics {
                         [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
                                 x.into_iter().filter_map(|x| {
-                                    x.and_then(|x| u64::try_from(x).ok())
+                                    x.and_then(|x| Some(x as u64))
                                 })
                             })
                             .flatten()
