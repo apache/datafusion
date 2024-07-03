@@ -1455,7 +1455,6 @@ pub fn project(
             _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
         }
     }
-
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)

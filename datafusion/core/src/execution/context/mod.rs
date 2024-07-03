@@ -60,6 +60,7 @@ use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
+    planner::UserDefinedSQLPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
 
@@ -1389,6 +1390,15 @@ impl FunctionRegistry for SessionContext {
         rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
     ) -> Result<()> {
         self.state.write().register_function_rewrite(rewrite)
+    }
+
+    fn register_user_defined_sql_planner(
+        &mut self,
+        user_defined_sql_planner: Arc<dyn UserDefinedSQLPlanner>,
+    ) -> Result<()> {
+        self.state
+            .write()
+            .register_user_defined_sql_planner(user_defined_sql_planner)
     }
 }
 

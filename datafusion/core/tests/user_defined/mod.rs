@@ -29,3 +29,6 @@ mod user_defined_window_functions;
 
 /// Tests for User Defined Table Functions
 mod user_defined_table_functions;
+
+/// Tests for User Defined SQL Planner
+mod user_defined_sql_planner;

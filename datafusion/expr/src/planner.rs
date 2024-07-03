@@ -83,7 +83,7 @@ pub trait ContextProvider {
 }
 
 /// This trait allows users to customize the behavior of the SQL planner
-pub trait UserDefinedSQLPlanner {
+pub trait UserDefinedSQLPlanner: Send + Sync {
     /// Plan the binary operation between two expressions, returns OriginalBinaryExpr if not possible
     fn plan_binary_op(
         &self,
@@ -109,6 +109,12 @@ pub trait UserDefinedSQLPlanner {
         _schema: &DFSchema,
     ) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(exprs))
+    }
+
+    // Plan the Extract expression, e.g., EXTRACT(month FROM foo)
+    // returns origin expression arguments if not possible
+    fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
     }
 }
 
