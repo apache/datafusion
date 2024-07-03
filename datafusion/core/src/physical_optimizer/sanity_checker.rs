@@ -40,7 +40,7 @@ use itertools::izip;
 /// 1. Invalid plans containing nodes whose order and/or distribution requirements
 ///    are not satisfied by their children.
 /// 2. Plans that use pipeline-breaking operators on infinite input(s),
-///    it is impossible to execute such queries.
+///    it is impossible to execute such queries (they will never generate output nor finish)
 #[derive(Default)]
 pub struct SanityCheckPlan {}
 

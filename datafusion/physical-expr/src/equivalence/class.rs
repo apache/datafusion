@@ -29,10 +29,11 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
 
 #[derive(Debug, Clone)]
-/// A structure representing a constant expression in a physical execution plan.
+/// A structure representing a expression known to be constant in a physical execution plan.
 ///
 /// The `ConstExpr` struct encapsulates an expression that is constant during the execution
-/// of a query.
+/// of a query. For example if a predicate like `A = 5` applied earlier in the plan `A` would 
+/// be known constant
 ///
 /// # Fields
 ///
