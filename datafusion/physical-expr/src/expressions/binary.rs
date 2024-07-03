@@ -258,8 +258,47 @@ impl PhysicalExpr for BinaryExpr {
         use arrow::compute::kernels::numeric::*;
 
         let lhs = self.left.evaluate(batch)?;
-        let rhs = self.right.evaluate(batch)?;
         let left_data_type = lhs.data_type();
+
+        if left_data_type == DataType::Boolean && self.op == Operator::And {
+            match &lhs {
+                ColumnarValue::Array(array) => {
+                    if let Ok(array) = as_boolean_array(&array) {
+                        if array.true_count() == 0 {
+                            return Ok(lhs);
+                        }
+                    }
+                }
+                ColumnarValue::Scalar(scalar) => {
+                    if let ScalarValue::Boolean(Some(value)) = scalar {
+                        if !value {
+                            return Ok(lhs);
+                        }
+                    }
+                }
+            }
+        }
+
+        if left_data_type == DataType::Boolean && self.op == Operator::Or {
+            match &lhs {
+                ColumnarValue::Array(array) => {
+                    if let Ok(array) = as_boolean_array(&array) {
+                        if array.true_count() == array.len() {
+                            return Ok(lhs);
+                        }
+                    }
+                }
+                ColumnarValue::Scalar(scalar) => {
+                    if let ScalarValue::Boolean(Some(value)) = scalar {
+                        if *value {
+                            return Ok(lhs);
+                        }
+                    }
+                }
+            }
+        }
+
+        let rhs = self.right.evaluate(batch)?;
         let right_data_type = rhs.data_type();
 
         let schema = batch.schema();
