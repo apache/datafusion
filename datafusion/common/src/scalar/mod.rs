@@ -3560,6 +3560,9 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::List(_) => write!(f, "List({self})"),
             ScalarValue::LargeList(_) => write!(f, "LargeList({self})"),
             ScalarValue::Struct(struct_arr) => {
+                // ScalarValue Struct should always have a single element
+                assert_eq!(struct_arr.len(), 1);
+
                 let columns = struct_arr.columns();
                 let fields = struct_arr.fields();
 
@@ -3579,8 +3582,6 @@ impl fmt::Debug for ScalarValue {
                 )
             }
             ScalarValue::Map(map_arr) => {
-                // ScalarValue Map should always have a single element
-                assert_eq!(map_arr.len(), 1);
                 write!(
                     f,
                     "Map([{}])",
@@ -6298,6 +6299,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(s.to_string(), "{a:1,b:}");
+        assert_eq!(format!("{s:?}"), r#"Struct({a:1,b:})"#);
 
         let ScalarValue::Struct(arr) = s else {
             panic!("Expected struct");
@@ -6340,7 +6342,7 @@ mod tests {
     }
 
     #[test]
-    fn test_map_display() {
+    fn test_map_display_and_debug() {
         let string_builder = StringBuilder::new();
         let int_builder = Int32Builder::with_capacity(4);
         let mut builder = MapBuilder::new(None, string_builder, int_builder);
@@ -6359,6 +6361,10 @@ mod tests {
         let map_value = ScalarValue::Map(Arc::new(builder.finish()));
 
         assert_eq!(map_value.to_string(), "[{joe:1},{blogs:2,foo:4},{},NULL]");
+        assert_eq!(
+            format!("{map_value:?}"),
+            r#"Map([{"joe":"1"},{"blogs":"2","foo":"4"},{},NULL])"#
+        );
 
         let ScalarValue::Map(arr) = map_value else {
             panic!("Expected map");
