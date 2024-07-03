@@ -1131,39 +1131,26 @@ pub async fn from_substrait_rex(
                         f.arguments.len()
                     );
                 }
+                // Some expressions are binary in DataFusion but take in a variadic number of args in Substrait.
+                // In those cases we iterate through all the arguments, applying the binary expression against them all
+                let combined_expr = args
+                    .into_iter()
+                    .fold(None, |combined_expr: Option<Arc<Expr>>, arg: Expr| {
+                        Some(match combined_expr {
+                            Some(expr) => Arc::new(Expr::BinaryExpr(BinaryExpr {
+                                left: Box::new(
+                                    Arc::try_unwrap(expr)
+                                        .unwrap_or_else(|arc: Arc<Expr>| (*arc).clone()),
+                                ), // Avoid cloning if possible
+                                op: op.clone(),
+                                right: Box::new(arg),
+                            })),
+                            None => Arc::new(arg),
+                        })
+                    })
+                    .unwrap();
 
-                let mut combined_expr: Option<Arc<Expr>> = None;
-
-                // Iterate through all arguments to construct the combined expression
-                for arg in &f.arguments {
-                    let next_expr = match &arg.arg_type {
-                        Some(ArgType::Value(val)) => {
-                            from_substrait_rex(ctx, val, input_schema, extensions).await?
-                        }
-                        other => {
-                            return not_impl_err!(
-                                "Invalid argument for binary expression: {other:?}"
-                            );
-                        }
-                    };
-
-                    combined_expr = Some(match combined_expr {
-                        Some(expr) => Arc::new(Expr::BinaryExpr(BinaryExpr {
-                            left: Box::new(
-                                Arc::try_unwrap(expr)
-                                    .unwrap_or_else(|arc| (*arc).clone()),
-                            ), // Avoid cloning if possible
-                            op: op.clone(),
-                            right: Box::new(
-                                Arc::try_unwrap(next_expr)
-                                    .unwrap_or_else(|arc| (*arc).clone()),
-                            ), // Avoid cloning if possible
-                        })),
-                        None => next_expr,
-                    });
-                }
-
-                Ok(combined_expr.unwrap())
+                Ok(combined_expr)
             } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
                 builder.build(ctx, f, input_schema, extensions).await
             } else {
@@ -2066,18 +2053,18 @@ impl BuiltinExprBuilder {
             Expr::Literal(ScalarValue::Utf8(None))
         };
 
-        let Expr::Literal(ScalarValue::Utf8(escape_char)) = escape_char_expr else {
-            return substrait_err!(
+        if let Expr::Literal(ScalarValue::Utf8(escape_char)) = escape_char_expr {
+            Ok(Arc::new(Expr::Like(Like {
+                negated: false,
+                expr: Box::new(expr),
+                pattern: Box::new(pattern),
+                escape_char: escape_char.map(|c| c.chars().next().unwrap()),
+                case_insensitive,
+            })))
+        } else {
+            substrait_err!(
                 "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
-            );
-        };
-
-        Ok(Arc::new(Expr::Like(Like {
-            negated: false,
-            expr: Box::new(expr),
-            pattern: Box::new(pattern),
-            escape_char: escape_char.map(|c| c.chars().next().unwrap()),
-            case_insensitive,
-        })))
+            )
+        }
     }
 }
