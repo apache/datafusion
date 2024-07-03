@@ -609,9 +609,7 @@ impl SessionState {
 
         let mut provider = SessionContextProvider {
             state: self,
-            tables: HashMap::with_capacity(
-                references.len() + self.user_defined_sql_planners.len(),
-            ),
+            tables: HashMap::with_capacity(references.len()),
         };
 
         for reference in references {
