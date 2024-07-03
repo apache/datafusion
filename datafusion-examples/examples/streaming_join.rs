@@ -49,7 +49,7 @@ use datafusion_common::{
     franz_arrow::infer_arrow_schema_from_json_value, plan_err, JoinType, ScalarValue,
 };
 use datafusion_expr::{
-    col, lit, create_udwf, ident, max, min, Expr, LogicalPlanBuilder, PartitionEvaluator,
+    col, create_udwf, ident, lit, max, min, Expr, LogicalPlanBuilder, PartitionEvaluator,
     TableType, Volatility, WindowFrame,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
@@ -64,7 +64,7 @@ async fn main() {
     tracing_log::LogTracer::init().expect("Failed to set up log tracer");
 
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::INFO)
         .with_span_events(FmtSpan::CLOSE | FmtSpan::ENTER)
         .finish();
     tracing::subscriber::set_global_default(subscriber)
@@ -149,10 +149,8 @@ async fn main() {
     .unwrap()
     .join_on(
         imu_stream_plan,
-        JoinType::Inner,
-        vec![
-            col("trips.driver_id").eq(col("imu_data.driver_id")),
-        ],
+        JoinType::Left,
+        vec![col("trips.driver_id").eq(col("imu_data.driver_id"))],
     )
     .unwrap()
     .build()
@@ -161,19 +159,12 @@ async fn main() {
     let df = DataFrame::new(ctx.state(), logical_plan);
     let windowed_df = df
         .clone()
-        .streaming_window(
-            vec![],
-            vec![
-                min(col("trips.occurred_at_ms")),
-                max(col("imu_data.imu_measurement").field("gps").field("speed")),
-                min(col("imu_data.imu_measurement").field("gps").field("altitude")),
-                count(col("imu_data.imu_measurement")).alias("count"),
-            ],
-            Duration::from_millis(4_000),
-            Some(Duration::from_millis(10_000)),
-        )
-        .unwrap()
-        .filter(col("count").gt(lit(0)))
+        .select(vec![
+            col("trips.trip_id"),
+            col("trips.driver_id"),
+            col("trips.event_name"),
+            col("imu_measurement").field("gps").field("speed"),
+        ])
         .unwrap();
 
     let writer = PrettyPrinter::new().unwrap();
@@ -215,7 +206,7 @@ fn create_kafka_source(
         partitions: 1_i32,
         timestamp_column: String::from("occurred_at_ms"),
         timestamp_unit: TimestampUnit::Int64Millis,
-        offset_reset: String::from("earliest"),
+        offset_reset: String::from("latest"),
     };
 
     // Create a new streaming table
