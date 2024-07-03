@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! listing_schema contains a SchemaProvider that scans ObjectStores for tables automatically
+//! [`ListingSchemaProvider`]: [`SchemaProvider`] that scans ObjectStores for tables automatically
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};

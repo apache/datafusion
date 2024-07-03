@@ -24,7 +24,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::Result;
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
 
@@ -43,14 +43,6 @@ impl PushDownLimit {
 
 /// Push down Limit.
 impl OptimizerRule for PushDownLimit {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called PushDownLimit::rewrite")
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }

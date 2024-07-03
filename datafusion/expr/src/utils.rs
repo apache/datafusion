@@ -46,6 +46,7 @@ pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::Int64(Some(1));
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression
+#[deprecated(since = "40.0.0", note = "Expr::add_column_refs instead")]
 pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result<()> {
     for e in expr {
         expr_to_columns(e, accum)?;
@@ -317,7 +318,7 @@ fn get_excluded_columns(
     opt_exclude: Option<&ExcludeSelectItem>,
     opt_except: Option<&ExceptSelectItem>,
     schema: &DFSchema,
-    qualifier: &Option<TableReference>,
+    qualifier: Option<&TableReference>,
 ) -> Result<Vec<Column>> {
     let mut idents = vec![];
     if let Some(excepts) = opt_except {
@@ -342,8 +343,7 @@ fn get_excluded_columns(
     let mut result = vec![];
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
-        let (qualifier, field) =
-            schema.qualified_field_with_name(qualifier.as_ref(), col_name)?;
+        let (qualifier, field) = schema.qualified_field_with_name(qualifier, col_name)?;
         result.push(Column::from((qualifier, field)));
     }
     Ok(result)
@@ -405,7 +405,7 @@ pub fn expand_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude.as_ref(), opt_except.as_ref(), schema, &None)?
+        get_excluded_columns(opt_exclude.as_ref(), opt_except.as_ref(), schema, None)?
     } else {
         vec![]
     };
@@ -416,12 +416,11 @@ pub fn expand_wildcard(
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
 pub fn expand_qualified_wildcard(
-    qualifier: &str,
+    qualifier: &TableReference,
     schema: &DFSchema,
     wildcard_options: Option<&WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
-    let qualifier = TableReference::from(qualifier);
-    let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
+    let qualified_indices = schema.fields_indices_with_qualified(qualifier);
     let projected_func_dependencies = schema
         .functional_dependencies()
         .project_functional_dependencies(&qualified_indices, qualified_indices.len());
@@ -444,7 +443,7 @@ pub fn expand_qualified_wildcard(
             opt_exclude.as_ref(),
             opt_except.as_ref(),
             schema,
-            &Some(qualifier),
+            Some(qualifier),
         )?
     } else {
         vec![]
@@ -871,7 +870,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
 
 /// Check whether all columns are from the schema.
 pub fn check_all_columns_from_schema(
-    columns: &HashSet<Column>,
+    columns: &HashSet<&Column>,
     schema: &DFSchema,
 ) -> Result<bool> {
     for col in columns.iter() {
@@ -899,8 +898,8 @@ pub fn find_valid_equijoin_key_pair(
     left_schema: &DFSchema,
     right_schema: &DFSchema,
 ) -> Result<Option<(Expr, Expr)>> {
-    let left_using_columns = left_key.to_columns()?;
-    let right_using_columns = right_key.to_columns()?;
+    let left_using_columns = left_key.column_refs();
+    let right_using_columns = right_key.column_refs();
 
     // Conditions like a = 10, will be added to non-equijoin.
     if left_using_columns.is_empty() || right_using_columns.is_empty() {
@@ -997,7 +996,7 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
 /// assert_eq!(split_conjunction_owned(expr), split);
 /// ```
 pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
-    split_binary_owned(expr, Operator::And)
+    split_binary_owned(expr, &Operator::And)
 }
 
 /// Splits an owned binary operator tree [`Expr`] such as `A <OP> B <OP> C` => `[A, B, C]`
@@ -1020,19 +1019,19 @@ pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
 /// ];
 ///
 /// // use split_binary_owned to split them
-/// assert_eq!(split_binary_owned(expr, Operator::Plus), split);
+/// assert_eq!(split_binary_owned(expr, &Operator::Plus), split);
 /// ```
-pub fn split_binary_owned(expr: Expr, op: Operator) -> Vec<Expr> {
+pub fn split_binary_owned(expr: Expr, op: &Operator) -> Vec<Expr> {
     split_binary_owned_impl(expr, op, vec![])
 }
 
 fn split_binary_owned_impl(
     expr: Expr,
-    operator: Operator,
+    operator: &Operator,
     mut exprs: Vec<Expr>,
 ) -> Vec<Expr> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { right, op, left }) if op == operator => {
+        Expr::BinaryExpr(BinaryExpr { right, op, left }) if &op == operator => {
             let exprs = split_binary_owned_impl(*left, operator, exprs);
             split_binary_owned_impl(*right, operator, exprs)
         }
@@ -1049,17 +1048,17 @@ fn split_binary_owned_impl(
 /// Splits an binary operator tree [`Expr`] such as `A <OP> B <OP> C` => `[A, B, C]`
 ///
 /// See [`split_binary_owned`] for more details and an example.
-pub fn split_binary(expr: &Expr, op: Operator) -> Vec<&Expr> {
+pub fn split_binary<'a>(expr: &'a Expr, op: &Operator) -> Vec<&'a Expr> {
     split_binary_impl(expr, op, vec![])
 }
 
 fn split_binary_impl<'a>(
     expr: &'a Expr,
-    operator: Operator,
+    operator: &Operator,
     mut exprs: Vec<&'a Expr>,
 ) -> Vec<&'a Expr> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { right, op, left }) if *op == operator => {
+        Expr::BinaryExpr(BinaryExpr { right, op, left }) if op == operator => {
             let exprs = split_binary_impl(left, operator, exprs);
             split_binary_impl(right, operator, exprs)
         }
@@ -1613,13 +1612,13 @@ mod tests {
     #[test]
     fn test_split_binary_owned() {
         let expr = col("a");
-        assert_eq!(split_binary_owned(expr.clone(), Operator::And), vec![expr]);
+        assert_eq!(split_binary_owned(expr.clone(), &Operator::And), vec![expr]);
     }
 
     #[test]
     fn test_split_binary_owned_two() {
         assert_eq!(
-            split_binary_owned(col("a").eq(lit(5)).and(col("b")), Operator::And),
+            split_binary_owned(col("a").eq(lit(5)).and(col("b")), &Operator::And),
             vec![col("a").eq(lit(5)), col("b")]
         );
     }
@@ -1629,7 +1628,7 @@ mod tests {
         let expr = col("a").eq(lit(5)).or(col("b"));
         assert_eq!(
             // expr is connected by OR, but pass in AND
-            split_binary_owned(expr.clone(), Operator::And),
+            split_binary_owned(expr.clone(), &Operator::And),
             vec![expr]
         );
     }

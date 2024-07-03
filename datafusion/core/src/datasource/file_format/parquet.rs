@@ -24,39 +24,39 @@ use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
-use super::{FileFormat, FileScanConfig};
-use crate::arrow::array::{
-    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
-};
-use crate::arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
+use super::{FileFormat, FileFormatFactory, FileScanConfig};
+use crate::arrow::array::RecordBatch;
+use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::physical_plan::{FileGroupDisplay, FileSinkConfig};
-use crate::datasource::schema_adapter::{
-    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
-};
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
 
-use datafusion_common::config::TableParquetOptions;
+use arrow::compute::sum;
+use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError,
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
+    DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::expressions::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
+use hashbrown::HashMap;
+use log::debug;
 use object_store::buffered::BufWriter;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
@@ -66,18 +66,18 @@ use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
 use parquet::file::footer::{decode_footer, decode_metadata};
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
-use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
+use crate::datasource::physical_plan::parquet::{
+    ParquetExecBuilder, StatisticsConverter,
+};
 use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashMap;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 
@@ -88,6 +88,65 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 /// When writing parquet files in parallel, if the buffered Parquet data exceeds
 /// this size, it is flushed to object store
 const BUFFER_FLUSH_BYTES: usize = 1024000;
+
+#[derive(Default)]
+/// Factory struct used to create [ParquetFormat]
+pub struct ParquetFormatFactory {
+    options: Option<TableParquetOptions>,
+}
+
+impl ParquetFormatFactory {
+    /// Creates an instance of [ParquetFormatFactory]
+    pub fn new() -> Self {
+        Self { options: None }
+    }
+
+    /// Creates an instance of [ParquetFormatFactory] with customized default options
+    pub fn new_with_options(options: TableParquetOptions) -> Self {
+        Self {
+            options: Some(options),
+        }
+    }
+}
+
+impl FileFormatFactory for ParquetFormatFactory {
+    fn create(
+        &self,
+        state: &SessionState,
+        format_options: &std::collections::HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        let parquet_options = match &self.options {
+            None => {
+                let mut table_options = state.default_table_options();
+                table_options.set_config_format(ConfigFileType::PARQUET);
+                table_options.alter_with_string_hash_map(format_options)?;
+                table_options.parquet
+            }
+            Some(parquet_options) => {
+                let mut parquet_options = parquet_options.clone();
+                for (k, v) in format_options {
+                    parquet_options.set(k, v)?;
+                }
+                parquet_options
+            }
+        };
+
+        Ok(Arc::new(
+            ParquetFormat::default().with_options(parquet_options),
+        ))
+    }
+
+    fn default(&self) -> Arc<dyn FileFormat> {
+        Arc::new(ParquetFormat::default())
+    }
+}
+
+impl GetExt for ParquetFormatFactory {
+    fn get_ext(&self) -> String {
+        // Removes the dot, i.e. ".parquet" -> "parquet"
+        DEFAULT_PARQUET_EXTENSION[1..].to_string()
+    }
+}
 
 /// The Apache Parquet `FileFormat` implementation
 #[derive(Debug, Default)]
@@ -188,6 +247,23 @@ async fn fetch_schema_with_location(
 impl FileFormat for ParquetFormat {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn get_ext(&self) -> String {
+        ParquetFormatFactory::new().get_ext()
+    }
+
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
+        let ext = self.get_ext();
+        match file_compression_type.get_variant() {
+            CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
+            _ => Err(DataFusionError::Internal(
+                "Parquet FileFormat does not support compression.".into(),
+            )),
+        }
     }
 
     async fn infer_schema(
@@ -295,86 +371,6 @@ impl FileFormat for ParquetFormat {
     }
 }
 
-fn summarize_min_max(
-    max_values: &mut [Option<MaxAccumulator>],
-    min_values: &mut [Option<MinAccumulator>],
-    fields: &Fields,
-    i: usize,
-    stat: &ParquetStatistics,
-) {
-    if !stat.has_min_max_set() {
-        max_values[i] = None;
-        min_values[i] = None;
-        return;
-    }
-    match stat {
-        ParquetStatistics::Boolean(s) if DataType::Boolean == *fields[i].data_type() => {
-            if let Some(max_value) = &mut max_values[i] {
-                max_value
-                    .update_batch(&[Arc::new(BooleanArray::from(vec![*s.max()]))])
-                    .unwrap_or_else(|_| max_values[i] = None);
-            }
-            if let Some(min_value) = &mut min_values[i] {
-                min_value
-                    .update_batch(&[Arc::new(BooleanArray::from(vec![*s.min()]))])
-                    .unwrap_or_else(|_| min_values[i] = None);
-            }
-        }
-        ParquetStatistics::Int32(s) if DataType::Int32 == *fields[i].data_type() => {
-            if let Some(max_value) = &mut max_values[i] {
-                max_value
-                    .update_batch(&[Arc::new(Int32Array::from_value(*s.max(), 1))])
-                    .unwrap_or_else(|_| max_values[i] = None);
-            }
-            if let Some(min_value) = &mut min_values[i] {
-                min_value
-                    .update_batch(&[Arc::new(Int32Array::from_value(*s.min(), 1))])
-                    .unwrap_or_else(|_| min_values[i] = None);
-            }
-        }
-        ParquetStatistics::Int64(s) if DataType::Int64 == *fields[i].data_type() => {
-            if let Some(max_value) = &mut max_values[i] {
-                max_value
-                    .update_batch(&[Arc::new(Int64Array::from_value(*s.max(), 1))])
-                    .unwrap_or_else(|_| max_values[i] = None);
-            }
-            if let Some(min_value) = &mut min_values[i] {
-                min_value
-                    .update_batch(&[Arc::new(Int64Array::from_value(*s.min(), 1))])
-                    .unwrap_or_else(|_| min_values[i] = None);
-            }
-        }
-        ParquetStatistics::Float(s) if DataType::Float32 == *fields[i].data_type() => {
-            if let Some(max_value) = &mut max_values[i] {
-                max_value
-                    .update_batch(&[Arc::new(Float32Array::from(vec![*s.max()]))])
-                    .unwrap_or_else(|_| max_values[i] = None);
-            }
-            if let Some(min_value) = &mut min_values[i] {
-                min_value
-                    .update_batch(&[Arc::new(Float32Array::from(vec![*s.min()]))])
-                    .unwrap_or_else(|_| min_values[i] = None);
-            }
-        }
-        ParquetStatistics::Double(s) if DataType::Float64 == *fields[i].data_type() => {
-            if let Some(max_value) = &mut max_values[i] {
-                max_value
-                    .update_batch(&[Arc::new(Float64Array::from(vec![*s.max()]))])
-                    .unwrap_or_else(|_| max_values[i] = None);
-            }
-            if let Some(min_value) = &mut min_values[i] {
-                min_value
-                    .update_batch(&[Arc::new(Float64Array::from(vec![*s.min()]))])
-                    .unwrap_or_else(|_| min_values[i] = None);
-            }
-        }
-        _ => {
-            max_values[i] = None;
-            min_values[i] = None;
-        }
-    }
-}
-
 /// Fetches parquet metadata from ObjectStore for given object
 ///
 /// This component is a subject to **change** in near future and is exposed for low level integrations
@@ -464,89 +460,131 @@ async fn fetch_statistics(
     metadata_size_hint: Option<usize>,
 ) -> Result<Statistics> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
-    statistics_from_parquet_meta(&metadata, table_schema).await
+    statistics_from_parquet_meta_calc(&metadata, table_schema)
 }
 
-/// Convert statistics in  [`ParquetMetaData`] into [`Statistics`]
+/// Convert statistics in  [`ParquetMetaData`] into [`Statistics`] using ['StatisticsConverter`]
 ///
 /// The statistics are calculated for each column in the table schema
 /// using the row group statistics in the parquet metadata.
-pub async fn statistics_from_parquet_meta(
+pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
 ) -> Result<Statistics> {
-    let file_metadata = metadata.file_metadata();
+    let row_groups_metadata = metadata.row_groups();
 
+    let mut statistics = Statistics::new_unknown(&table_schema);
+    let mut has_statistics = false;
+    let mut num_rows = 0_usize;
+    let mut total_byte_size = 0_usize;
+    for row_group_meta in row_groups_metadata {
+        num_rows += row_group_meta.num_rows() as usize;
+        total_byte_size += row_group_meta.total_byte_size() as usize;
+
+        if !has_statistics {
+            row_group_meta.columns().iter().for_each(|column| {
+                has_statistics = column.statistics().is_some();
+            });
+        }
+    }
+    statistics.num_rows = Precision::Exact(num_rows);
+    statistics.total_byte_size = Precision::Exact(total_byte_size);
+
+    let file_metadata = metadata.file_metadata();
     let file_schema = parquet_to_arrow_schema(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
 
-    let num_fields = table_schema.fields().len();
-    let fields = table_schema.fields();
+    statistics.column_statistics = if has_statistics {
+        let (mut max_accs, mut min_accs) = create_max_min_accs(&table_schema);
+        let mut null_counts_array =
+            vec![Precision::Exact(0); table_schema.fields().len()];
 
-    let mut num_rows = 0;
-    let mut total_byte_size = 0;
-    let mut null_counts = vec![Precision::Exact(0); num_fields];
-    let mut has_statistics = false;
-
-    let schema_adapter =
-        DefaultSchemaAdapterFactory::default().create(table_schema.clone());
-
-    let (mut max_values, mut min_values) = create_max_min_accs(&table_schema);
-
-    for row_group_meta in metadata.row_groups() {
-        num_rows += row_group_meta.num_rows();
-        total_byte_size += row_group_meta.total_byte_size();
-
-        let mut column_stats: HashMap<usize, (u64, &ParquetStatistics)> = HashMap::new();
-
-        for (i, column) in row_group_meta.columns().iter().enumerate() {
-            if let Some(stat) = column.statistics() {
-                has_statistics = true;
-                column_stats.insert(i, (stat.null_count(), stat));
-            }
-        }
-
-        if has_statistics {
-            for (table_idx, null_cnt) in null_counts.iter_mut().enumerate() {
-                if let Some(file_idx) =
-                    schema_adapter.map_column_index(table_idx, &file_schema)
-                {
-                    if let Some((null_count, stats)) = column_stats.get(&file_idx) {
-                        *null_cnt = null_cnt.add(&Precision::Exact(*null_count as usize));
-                        summarize_min_max(
-                            &mut max_values,
-                            &mut min_values,
-                            fields,
-                            table_idx,
-                            stats,
+        table_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .for_each(|(idx, field)| {
+                match StatisticsConverter::try_new(
+                    field.name(),
+                    &file_schema,
+                    file_metadata.schema_descr(),
+                ) {
+                    Ok(stats_converter) => {
+                        summarize_min_max_null_counts(
+                            &mut min_accs,
+                            &mut max_accs,
+                            &mut null_counts_array,
+                            idx,
+                            num_rows,
+                            &stats_converter,
+                            row_groups_metadata,
                         )
-                    } else {
-                        // If none statistics of current column exists, set the Max/Min Accumulator to None.
-                        max_values[table_idx] = None;
-                        min_values[table_idx] = None;
+                        .ok();
                     }
-                } else {
-                    *null_cnt = null_cnt.add(&Precision::Exact(num_rows as usize));
+                    Err(e) => {
+                        debug!("Failed to create statistics converter: {}", e);
+                        null_counts_array[idx] = Precision::Exact(num_rows);
+                    }
                 }
-            }
-        }
-    }
+            });
 
-    let column_stats = if has_statistics {
-        get_col_stats(&table_schema, null_counts, &mut max_values, &mut min_values)
+        get_col_stats(
+            &table_schema,
+            null_counts_array,
+            &mut max_accs,
+            &mut min_accs,
+        )
     } else {
         Statistics::unknown_column(&table_schema)
     };
 
-    let statistics = Statistics {
-        num_rows: Precision::Exact(num_rows as usize),
-        total_byte_size: Precision::Exact(total_byte_size as usize),
-        column_statistics: column_stats,
-    };
-
     Ok(statistics)
+}
+
+/// Deprecated
+/// Use [`statistics_from_parquet_meta_calc`] instead.
+/// This method was deprecated because it didn't need to be async so a new method was created
+/// that exposes a synchronous API.
+#[deprecated(
+    since = "40.0.0",
+    note = "please use `statistics_from_parquet_meta_calc` instead"
+)]
+pub async fn statistics_from_parquet_meta(
+    metadata: &ParquetMetaData,
+    table_schema: SchemaRef,
+) -> Result<Statistics> {
+    statistics_from_parquet_meta_calc(metadata, table_schema)
+}
+
+fn summarize_min_max_null_counts(
+    min_accs: &mut [Option<MinAccumulator>],
+    max_accs: &mut [Option<MaxAccumulator>],
+    null_counts_array: &mut [Precision<usize>],
+    arrow_schema_index: usize,
+    num_rows: usize,
+    stats_converter: &StatisticsConverter,
+    row_groups_metadata: &[RowGroupMetaData],
+) -> Result<()> {
+    let max_values = stats_converter.row_group_maxes(row_groups_metadata)?;
+    let min_values = stats_converter.row_group_mins(row_groups_metadata)?;
+    let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
+
+    if let Some(max_acc) = &mut max_accs[arrow_schema_index] {
+        max_acc.update_batch(&[max_values])?;
+    }
+
+    if let Some(min_acc) = &mut min_accs[arrow_schema_index] {
+        min_acc.update_batch(&[min_values])?;
+    }
+
+    null_counts_array[arrow_schema_index] = Precision::Exact(match sum(&null_counts) {
+        Some(null_count) => null_count as usize,
+        None => num_rows,
+    });
+
+    Ok(())
 }
 
 /// Implements [`DataSink`] for writing to a parquet file.
@@ -603,7 +641,9 @@ impl ParquetSink {
     /// of hive style partitioning where some columns are removed from the
     /// underlying files.
     fn get_writer_schema(&self) -> Arc<Schema> {
-        if !self.config.table_partition_cols.is_empty() {
+        if !self.config.table_partition_cols.is_empty()
+            && !self.config.keep_partition_by_columns
+        {
             let schema = self.config.output_schema();
             let partition_names: Vec<_> = self
                 .config
@@ -693,6 +733,7 @@ impl DataSink for ParquetSink {
             part_col,
             self.config.table_paths[0].clone(),
             "parquet".into(),
+            self.config.keep_partition_by_columns,
         );
 
         let mut file_write_tasks: JoinSet<
@@ -1126,7 +1167,9 @@ mod tests {
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow_schema::Field;
+    use arrow_array::types::Int32Type;
+    use arrow_array::{DictionaryArray, Int32Array, Int64Array};
+    use arrow_schema::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_common::cast::{
         as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
@@ -1134,6 +1177,7 @@ mod tests {
     };
     use datafusion_common::config::ParquetOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_common::ScalarValue::Utf8;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -1416,6 +1460,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_statistics_from_parquet_metadata_dictionary() -> Result<()> {
+        // Data for column c_dic: ["a", "b", "c", "d"]
+        let values = StringArray::from_iter_values(["a", "b", "c", "d"]);
+        let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
+        let dic_array =
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        let c_dic: ArrayRef = Arc::new(dic_array);
+
+        let batch1 = RecordBatch::try_from_iter(vec![("c_dic", c_dic)]).unwrap();
+
+        // Use store_parquet to write each batch to its own file
+        // . batch1 written into first file and includes:
+        //    - column c_dic that has 4 rows with no null. Stats min and max of dictionary column is available.
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let (files, _file_names) = store_parquet(vec![batch1], false).await?;
+
+        let state = SessionContext::new().state();
+        let format = ParquetFormat::default();
+        let schema = format.infer_schema(&state, &store, &files).await.unwrap();
+
+        // Fetch statistics for first file
+        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
+        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
+        assert_eq!(stats.num_rows, Precision::Exact(4));
+
+        // column c_dic
+        let c_dic_stats = &stats.column_statistics[0];
+
+        assert_eq!(c_dic_stats.null_count, Precision::Exact(0));
+        assert_eq!(
+            c_dic_stats.max_value,
+            Precision::Exact(Utf8(Some("d".into())))
+        );
+        assert_eq!(
+            c_dic_stats.min_value,
+            Precision::Exact(Utf8(Some("a".into())))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_statistics_from_parquet_metadata() -> Result<()> {
         // Data for column c1: ["Foo", null, "bar"]
         let c1: ArrayRef =
@@ -1443,14 +1529,20 @@ mod tests {
 
         // Fetch statistics for first file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         //
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
         let c1_stats = &stats.column_statistics[0];
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
-        assert_eq!(c1_stats.max_value, Precision::Absent);
-        assert_eq!(c1_stats.min_value, Precision::Absent);
+        assert_eq!(
+            c1_stats.max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("bar".to_string())))
+        );
+        assert_eq!(
+            c1_stats.min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("Foo".to_string())))
+        );
         // column c2: missing from the file so the table treats all 3 rows as null
         let c2_stats = &stats.column_statistics[1];
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
@@ -1459,7 +1551,7 @@ mod tests {
 
         // Fetch statistics for second file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[1], None).await?;
-        let stats = statistics_from_parquet_meta(&pq_meta, schema.clone()).await?;
+        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1: missing from the file so the table treats all 3 rows as null
         let c1_stats = &stats.column_statistics[0];
@@ -1923,6 +2015,7 @@ mod tests {
             output_schema: schema.clone(),
             table_partition_cols: vec![],
             overwrite: true,
+            keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
@@ -2017,6 +2110,7 @@ mod tests {
             output_schema: schema.clone(),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
             overwrite: true,
+            keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,

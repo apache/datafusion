@@ -25,7 +25,6 @@ use datafusion::common::config::{
 use datafusion::common::{config_err, exec_datafusion_err, exec_err};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
-use datafusion::prelude::SessionContext;
 
 use async_trait::async_trait;
 use aws_credential_types::provider::ProvideCredentials;
@@ -392,48 +391,6 @@ impl ConfigExtension for GcpOptions {
     const PREFIX: &'static str = "gcp";
 }
 
-/// Registers storage options for different cloud storage schemes in a given
-/// session context.
-///
-/// This function is responsible for extending the session context with specific
-/// options based on the storage scheme being used. These options are essential
-/// for handling interactions with different cloud storage services such as Amazon
-/// S3, Alibaba Cloud OSS, Google Cloud Storage, etc.
-///
-/// # Parameters
-///
-/// * `ctx` - A mutable reference to the session context where table options are
-///   to be registered. The session context holds configuration and environment
-///   for the current session.
-/// * `scheme` - A string slice that represents the cloud storage scheme. This
-///   determines which set of options will be registered in the session context.
-///
-/// # Supported Schemes
-///
-/// * `s3` or `oss` - Registers `AwsOptions` which are configurations specific to
-///   Amazon S3 and Alibaba Cloud OSS.
-/// * `gs` or `gcs` - Registers `GcpOptions` which are configurations specific to
-///   Google Cloud Storage.
-///
-/// NOTE: This function will not perform any action when given an unsupported scheme.
-pub(crate) fn register_options(ctx: &SessionContext, scheme: &str) {
-    // Match the provided scheme against supported cloud storage schemes:
-    match scheme {
-        // For Amazon S3 or Alibaba Cloud OSS
-        "s3" | "oss" | "cos" => {
-            // Register AWS specific table options in the session context:
-            ctx.register_table_options_extension(AwsOptions::default())
-        }
-        // For Google Cloud Storage
-        "gs" | "gcs" => {
-            // Register GCP specific table options in the session context:
-            ctx.register_table_options_extension(GcpOptions::default())
-        }
-        // For unsupported schemes, do nothing:
-        _ => {}
-    }
-}
-
 pub(crate) async fn get_object_store(
     state: &SessionState,
     scheme: &str,
@@ -498,6 +455,8 @@ pub(crate) async fn get_object_store(
 
 #[cfg(test)]
 mod tests {
+    use crate::cli_context::CliSessionContext;
+
     use super::*;
 
     use datafusion::common::plan_err;
@@ -534,7 +493,7 @@ mod tests {
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            register_options(&ctx, scheme);
+            ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options().clone();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
@@ -579,7 +538,7 @@ mod tests {
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            register_options(&ctx, scheme);
+            ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options().clone();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
@@ -605,7 +564,7 @@ mod tests {
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            register_options(&ctx, scheme);
+            ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options().clone();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
@@ -633,7 +592,7 @@ mod tests {
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            register_options(&ctx, scheme);
+            ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options().clone();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
@@ -670,7 +629,7 @@ mod tests {
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            register_options(&ctx, scheme);
+            ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options().clone();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let gcp_options = table_options.extensions.get::<GcpOptions>().unwrap();

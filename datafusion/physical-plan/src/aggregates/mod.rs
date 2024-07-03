@@ -675,7 +675,7 @@ impl ExecutionPlan for AggregateExec {
                 vec![Distribution::UnspecifiedDistribution]
             }
             AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
-                vec![Distribution::HashPartitioned(self.output_group_expr())]
+                vec![Distribution::HashPartitioned(self.group_by.input_exprs())]
             }
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
@@ -1177,7 +1177,7 @@ mod tests {
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
-    use crate::expressions::{col, Avg};
+    use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
@@ -1194,11 +1194,11 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::expr::Sort;
+    use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
     use datafusion_functions_aggregate::median::median_udaf;
-    use datafusion_physical_expr::expressions::{
-        lit, FirstValue, LastValue, OrderSensitiveArrayAgg,
-    };
+    use datafusion_physical_expr::expressions::{lit, OrderSensitiveArrayAgg};
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
@@ -1485,11 +1485,17 @@ mod tests {
             groups: vec![vec![false]],
         };
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-            col("b", &input_schema)?,
-            "AVG(b)".to_string(),
-            DataType::Float64,
-        ))];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
+            &avg_udaf(),
+            &[col("b", &input_schema)?],
+            &[datafusion_expr::col("b")],
+            &[],
+            &[],
+            &input_schema,
+            "AVG(b)",
+            false,
+            false,
+        )?];
 
         let task_ctx = if spill {
             // set to an appropriate value to trigger spill
@@ -1819,11 +1825,17 @@ mod tests {
             vec![test_median_agg_expr(&input_schema)?];
 
         // use fast-path in `row_hash.rs`.
-        let aggregates_v2: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-            col("b", &input_schema)?,
-            "AVG(b)".to_string(),
-            DataType::Float64,
-        ))];
+        let aggregates_v2: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
+            &avg_udaf(),
+            &[col("b", &input_schema)?],
+            &[datafusion_expr::col("b")],
+            &[],
+            &[],
+            &input_schema,
+            "AVG(b)",
+            false,
+            false,
+        )?];
 
         for (version, groups, aggregates) in [
             (0, groups_none, aggregates_v0),
@@ -1873,15 +1885,21 @@ mod tests {
     async fn test_drop_cancel_without_groups() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
 
         let groups = PhysicalGroupBy::default();
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-            col("a", &schema)?,
-            "AVG(a)".to_string(),
-            DataType::Float64,
-        ))];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
+            &avg_udaf(),
+            &[col("a", &schema)?],
+            &[datafusion_expr::col("a")],
+            &[],
+            &[],
+            &schema,
+            "AVG(a)",
+            false,
+            false,
+        )?];
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
@@ -1908,18 +1926,24 @@ mod tests {
     async fn test_drop_cancel_with_groups() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Float32, true),
-            Field::new("b", DataType::Float32, true),
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Float64, true),
         ]));
 
         let groups =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-            col("b", &schema)?,
-            "AVG(b)".to_string(),
-            DataType::Float64,
-        ))];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
+            &avg_udaf(),
+            &[col("b", &schema)?],
+            &[datafusion_expr::col("b")],
+            &[],
+            &[],
+            &schema,
+            "AVG(b)",
+            false,
+            false,
+        )?];
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();

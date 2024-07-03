@@ -230,6 +230,16 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
+        TestStatementWithDialect {
+            sql: "SELECT j1_id FROM j1
+                  UNION ALL
+                  SELECT tb.j2_id as j1_id FROM j2 tb
+                  ORDER BY j1_id
+                  LIMIT 10;",
+            expected: r#"SELECT j1.j1_id FROM j1 UNION ALL SELECT tb.j2_id AS j1_id FROM j2 AS tb ORDER BY j1_id ASC NULLS LAST LIMIT 10"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
     ];
 
     for query in tests {
@@ -239,7 +249,9 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
 
         let context = MockContextProvider::default();
         let sql_to_rel = SqlToRel::new(&context);
-        let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+        let plan = sql_to_rel
+            .sql_statement_to_plan(statement)
+            .unwrap_or_else(|e| panic!("Failed to parse sql: {}\n{e}", query.sql));
 
         let unparser = Unparser::new(&*query.unparser_dialect);
         let roundtrip_statement = unparser.plan_to_sql(&plan)?;

@@ -33,7 +33,6 @@ use arrow::datatypes::Schema;
 use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
-use crate::aggregate::average::Avg;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 
@@ -61,41 +60,6 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::BitAnd, _) => Arc::new(expressions::BitAnd::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::BitOr, _) => Arc::new(expressions::BitOr::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::BitXor, false) => Arc::new(expressions::BitXor::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::BitXor, true) => Arc::new(expressions::DistinctBitXor::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::BoolAnd, _) => Arc::new(expressions::BoolAnd::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
-        (AggregateFunction::BoolOr, _) => Arc::new(expressions::BoolOr::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
         (AggregateFunction::ArrayAgg, false) => {
             let expr = input_phy_exprs[0].clone();
             let nullable = expr.nullable(input_schema)?;
@@ -138,23 +102,6 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::Avg, false) => {
-            Arc::new(Avg::new(input_phy_exprs[0].clone(), name, data_type))
-        }
-        (AggregateFunction::Avg, true) => {
-            return not_impl_err!("AVG(DISTINCT) aggregations are not available");
-        }
-        (AggregateFunction::Correlation, false) => {
-            Arc::new(expressions::Correlation::new(
-                input_phy_exprs[0].clone(),
-                input_phy_exprs[1].clone(),
-                name,
-                data_type,
-            ))
-        }
-        (AggregateFunction::Correlation, true) => {
-            return not_impl_err!("CORR(DISTINCT) aggregations are not available");
-        }
         (AggregateFunction::NthValue, _) => {
             let expr = &input_phy_exprs[0];
             let Some(n) = input_phy_exprs[1]
@@ -175,22 +122,6 @@ pub fn create_aggregate_expr(
                 ordering_req.to_vec(),
             ))
         }
-        (AggregateFunction::StringAgg, false) => {
-            if !ordering_req.is_empty() {
-                return not_impl_err!(
-                    "STRING_AGG(ORDER BY a ASC) order-sensitive aggregations are not available"
-                );
-            }
-            Arc::new(expressions::StringAgg::new(
-                input_phy_exprs[0].clone(),
-                input_phy_exprs[1].clone(),
-                name,
-                data_type,
-            ))
-        }
-        (AggregateFunction::StringAgg, true) => {
-            return not_impl_err!("STRING_AGG(DISTINCT) aggregations are not available");
-        }
     })
 }
 
@@ -201,13 +132,9 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_expr::{type_coercion, Signature};
 
-    use crate::expressions::{
-        try_cast, ArrayAgg, Avg, BitAnd, BitOr, BitXor, BoolAnd, BoolOr,
-        DistinctArrayAgg, Max, Min,
-    };
+    use crate::expressions::{try_cast, ArrayAgg, DistinctArrayAgg, Max, Min};
 
     use super::*;
-
     #[test]
     fn test_approx_expr() -> Result<()> {
         let funcs = vec![AggregateFunction::ArrayAgg];
@@ -240,7 +167,7 @@ mod tests {
                         Field::new_list(
                             "c1",
                             Field::new("item", data_type.clone(), true),
-                            true,
+                            false,
                         ),
                         result_agg_phy_exprs.field().unwrap()
                     );
@@ -260,7 +187,7 @@ mod tests {
                         Field::new_list(
                             "c1",
                             Field::new("item", data_type.clone(), true),
-                            true,
+                            false,
                         ),
                         result_agg_phy_exprs.field().unwrap()
                     );
@@ -320,185 +247,24 @@ mod tests {
     }
 
     #[test]
-    fn test_bit_and_or_xor_expr() -> Result<()> {
-        let funcs = vec![
-            AggregateFunction::BitAnd,
-            AggregateFunction::BitOr,
-            AggregateFunction::BitXor,
-        ];
-        let data_types = vec![DataType::UInt64, DataType::Int64];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema =
-                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                match fun {
-                    AggregateFunction::BitAnd => {
-                        assert!(result_agg_phy_exprs.as_any().is::<BitAnd>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", data_type.clone(), true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    AggregateFunction::BitOr => {
-                        assert!(result_agg_phy_exprs.as_any().is::<BitOr>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", data_type.clone(), true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    AggregateFunction::BitXor => {
-                        assert!(result_agg_phy_exprs.as_any().is::<BitXor>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", data_type.clone(), true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_bool_and_or_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::BoolAnd, AggregateFunction::BoolOr];
-        let data_types = vec![DataType::Boolean];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema =
-                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                match fun {
-                    AggregateFunction::BoolAnd => {
-                        assert!(result_agg_phy_exprs.as_any().is::<BoolAnd>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", data_type.clone(), true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    AggregateFunction::BoolOr => {
-                        assert!(result_agg_phy_exprs.as_any().is::<BoolOr>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", data_type.clone(), true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_sum_avg_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::Avg];
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Float32,
-            DataType::Float64,
-        ];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema =
-                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::Avg {
-                    assert!(result_agg_phy_exprs.as_any().is::<Avg>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new("c1", DataType::Float64, true),
-                        result_agg_phy_exprs.field().unwrap()
-                    );
-                };
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_min_max() -> Result<()> {
-        let observed = AggregateFunction::Min.return_type(&[DataType::Utf8])?;
+        let observed = AggregateFunction::Min.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = AggregateFunction::Max.return_type(&[DataType::Int32])?;
+        let observed = AggregateFunction::Max.return_type(&[DataType::Int32], &[true])?;
         assert_eq!(DataType::Int32, observed);
 
         // test decimal for min
-        let observed =
-            AggregateFunction::Min.return_type(&[DataType::Decimal128(10, 6)])?;
+        let observed = AggregateFunction::Min
+            .return_type(&[DataType::Decimal128(10, 6)], &[true])?;
         assert_eq!(DataType::Decimal128(10, 6), observed);
 
         // test decimal for max
-        let observed =
-            AggregateFunction::Max.return_type(&[DataType::Decimal128(28, 13)])?;
+        let observed = AggregateFunction::Max
+            .return_type(&[DataType::Decimal128(28, 13)], &[true])?;
         assert_eq!(DataType::Decimal128(28, 13), observed);
 
         Ok(())
-    }
-
-    #[test]
-    fn test_avg_return_type() -> Result<()> {
-        let observed = AggregateFunction::Avg.return_type(&[DataType::Float32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Avg.return_type(&[DataType::Float64])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed = AggregateFunction::Avg.return_type(&[DataType::Int32])?;
-        assert_eq!(DataType::Float64, observed);
-
-        let observed =
-            AggregateFunction::Avg.return_type(&[DataType::Decimal128(10, 6)])?;
-        assert_eq!(DataType::Decimal128(14, 10), observed);
-
-        let observed =
-            AggregateFunction::Avg.return_type(&[DataType::Decimal128(36, 6)])?;
-        assert_eq!(DataType::Decimal128(38, 10), observed);
-        Ok(())
-    }
-
-    #[test]
-    fn test_avg_no_utf8() {
-        let observed = AggregateFunction::Avg.return_type(&[DataType::Utf8]);
-        assert!(observed.is_err());
     }
 
     // Helper function

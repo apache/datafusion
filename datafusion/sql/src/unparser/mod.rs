@@ -18,6 +18,7 @@
 mod ast;
 mod expr;
 mod plan;
+mod rewrite;
 mod utils;
 
 pub use expr::expr_to_sql;

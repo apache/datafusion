@@ -94,6 +94,10 @@ impl DisplayAs for CustomPlan {
 }
 
 impl ExecutionPlan for CustomPlan {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

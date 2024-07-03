@@ -82,14 +82,6 @@ impl UnwrapCastInComparison {
 }
 
 impl OptimizerRule for UnwrapCastInComparison {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called UnwrapCastInComparison::rewrite")
-    }
-
     fn name(&self) -> &str {
         "unwrap_cast_in_comparison"
     }
@@ -847,7 +839,7 @@ mod tests {
 
     fn expr_test_schema() -> DFSchemaRef {
         Arc::new(
-            DFSchema::from_unqualifed_fields(
+            DFSchema::from_unqualified_fields(
                 vec![
                     Field::new("c1", DataType::Int32, false),
                     Field::new("c2", DataType::Int64, false),
