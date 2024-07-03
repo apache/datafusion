@@ -2289,8 +2289,8 @@ mod test {
             ),
         )))?;
 
-        let c0 = Field::new("c0", DataType::Boolean, false);
-        let c1 = Field::new("c1", DataType::Int32, false);
+        let c0 = Field::new("c0", DataType::Boolean, true);
+        let c1 = Field::new("c1", DataType::Int32, true);
         let c2 = Field::new("c2", DataType::Utf8, true);
         round_trip_literal(
             ScalarStructBuilder::new()
@@ -2363,7 +2363,7 @@ mod test {
         round_trip_type(DataType::Struct(
             vec![
                 Field::new("c0", DataType::Int32, true),
-                Field::new("c1", DataType::Utf8, false),
+                Field::new("c1", DataType::Utf8, true),
             ]
             .into(),
         ))?;

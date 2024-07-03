@@ -358,6 +358,11 @@ impl Unnest {
             expr: Box::new(expr),
         }
     }
+
+    /// Create a new Unnest expression.
+    pub fn new_boxed(boxed: Box<Expr>) -> Self {
+        Self { expr: boxed }
+    }
 }
 
 /// Alias expression
@@ -1198,32 +1203,53 @@ impl Expr {
         }
     }
 
-    /// Recursively potentially multiple aliases from an expression.
+    /// Recursively removed potentially multiple aliases from an expression.
     ///
-    /// If the expression is not an alias, the expression is returned unchanged.
-    /// This method removes directly nested aliases, but not other nested
-    /// aliases.
+    /// This method removes nested aliases and returns [`Transformed`]
+    /// to signal if the expression was changed.
     ///
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
     /// // `foo as "bar"` is unaliased to `foo`
     /// let expr = col("foo").alias("bar");
-    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    /// assert_eq!(expr.unalias_nested().data, col("foo"));
     ///
-    /// // `foo as "bar" + baz` is not unaliased
+    /// // `foo as "bar" + baz` is  unaliased
     /// let expr = col("foo").alias("bar") + col("baz");
-    /// assert_eq!(expr.clone().unalias_nested(), expr);
+    /// assert_eq!(expr.clone().unalias_nested().data, col("foo") + col("baz"));
     ///
     /// // `foo as "bar" as "baz" is unalaised to foo
     /// let expr = col("foo").alias("bar").alias("baz");
-    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    /// assert_eq!(expr.unalias_nested().data, col("foo"));
     /// ```
-    pub fn unalias_nested(self) -> Expr {
-        match self {
-            Expr::Alias(alias) => alias.expr.unalias_nested(),
-            _ => self,
-        }
+    pub fn unalias_nested(self) -> Transformed<Expr> {
+        self.transform_down_up(
+            |expr| {
+                // f_down: skip subqueries.  Check in f_down to avoid recursing into them
+                let recursion = if matches!(
+                    expr,
+                    Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_)
+                ) {
+                    // subqueries could contain aliases so don't recurse into those
+                    TreeNodeRecursion::Jump
+                } else {
+                    TreeNodeRecursion::Continue
+                };
+                Ok(Transformed::new(expr, false, recursion))
+            },
+            |expr| {
+                // f_up: unalias on up so we can remove nested aliases like
+                // `(x as foo) as bar`
+                if let Expr::Alias(Alias { expr, .. }) = expr {
+                    Ok(Transformed::yes(*expr))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            },
+        )
+        // unreachable code: internal closure doesn't return err
+        .unwrap()
     }
 
     /// Return `self IN <list>` if `negated` is false, otherwise
