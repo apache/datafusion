@@ -4830,6 +4830,8 @@ NULL 3
 NULL 2
 NULL 1
 
+statement ok
+drop table t
 
 ### Test for window functions with arrays
 statement ok
@@ -4852,3 +4854,38 @@ c [4, 5, 6] NULL
 
 statement ok
 drop table array_data
+
+# Test for non-i64 offsets for NTILE, LAG, LEAD, NTH_VALUE
+statement ok
+CREATE TABLE t AS VALUES  (3, 3), (4, 4), (5, 5), (6, 6);
+
+query IIIIIIIII
+SELECT
+  column1,
+  ntile(2) OVER (order by column1),
+  ntile(arrow_cast(2, 'Int32')) OVER (order by column1),
+  lag(column2, -1) OVER (order by column1),
+  lag(column2, arrow_cast(-1, 'Int32')) OVER (order by column1),
+  lead(column2, -1) OVER (order by column1),
+  lead(column2, arrow_cast(-1, 'Int32')) OVER (order by column1),
+  nth_value(column2, 2) OVER (order by column1),
+  nth_value(column2, arrow_cast(2, 'Int32')) OVER (order by column1)
+FROM t;
+----
+3 1 1 4    4    NULL NULL NULL NULL
+4 1 1 5    5    3    3    4    4
+5 2 2 6    6    4    4    4    4
+6 2 2 NULL NULL 5    5    4    4
+
+# NTILE specifies the argument types so the error is different
+query error
+SELECT ntile(1.1) OVER (order by column1) FROM t;
+
+query error DataFusion error: Execution error: Expected an integer value
+SELECT lag(column2, 1.1) OVER (order by column1) FROM t;
+
+query error DataFusion error: Execution error: Expected an integer value
+SELECT lead(column2, 1.1) OVER (order by column1) FROM t;
+
+query error DataFusion error: Execution error: Expected an integer value
+SELECT nth_value(column2, 1.1) OVER (order by column1) FROM t;
