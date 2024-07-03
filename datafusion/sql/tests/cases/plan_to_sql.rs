@@ -351,6 +351,12 @@ fn test_pretty_roundtrip() -> Result<()> {
         ("(id OR (age - 8))", "id OR age - 8"),
         ("(id / (age - 8))", "id / (age - 8)"),
         ("((id / age) * 8)", "id / age * 8"),
+        ("((age + 10) < 20) IS TRUE", "(age + 10 < 20) IS TRUE"),
+        (
+            "(20 > (age + 5)) IS NOT FALSE",
+            "(20 > age + 5) IS NOT FALSE",
+        ),
+        ("(TRUE AND FALSE) IS FALSE", "(TRUE AND FALSE) IS FALSE"),
     ];
 
     for (sql, pretty) in sql_to_pretty_unparse.iter() {

@@ -102,6 +102,9 @@ pub fn expr_to_unparsed(expr: &Expr) -> Result<Unparsed> {
 }
 
 const LOWEST: &BinaryOperator = &BinaryOperator::Or;
+// closest precedence we have to IS operator is BitwiseAnd (any other) in PG docs
+// (https://www.postgresql.org/docs/7.2/sql-precedence.html)
+const IS: &BinaryOperator = &BinaryOperator::BitwiseAnd;
 
 impl Unparser<'_> {
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
@@ -652,28 +655,28 @@ impl Unparser<'_> {
                 op,
             },
             ast::Expr::IsTrue(expr) => ast::Expr::IsTrue(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
             )),
             ast::Expr::IsNotTrue(expr) => ast::Expr::IsNotTrue(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
             )),
             ast::Expr::IsFalse(expr) => ast::Expr::IsFalse(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
             )),
             ast::Expr::IsNotFalse(expr) => ast::Expr::IsNotFalse(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
             )),
             ast::Expr::IsNull(expr) => ast::Expr::IsNull(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
             )),
             ast::Expr::IsNotNull(expr) => ast::Expr::IsNotNull(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
             )),
             ast::Expr::IsUnknown(expr) => ast::Expr::IsUnknown(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
             )),
             ast::Expr::IsNotUnknown(expr) => ast::Expr::IsNotUnknown(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
             )),
             _ => expr,
         }
@@ -1480,27 +1483,27 @@ mod tests {
             (col("a").is_null(), r#"a IS NULL"#),
             (
                 (col("a") + col("b")).gt(lit(4)).is_true(),
-                r#"a + b > 4 IS TRUE"#,
+                r#"(a + b > 4) IS TRUE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_true(),
-                r#"a + b > 4 IS NOT TRUE"#,
+                r#"(a + b > 4) IS NOT TRUE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_false(),
-                r#"a + b > 4 IS FALSE"#,
+                r#"(a + b > 4) IS FALSE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_false(),
-                r#"a + b > 4 IS NOT FALSE"#,
+                r#"(a + b > 4) IS NOT FALSE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_unknown(),
-                r#"a + b > 4 IS UNKNOWN"#,
+                r#"(a + b > 4) IS UNKNOWN"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_unknown(),
-                r#"a + b > 4 IS NOT UNKNOWN"#,
+                r#"(a + b > 4) IS NOT UNKNOWN"#,
             ),
             (not(col("a")), r#"NOT a"#),
             (
