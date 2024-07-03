@@ -149,7 +149,7 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
 /// `parse_data_type(data_type.to_string()) == data_type`
 ///
 /// Remove if added to arrow: <https://github.com/apache/arrow-rs/issues/3821>
-fn parse_data_type(val: &str) -> Result<DataType> {
+pub fn parse_data_type(val: &str) -> Result<DataType> {
     Parser::new(val).parse()
 }
 
