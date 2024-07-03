@@ -231,10 +231,31 @@ impl SessionState {
             );
         }
 
+        let mut user_defined_sql_planners = vec![];
+
+        // register crate of array expressions (if enabled)
+        #[cfg(feature = "array_expressions")]
+        {
+            let array_planner =
+                Arc::new(functions_array::planner::ArrayFunctionPlanner) as _;
+
+            let field_access_planner =
+                Arc::new(functions_array::planner::FieldAccessPlanner) as _;
+
+            user_defined_sql_planners.extend(vec![array_planner, field_access_planner]);
+        }
+        #[cfg(feature = "datetime_expressions")]
+        {
+            let extract_planner =
+                Arc::new(functions::datetime::planner::ExtractPlanner::default()) as _;
+
+            user_defined_sql_planners.push(extract_planner);
+        }
+
         let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
-            user_defined_sql_planners: vec![],
+            user_defined_sql_planners,
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
@@ -956,27 +977,6 @@ impl SessionState {
         // custom planners are registered first, so they're run first and take precedence over built-in planners
         for planner in self.user_defined_sql_planners.iter() {
             query = query.with_user_defined_planner(planner.clone());
-        }
-
-        // register crate of array expressions (if enabled)
-        #[cfg(feature = "array_expressions")]
-        {
-            let array_planner =
-                Arc::new(functions_array::planner::ArrayFunctionPlanner) as _;
-
-            let field_access_planner =
-                Arc::new(functions_array::planner::FieldAccessPlanner) as _;
-
-            query = query
-                .with_user_defined_planner(array_planner)
-                .with_user_defined_planner(field_access_planner);
-        }
-        #[cfg(feature = "datetime_expressions")]
-        {
-            let extract_planner =
-                Arc::new(functions::datetime::planner::ExtractPlanner::default()) as _;
-
-            query = query.with_user_defined_planner(extract_planner);
         }
 
         query
