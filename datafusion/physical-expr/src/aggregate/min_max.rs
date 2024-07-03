@@ -266,6 +266,10 @@ impl AggregateExpr for Max {
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(SlidingMaxAccumulator::try_new(&self.data_type)?))
     }
+
+    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        Some((self.field().ok()?, true))
+    }
 }
 
 impl PartialEq<dyn Any> for Max {
@@ -1017,6 +1021,10 @@ impl AggregateExpr for Min {
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(SlidingMinAccumulator::try_new(&self.data_type)?))
+    }
+
+    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        Some((self.field().ok()?, false))
     }
 }
 
