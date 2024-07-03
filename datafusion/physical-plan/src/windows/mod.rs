@@ -634,7 +634,6 @@ mod tests {
     use datafusion_execution::TaskContext;
 
     use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_physical_expr_common::expressions::lit;
     use futures::FutureExt;
     use InputOrderMode::{Linear, PartiallySorted, Sorted};
 
