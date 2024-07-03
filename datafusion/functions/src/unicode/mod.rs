@@ -32,6 +32,7 @@ pub mod strpos;
 pub mod substr;
 pub mod substrindex;
 pub mod translate;
+pub mod planner;
 
 // create UDFs
 make_udf_function!(

@@ -110,6 +110,15 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
     ) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(exprs))
     }
+
+    // Plan the POSITION expression, e.g., POSITION(<expr> in <expr>)
+    // returns origin expression arguments if not possible
+    fn plan_position(
+        &self,
+        args: Vec<Expr>
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
 }
 
 /// An operator with two arguments to plan

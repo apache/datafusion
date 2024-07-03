@@ -967,14 +967,19 @@ impl SessionState {
             let field_access_planner =
                 Arc::new(functions_array::planner::FieldAccessPlanner) as _;
 
-            query
+            query = query
                 .with_user_defined_planner(array_planner)
                 .with_user_defined_planner(field_access_planner)
         }
-        #[cfg(not(feature = "array_expressions"))]
+        #[cfg(feature = "unicode_expressions")]
         {
-            query
+            let position_planner =
+                Arc::new(functions::unicode::planner::PositionPlanner::default()) as _;
+
+            query = query.with_user_defined_planner(position_planner);
         }
+        
+        query
     }
 }
 
