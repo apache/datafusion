@@ -651,6 +651,30 @@ impl Unparser<'_> {
                 right: Box::new(self.remove_unnecessary_nesting(*right, &op, right_op)),
                 op,
             },
+            ast::Expr::IsTrue(expr) => ast::Expr::IsTrue(Box::new(
+                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+            )),
+            ast::Expr::IsNotTrue(expr) => ast::Expr::IsNotTrue(Box::new(
+                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+            )),
+            ast::Expr::IsFalse(expr) => ast::Expr::IsFalse(Box::new(
+                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+            )),
+            ast::Expr::IsNotFalse(expr) => ast::Expr::IsNotFalse(Box::new(
+                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+            )),
+            ast::Expr::IsNull(expr) => ast::Expr::IsNull(Box::new(
+                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+            )),
+            ast::Expr::IsNotNull(expr) => ast::Expr::IsNotNull(Box::new(
+                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+            )),
+            ast::Expr::IsUnknown(expr) => ast::Expr::IsUnknown(Box::new(
+                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+            )),
+            ast::Expr::IsNotUnknown(expr) => ast::Expr::IsNotUnknown(Box::new(
+                self.remove_unnecessary_nesting(*expr, LOWEST, LOWEST),
+            )),
             _ => expr,
         }
     }
@@ -1456,27 +1480,27 @@ mod tests {
             (col("a").is_null(), r#"a IS NULL"#),
             (
                 (col("a") + col("b")).gt(lit(4)).is_true(),
-                r#"((a + b) > 4) IS TRUE"#,
+                r#"a + b > 4 IS TRUE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_true(),
-                r#"((a + b) > 4) IS NOT TRUE"#,
+                r#"a + b > 4 IS NOT TRUE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_false(),
-                r#"((a + b) > 4) IS FALSE"#,
+                r#"a + b > 4 IS FALSE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_false(),
-                r#"((a + b) > 4) IS NOT FALSE"#,
+                r#"a + b > 4 IS NOT FALSE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_unknown(),
-                r#"((a + b) > 4) IS UNKNOWN"#,
+                r#"a + b > 4 IS UNKNOWN"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_unknown(),
-                r#"((a + b) > 4) IS NOT UNKNOWN"#,
+                r#"a + b > 4 IS NOT UNKNOWN"#,
             ),
             (not(col("a")), r#"NOT a"#),
             (
@@ -1619,6 +1643,7 @@ mod tests {
 
         Ok(())
     }
+
     #[test]
     fn custom_dialect() -> Result<()> {
         let dialect = CustomDialect::new(Some('\''));
