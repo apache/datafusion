@@ -3851,12 +3851,13 @@ mod tests {
         Ok(())
     }
 
-    pub fn build_table_struct(
+    fn build_table_struct(
         struct_name: &str,
-        a: (&str, &Vec<Option<i32>>),
+        field_name_and_values: (&str, &Vec<Option<i32>>),
         nulls: Option<NullBuffer>,
     ) -> Arc<dyn ExecutionPlan> {
-        let inner_fields = vec![Field::new(a.0, DataType::Int32, true)];
+        let (field_name, values) = field_name_and_values;
+        let inner_fields = vec![Field::new(field_name, DataType::Int32, true)];
         let schema = Schema::new(vec![Field::new(
             struct_name,
             DataType::Struct(inner_fields.clone().into()),
@@ -3867,7 +3868,7 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(StructArray::new(
                 inner_fields.into(),
-                vec![Arc::new(Int32Array::from(a.1.clone()))],
+                vec![Arc::new(Int32Array::from(values.clone()))],
                 nulls,
             ))],
         )

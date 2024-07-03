@@ -1351,10 +1351,6 @@ physical_plan
 11)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
-statement ok
-set datafusion.optimizer.prefer_hash_join = true;
-
-
 # Join on struct
 query ??
 select join_t3.s3, join_t4.s4
@@ -1363,7 +1359,7 @@ inner join join_t4 on join_t3.s3 = join_t4.s4
 ----
 {id: 2} {id: 2}
 
-# Join on struct with null
+# Join on struct using IS NOT DISTINCT FROM
 query ??
 select join_t3.s3, join_t4.s4
 from join_t3
