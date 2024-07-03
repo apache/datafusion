@@ -20,7 +20,9 @@ use arrow_schema::TimeUnit;
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::planner::RawDictionaryExpr;
 use datafusion_expr::planner::RawFieldAccessExpr;
-use sqlparser::ast::{CastKind, Expr as SQLExpr, Subscript, TrimWhereField, Value};
+use sqlparser::ast::{
+    CastKind, DictionaryField, Expr as SQLExpr, Subscript, TrimWhereField, Value,
+};
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
@@ -621,21 +623,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 },
             ))),
             SQLExpr::Dictionary(fields) => {
-                let mut keys = vec![];
-                let mut values = vec![];
-                for field in fields {
-                    let key = lit(field.key.value);
-                    let value = self.sql_expr_to_logical_expr(
-                        *field.value,
-                        schema,
-                        planner_context,
-                    )?;
-                    keys.push(key);
-                    values.push(value);
-                }
-
-                let expr = RawDictionaryExpr { keys, values };
-                self.try_plan_dictionary_literal(expr, schema)
+                self.try_plan_dictionary_literal(fields, schema, planner_context)
             }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
@@ -643,10 +631,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn try_plan_dictionary_literal(
         &self,
-        expr: RawDictionaryExpr,
+        fields: Vec<DictionaryField>,
         schema: &DFSchema,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let mut raw_expr = expr;
+        let mut keys = vec![];
+        let mut values = vec![];
+        for field in fields {
+            let key = lit(field.key.value);
+            let value =
+                self.sql_expr_to_logical_expr(*field.value, schema, planner_context)?;
+            keys.push(key);
+            values.push(value);
+        }
+
+        let mut raw_expr = RawDictionaryExpr { keys, values };
+
         for planner in self.planners.iter() {
             match planner.plan_dictionary_literal(raw_expr, schema)? {
                 PlannerResult::Planned(expr) => {
