@@ -257,48 +257,58 @@ impl PhysicalExpr for BinaryExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         use arrow::compute::kernels::numeric::*;
 
-        let lhs = self.left.evaluate(batch)?;
-        let left_data_type = lhs.data_type();
-
-        if left_data_type == DataType::Boolean && self.op == Operator::And {
-            match &lhs {
-                ColumnarValue::Array(array) => {
-                    if let Ok(array) = as_boolean_array(&array) {
-                        if array.true_count() == 0 {
-                            return Ok(lhs);
+        #[inline]
+        fn check_short_circuit(arg: &ColumnarValue, op: &Operator) -> bool {
+            let data_type = arg.data_type();
+            if data_type == DataType::Boolean {
+                if *op == Operator::And {
+                    match arg {
+                        ColumnarValue::Array(array) => {
+                            if let Ok(array) = as_boolean_array(&array) {
+                                if array.true_count() == 0 {
+                                    return true;
+                                }
+                            }
+                        }
+                        ColumnarValue::Scalar(scalar) => {
+                            if let ScalarValue::Boolean(Some(value)) = scalar {
+                                if !value {
+                                    return true;
+                                }
+                            }
                         }
                     }
-                }
-                ColumnarValue::Scalar(scalar) => {
-                    if let ScalarValue::Boolean(Some(value)) = scalar {
-                        if !value {
-                            return Ok(lhs);
+                } else if *op == Operator::Or {
+                    match arg {
+                        ColumnarValue::Array(array) => {
+                            if let Ok(array) = as_boolean_array(&array) {
+                                if array.true_count() == array.len() {
+                                    return true;
+                                }
+                            }
+                        }
+                        ColumnarValue::Scalar(scalar) => {
+                            if let ScalarValue::Boolean(Some(value)) = scalar {
+                                if *value {
+                                    return true;
+                                }
+                            }
                         }
                     }
                 }
             }
+            false
         }
 
-        if left_data_type == DataType::Boolean && self.op == Operator::Or {
-            match &lhs {
-                ColumnarValue::Array(array) => {
-                    if let Ok(array) = as_boolean_array(&array) {
-                        if array.true_count() == array.len() {
-                            return Ok(lhs);
-                        }
-                    }
-                }
-                ColumnarValue::Scalar(scalar) => {
-                    if let ScalarValue::Boolean(Some(value)) = scalar {
-                        if *value {
-                            return Ok(lhs);
-                        }
-                    }
-                }
-            }
+        let lhs = self.left.evaluate(batch)?;
+
+        // Optimize for short-circuiting `Operator::And` or `Operator::Or` operations and return early.
+        if check_short_circuit(&lhs, &self.op) {
+            return Ok(lhs);
         }
 
         let rhs = self.right.evaluate(batch)?;
+        let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
 
         let schema = batch.schema();
