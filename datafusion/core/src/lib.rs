@@ -182,7 +182,7 @@
 //! In order to achieve this, DataFusion supports extension at many points:
 //!
 //! * read from any datasource ([`TableProvider`])
-//! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
+//! * define your own catalogs, schemas, and table lists ([`catalog`] and [`CatalogProvider`])
 //! * build your own query language or plans ([`LogicalPlanBuilder`])
 //! * declare and use user-defined functions ([`ScalarUDF`], and [`AggregateUDF`], [`WindowUDF`])
 //! * add custom plan rewrite passes ([`AnalyzerRule`], [`OptimizerRule`]  and [`PhysicalOptimizerRule`])
@@ -587,8 +587,47 @@ pub mod test_util;
 #[cfg(doctest)]
 doc_comment::doctest!("../../../README.md", readme_example_test);
 
+// Instructions for Documentation Examples
+//
+// The following commands test the examples from the user guide as part of
+// `cargo test --doc`
+//
+// # Adding new tests:
+//
+// Simply add code like this to your .md file and ensure your md file is
+// included in the lists below.
+//
+// ```rust
+// <code here will be tested>
+// ```
+//
+// Note that sometimes it helps to author the doctest as a standalone program
+// first, and then copy it into the user guide.
+//
+// # Debugging Test Failures
+//
+// Unfortunately, the line numbers reported by doctest do not correspond to the
+// line numbers of in the .md files. Thus, if a doctest fails, use the name of
+// the test to find the relevant file in the list below, and then find the
+// example in that file to fix.
+//
+// For example, if `user_guide_expressions(line 123)` fails,
+// go to `docs/source/user-guide/expressions.md` to find the relevant problem.
+
 #[cfg(doctest)]
 doc_comment::doctest!(
     "../../../docs/source/user-guide/example-usage.md",
-    user_guid_example_tests
+    user_guide_example_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/configs.md",
+    user_guide_configs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/expressions.md",
+    user_guide_expressions
 );

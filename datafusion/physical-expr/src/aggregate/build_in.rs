@@ -60,11 +60,6 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
-            Arc::clone(&input_phy_exprs[0]),
-            name,
-            data_type,
-        )),
         (AggregateFunction::ArrayAgg, false) => {
             let expr = Arc::clone(&input_phy_exprs[0]);
             let nullable = expr.nullable(input_schema)?;

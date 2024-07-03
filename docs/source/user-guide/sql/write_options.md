@@ -70,6 +70,16 @@ In this example, we write the entirety of `source_table` out to a folder of parq
 
 ## Available Options
 
+### Execution Specific Options
+
+The following options are available when executing a `COPY` query.
+
+| Option                              | Description                                                                        | Default Value |
+| ----------------------------------- | ---------------------------------------------------------------------------------- | ------------- |
+| execution.keep_partition_by_columns | Flag to retain the columns in the output data when using `PARTITIONED BY` queries. | false         |
+
+Note: `execution.keep_partition_by_columns` flag can also be enabled through `ExecutionOptions` within `SessionConfig`.
+
 ### JSON Format Specific Options
 
 The following options are available when writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.

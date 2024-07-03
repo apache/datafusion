@@ -1196,10 +1196,9 @@ mod tests {
     use datafusion_expr::expr::Sort;
     use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
     use datafusion_functions_aggregate::median::median_udaf;
-    use datafusion_physical_expr::expressions::{
-        lit, FirstValue, LastValue, OrderSensitiveArrayAgg,
-    };
+    use datafusion_physical_expr::expressions::{lit, OrderSensitiveArrayAgg};
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
