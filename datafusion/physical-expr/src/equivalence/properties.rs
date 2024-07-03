@@ -175,7 +175,7 @@ impl EquivalenceProperties {
     }
 
     /// Removes constant expressions that may change across partitions.
-    /// This method should be used when different partitions are fused.
+    /// This method should be used when data from different partitions are merged.
     pub fn clear_per_partition_constants(&mut self) {
         self.constants.retain(|item| item.across_partitions());
     }

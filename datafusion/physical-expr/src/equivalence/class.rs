@@ -32,7 +32,7 @@ use datafusion_common::JoinType;
 /// A structure representing a expression known to be constant in a physical execution plan.
 ///
 /// The `ConstExpr` struct encapsulates an expression that is constant during the execution
-/// of a query. For example if a predicate like `A = 5` applied earlier in the plan `A` would 
+/// of a query. For example if a predicate like `A = 5` applied earlier in the plan `A` would
 /// be known constant
 ///
 /// # Fields
