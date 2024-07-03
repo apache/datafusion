@@ -135,7 +135,9 @@ async fn query_parquet_demo() -> Result<()> {
 
 /// DataFusion can parse a SQL text and convert it back to SQL using [`Unparser`].
 async fn round_trip_parse_sql_expr_demo() -> Result<()> {
-    let sql = "((int_col < 5) OR (double_col = 8))";
+    // unparser can also remove extra parentheses,
+    // so `((int_col < 5) OR (double_col = 8))` will also produce the same SQL
+    let sql = "int_col < 5 OR double_col = 8";
 
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();

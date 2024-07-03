@@ -655,28 +655,28 @@ impl Unparser<'_> {
                 op,
             },
             ast::Expr::IsTrue(expr) => ast::Expr::IsTrue(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
             )),
             ast::Expr::IsNotTrue(expr) => ast::Expr::IsNotTrue(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
             )),
             ast::Expr::IsFalse(expr) => ast::Expr::IsFalse(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
             )),
             ast::Expr::IsNotFalse(expr) => ast::Expr::IsNotFalse(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
             )),
             ast::Expr::IsNull(expr) => ast::Expr::IsNull(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
             )),
             ast::Expr::IsNotNull(expr) => ast::Expr::IsNotNull(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
             )),
             ast::Expr::IsUnknown(expr) => ast::Expr::IsUnknown(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
             )),
             ast::Expr::IsNotUnknown(expr) => ast::Expr::IsNotUnknown(Box::new(
-                self.remove_unnecessary_nesting(*expr, LOWEST, IS),
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
             )),
             _ => expr,
         }
