@@ -152,6 +152,7 @@ pub struct RawFieldAccessExpr {
 }
 
 /// A dictionary expression { key: value, ...}
+#[derive(Debug, Clone)]
 pub struct RawDictionaryExpr {
     pub keys: Vec<Expr>,
     pub values: Vec<Expr>,

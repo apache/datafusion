@@ -655,8 +655,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 PlannerResult::Original(expr) => raw_expr = expr,
             }
         }
-
-        internal_err!("Expected a simplified result, but none was found")
+        not_impl_err!("Unsupported dictionary literal: {raw_expr:?}")
     }
 
     /// Parses a struct(..) expression
