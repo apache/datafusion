@@ -42,9 +42,11 @@ pub fn main() -> Result<()> {
     let context_provider = MyContextProvider::default();
     let sql_to_rel = SqlToRel::new(&context_provider);
     let logical_plan = sql_to_rel.sql_statement_to_plan(statements[0].clone())?;
-    println!(
-        "Unoptimized Logical Plan:\n\n{}\n",
-        logical_plan.display_indent()
+    assert_eq!(
+        logical_plan.display_indent().to_string(),
+        "Projection: person.name\
+        \n  Filter: person.age BETWEEN Int64(21) AND Int64(32)\
+        \n    TableScan: person"
     );
 
     // run the analyzer with our custom rule
@@ -52,18 +54,20 @@ pub fn main() -> Result<()> {
     let analyzer = Analyzer::with_rules(vec![Arc::new(MyAnalyzerRule {})]);
     let analyzed_plan =
         analyzer.execute_and_check(logical_plan, config.options(), |_, _| {})?;
-    println!(
-        "Analyzed Logical Plan:\n\n{}\n",
-        analyzed_plan.display_indent()
-    );
+        assert_eq!(
+          analyzed_plan.display_indent().to_string(),
+          "Projection: person.name\
+          \n  Filter: CAST(person.age AS Int64) BETWEEN Int64(21) AND Int64(32)\
+          \n    TableScan: person",
+      );
 
     // then run the optimizer with our custom rule
     let optimizer = Optimizer::with_rules(vec![Arc::new(MyOptimizerRule {})]);
     let optimized_plan = optimizer.optimize(analyzed_plan, &config, observe)?;
-    println!(
-        "Optimized Logical Plan:\n\n{}\n",
-        optimized_plan.display_indent()
-    );
+    assert_eq!(
+      optimized_plan.display_indent().to_string(),
+      "TableScan: person projection=[name], full_filters=[person.age >= UInt8(21), person.age <= UInt8(32)]"
+  );
 
     Ok(())
 }
