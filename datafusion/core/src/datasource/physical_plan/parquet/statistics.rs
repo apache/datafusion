@@ -918,21 +918,18 @@ macro_rules! get_data_page_statistics {
                         }
                     })
                 },
-                Some(DataType::FixedSizeBinary(size)) => {
+               Some(DataType::FixedSizeBinary(size)) => {
                     Ok(Arc::new(
-                        FixedSizeBinaryArray::from(
-                            [<$stat_type_prefix FixedLenByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                                x.into_iter().filter_map(|x| x.and_then(|x| {
-                                    if x.len().try_into() == Ok(*size) {
-                                        Some(x.data())
-                                    } else {
-                                        None
-                                    }
-                                }))
-                            }).flatten().collect::<Vec<_>>()
-                        )
+                        FixedSizeBinaryArray::try_from_iter(
+                            [<$stat_type_prefix FixedLenByteArrayDataPageStatsIterator>]::new($iterator)
+                            .flat_map(|x| x.into_iter())
+                            .filter_map(|x| x)
+                        ).unwrap_or_else(|e| {
+                            log::debug!("FixedSizeBinary statistics is invalid: {}", e);
+                            FixedSizeBinaryArray::new(*size, vec![].into(), None)
+                        })
                     ))
-                }
+                },
                 _ => unimplemented!()
             }
         }
