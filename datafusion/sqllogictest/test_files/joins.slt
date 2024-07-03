@@ -1352,6 +1352,28 @@ physical_plan
 
 
 # Join on struct
+query TT
+explain select join_t3.s3, join_t4.s4
+from join_t3
+inner join join_t4 on join_t3.s3 = join_t4.s4
+----
+logical_plan
+01)Inner Join: join_t3.s3 = join_t4.s4
+02)--TableScan: join_t3 projection=[s3]
+03)--TableScan: join_t4 projection=[s4]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=2
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s3@0, s4@0)]
+03)----CoalesceBatchesExec: target_batch_size=2
+04)------RepartitionExec: partitioning=Hash([s3@0], 2), input_partitions=2
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=2
+08)------RepartitionExec: partitioning=Hash([s4@0], 2), input_partitions=2
+09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)----------MemoryExec: partitions=1, partition_sizes=[1]
+
+
 query ??
 select join_t3.s3, join_t4.s4
 from join_t3
