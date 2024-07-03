@@ -221,6 +221,17 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     ) -> Option<Arc<dyn AggregateExpr>> {
         None
     }
+
+    /// If this function is max, return (output_field, true)
+    /// if the function is min, return (output_field, false)
+    /// otherwise return None (the default)
+    ///
+    /// output_field is the name of the column produced by this aggregate
+    ///
+    /// Note: this is used to use special aggregate implementations in certain conditions
+    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        None
+    }
 }
 
 /// Stores the physical expressions used inside the `AggregateExpr`.
