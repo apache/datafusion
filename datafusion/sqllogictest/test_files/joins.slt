@@ -53,6 +53,20 @@ AS VALUES
 (44, 'x', 3),
 (55, 'w', 3);
 
+statement ok
+CREATE TABLE join_t3(s3 struct<id INT>)
+  AS VALUES
+  (NULL),
+  (struct(1)),
+  (struct(2));
+
+statement ok
+CREATE TABLE join_t4(s4 struct<id INT>)
+  AS VALUES
+  (NULL),
+  (struct(2)),
+  (struct(3));
+
 # Left semi anti join
 
 statement ok
@@ -1335,6 +1349,29 @@ physical_plan
 09)--------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
 10)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 11)------------MemoryExec: partitions=1, partition_sizes=[1]
+
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = true;
+
+
+# Join on struct
+query ??
+select join_t3.s3, join_t4.s4
+from join_t3
+inner join join_t4 on join_t3.s3 = join_t4.s4
+----
+{id: 2} {id: 2}
+
+# Join on struct with null
+query ??
+select join_t3.s3, join_t4.s4
+from join_t3
+inner join join_t4 on join_t3.s3 IS NOT DISTINCT FROM join_t4.s4
+----
+NULL NULL
+{id: 2} {id: 2}
+
 
 query TT
 EXPLAIN
