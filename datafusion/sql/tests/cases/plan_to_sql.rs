@@ -356,7 +356,8 @@ fn test_pretty_roundtrip() -> Result<()> {
             "(20 > (age + 5)) IS NOT FALSE",
             "(20 > age + 5) IS NOT FALSE",
         ),
-        ("(TRUE AND FALSE) IS FALSE", "(TRUE AND FALSE) IS FALSE"),
+        ("(true AND false) IS FALSE", "(true AND false) IS FALSE"),
+        ("true AND (false IS FALSE)", "true AND false IS FALSE"),
     ];
 
     for (sql, pretty) in sql_to_pretty_unparse.iter() {
