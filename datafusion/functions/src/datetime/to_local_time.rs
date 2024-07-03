@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn test_to_local_time_timezones_scalar() {
         // TODO chunchun: this is wrong
-        let expect = ScalarValue::TimestampSecond(Some(3602_000_000_000), None);
+        let expect = ScalarValue::TimestampSecond(Some(3_602_000_000_000), None);
         let res = ToLocalTimeFunc::new()
             .invoke(&[ColumnarValue::Scalar(ScalarValue::TimestampSecond(
                 Some(2_000_000_000),            // 2033-05-18T03:33:20Z
@@ -327,11 +327,12 @@ mod tests {
             panic!("unexpected return type")
         }
 
-        let expect = ScalarValue::TimestampNanosecond(Some(1711929601_000_000_000), None); // 2024-04-01T00:00:01
+        let expect =
+            ScalarValue::TimestampNanosecond(Some(1_711_929_601_000_000_000), None); // 2024-04-01T00:00:01
         let res = ToLocalTimeFunc::new()
             .invoke(&[ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                Some(1711922401_000_000_000),   // 2024-03-31T22:00:01Z
-                Some("Europe/Brussels".into()), // 2024-04-01T00:00:01+02:00
+                Some(1_711_922_401_000_000_000), // 2024-03-31T22:00:01Z
+                Some("Europe/Brussels".into()),  // 2024-04-01T00:00:01+02:00
             ))])
             .unwrap();
         if let ColumnarValue::Scalar(res) = res {
@@ -348,7 +349,7 @@ mod tests {
     #[test]
     fn test_to_local_time_timezones_array() {
         // TODO chunchun: might need to change string to Timestamp in cases
-        let cases = vec![
+        let cases = [
             (
                 vec![
                     "2020-09-08T00:00:00Z",
