@@ -967,14 +967,19 @@ impl SessionState {
             let field_access_planner =
                 Arc::new(functions_array::planner::FieldAccessPlanner) as _;
 
-            query
+            query = query
                 .with_user_defined_planner(array_planner)
-                .with_user_defined_planner(field_access_planner)
+                .with_user_defined_planner(field_access_planner);
         }
-        #[cfg(not(feature = "array_expressions"))]
+        #[cfg(feature = "datetime_expressions")]
         {
-            query
+            let extract_planner =
+                Arc::new(functions::datetime::planner::ExtractPlanner::default()) as _;
+
+            query = query.with_user_defined_planner(extract_planner);
         }
+
+        query
     }
 }
 
