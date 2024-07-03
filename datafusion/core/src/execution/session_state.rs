@@ -244,6 +244,13 @@ impl SessionState {
 
             user_defined_sql_planners.extend(vec![array_planner, field_access_planner]);
         }
+        #[cfg(feature = "datetime_expressions")]
+        {
+            let extract_planner =
+                Arc::new(functions::datetime::planner::ExtractPlanner::default()) as _;
+
+            user_defined_sql_planners.push(extract_planner);
+        }
 
         let mut new_self = SessionState {
             session_id,
