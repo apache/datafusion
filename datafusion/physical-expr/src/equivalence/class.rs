@@ -72,6 +72,17 @@ impl ConstExpr {
     pub fn owned_expr(self) -> Arc<dyn PhysicalExpr> {
         self.expr
     }
+
+    pub fn map<F>(&self, f: F) -> Option<Self>
+    where
+        F: Fn(&Arc<dyn PhysicalExpr>) -> Option<Arc<dyn PhysicalExpr>>,
+    {
+        let maybe_expr = f(&self.expr);
+        maybe_expr.map(|expr| Self {
+            expr,
+            across_partitions: self.across_partitions,
+        })
+    }
 }
 
 /// Checks whether `expr` is among in the `const_exprs`.

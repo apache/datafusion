@@ -822,12 +822,7 @@ impl EquivalenceProperties {
             .constants
             .iter()
             .flat_map(|const_expr| {
-                self.eq_group
-                    .project_expr(mapping, const_expr.expr())
-                    .map(|expr| {
-                        ConstExpr::new(expr)
-                            .with_across_partitions(const_expr.across_partitions())
-                    })
+                const_expr.map(|expr| self.eq_group.project_expr(mapping, expr))
             })
             .collect::<Vec<_>>();
         // Add projection expressions that are known to be constant:
