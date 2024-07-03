@@ -599,7 +599,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Position { expr, r#in } => {
                 let substr =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
-                let fullstr = self.sql_expr_to_logical_expr(*r#in, schema, planner_context)?;
+                let fullstr =
+                    self.sql_expr_to_logical_expr(*r#in, schema, planner_context)?;
                 let mut extract_args = vec![fullstr, substr];
 
                 for planner in self.planners.iter() {

@@ -25,6 +25,7 @@ pub mod character_length;
 pub mod find_in_set;
 pub mod left;
 pub mod lpad;
+pub mod planner;
 pub mod reverse;
 pub mod right;
 pub mod rpad;
@@ -32,7 +33,6 @@ pub mod strpos;
 pub mod substr;
 pub mod substrindex;
 pub mod translate;
-pub mod planner;
 
 // create UDFs
 make_udf_function!(

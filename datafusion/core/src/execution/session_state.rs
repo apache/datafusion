@@ -978,7 +978,7 @@ impl SessionState {
 
             query = query.with_user_defined_planner(position_planner);
         }
-        
+
         query
     }
 }
