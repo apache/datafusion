@@ -56,9 +56,9 @@ pub fn main() -> Result<()> {
         analyzer.execute_and_check(logical_plan, config.options(), |_, _| {})?;
     assert_eq!(
         analyzed_plan.display_indent().to_string(),
-        "Projection: person.name\
-          \n  Filter: CAST(person.age AS Int64) BETWEEN Int64(21) AND Int64(32)\
-          \n    TableScan: person",
+        "Projection: person.name, person.age\
+        \n  Filter: person.age BETWEEN Int64(21) AND Int64(32)\
+        \n    TableScan: person"
     );
 
     // then run the optimizer with our custom rule
