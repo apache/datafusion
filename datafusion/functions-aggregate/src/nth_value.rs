@@ -222,20 +222,19 @@ impl Accumulator for NthValueAccumulator {
             return Ok(());
         }
 
-        let n_required = self.n.unsigned_abs() as usize;
-        let from_start = self.n > 0;
-        if from_start {
-            // direction is from start
-            let n_remaining = n_required.saturating_sub(self.values.len());
-            self.append_new_data(values, Some(n_remaining))?;
-        } else {
-            // direction is from end
-            self.append_new_data(values, None)?;
-            let start_offset = self.values.len().saturating_sub(n_required);
-            if start_offset > 0 {
-                self.values.drain(0..start_offset);
-                self.ordering_values.drain(0..start_offset);
-            }
+        let _ = self.append_new_data(values, None);
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let end = std::cmp::min(self.values.len(), values[0].len());
+        if end > 0 {
+            self.values.drain(0..end);
+            self.ordering_values.drain(0..end);
         }
 
         Ok(())
