@@ -5,7 +5,7 @@ use arrow::{
     datatypes::TimestampMillisecondType,
 };
 use arrow_array::{
-    Array, Int64Array, PrimitiveArray, RecordBatch, StringArray,
+    Array, Int64Array, PrimitiveArray, RecordBatch, StringArray, StructArray,
     TimestampMillisecondArray,
 };
 use chrono::NaiveDateTime;
@@ -32,9 +32,14 @@ pub fn system_time_from_epoch(epoch: i64) -> SystemTime {
 impl RecordBatchWatermark {
     pub fn try_from(
         record_batch: &RecordBatch,
-        timestamp_column: &str,
+        metadata_column: &str,
     ) -> Result<Self, DataFusionError> {
-        let ts_column = record_batch.column_by_name(timestamp_column).unwrap();
+        let metadata = record_batch.column_by_name(metadata_column).unwrap();
+        let metadata_struct = metadata.as_any().downcast_ref::<StructArray>().unwrap();
+
+        let ts_column = metadata_struct
+            .column_by_name("canonical_timestamp")
+            .unwrap();
         let ts_array = ts_column
             .as_any()
             .downcast_ref::<PrimitiveArray<TimestampMillisecondType>>()
