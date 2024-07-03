@@ -85,7 +85,7 @@ impl Display for Unparsed {
 /// let expr = col("a").gt(lit(4));
 /// let sql = expr_to_sql(&expr).unwrap();
 ///
-/// assert_eq!(format!("{}", sql), "(a > 4)")
+/// assert_eq!(format!("{}", sql), "a > 4")
 /// ```
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
@@ -104,14 +104,12 @@ pub fn expr_to_unparsed(expr: &Expr) -> Result<Unparsed> {
 const LOWEST: &BinaryOperator = &BinaryOperator::Or;
 
 impl Unparser<'_> {
-    /// Try to unparse the expression into a more human-readable format
-    /// by removing unnecessary parentheses.
-    pub fn pretty_expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
-        let root_expr = self.expr_to_sql(expr)?;
-        Ok(self.pretty(root_expr, LOWEST, LOWEST))
+    pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
+        let root_expr = self.expr_to_sql_inner(expr)?;
+        Ok(self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST))
     }
 
-    pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
+    fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
         match expr {
             Expr::InList(InList {
                 expr,
@@ -120,10 +118,10 @@ impl Unparser<'_> {
             }) => {
                 let list_expr = list
                     .iter()
-                    .map(|e| self.expr_to_sql(e))
+                    .map(|e| self.expr_to_sql_inner(e))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(ast::Expr::InList {
-                    expr: Box::new(self.expr_to_sql(expr)?),
+                    expr: Box::new(self.expr_to_sql_inner(expr)?),
                     list: list_expr,
                     negated: *negated,
                 })
@@ -137,7 +135,7 @@ impl Unparser<'_> {
                         if matches!(e, Expr::Wildcard { qualifier: None }) {
                             Ok(FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
                         } else {
-                            self.expr_to_sql(e).map(|e| {
+                            self.expr_to_sql_inner(e).map(|e| {
                                 FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e))
                             })
                         }
@@ -166,9 +164,9 @@ impl Unparser<'_> {
                 low,
                 high,
             }) => {
-                let sql_parser_expr = self.expr_to_sql(expr)?;
-                let sql_low = self.expr_to_sql(low)?;
-                let sql_high = self.expr_to_sql(high)?;
+                let sql_parser_expr = self.expr_to_sql_inner(expr)?;
+                let sql_low = self.expr_to_sql_inner(low)?;
+                let sql_high = self.expr_to_sql_inner(high)?;
                 Ok(ast::Expr::Nested(Box::new(self.between_op_to_sql(
                     sql_parser_expr,
                     *negated,
@@ -178,8 +176,8 @@ impl Unparser<'_> {
             }
             Expr::Column(col) => self.col_to_sql(col),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let l = self.expr_to_sql(left.as_ref())?;
-                let r = self.expr_to_sql(right.as_ref())?;
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
                 let op = self.op_to_sql(op)?;
 
                 Ok(ast::Expr::Nested(Box::new(self.binary_op_to_sql(l, r, op))))
@@ -191,21 +189,21 @@ impl Unparser<'_> {
             }) => {
                 let conditions = when_then_expr
                     .iter()
-                    .map(|(w, _)| self.expr_to_sql(w))
+                    .map(|(w, _)| self.expr_to_sql_inner(w))
                     .collect::<Result<Vec<_>>>()?;
                 let results = when_then_expr
                     .iter()
-                    .map(|(_, t)| self.expr_to_sql(t))
+                    .map(|(_, t)| self.expr_to_sql_inner(t))
                     .collect::<Result<Vec<_>>>()?;
                 let operand = match expr.as_ref() {
-                    Some(e) => match self.expr_to_sql(e) {
+                    Some(e) => match self.expr_to_sql_inner(e) {
                         Ok(sql_expr) => Some(Box::new(sql_expr)),
                         Err(_) => None,
                     },
                     None => None,
                 };
                 let else_result = match else_expr.as_ref() {
-                    Some(e) => match self.expr_to_sql(e) {
+                    Some(e) => match self.expr_to_sql_inner(e) {
                         Ok(sql_expr) => Some(Box::new(sql_expr)),
                         Err(_) => None,
                     },
@@ -220,7 +218,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::Cast(Cast { expr, data_type }) => {
-                let inner_expr = self.expr_to_sql(expr)?;
+                let inner_expr = self.expr_to_sql_inner(expr)?;
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(inner_expr),
@@ -229,7 +227,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
-            Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql(expr),
+            Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
@@ -264,7 +262,7 @@ impl Unparser<'_> {
                     window_name: None,
                     partition_by: partition_by
                         .iter()
-                        .map(|e| self.expr_to_sql(e))
+                        .map(|e| self.expr_to_sql_inner(e))
                         .collect::<Result<Vec<_>>>()?,
                     order_by,
                     window_frame: Some(ast::WindowFrame {
@@ -305,8 +303,8 @@ impl Unparser<'_> {
                 case_insensitive: _,
             }) => Ok(ast::Expr::Like {
                 negated: *negated,
-                expr: Box::new(self.expr_to_sql(expr)?),
-                pattern: Box::new(self.expr_to_sql(pattern)?),
+                expr: Box::new(self.expr_to_sql_inner(expr)?),
+                pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                 escape_char: escape_char.map(|c| c.to_string()),
             }),
             Expr::AggregateFunction(agg) => {
@@ -314,7 +312,7 @@ impl Unparser<'_> {
 
                 let args = self.function_args_to_sql(&agg.args)?;
                 let filter = match &agg.filter {
-                    Some(filter) => Some(Box::new(self.expr_to_sql(filter)?)),
+                    Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
                 Ok(ast::Expr::Function(Function {
@@ -348,7 +346,7 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Subquery(sub_query))
             }
             Expr::InSubquery(insubq) => {
-                let inexpr = Box::new(self.expr_to_sql(insubq.expr.as_ref())?);
+                let inexpr = Box::new(self.expr_to_sql_inner(insubq.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(insubq.subquery.subquery.as_ref())?;
                 let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
@@ -386,38 +384,38 @@ impl Unparser<'_> {
                 nulls_first: _,
             }) => plan_err!("Sort expression should be handled by expr_to_unparsed"),
             Expr::IsNull(expr) => {
-                Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql(expr)?)))
+                Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql_inner(expr)?)))
             }
-            Expr::IsNotNull(expr) => {
-                Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
-            }
+            Expr::IsNotNull(expr) => Ok(ast::Expr::IsNotNull(Box::new(
+                self.expr_to_sql_inner(expr)?,
+            ))),
             Expr::IsTrue(expr) => {
-                Ok(ast::Expr::IsTrue(Box::new(self.expr_to_sql(expr)?)))
+                Ok(ast::Expr::IsTrue(Box::new(self.expr_to_sql_inner(expr)?)))
             }
-            Expr::IsNotTrue(expr) => {
-                Ok(ast::Expr::IsNotTrue(Box::new(self.expr_to_sql(expr)?)))
-            }
+            Expr::IsNotTrue(expr) => Ok(ast::Expr::IsNotTrue(Box::new(
+                self.expr_to_sql_inner(expr)?,
+            ))),
             Expr::IsFalse(expr) => {
-                Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql(expr)?)))
+                Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql_inner(expr)?)))
             }
-            Expr::IsNotFalse(expr) => {
-                Ok(ast::Expr::IsNotFalse(Box::new(self.expr_to_sql(expr)?)))
-            }
-            Expr::IsUnknown(expr) => {
-                Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
-            }
-            Expr::IsNotUnknown(expr) => {
-                Ok(ast::Expr::IsNotUnknown(Box::new(self.expr_to_sql(expr)?)))
-            }
+            Expr::IsNotFalse(expr) => Ok(ast::Expr::IsNotFalse(Box::new(
+                self.expr_to_sql_inner(expr)?,
+            ))),
+            Expr::IsUnknown(expr) => Ok(ast::Expr::IsUnknown(Box::new(
+                self.expr_to_sql_inner(expr)?,
+            ))),
+            Expr::IsNotUnknown(expr) => Ok(ast::Expr::IsNotUnknown(Box::new(
+                self.expr_to_sql_inner(expr)?,
+            ))),
             Expr::Not(expr) => {
-                let sql_parser_expr = self.expr_to_sql(expr)?;
+                let sql_parser_expr = self.expr_to_sql_inner(expr)?;
                 Ok(AstExpr::UnaryOp {
                     op: UnaryOperator::Not,
                     expr: Box::new(sql_parser_expr),
                 })
             }
             Expr::Negative(expr) => {
-                let sql_parser_expr = self.expr_to_sql(expr)?;
+                let sql_parser_expr = self.expr_to_sql_inner(expr)?;
                 Ok(AstExpr::UnaryOp {
                     op: UnaryOperator::Minus,
                     expr: Box::new(sql_parser_expr),
@@ -441,7 +439,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::TryCast(TryCast { expr, data_type }) => {
-                let inner_expr = self.expr_to_sql(expr)?;
+                let inner_expr = self.expr_to_sql_inner(expr)?;
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::TryCast,
                     expr: Box::new(inner_expr),
@@ -458,7 +456,7 @@ impl Unparser<'_> {
                         .iter()
                         .map(|set| {
                             set.iter()
-                                .map(|e| self.expr_to_sql(e))
+                                .map(|e| self.expr_to_sql_inner(e))
                                 .collect::<Result<Vec<_>>>()
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -469,7 +467,7 @@ impl Unparser<'_> {
                     let expr_ast_sets = cube
                         .iter()
                         .map(|e| {
-                            let sql = self.expr_to_sql(e)?;
+                            let sql = self.expr_to_sql_inner(e)?;
                             Ok(vec![sql])
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -479,7 +477,7 @@ impl Unparser<'_> {
                     let expr_ast_sets: Vec<Vec<AstExpr>> = rollup
                         .iter()
                         .map(|e| {
-                            let sql = self.expr_to_sql(e)?;
+                            let sql = self.expr_to_sql_inner(e)?;
                             Ok(vec![sql])
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -619,7 +617,7 @@ impl Unparser<'_> {
     ///
     /// Also note that when fetching the precedence of a nested expression, we ignore other nested
     /// expressions, so precedence of expr `(a * (b + c))` equals `*` and not `+`.
-    fn pretty(
+    fn remove_unnecessary_nesting(
         &self,
         expr: ast::Expr,
         left_op: &BinaryOperator,
@@ -637,16 +635,20 @@ impl Unparser<'_> {
                     matches!(left_op, BinaryOperator::Minus | BinaryOperator::Divide);
 
                 if inner_precedence == surrounding_precedence && not_associative {
-                    ast::Expr::Nested(Box::new(self.pretty(*nested, LOWEST, LOWEST)))
+                    ast::Expr::Nested(Box::new(
+                        self.remove_unnecessary_nesting(*nested, LOWEST, LOWEST),
+                    ))
                 } else if inner_precedence >= surrounding_precedence {
-                    self.pretty(*nested, left_op, right_op)
+                    self.remove_unnecessary_nesting(*nested, left_op, right_op)
                 } else {
-                    ast::Expr::Nested(Box::new(self.pretty(*nested, LOWEST, LOWEST)))
+                    ast::Expr::Nested(Box::new(
+                        self.remove_unnecessary_nesting(*nested, LOWEST, LOWEST),
+                    ))
                 }
             }
             ast::Expr::BinaryOp { left, op, right } => ast::Expr::BinaryOp {
-                left: Box::new(self.pretty(*left, left_op, &op)),
-                right: Box::new(self.pretty(*right, &op, right_op)),
+                left: Box::new(self.remove_unnecessary_nesting(*left, left_op, &op)),
+                right: Box::new(self.remove_unnecessary_nesting(*right, &op, right_op)),
                 op,
             },
             _ => expr,
@@ -681,8 +683,6 @@ impl Unparser<'_> {
         }
     }
 
-    // TODO: operator precedence should be defined in sqlparser
-    // to avoid the need for sql_to_op and sql_op_precedence
     fn sql_op_precedence(&self, op: &BinaryOperator) -> u8 {
         match self.sql_to_op(op) {
             Ok(op) => op.precedence(),
@@ -1233,14 +1233,14 @@ mod tests {
             .build()?;
 
         let tests: Vec<(Expr, &str)> = vec![
-            ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
+            ((col("a") + col("b")).gt(lit(4)), r#"a + b > 4"#),
             (
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
                 })
                 .gt(lit(4)),
-                r#"(a.b.c > 4)"#,
+                r#"a.b.c > 4"#,
             ),
             (
                 case(col("a"))
@@ -1481,16 +1481,16 @@ mod tests {
             (not(col("a")), r#"NOT a"#),
             (
                 Expr::between(col("a"), lit(1), lit(7)),
-                r#"(a BETWEEN 1 AND 7)"#,
+                r#"a BETWEEN 1 AND 7"#,
             ),
             (Expr::Negative(Box::new(col("a"))), r#"-a"#),
             (
                 exists(Arc::new(dummy_logical_plan.clone())),
-                r#"EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
+                r#"EXISTS (SELECT t.a FROM t WHERE t.a = 1)"#,
             ),
             (
                 not_exists(Arc::new(dummy_logical_plan.clone())),
-                r#"NOT EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
+                r#"NOT EXISTS (SELECT t.a FROM t WHERE t.a = 1)"#,
             ),
             (
                 try_cast(col("a"), DataType::Date64),
@@ -1511,24 +1511,21 @@ mod tests {
                 ),
                 r#"@root.foo"#,
             ),
-            (col("x").eq(placeholder("$1")), r#"(x = $1)"#),
-            (
-                out_ref_col(DataType::Int32, "t.a").gt(lit(1)),
-                r#"(t.a > 1)"#,
-            ),
+            (col("x").eq(placeholder("$1")), r#"x = $1"#),
+            (out_ref_col(DataType::Int32, "t.a").gt(lit(1)), r#"t.a > 1"#),
             (
                 grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]),
                 r#"GROUPING SETS ((a, b), (a))"#,
             ),
             (cube(vec![col("a"), col("b")]), r#"CUBE (a, b)"#),
             (rollup(vec![col("a"), col("b")]), r#"ROLLUP (a, b)"#),
-            (col("table").eq(lit(1)), r#"("table" = 1)"#),
+            (col("table").eq(lit(1)), r#""table" = 1"#),
             (
                 col("123_need_quoted").eq(lit(1)),
-                r#"("123_need_quoted" = 1)"#,
+                r#""123_need_quoted" = 1"#,
             ),
-            (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
-            (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
+            (col("need-quoted").eq(lit(1)), r#""need-quoted" = 1"#),
+            (col("need quoted").eq(lit(1)), r#""need quoted" = 1"#),
             (
                 interval_month_day_nano_lit(
                     "1 YEAR 1 MONTH 1 DAY 3 HOUR 10 MINUTE 20 SECOND",
@@ -1546,12 +1543,12 @@ mod tests {
             (
                 interval_month_day_nano_lit("1 MONTH")
                     .add(interval_month_day_nano_lit("1 DAY")),
-                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' + INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
+                r#"INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' + INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
             ),
             (
                 interval_month_day_nano_lit("1 MONTH")
                     .sub(interval_month_day_nano_lit("1 DAY")),
-                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
+                r#"INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
             ),
             (
                 interval_datetime_lit("10 DAY 1 HOUR 10 MINUTE 20 SECOND"),
@@ -1575,7 +1572,7 @@ mod tests {
                     28,
                     3,
                 ))),
-                r#"((a + b) > 100.123)"#,
+                r#"a + b > 100.123"#,
             ),
             (
                 (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal256(
@@ -1583,7 +1580,7 @@ mod tests {
                     28,
                     3,
                 ))),
-                r#"((a + b) > 100.123)"#,
+                r#"a + b > 100.123"#,
             ),
             (
                 Expr::Cast(Cast {
@@ -1608,7 +1605,7 @@ mod tests {
     #[test]
     fn expr_to_unparsed_ok() -> Result<()> {
         let tests: Vec<(Expr, &str)> = vec![
-            ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
+            ((col("a") + col("b")).gt(lit(4)), r#"a + b > 4"#),
             (col("a").sort(true, true), r#"a ASC NULLS FIRST"#),
         ];
 
@@ -1632,7 +1629,7 @@ mod tests {
 
         let actual = format!("{}", ast);
 
-        let expected = r#"('a' > 4)"#;
+        let expected = r#"'a' > 4"#;
         assert_eq!(actual, expected);
 
         Ok(())
@@ -1648,7 +1645,7 @@ mod tests {
 
         let actual = format!("{}", ast);
 
-        let expected = r#"(a > 4)"#;
+        let expected = r#"a > 4"#;
         assert_eq!(actual, expected);
 
         Ok(())

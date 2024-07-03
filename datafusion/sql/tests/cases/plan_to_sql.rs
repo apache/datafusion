@@ -36,12 +36,8 @@ use crate::common::MockContextProvider;
 #[test]
 fn roundtrip_expr() {
     let tests: Vec<(TableReference, &str, &str)> = vec![
-        (TableReference::bare("person"), "age > 35", r#"(age > 35)"#),
-        (
-            TableReference::bare("person"),
-            "id = '10'",
-            r#"(id = '10')"#,
-        ),
+        (TableReference::bare("person"), "age > 35", r#"age > 35"#),
+        (TableReference::bare("person"), "id = '10'", r#"id = '10'"#),
         (
             TableReference::bare("person"),
             "CAST(id AS VARCHAR)",
@@ -50,7 +46,7 @@ fn roundtrip_expr() {
         (
             TableReference::bare("person"),
             "sum((age * 2))",
-            r#"sum((age * 2))"#,
+            r#"sum(age * 2)"#,
         ),
     ];
 
@@ -363,7 +359,7 @@ fn test_pretty_roundtrip() -> Result<()> {
             .parse_expr()?;
         let expr =
             sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
-        let round_trip_sql = unparser.pretty_expr_to_sql(&expr)?.to_string();
+        let round_trip_sql = unparser.expr_to_sql(&expr)?.to_string();
         assert_eq!(pretty.to_string(), round_trip_sql);
 
         // verify that the pretty string parses to the same underlying Expr
