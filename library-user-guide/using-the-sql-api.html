@@ -462,9 +462,63 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#registering-data-sources-using-sessioncontext-register">
+   Registering Data Sources using
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     SessionContext::register*
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#read-a-csv-file">
+     Read a CSV File
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#read-an-apache-parquet-file">
+     Read an Apache Parquet file
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#read-an-apache-avro-file">
+     Read an Apache Avro file
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#reading-multiple-files-as-a-table">
+   Reading Multiple Files as a table
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#using-create-external-table-to-register-data-sources-via-sql">
+   Using
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     CREATE
+    </span>
+    <span class="pre">
+     EXTERNAL
+    </span>
+    <span class="pre">
+     TABLE
+    </span>
+   </code>
+   to register data sources via SQL
+  </a>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -511,7 +565,189 @@
 -->
 <section id="using-the-sql-api">
 <h1>Using the SQL API<a class="headerlink" href="#using-the-sql-api" title="Link to this heading">¶</a></h1>
+<p>DataFusion has a full SQL API that allows you to interact with DataFusion using
+SQL query strings. The simplest way to use the SQL API is to use the
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html"><code class="docutils literal notranslate"><span class="pre">SessionContext</span></code></a> struct which provides the highest-level API for executing SQL
+queries.</p>
+<p>To use SQL, you first register your data as a table and then run queries
+using the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql"><code class="docutils literal notranslate"><span class="pre">SessionContext::sql</span></code></a> method. For lower level control such as
+preventing DDL, you can use <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql_with_options"><code class="docutils literal notranslate"><span class="pre">SessionContext::sql_with_options</span></code></a> or the
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html"><code class="docutils literal notranslate"><span class="pre">SessionState</span></code></a> APIs</p>
+<section id="registering-data-sources-using-sessioncontext-register">
+<h2>Registering Data Sources using <code class="docutils literal notranslate"><span class="pre">SessionContext::register*</span></code><a class="headerlink" href="#registering-data-sources-using-sessioncontext-register" title="Link to this heading">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">SessionContext::register*</span></code> methods tell DataFusion the name of
+the source and how to read data. Once registered, you can execute SQL queries
+using the <code class="docutils literal notranslate"><span class="pre">SessionContext::sql</span></code> method referring to your data source as a table.</p>
+<section id="read-a-csv-file">
+<h3>Read a CSV File<a class="headerlink" href="#read-a-csv-file" title="Link to this heading">¶</a></h3>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">arrow</span><span class="p">::</span><span class="n">record_batch</span><span class="p">::</span><span class="n">RecordBatch</span><span class="p">;</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// register the &quot;example&quot; table</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">.</span><span class="n">register_csv</span><span class="p">(</span><span class="s">&quot;example&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// create a plan to run a SQL query</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT a, MIN(b) FROM example WHERE a &lt;= b GROUP BY a LIMIT 100&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// execute the plan and collect the results as Vec&lt;RecordBatch&gt;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">results</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">RecordBatch</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// Use the assert_batches_eq macro to compare the results with expected output</span>
+<span class="w">    </span><span class="n">datafusion</span><span class="p">::</span><span class="n">assert_batches_eq</span><span class="o">!</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">        </span><span class="s">&quot;+---+----------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| a | MIN(example.b) |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;+---+----------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| 1 | 2              |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;+---+----------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="p">],</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="n">results</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="w">  </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="read-an-apache-parquet-file">
+<h3>Read an Apache Parquet file<a class="headerlink" href="#read-an-apache-parquet-file" title="Link to this heading">¶</a></h3>
+<p>Similarly to CSV, you can register a Parquet file as a table using the <code class="docutils literal notranslate"><span class="pre">register_parquet</span></code> method.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// create local session context</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">testdata</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">test_util</span><span class="p">::</span><span class="n">parquet_test_data</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// register parquet file with the execution context</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">.</span><span class="n">register_parquet</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;alltypes_plain&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{testdata}/alltypes_plain.parquet&quot;</span><span class="p">),</span>
+<span class="w">        </span><span class="n">ParquetReadOptions</span><span class="p">::</span><span class="n">default</span><span class="p">(),</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// execute the query</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \</span>
+<span class="s">         FROM alltypes_plain \</span>
+<span class="s">         WHERE id &gt; 1 AND tinyint_col &lt; double_col&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// execute the plan, and compare to the expected results</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="n">datafusion</span><span class="p">::</span><span class="n">assert_batches_eq</span><span class="o">!</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">        </span><span class="s">&quot;+---------+------------+--------------------------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| int_col | double_col | alltypes_plain.date_string_col |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;+---------+------------+--------------------------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| 1       | 10.1       | 03/01/09                       |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| 1       | 10.1       | 04/01/09                       |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| 1       | 10.1       | 02/01/09                       |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;+---------+------------+--------------------------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="p">],</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="n">results</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="read-an-apache-avro-file">
+<h3>Read an Apache Avro file<a class="headerlink" href="#read-an-apache-avro-file" title="Link to this heading">¶</a></h3>
+<p>DataFusion can also read Avro files using the <code class="docutils literal notranslate"><span class="pre">register_avro</span></code> method.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">util</span><span class="p">::</span><span class="n">pretty</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// find the path to the avro test files</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">testdata</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">test_util</span><span class="p">::</span><span class="n">arrow_test_data</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// register avro file with the execution context</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">avro_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{testdata}/avro/alltypes_plain.avro&quot;</span><span class="p">);</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">.</span><span class="n">register_avro</span><span class="p">(</span><span class="s">&quot;alltypes_plain&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">avro_file</span><span class="p">,</span><span class="w"> </span><span class="n">AvroReadOptions</span><span class="p">::</span><span class="n">default</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// execute the query</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \</span>
+<span class="s">         FROM alltypes_plain \</span>
+<span class="s">         WHERE id &gt; 1 AND tinyint_col &lt; double_col&quot;</span>
+<span class="w">      </span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// execute the plan, and compare to the expected results</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="n">datafusion</span><span class="p">::</span><span class="n">assert_batches_eq</span><span class="o">!</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">        </span><span class="s">&quot;+---------+------------+--------------------------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| int_col | double_col | alltypes_plain.date_string_col |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;+---------+------------+--------------------------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| 1       | 10.1       | 03/01/09                       |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| 1       | 10.1       | 04/01/09                       |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| 1       | 10.1       | 02/01/09                       |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;+---------+------------+--------------------------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="p">],</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="n">results</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="reading-multiple-files-as-a-table">
+<h2>Reading Multiple Files as a table<a class="headerlink" href="#reading-multiple-files-as-a-table" title="Link to this heading">¶</a></h2>
+<p>It is also possible to read multiple files as a single table. This is done
+with the ListingTableProvider which takes a list of file paths and reads them
+as a single table, matching schemas as appropriate</p>
 <p>Coming Soon</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span>
+</pre></div>
+</div>
+</section>
+<section id="using-create-external-table-to-register-data-sources-via-sql">
+<h2>Using <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> to register data sources via SQL<a class="headerlink" href="#using-create-external-table-to-register-data-sources-via-sql" title="Link to this heading">¶</a></h2>
+<p>You can also register files using SQL using the <a class="reference internal" href="../user-guide/sql/ddl.html#create-external-table"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code></span></a>
+statement.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// create local session context</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">testdata</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">test_util</span><span class="p">::</span><span class="n">parquet_test_data</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// register parquet file using SQL</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ddl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">format!</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;CREATE EXTERNAL TABLE alltypes_plain \</span>
+<span class="s">        STORED AS PARQUET LOCATION &#39;{testdata}/alltypes_plain.parquet&#39;&quot;</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="o">&amp;</span><span class="n">ddl</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// execute the query referring to the alltypes_plain table we just registered</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \</span>
+<span class="s">         FROM alltypes_plain \</span>
+<span class="s">         WHERE id &gt; 1 AND tinyint_col &lt; double_col&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// execute the plan, and compare to the expected results</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="n">datafusion</span><span class="p">::</span><span class="n">assert_batches_eq</span><span class="o">!</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">        </span><span class="s">&quot;+---------+------------+--------------------------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| int_col | double_col | alltypes_plain.date_string_col |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;+---------+------------+--------------------------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| 1       | 10.1       | 03/01/09                       |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| 1       | 10.1       | 04/01/09                       |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| 1       | 10.1       | 02/01/09                       |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;+---------+------------+--------------------------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="p">],</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="n">results</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
 </section>
 
 
