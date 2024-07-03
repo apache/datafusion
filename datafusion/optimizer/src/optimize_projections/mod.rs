@@ -271,7 +271,7 @@ fn optimize_projections(
             //      Ideally we want to have a concept of canonical timestamps that optimizer rules are aware of and
             //      thus don't mess with them.
             let col = schema
-                .index_of_column_by_name(None, "franz_canonical_timestamp")
+                .index_of_column_by_name(None, "_streaming_internal_metadata")
                 .unwrap();
 
             let necessary_indices = necessary_indices.append(&[col]);

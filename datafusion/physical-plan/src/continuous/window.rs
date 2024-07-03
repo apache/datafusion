@@ -14,7 +14,9 @@ use arrow::{
     datatypes::TimestampMillisecondType,
 };
 
-use arrow_array::{Array, PrimitiveArray, RecordBatch, TimestampMillisecondArray};
+use arrow_array::{
+    Array, PrimitiveArray, RecordBatch, StructArray, TimestampMillisecondArray,
+};
 use arrow_ord::cmp;
 use arrow_schema::{DataType, Field, Schema, SchemaBuilder, SchemaRef, TimeUnit};
 use datafusion_common::{internal_err, stats::Precision, DataFusionError, Statistics};
@@ -107,8 +109,13 @@ impl FranzWindowFrame {
     }
 
     pub fn push(&mut self, batch: &RecordBatch) -> Result<(), DataFusionError> {
-        let ts_column = batch
-            .column_by_name(self.timestamp_column.as_str())
+        let metadata = batch
+            .column_by_name("_streaming_internal_metadata")
+            .unwrap();
+        let metadata_struct = metadata.as_any().downcast_ref::<StructArray>().unwrap();
+
+        let ts_column = metadata_struct
+            .column_by_name("canonical_timestamp")
             .unwrap();
 
         let ts_array = ts_column
@@ -136,8 +143,13 @@ impl FranzWindowFrame {
             .unwrap()
             .as_millis() as i64;
 
-        let ts_column = filtered_batch
-            .column_by_name(self.timestamp_column.as_str())
+        let metadata = filtered_batch
+            .column_by_name("_streaming_internal_metadata")
+            .unwrap();
+        let metadata_struct = metadata.as_any().downcast_ref::<StructArray>().unwrap();
+
+        let ts_column = metadata_struct
+            .column_by_name("canonical_timestamp")
             .unwrap();
 
         let ts_array = ts_column
@@ -686,7 +698,7 @@ impl FranzWindowAggStream {
                 FranzWindowFrame::new(
                     *start_time,
                     *end_time,
-                    "franz_canonical_timestamp".to_string(),
+                    "canonical_timestamp".to_string(),
                     accumulators,
                     self.aggregate_expressions.clone(),
                     self.filter_expressions.clone(),
@@ -713,7 +725,7 @@ impl FranzWindowAggStream {
                                 let watermark: RecordBatchWatermark =
                                     RecordBatchWatermark::try_from(
                                         &batch,
-                                        "franz_canonical_timestamp",
+                                        "_streaming_internal_metadata",
                                     )?;
                                 let ranges = get_windows_for_watermark(
                                     &watermark,

@@ -22,8 +22,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::datatypes::TimestampMillisecondType;
-use arrow_array::{Array, PrimitiveArray, RecordBatch};
-use arrow_schema::SchemaRef;
+use arrow_array::{
+    Array, ArrayRef, PrimitiveArray, RecordBatch, StringArray, StructArray,
+};
+use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
 use datafusion_common::franz_arrow::json_records_to_arrow_record_batch;
 use tracing::{debug, error, info, instrument};
 //use datafusion::datasource::TableProvider;
@@ -197,6 +199,11 @@ impl PartitionStream for KafkaStreamRead {
                     })
                     .unwrap();
 
+                let binary_vec = Vec::from_iter(
+                    std::iter::repeat(String::from("no_barrier")).take(ts_column.len()),
+                );
+                let barrier_batch_column = StringArray::from(binary_vec);
+
                 let ts_array = ts_column
                     .as_any()
                     .downcast_ref::<PrimitiveArray<TimestampMillisecondType>>()
@@ -206,7 +213,22 @@ impl PartitionStream for KafkaStreamRead {
                 let min_timestamp: Option<_> = min::<TimestampMillisecondType>(&ts_array);
                 debug!("min: {:?}, max: {:?}", min_timestamp, max_timestamp);
                 let mut columns: Vec<Arc<dyn Array>> = record_batch.columns().to_vec();
-                columns.push(ts_column);
+
+                let metadata_column = StructArray::from(vec![
+                    (
+                        Arc::new(Field::new("barrier_batch", DataType::Utf8, false)),
+                        Arc::new(barrier_batch_column) as ArrayRef,
+                    ),
+                    (
+                        Arc::new(Field::new(
+                            "canonical_timestamp",
+                            DataType::Timestamp(TimeUnit::Millisecond, None),
+                            true,
+                        )),
+                        ts_column as ArrayRef,
+                    ),
+                ]);
+                columns.push(Arc::new(metadata_column));
 
                 let timestamped_record_batch: RecordBatch =
                     RecordBatch::try_new(canonical_schema.clone(), columns).unwrap();
