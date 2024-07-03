@@ -25,7 +25,7 @@ use datafusion_expr::{
 };
 
 #[derive(Default)]
-pub struct ExtractPlanner {}
+pub struct ExtractPlanner;
 
 impl UserDefinedSQLPlanner for ExtractPlanner {
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {

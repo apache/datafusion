@@ -41,7 +41,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
-    expressions::{Column, Max, Min, UnKnownColumn},
+    expressions::{Column, UnKnownColumn},
     physical_exprs_contains, AggregateExpr, EquivalenceProperties, LexOrdering,
     LexRequirement, PhysicalExpr, PhysicalSortRequirement,
 };
@@ -484,13 +484,7 @@ impl AggregateExec {
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
     pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
         let agg_expr = self.aggr_expr.iter().exactly_one().ok()?;
-        if let Some(max) = agg_expr.as_any().downcast_ref::<Max>() {
-            Some((max.field().ok()?, true))
-        } else if let Some(min) = agg_expr.as_any().downcast_ref::<Min>() {
-            Some((min.field().ok()?, false))
-        } else {
-            None
-        }
+        agg_expr.get_minmax_desc()
     }
 
     /// true, if this Aggregate has a group-by with no required or explicit ordering,
