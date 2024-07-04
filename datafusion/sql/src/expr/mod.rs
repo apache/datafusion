@@ -600,22 +600,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_struct(values, fields, schema, planner_context)
             }
             SQLExpr::Position { expr, r#in } => {
-                let substr =
-                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
-                let fullstr =
-                    self.sql_expr_to_logical_expr(*r#in, schema, planner_context)?;
-                let mut extract_args = vec![fullstr, substr];
-
-                for planner in self.planners.iter() {
-                    match planner.plan_position(extract_args)? {
-                        PlannerResult::Planned(expr) => return Ok(expr),
-                        PlannerResult::Original(args) => {
-                            extract_args = args;
-                        }
-                    }
-                }
-
-                not_impl_err!("Position not supported by UserDefinedExtensionPlanners: {extract_args:?}")
+                self.sql_position_to_expr(*expr, *r#in, schema, planner_context)
             }
             SQLExpr::AtTimeZone {
                 timestamp,
@@ -642,6 +627,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
+    }
+
+    fn sql_position_to_expr(
+        &self,
+        substr_expr: SQLExpr,
+        str_expr: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let substr =
+            self.sql_expr_to_logical_expr(substr_expr, schema, planner_context)?;
+        let fullstr = self.sql_expr_to_logical_expr(str_expr, schema, planner_context)?;
+        let mut extract_args = vec![fullstr, substr];
+        for planner in self.planners.iter() {
+            match planner.plan_position(extract_args)? {
+                PlannerResult::Planned(expr) => return Ok(expr),
+                PlannerResult::Original(args) => {
+                    extract_args = args;
+                }
+            }
+        }
+
+        not_impl_err!(
+            "Position not supported by UserDefinedExtensionPlanners: {extract_args:?}"
+        )
     }
 
     fn try_plan_dictionary_literal(
