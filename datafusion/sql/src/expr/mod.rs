@@ -600,14 +600,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if !fields.is_empty() {
                     return not_impl_err!("Struct fields are not supported yet");
                 }
-                fn is_named_struct(values: &Vec<sqlparser::ast::Expr>) -> bool {
-                    values
-                        .iter()
-                        .any(|value| matches!(value, SQLExpr::Named { .. }))
-                }
+                let is_named_struct = values
+                    .iter()
+                    .any(|value| matches!(value, SQLExpr::Named { .. }));
 
-                if is_named_struct(&values) {
-                    return self.create_named_struct(values, schema, planner_context);
+                if is_named_struct {
+                    self.create_named_struct(values, schema, planner_context)
                 } else {
                     let mut create_struct_args =
                         self.create_struct_expr(values, schema, planner_context)?;
