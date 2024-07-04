@@ -164,8 +164,7 @@ async fn cross_join() {
 }
 
 #[tokio::test]
-#[ignore]
-async fn merge_join() {
+async fn sort_merge_join_no_spill() {
     // Planner chooses MergeJoin only if number of partitions > 1
     let config = SessionConfig::new()
         .with_target_partitions(2)
@@ -183,6 +182,11 @@ async fn merge_join() {
         .with_config(config)
         .run()
         .await
+}
+
+#[tokio::test]
+async fn sort_merge_join_spill() {
+    todo!()
 }
 
 #[tokio::test]

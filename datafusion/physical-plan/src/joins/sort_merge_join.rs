@@ -37,8 +37,8 @@ use crate::joins::utils::{
 };
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
-    execution_mode_from_children, metrics, spill_record_batches, DisplayAs,
-    DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    execution_mode_from_children, metrics, read_spill_as_stream, spill_record_batches,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     Statistics,
 };
@@ -650,12 +650,11 @@ impl BufferedBatch {
     }
 
     fn read_spilled_from_disk(
-        &self,
+        &mut self,
         schema: SchemaRef,
     ) -> Result<SendableRecordBatchStream> {
-        if let Some(f) = &self.spill_file {
-            todo!()
-            //read_spill_as_stream(*f, schema, 2)
+        if let Some(f) = mem::take(&mut self.spill_file) {
+            read_spill_as_stream(f, schema, 2)
         } else {
             exec_err!("Cannot read data batch from disk. Use `spill_to_disk` to spill")
         }
@@ -921,7 +920,7 @@ impl SMJStream {
                     while !self.buffered_data.batches.is_empty() {
                         let head_batch = self.buffered_data.head_batch();
                         // If the head batch is fully processed, dequeue it and produce output of it.
-                        if head_batch.range.end == head_batch.batch.num_rows() {
+                        if head_batch.range.end == head_batch.num_rows {
                             self.freeze_dequeuing_buffered()?;
                             if let Some(buffered_batch) =
                                 self.buffered_data.batches.pop_front()
@@ -964,34 +963,46 @@ impl SMJStream {
                             let mut buffered_batch =
                                 BufferedBatch::new(batch, 0..1, &self.on_buffered);
 
-                            if self
+                            match self
                                 .reservation
                                 .try_grow(buffered_batch.size_estimation)
-                                .is_err()
                             {
-                                // spill batch to disk
-                                let spill_file = self
-                                    .runtime_env
-                                    .disk_manager
-                                    .create_tmp_file("SortMergeJoin")?;
-                                buffered_batch.spill_to_disk(
-                                    spill_file,
-                                    self.buffered_schema.clone(),
-                                )?;
+                                Ok(_) => {
+                                    self.join_metrics
+                                        .peak_mem_used
+                                        .set_max(self.reservation.size());
+                                    Ok(())
+                                }
+                                Err(_)
+                                    if self
+                                        .runtime_env
+                                        .disk_manager
+                                        .tmp_files_enabled() =>
+                                {
+                                    // spill buffered batch to disk
+                                    let spill_file = self
+                                        .runtime_env
+                                        .disk_manager
+                                        .create_tmp_file("SortMergeJoinBuffered")?;
 
-                                // update metrics to display spill
-                                self.join_metrics.spill_count.add(1);
-                                self.join_metrics
-                                    .spilled_bytes
-                                    .add(buffered_batch.size_estimation);
-                                self.join_metrics
-                                    .spilled_rows
-                                    .add(buffered_batch.num_rows);
-                            } else {
-                                self.join_metrics
-                                    .peak_mem_used
-                                    .set_max(self.reservation.size());
-                            }
+                                    buffered_batch.spill_to_disk(
+                                        spill_file,
+                                        self.buffered_schema.clone(),
+                                    )?;
+
+                                    // update metrics to display spill
+                                    self.join_metrics.spill_count.add(1);
+                                    self.join_metrics
+                                        .spilled_bytes
+                                        .add(buffered_batch.size_estimation);
+                                    self.join_metrics
+                                        .spilled_rows
+                                        .add(buffered_batch.num_rows);
+
+                                    Ok(())
+                                }
+                                Err(e) => Err(e),
+                            }?;
 
                             self.buffered_data.batches.push_back(buffered_batch);
                             self.buffered_state = BufferedState::PollingRest;
@@ -1001,10 +1012,10 @@ impl SMJStream {
                 BufferedState::PollingRest => {
                     println!("Polling Rest");
                     if self.buffered_data.tail_batch().range.end
-                        < self.buffered_data.tail_batch().batch.num_rows()
+                        < self.buffered_data.tail_batch().num_rows
                     {
                         while self.buffered_data.tail_batch().range.end
-                            < self.buffered_data.tail_batch().batch.num_rows()
+                            < self.buffered_data.tail_batch().num_rows
                         {
                             if is_join_arrays_equal(
                                 &self.buffered_data.head_batch().join_arrays,
@@ -1285,7 +1296,7 @@ impl SMJStream {
                     vec![]
                 } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
                     get_buffered_columns(
-                        &self.buffered_data,
+                        &mut self.buffered_data,
                         buffered_idx,
                         &buffered_indices,
                     )?
@@ -1315,7 +1326,7 @@ impl SMJStream {
                 ) {
                     // unwrap is safe here as we check is_some on top of if statement
                     let buffered_columns = get_buffered_columns(
-                        &self.buffered_data,
+                        &mut self.buffered_data,
                         chunk.buffered_batch_idx.unwrap(),
                         &buffered_indices,
                     )?;
@@ -1559,7 +1570,7 @@ fn produce_buffered_null_batch(
     schema: &SchemaRef,
     streamed_schema: &SchemaRef,
     buffered_indices: &PrimitiveArray<UInt64Type>,
-    buffered_batch: &BufferedBatch,
+    buffered_batch: &mut BufferedBatch,
 ) -> Result<Option<RecordBatch>> {
     if buffered_indices.is_empty() {
         return Ok(None);
@@ -1588,19 +1599,19 @@ fn produce_buffered_null_batch(
 /// Get `buffered_indices` rows for `buffered_data[buffered_batch_idx]`
 #[inline(always)]
 fn get_buffered_columns(
-    buffered_data: &BufferedData,
+    buffered_data: &mut BufferedData,
     buffered_batch_idx: usize,
     buffered_indices: &UInt64Array,
 ) -> Result<Vec<ArrayRef>, ArrowError> {
     get_buffered_columns_from_batch(
-        &buffered_data.batches[buffered_batch_idx],
+        &mut buffered_data.batches[buffered_batch_idx],
         buffered_indices,
     )
 }
 
 #[inline(always)]
 fn get_buffered_columns_from_batch(
-    buffered_batch: &BufferedBatch,
+    buffered_batch: &mut BufferedBatch,
     buffered_indices: &UInt64Array,
 ) -> Result<Vec<ArrayRef>, ArrowError> {
     if buffered_batch.spill_file.is_none() {
@@ -1973,6 +1984,7 @@ mod tests {
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, JoinType, Result,
     };
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::disk_manager::DiskManagerConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_execution::TaskContext;
 
@@ -2868,8 +2880,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
-    async fn overallocation_single_batch() -> Result<()> {
+    async fn overallocation_single_batch_no_spill() -> Result<()> {
         let left = build_table(
             ("a1", &vec![0, 1, 2, 3, 4, 5]),
             ("b1", &vec![1, 2, 3, 4, 5, 6]),
@@ -2895,14 +2906,17 @@ mod tests {
             JoinType::LeftAnti,
         ];
 
-        for join_type in join_types {
-            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
-            let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
-            let session_config = SessionConfig::default().with_batch_size(50);
+        // Disable DiskManager to prevent spilling
+        let runtime_config = RuntimeConfig::new()
+            .with_memory_limit(100, 1.0)
+            .with_disk_manager(DiskManagerConfig::Disabled);
+        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+        let session_config = SessionConfig::default().with_batch_size(50);
 
+        for join_type in join_types {
             let task_ctx = TaskContext::default()
-                .with_session_config(session_config)
-                .with_runtime(runtime);
+                .with_session_config(session_config.clone())
+                .with_runtime(runtime.clone());
             let task_ctx = Arc::new(task_ctx);
 
             let join = join_with_options(
@@ -2928,7 +2942,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn overallocation_multi_batch() -> Result<()> {
+    async fn overallocation_multi_batch_no_spill() -> Result<()> {
         let left_batch_1 = build_table_i32(
             ("a1", &vec![0, 1]),
             ("b1", &vec![1, 1]),
@@ -2975,13 +2989,17 @@ mod tests {
             JoinType::LeftAnti,
         ];
 
+        // Disable DiskManager to prevent spilling
+        let runtime_config = RuntimeConfig::new()
+            .with_memory_limit(100, 1.0)
+            .with_disk_manager(DiskManagerConfig::Disabled);
+        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+        let session_config = SessionConfig::default().with_batch_size(50);
+
         for join_type in join_types {
-            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
-            let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
-            let session_config = SessionConfig::default().with_batch_size(50);
             let task_ctx = TaskContext::default()
-                .with_session_config(session_config)
-                .with_runtime(runtime);
+                .with_session_config(session_config.clone())
+                .with_runtime(runtime.clone());
             let task_ctx = Arc::new(task_ctx);
             let join = join_with_options(
                 Arc::clone(&left),
@@ -3003,6 +3021,15 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn overallocation_single_batch_spill() -> Result<()> {
+        todo!()
+    }
+    #[tokio::test]
+    async fn overallocation_multi_batch_spill() -> Result<()> {
+        todo!()
     }
 
     #[tokio::test]
