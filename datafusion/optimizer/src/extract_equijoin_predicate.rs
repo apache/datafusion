@@ -21,7 +21,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::DFSchema;
 use datafusion_common::Result;
-use datafusion_expr::utils::split_conjunction_owned;
+use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
 // equijoin predicate
@@ -67,57 +67,135 @@ impl OptimizerRule for ExtractEquijoinPredicate {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Join(Join {
-                left,
-                right,
-                mut on,
-                filter: Some(expr),
-                join_type,
-                join_constraint,
-                schema,
-                null_equals_null,
-            }) => {
-                let left_schema = left.schema();
-                let right_schema = right.schema();
-                let (equijoin_predicates, non_equijoin_expr) =
-                    split_eq_and_noneq_join_predicate(expr, left_schema, right_schema)?;
-
-                if !equijoin_predicates.is_empty() {
-                    on.extend(equijoin_predicates);
-                    Ok(Transformed::yes(LogicalPlan::Join(Join {
-                        left,
-                        right,
-                        on,
-                        filter: non_equijoin_expr,
-                        join_type,
-                        join_constraint,
-                        schema,
-                        null_equals_null,
-                    })))
-                } else {
-                    Ok(Transformed::no(LogicalPlan::Join(Join {
-                        left,
-                        right,
-                        on,
-                        filter: non_equijoin_expr,
-                        join_type,
-                        join_constraint,
-                        schema,
-                        null_equals_null,
-                    })))
-                }
-            }
+            LogicalPlan::Join(join) => extract_equijoin_predicate(join),
             _ => Ok(Transformed::no(plan)),
         }
     }
 }
 
+fn extract_equijoin_predicate(join: Join) -> Result<Transformed<LogicalPlan>> {
+    fn update_join_predicate(
+        join: Join,
+        extra_on: Vec<EquijoinPredicate>,
+        filter: Option<Expr>,
+        null_equals_null: bool,
+    ) -> Transformed<LogicalPlan> {
+        if extra_on.is_empty() {
+            Transformed::no(LogicalPlan::Join(join))
+        } else {
+            let mut on = join.on;
+            on.extend(extra_on);
+            Transformed::yes(LogicalPlan::Join(Join {
+                left: join.left,
+                right: join.right,
+                on,
+                filter,
+                join_type: join.join_type,
+                join_constraint: join.join_constraint,
+                schema: join.schema,
+                null_equals_null,
+            }))
+        }
+    }
+    if join.filter.is_none() {
+        return Ok(Transformed::no(LogicalPlan::Join(join)));
+    }
+    let expr = join.filter.as_ref().unwrap();
+
+    let left_schema = join.left.schema();
+    let right_schema = join.right.schema();
+
+    if join.on.is_empty() {
+        let (eq_predicates, null_equals_null, non_eq_expr) =
+            split_eq_and_noneq_join_predicate(expr, left_schema, right_schema)?;
+        Ok(update_join_predicate(
+            join,
+            eq_predicates,
+            non_eq_expr,
+            null_equals_null,
+        ))
+    } else if join.null_equals_null {
+        let (eq_predicates, non_eq_expr) =
+            split_eq_and_noneq_join_predicate_nulls_eq(expr, left_schema, right_schema)?;
+
+        Ok(update_join_predicate(
+            join,
+            eq_predicates,
+            non_eq_expr,
+            true,
+        ))
+    } else {
+        let (eq_predicates, non_eq_expr) =
+            split_eq_and_noneq_join_predicate_nulls_not_eq(
+                expr,
+                left_schema,
+                right_schema,
+            )?;
+
+        Ok(update_join_predicate(
+            join,
+            eq_predicates,
+            non_eq_expr,
+            false,
+        ))
+    }
+}
+
 fn split_eq_and_noneq_join_predicate(
-    filter: Expr,
+    filter: &Expr,
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
+) -> Result<(Vec<EquijoinPredicate>, bool, Option<Expr>)> {
+    let (eq, noneq) = split_eq_and_noneq_join_predicate_nulls_not_eq(
+        filter,
+        left_schema,
+        right_schema,
+    )?;
+    if !eq.is_empty() {
+        Ok((eq, false, noneq))
+    } else {
+        let (eq, noneq) = split_eq_and_noneq_join_predicate_nulls_eq(
+            filter,
+            left_schema,
+            right_schema,
+        )?;
+        Ok((eq, true, noneq))
+    }
+}
+
+fn split_eq_and_noneq_join_predicate_nulls_eq(
+    filter: &Expr,
     left_schema: &DFSchema,
     right_schema: &DFSchema,
 ) -> Result<(Vec<EquijoinPredicate>, Option<Expr>)> {
-    let exprs = split_conjunction_owned(filter);
+    split_eq_and_noneq_join_predicate_impl(
+        filter,
+        left_schema,
+        right_schema,
+        Operator::IsNotDistinctFrom,
+    )
+}
+
+fn split_eq_and_noneq_join_predicate_nulls_not_eq(
+    filter: &Expr,
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
+) -> Result<(Vec<EquijoinPredicate>, Option<Expr>)> {
+    split_eq_and_noneq_join_predicate_impl(
+        filter,
+        left_schema,
+        right_schema,
+        Operator::Eq,
+    )
+}
+
+fn split_eq_and_noneq_join_predicate_impl(
+    filter: &Expr,
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
+    eq_op: Operator,
+) -> Result<(Vec<EquijoinPredicate>, Option<Expr>)> {
+    let exprs = split_conjunction(filter);
 
     let mut accum_join_keys: Vec<(Expr, Expr)> = vec![];
     let mut accum_filters: Vec<Expr> = vec![];
@@ -125,9 +203,9 @@ fn split_eq_and_noneq_join_predicate(
         match expr {
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
-                op: Operator::Eq,
+                op,
                 ref right,
-            }) => {
+            }) if *op == eq_op => {
                 let join_key_pair =
                     find_valid_equijoin_key_pair(left, right, left_schema, right_schema)?;
 
@@ -138,13 +216,13 @@ fn split_eq_and_noneq_join_predicate(
                     if can_hash(&left_expr_type) && can_hash(&right_expr_type) {
                         accum_join_keys.push((left_expr, right_expr));
                     } else {
-                        accum_filters.push(expr);
+                        accum_filters.push(expr.clone());
                     }
                 } else {
-                    accum_filters.push(expr);
+                    accum_filters.push(expr.clone());
                 }
             }
-            _ => accum_filters.push(expr),
+            _ => accum_filters.push(expr.clone()),
         }
     }
 
