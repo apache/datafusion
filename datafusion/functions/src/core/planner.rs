@@ -17,7 +17,9 @@
 
 use datafusion_common::DFSchema;
 use datafusion_common::Result;
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::planner::{PlannerResult, RawDictionaryExpr, UserDefinedSQLPlanner};
+use datafusion_expr::Expr;
 
 use super::named_struct;
 
@@ -36,5 +38,16 @@ impl UserDefinedSQLPlanner for CoreFunctionPlanner {
             args.push(v);
         }
         Ok(PlannerResult::Planned(named_struct().call(args)))
+    }
+}
+
+#[derive(Default)]
+pub struct CreateStructPlanner;
+
+impl UserDefinedSQLPlanner for CreateStructPlanner {
+    fn plan_create_struct(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::core::r#struct(), args),
+        )))
     }
 }

@@ -233,6 +233,7 @@ impl SessionState {
 
         let user_defined_sql_planners: Vec<Arc<dyn UserDefinedSQLPlanner>> = vec![
             Arc::new(functions::core::planner::CoreFunctionPlanner::default()),
+            Arc::new(functions::core::planner::CreateStructPlanner),
             // register crate of array expressions (if enabled)
             #[cfg(feature = "array_expressions")]
             Arc::new(functions_array::planner::ArrayFunctionPlanner),

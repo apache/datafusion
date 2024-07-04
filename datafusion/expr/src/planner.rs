@@ -133,6 +133,10 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
+
+    fn plan_create_struct(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
 }
 
 /// An operator with two arguments to plan
