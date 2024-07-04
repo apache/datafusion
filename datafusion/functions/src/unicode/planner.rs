@@ -21,14 +21,22 @@ use datafusion_common::Result;
 use datafusion_expr::{
     expr::ScalarFunction,
     planner::{PlannerResult, UserDefinedSQLPlanner},
-    Expr,
+    sqlparser, Expr,
 };
 
 #[derive(Default)]
 pub struct PositionPlanner {}
 
 impl UserDefinedSQLPlanner for PositionPlanner {
-    fn plan_position(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+    fn plan_udf(
+        &self,
+        sql: &sqlparser::ast::Expr,
+        args: Vec<Expr>,
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        let sqlparser::ast::Expr::Position { .. } = sql else {
+            return Ok(PlannerResult::Original(args));
+        };
+
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(crate::unicode::strpos(), args),
         )))

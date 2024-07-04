@@ -170,6 +170,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        let sql_not_moved = sql.clone();
         match sql {
             SQLExpr::Value(value) => {
                 self.parse_value(value, planner_context.prepare_param_data_types())
@@ -601,18 +602,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
                 let fullstr =
                     self.sql_expr_to_logical_expr(*r#in, schema, planner_context)?;
-                let mut extract_args = vec![fullstr, substr];
+                let mut extracted_args = vec![fullstr, substr];
 
                 for planner in self.planners.iter() {
-                    match planner.plan_position(extract_args)? {
+                    match planner.plan_udf(&sql_not_moved, extracted_args)? {
                         PlannerResult::Planned(expr) => return Ok(expr),
                         PlannerResult::Original(args) => {
-                            extract_args = args;
+                            extracted_args = args;
                         }
                     }
                 }
 
-                not_impl_err!("Position not supported by UserDefinedExtensionPlanners: {extract_args:?}")
+                not_impl_err!("Position not supported by UserDefinedExtensionPlanners: {extracted_args:?}")
             }
             SQLExpr::AtTimeZone {
                 timestamp,
