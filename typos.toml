@@ -14,3 +14,24 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+
+[files]
+extend-exclude = [
+    "benchmarks",
+    "ci",
+    "datafusion",
+    "dev",
+    "parquet-testing",
+    "test-utils",
+    "testing",
+    "**/tests/data",
+]
+
+# Match Whole Word - Case Sensitive
+[default.extend-identifiers]
+flate2 = "flate2"
+
+# Match Inside a Word - Case Insensitive
+[default.extend-words]
+Nd = "Nd" # NdJson
+hom = "hom" # `overlay('Txxxxas' placing 'hom' from 2 for 4) → Thomas`
