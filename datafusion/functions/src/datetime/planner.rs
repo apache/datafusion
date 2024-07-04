@@ -14,27 +14,23 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
-#![deny(clippy::clone_on_ref_ptr)]
 
-//! DataFusion execution configuration and runtime structures
+//! SQL planning extensions like [`ExtractPlanner`]
 
-pub mod cache;
-pub mod config;
-pub mod disk_manager;
-pub mod memory_pool;
-pub mod object_store;
-pub mod runtime_env;
-mod stream;
-mod task;
+use datafusion_common::Result;
+use datafusion_expr::{
+    expr::ScalarFunction,
+    planner::{PlannerResult, UserDefinedSQLPlanner},
+    Expr,
+};
 
-pub mod registry {
-    pub use datafusion_expr::registry::{
-        FunctionRegistry, MemoryFunctionRegistry, SerializerRegistry,
-    };
+#[derive(Default)]
+pub struct ExtractPlanner;
+
+impl UserDefinedSQLPlanner for ExtractPlanner {
+    fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::datetime::date_part(), args),
+        )))
+    }
 }
-
-pub use disk_manager::DiskManager;
-pub use registry::FunctionRegistry;
-pub use stream::{RecordBatchStream, SendableRecordBatchStream};
-pub use task::TaskContext;
