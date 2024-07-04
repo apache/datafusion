@@ -1350,7 +1350,6 @@ physical_plan
 10)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 11)------------MemoryExec: partitions=1, partition_sizes=[1]
 
-
 # Join on struct
 query TT
 explain select join_t3.s3, join_t4.s4
@@ -1373,7 +1372,6 @@ physical_plan
 09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 10)----------MemoryExec: partitions=1, partition_sizes=[1]
 
-
 query ??
 select join_t3.s3, join_t4.s4
 from join_t3
@@ -1381,15 +1379,13 @@ inner join join_t4 on join_t3.s3 = join_t4.s4
 ----
 {id: 2} {id: 2}
 
-# Join on struct using IS NOT DISTINCT FROM
-query ??
-select join_t3.s3, join_t4.s4
-from join_t3
-inner join join_t4 on join_t3.s3 IS NOT DISTINCT FROM join_t4.s4
+# join with struct key and nulls
+query ?
+SELECT * FROM join_t3
+EXCEPT
+SELECT * FROM join_t4
 ----
-NULL NULL
-{id: 2} {id: 2}
-
+{id: 1}
 
 query TT
 EXPLAIN
