@@ -2057,9 +2057,11 @@ impl BuiltinExprBuilder {
                     // Convert Option<String> to Option<char>
                     escape_char_string.and_then(|s| s.chars().next())
                 }
-                _ => return substrait_err!(
+                _ => {
+                    return substrait_err!(
                     "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
-                ),
+                )
+                }
             }
         } else {
             None
