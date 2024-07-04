@@ -25,7 +25,7 @@ use datafusion_expr::{
 };
 
 #[derive(Default)]
-pub struct PositionPlanner {}
+pub struct PositionPlanner;
 
 impl UserDefinedSQLPlanner for PositionPlanner {
     fn plan_position(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
