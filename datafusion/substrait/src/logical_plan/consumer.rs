@@ -2040,31 +2040,37 @@ impl BuiltinExprBuilder {
                 .clone();
 
         // Default case: escape character is Literal(Utf8(None))
-        let escape_char_expr = if f.arguments.len() == 3 {
+        let escape_char = if f.arguments.len() == 3 {
             let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type
             else {
                 return substrait_err!("Invalid arguments type for `{fn_name}` expr");
             };
-            from_substrait_rex(ctx, escape_char_substrait, input_schema, extensions)
-                .await?
-                .as_ref()
-                .clone()
+
+            let escape_char_expr =
+                from_substrait_rex(ctx, escape_char_substrait, input_schema, extensions)
+                    .await?
+                    .as_ref()
+                    .clone();
+
+            match escape_char_expr {
+                Expr::Literal(ScalarValue::Utf8(escape_char_string)) => {
+                    // Convert Option<String> to Option<char>
+                    escape_char_string.and_then(|s| s.chars().next())
+                }
+                _ => return substrait_err!(
+                    "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
+                ),
+            }
         } else {
-            Expr::Literal(ScalarValue::Utf8(None))
+            None
         };
 
-        if let Expr::Literal(ScalarValue::Utf8(escape_char)) = escape_char_expr {
-            Ok(Arc::new(Expr::Like(Like {
-                negated: false,
-                expr: Box::new(expr),
-                pattern: Box::new(pattern),
-                escape_char: escape_char.map(|c| c.chars().next().unwrap()),
-                case_insensitive,
-            })))
-        } else {
-            substrait_err!(
-                "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
-            )
-        }
+        Ok(Arc::new(Expr::Like(Like {
+            negated: false,
+            expr: Box::new(expr),
+            pattern: Box::new(pattern),
+            escape_char,
+            case_insensitive,
+        })))
     }
 }
