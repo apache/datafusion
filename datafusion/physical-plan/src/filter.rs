@@ -31,11 +31,11 @@ use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
 };
-
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::cast::as_boolean_array;
+use arrow_array::{Array, BooleanArray};
+use datafusion_common::cast::{as_boolean_array, as_null_array};
 use datafusion_common::stats::Precision;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -76,6 +76,19 @@ impl FilterExec {
                 let default_selectivity = 20;
                 let cache =
                     Self::compute_properties(&input, &predicate, default_selectivity)?;
+                Ok(Self {
+                    predicate,
+                    input: input.clone(),
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    default_selectivity,
+                    cache,
+                })
+            }
+            DataType::Null => {
+                let default_selectivity = 0;
+                let cache =
+                    Self::compute_properties(&input, &predicate, default_selectivity)?;
+
                 Ok(Self {
                     predicate,
                     input: input.clone(),
@@ -357,9 +370,18 @@ pub(crate) fn batch_filter(
         .evaluate(batch)
         .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
-            Ok(as_boolean_array(&array)?)
-                // apply filter array to record batch
-                .and_then(|filter_array| Ok(filter_record_batch(batch, filter_array)?))
+            let filter_array: BooleanArray = match as_null_array(&array) {
+                Ok(null_array) => {
+                    // if the predicate is null, then the result is also null
+                    Ok::<BooleanArray, DataFusionError>(BooleanArray::new_null(null_array.len()))
+                }
+                Err(_) => {
+                    // if the predicate is not null, then the result is a boolean array
+                    Ok(as_boolean_array(&array)?.to_owned())
+                }
+            }?;
+
+            Ok(filter_record_batch(batch, &filter_array)?)
         })
 }
 
