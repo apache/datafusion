@@ -582,3 +582,20 @@ jobs:
       - name: Check datafusion-cli
         working-directory: datafusion-cli
         run: cargo msrv verify
+
+  check-typos:
+    name: check typos
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check typos
+        uses: crate-ci/typos@v1.22.9
+      - name: Typos info
+        if: failure()
+        run: |
+          echo 'To fix typos, please run `typos -w`'
+          echo 'To check for a diff, run `typos`'
+          echo 'You can find typos here: https://crates.io/crates/typos'
+          echo 'if you use VSCode, you can also install `Typos Spell Checker'
+          echo 'You can find the extension here: https://marketplace.visualstudio.com/items?itemName=tekumara.typos-vscode'
