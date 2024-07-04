@@ -608,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn one_distinctand_and_two_common() -> Result<()> {
+    fn one_distinct_and_two_common() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
