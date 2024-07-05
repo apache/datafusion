@@ -173,29 +173,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let sql_not_moved = sql.clone();
         match sql {
             SQLExpr::Value(value) => {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
-            SQLExpr::Extract { field, expr } => {
-                let mut extract_args = vec![
-                    Expr::Literal(ScalarValue::from(format!("{field}"))),
-                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
-                ];
-
-                for planner in self.planners.iter() {
-                    match planner.plan_extract(extract_args)? {
-                        PlannerResult::Planned(expr) => return Ok(expr),
-                        PlannerResult::Original(args) => {
-                            extract_args = args;
-                        }
-                    }
-                }
-
-                not_impl_err!("Extract not supported by UserDefinedExtensionPlanners: {extract_args:?}")
-            }
-
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
             SQLExpr::Interval(interval) => {
                 self.sql_interval_to_expr(false, interval, schema, planner_context)
@@ -600,24 +581,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Struct { values, fields } => {
                 self.parse_struct(values, fields, schema, planner_context)
             }
-            SQLExpr::Position { expr, r#in } => {
-                let substr =
-                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
-                let fullstr =
-                    self.sql_expr_to_logical_expr(*r#in, schema, planner_context)?;
-                let mut extracted_args = vec![fullstr, substr];
-
-                for planner in self.planners.iter() {
-                    match planner.plan_udf(&sql_not_moved, extracted_args)? {
-                        PlannerResult::Planned(expr) => return Ok(expr),
-                        PlannerResult::Original(args) => {
-                            extracted_args = args;
-                        }
-                    }
-                }
-
-                not_impl_err!("Position not supported by UserDefinedExtensionPlanners: {extracted_args:?}")
-            }
             SQLExpr::AtTimeZone {
                 timestamp,
                 time_zone,
@@ -640,6 +603,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
             SQLExpr::Dictionary(fields) => {
                 self.try_plan_dictionary_literal(fields, schema, planner_context)
+            }
+            SQLExpr::Extract { .. } | SQLExpr::Position { .. } => {
+                self.sql_udf_plan(sql, schema, planner_context)
             }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
@@ -827,6 +793,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             escape_char,
             case_insensitive,
         )))
+    }
+
+    fn sql_udf_plan(
+        &self,
+        sql: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let sql_not_moved = sql.clone();
+        let mut extracted_args = match sql {
+            SQLExpr::Position { expr, r#in } => Ok(vec![
+                self.sql_expr_to_logical_expr(*r#in, schema, planner_context)?,
+                self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
+            ]),
+            SQLExpr::Extract { field, expr } => Ok(vec![
+                Expr::Literal(ScalarValue::from(format!("{field}"))),
+                self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
+            ]),
+            _ => not_impl_err!("sql_udf_plan not support sql expression: {sql:?}"),
+        }?;
+
+        for planner in self.planners.iter() {
+            match planner.plan_udf(&sql_not_moved, extracted_args)? {
+                PlannerResult::Planned(expr) => return Ok(expr),
+                PlannerResult::Original(args) => {
+                    extracted_args = args;
+                }
+            }
+        }
+
+        not_impl_err!("sql_udf_plan not support sql expression: {sql_not_moved:?}")
     }
 
     fn sql_similarto_to_expr(

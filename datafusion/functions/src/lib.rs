@@ -130,6 +130,9 @@ make_stub_package!(crypto, "crypto_expressions");
 pub mod unicode;
 make_stub_package!(unicode, "unicode_expressions");
 
+#[cfg(any(feature = "datetime_expressions", feature = "unicode_expressions"))]
+pub mod planner;
+
 mod utils;
 
 /// Fluent-style API for creating `Expr`s
