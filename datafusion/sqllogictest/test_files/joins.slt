@@ -53,6 +53,20 @@ AS VALUES
 (44, 'x', 3),
 (55, 'w', 3);
 
+statement ok
+CREATE TABLE join_t3(s3 struct<id INT>)
+  AS VALUES
+  (NULL),
+  (struct(1)),
+  (struct(2));
+
+statement ok
+CREATE TABLE join_t4(s4 struct<id INT>)
+  AS VALUES
+  (NULL),
+  (struct(2)),
+  (struct(3));
+
 # Left semi anti join
 
 statement ok
@@ -1335,6 +1349,44 @@ physical_plan
 09)--------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
 10)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 11)------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# Join on struct
+query TT
+explain select join_t3.s3, join_t4.s4
+from join_t3
+inner join join_t4 on join_t3.s3 = join_t4.s4
+----
+logical_plan
+01)Inner Join: join_t3.s3 = join_t4.s4
+02)--TableScan: join_t3 projection=[s3]
+03)--TableScan: join_t4 projection=[s4]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=2
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s3@0, s4@0)]
+03)----CoalesceBatchesExec: target_batch_size=2
+04)------RepartitionExec: partitioning=Hash([s3@0], 2), input_partitions=2
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=2
+08)------RepartitionExec: partitioning=Hash([s4@0], 2), input_partitions=2
+09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)----------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ??
+select join_t3.s3, join_t4.s4
+from join_t3
+inner join join_t4 on join_t3.s3 = join_t4.s4
+----
+{id: 2} {id: 2}
+
+# join with struct key and nulls
+# Note that intersect or except applies `null_equals_null` as true for Join.
+query ?
+SELECT * FROM join_t3
+EXCEPT
+SELECT * FROM join_t4
+----
+{id: 1}
 
 query TT
 EXPLAIN
