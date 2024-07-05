@@ -183,7 +183,6 @@ logical_plan after apply_function_rewrites SAME TEXT AS ABOVE
 logical_plan after inline_table_scan SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
 logical_plan after count_wildcard_rule SAME TEXT AS ABOVE
-logical_plan after count_empty_rule SAME TEXT AS ABOVE
 analyzed_logical_plan SAME TEXT AS ABOVE
 logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE

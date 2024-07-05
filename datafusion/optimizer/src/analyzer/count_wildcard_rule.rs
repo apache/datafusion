@@ -35,7 +35,7 @@ pub struct CountWildcardRule {}
 
 impl CountWildcardRule {
     pub fn new() -> Self {
-        Self {}
+        CountWildcardRule {}
     }
 }
 
