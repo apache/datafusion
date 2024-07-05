@@ -632,7 +632,12 @@
 </section>
 <section id="rewriting-exprs">
 <h2>Rewriting <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s<a class="headerlink" href="#rewriting-exprs" title="Link to this heading">¶</a></h2>
-<p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/rewrite_expr.rs">rewrite_expr.rs</a> contains example code for rewriting <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s.</p>
+<p>There are several examples of rewriting and working with <code class="docutils literal notranslate"><span class="pre">Exprs</span></code>:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs">expr_api.rs</a></p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/analyzer_rule.rs">analyzer_rule.rs</a></p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/optimizer_rule.rs">optimizer_rule.rs</a></p></li>
+</ul>
 <p>Rewriting Expressions is the process of taking an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and transforming it into another <code class="docutils literal notranslate"><span class="pre">Expr</span></code>. This is useful for a number of reasons, including:</p>
 <ul class="simple">
 <li><p>Simplifying <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to make them easier to evaluate</p></li>
