@@ -409,17 +409,13 @@ pub async fn from_substrait_rel(
                         from_substrait_rex(ctx, e, input.clone().schema(), extensions)
                             .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
-                    //   before returning and do not add to list of this Projection's expression list
-                    // otherwise, add expression to the Projection's expression list
                     match &*x {
                         Expr::WindowFunction(_) => {
-                            input = input.window(vec![x.as_ref().clone()])?;
-                            exprs.push(x.as_ref().clone());
+                            input = input.window(vec![x.as_ref().clone()])?
                         }
-                        _ => {
-                            exprs.push(x.as_ref().clone());
-                        }
+                        _ => {}
                     }
+                    exprs.push(x.as_ref().clone());
                 }
                 input.project(exprs)?.build()
             } else {
