@@ -21,7 +21,9 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 use std::vec;
 
-use arrow::array::{ArrayRef, FixedSizeListArray};
+use arrow::array::{
+    ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
+};
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
@@ -1247,6 +1249,31 @@ fn round_trip_scalar_values() {
             ),
         ])))
         .unwrap(),
+        ScalarValue::try_from(&DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int32, true),
+                    Field::new("value", DataType::Utf8, false),
+                ])),
+                false,
+            )),
+            false,
+        ))
+        .unwrap(),
+        ScalarValue::try_from(&DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int32, true),
+                    Field::new("value", DataType::Utf8, true),
+                ])),
+                false,
+            )),
+            true,
+        ))
+        .unwrap(),
+        ScalarValue::Map(Arc::new(create_map_array_test_case())),
         ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
         ScalarValue::FixedSizeBinary(0, None),
         ScalarValue::FixedSizeBinary(5, None),
@@ -1267,6 +1294,25 @@ fn round_trip_scalar_values() {
                         Input: {test_case:?}\n\nRoundtrip: {roundtrip:?}"
         );
     }
+}
+
+// create a map array [{joe:1}, {blogs:2, foo:4}, {}, null] for testing
+fn create_map_array_test_case() -> MapArray {
+    let string_builder = StringBuilder::new();
+    let int_builder = Int32Builder::with_capacity(4);
+    let mut builder = MapBuilder::new(None, string_builder, int_builder);
+    builder.keys().append_value("joe");
+    builder.values().append_value(1);
+    builder.append(true).unwrap();
+
+    builder.keys().append_value("blogs");
+    builder.values().append_value(2);
+    builder.keys().append_value("foo");
+    builder.values().append_value(4);
+    builder.append(true).unwrap();
+    builder.append(true).unwrap();
+    builder.append(false).unwrap();
+    builder.finish()
 }
 
 #[test]

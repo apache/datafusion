@@ -18,8 +18,11 @@
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::planner::RawDictionaryExpr;
 use datafusion_expr::planner::RawFieldAccessExpr;
-use sqlparser::ast::{CastKind, Expr as SQLExpr, Subscript, TrimWhereField, Value};
+use sqlparser::ast::{
+    CastKind, DictionaryField, Expr as SQLExpr, Subscript, TrimWhereField, Value,
+};
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
@@ -175,21 +178,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
             SQLExpr::Extract { field, expr } => {
-                let date_part = self
-                    .context_provider
-                    .get_function_meta("date_part")
-                    .ok_or_else(|| {
-                        internal_datafusion_err!(
-                            "Unable to find expected 'date_part' function"
-                        )
-                    })?;
-                let args = vec![
+                let mut extract_args = vec![
                     Expr::Literal(ScalarValue::from(format!("{field}"))),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ];
-                Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                    date_part, args,
-                )))
+
+                for planner in self.planners.iter() {
+                    match planner.plan_extract(extract_args)? {
+                        PlannerResult::Planned(expr) => return Ok(expr),
+                        PlannerResult::Original(args) => {
+                            extract_args = args;
+                        }
+                    }
+                }
+
+                not_impl_err!("Extract not supported by UserDefinedExtensionPlanners: {extract_args:?}")
             }
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
@@ -619,8 +622,40 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 },
             ))),
+            SQLExpr::Dictionary(fields) => {
+                self.try_plan_dictionary_literal(fields, schema, planner_context)
+            }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
+    }
+
+    fn try_plan_dictionary_literal(
+        &self,
+        fields: Vec<DictionaryField>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let mut keys = vec![];
+        let mut values = vec![];
+        for field in fields {
+            let key = lit(field.key.value);
+            let value =
+                self.sql_expr_to_logical_expr(*field.value, schema, planner_context)?;
+            keys.push(key);
+            values.push(value);
+        }
+
+        let mut raw_expr = RawDictionaryExpr { keys, values };
+
+        for planner in self.planners.iter() {
+            match planner.plan_dictionary_literal(raw_expr, schema)? {
+                PlannerResult::Planned(expr) => {
+                    return Ok(expr);
+                }
+                PlannerResult::Original(expr) => raw_expr = expr,
+            }
+        }
+        not_impl_err!("Unsupported dictionary literal: {raw_expr:?}")
     }
 
     /// Parses a struct(..) expression

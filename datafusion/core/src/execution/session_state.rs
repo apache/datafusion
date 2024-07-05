@@ -231,10 +231,21 @@ impl SessionState {
             );
         }
 
+        let user_defined_sql_planners: Vec<Arc<dyn UserDefinedSQLPlanner>> = vec![
+            Arc::new(functions::core::planner::CoreFunctionPlanner::default()),
+            // register crate of array expressions (if enabled)
+            #[cfg(feature = "array_expressions")]
+            Arc::new(functions_array::planner::ArrayFunctionPlanner),
+            #[cfg(feature = "array_expressions")]
+            Arc::new(functions_array::planner::FieldAccessPlanner),
+            #[cfg(feature = "datetime_expressions")]
+            Arc::new(functions::datetime::planner::ExtractPlanner),
+        ];
+
         let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
-            user_defined_sql_planners: vec![],
+            user_defined_sql_planners,
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
@@ -958,23 +969,7 @@ impl SessionState {
             query = query.with_user_defined_planner(planner.clone());
         }
 
-        // register crate of array expressions (if enabled)
-        #[cfg(feature = "array_expressions")]
-        {
-            let array_planner =
-                Arc::new(functions_array::planner::ArrayFunctionPlanner) as _;
-
-            let field_access_planner =
-                Arc::new(functions_array::planner::FieldAccessPlanner) as _;
-
-            query
-                .with_user_defined_planner(array_planner)
-                .with_user_defined_planner(field_access_planner)
-        }
-        #[cfg(not(feature = "array_expressions"))]
-        {
-            query
-        }
+        query
     }
 }
 

@@ -952,6 +952,7 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
             ScalarValue::Struct(_) => not_impl_err!("Unsupported scalar: {v:?}"),
+            ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(..) => not_impl_err!("Unsupported scalar: {v:?}"),
         }
