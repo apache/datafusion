@@ -186,7 +186,7 @@ impl NthValueAccumulator {
         datatype: &DataType,
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
-    ) -> datafusion_common::Result<Self> {
+    ) -> Result<Self> {
         if n == 0 {
             // n cannot be 0
             return internal_err!("Nth value indices are 1 based. 0 is invalid index");
@@ -206,7 +206,7 @@ impl NthValueAccumulator {
 impl Accumulator for NthValueAccumulator {
     /// Updates its state with the `values`. Assumes data in the `values` satisfies the required
     /// ordering for the accumulator (across consecutive batches, not just batch-wise).
-    fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
         }
@@ -230,7 +230,7 @@ impl Accumulator for NthValueAccumulator {
         Ok(())
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
         }
@@ -289,8 +289,8 @@ impl Accumulator for NthValueAccumulator {
                             ordering_row.data_type()
                         )
                     }
-                }).collect::<datafusion_common::Result<Vec<_>>>()
-            }).collect::<datafusion_common::Result<Vec<_>>>()?;
+                }).collect::<Result<Vec<_>>>()
+            }).collect::<Result<Vec<_>>>()?;
             for ordering_values in ordering_values.into_iter() {
                 partition_ordering_values.push(ordering_values.into());
             }
@@ -313,7 +313,7 @@ impl Accumulator for NthValueAccumulator {
         Ok(())
     }
 
-    fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.evaluate_values()];
         if !self.ordering_req.is_empty() {
             result.push(self.evaluate_orderings()?);
@@ -321,7 +321,7 @@ impl Accumulator for NthValueAccumulator {
         Ok(result)
     }
 
-    fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let n_required = self.n.unsigned_abs() as usize;
         let from_start = self.n > 0;
         let nth_value_idx = if from_start {
@@ -365,7 +365,7 @@ impl Accumulator for NthValueAccumulator {
 }
 
 impl NthValueAccumulator {
-    fn evaluate_orderings(&self) -> datafusion_common::Result<ScalarValue> {
+    fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
         let struct_field = Fields::from(fields.clone());
 
@@ -411,7 +411,7 @@ impl NthValueAccumulator {
         &mut self,
         values: &[ArrayRef],
         fetch: Option<usize>,
-    ) -> datafusion_common::Result<()> {
+    ) -> Result<()> {
         let n_row = values[0].len();
         let n_to_add = if let Some(fetch) = fetch {
             std::cmp::min(fetch, n_row)
@@ -464,7 +464,7 @@ impl<'a> CustomElement<'a> {
         &self,
         current: &[ScalarValue],
         target: &[ScalarValue],
-    ) -> datafusion_common::Result<Ordering> {
+    ) -> Result<Ordering> {
         // Calculate ordering according to `sort_options`
         compare_rows(current, target, self.sort_options)
     }
@@ -525,7 +525,7 @@ fn merge_ordered_arrays(
     ordering_values: &mut [VecDeque<Vec<ScalarValue>>],
     // Defines according to which ordering comparisons should be done.
     sort_options: &[SortOptions],
-) -> datafusion_common::Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
+) -> Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
     // Keep track the most recent data of each branch, in binary heap data structure.
     let mut heap = BinaryHeap::<CustomElement>::new();
 
