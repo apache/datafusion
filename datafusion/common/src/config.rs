@@ -565,6 +565,12 @@ config_namespace! {
         /// rule. When set to false, any rules that produce errors will cause the query to fail
         pub skip_failed_rules: bool, default = false
 
+        /// When set to true, the logical plan optimizer will produce error
+        /// when an optimization rule produces a plan that was previously observed.
+        /// When set to false, the optimizer will stop the optimization and return current,
+        /// not fully optimized plan.
+        pub abort_on_optimization_cycle: bool, default = true
+
         /// Number of times that the optimizer will attempt to optimize the plan
         pub max_passes: usize, default = 3
 
