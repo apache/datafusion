@@ -82,7 +82,7 @@ pub async fn main() -> Result<()> {
     rule.set_show_position("Manager");
     ctx.sql("SELECT * FROM employee").await?.show().await?;
 
-    // The filters introduced by our AanalyzerRule are treated the same as any
+    // The filters introduced by our AnalyzerRule are treated the same as any
     // other filter by the DataFusion optimizer, including predicate push down
     // (including into scans), simplifications, and similar optimizations.
     //
@@ -102,7 +102,7 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Example AnalyzerRulw ule that implements a very basic "row level access
+/// Example AnalyzerRule that implements a very basic "row level access
 /// control"
 ///
 /// In this case, it adds a filter to the plan that removes all managers from
