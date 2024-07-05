@@ -1181,6 +1181,10 @@ impl FunctionRegistry for SessionState {
         Ok(())
     }
 
+    fn user_defined_sql_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+        self.user_defined_sql_planners.clone()
+    }
+
     fn register_user_defined_sql_planner(
         &mut self,
         user_defined_sql_planner: Arc<dyn UserDefinedSQLPlanner>,
