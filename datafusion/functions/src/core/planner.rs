@@ -51,3 +51,17 @@ impl UserDefinedSQLPlanner for CreateStructPlanner {
         )))
     }
 }
+
+#[derive(Default)]
+pub struct CreateNamedStructPlanner;
+
+impl UserDefinedSQLPlanner for CreateNamedStructPlanner {
+    fn plan_create_named_struct(
+        &self,
+        args: Vec<Expr>,
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::core::named_struct(), args),
+        )))
+    }
+}

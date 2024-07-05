@@ -21,7 +21,8 @@ use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::planner::RawDictionaryExpr;
 use datafusion_expr::planner::RawFieldAccessExpr;
 use sqlparser::ast::{
-    CastKind, DictionaryField, Expr as SQLExpr, Subscript, TrimWhereField, Value,
+    CastKind, DictionaryField, Expr as SQLExpr, StructField, Subscript, TrimWhereField,
+    Value,
 };
 
 use datafusion_common::{
@@ -597,28 +598,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::Struct { values, fields } => {
-                if !fields.is_empty() {
-                    return not_impl_err!("Struct fields are not supported yet");
-                }
-                let is_named_struct = values
-                    .iter()
-                    .any(|value| matches!(value, SQLExpr::Named { .. }));
-
-                if is_named_struct {
-                    self.create_named_struct(values, schema, planner_context)
-                } else {
-                    let mut create_struct_args =
-                        self.create_struct_expr(values, schema, planner_context)?;
-                    for planner in self.planners.iter() {
-                        match planner.plan_create_struct(create_struct_args)? {
-                            PlannerResult::Planned(expr) => return Ok(expr),
-                            PlannerResult::Original(args) => {
-                                create_struct_args = args;
-                            }
-                        }
-                    }
-                    not_impl_err!("CreateStruct not supported by UserDefinedExtensionPlanners: {create_struct_args:?}")
-                }
+                self.create_struct(schema, planner_context, values, fields)
             }
             SQLExpr::Position { expr, r#in } => {
                 self.sql_position_to_expr(*expr, *r#in, schema, planner_context)
@@ -647,6 +627,46 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.try_plan_dictionary_literal(fields, schema, planner_context)
             }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
+        }
+    }
+
+    fn create_struct(
+        &self,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+        values: Vec<sqlparser::ast::Expr>,
+        fields: Vec<StructField>,
+    ) -> Result<Expr> {
+        if !fields.is_empty() {
+            return not_impl_err!("Struct fields are not supported yet");
+        }
+        let is_named_struct = values
+            .iter()
+            .any(|value| matches!(value, SQLExpr::Named { .. }));
+
+        let mut expressions = if is_named_struct {
+            self.create_named_struct_expr(values, schema, planner_context)?
+        } else {
+            self.create_struct_expr(values, schema, planner_context)?
+        };
+        if is_named_struct {
+            for planner in self.planners.iter() {
+                match planner.plan_create_named_struct(expressions)? {
+                    PlannerResult::Planned(expr) => return Ok(expr),
+                    PlannerResult::Original(args) => expressions = args,
+                }
+            }
+            not_impl_err!("CreateNamedStruct not supported by UserDefinedExtensionPlanners: {expressions:?}")
+        } else {
+            for planner in self.planners.iter() {
+                match planner.plan_create_struct(expressions)? {
+                    PlannerResult::Planned(expr) => return Ok(expr),
+                    PlannerResult::Original(args) => {
+                        expressions = args;
+                    }
+                }
+            }
+            not_impl_err!("CreateStruct not supported by UserDefinedExtensionPlanners: {expressions:?}")
         }
     }
 
@@ -681,13 +701,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     // Handles a call to struct(...) where the arguments are named. For example
     // `struct (v as foo, v2 as bar)` by creating a call to the `named_struct` function
-    fn create_named_struct(
+    fn create_named_struct_expr(
         &self,
         values: Vec<SQLExpr>,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<Expr> {
-        let args = values
+    ) -> Result<Vec<Expr>> {
+        Ok(values
             .into_iter()
             .enumerate()
             .map(|(i, value)| {
@@ -716,19 +736,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
-            .collect();
-
-        let named_struct_func = self
-            .context_provider
-            .get_function_meta("named_struct")
-            .ok_or_else(|| {
-            internal_datafusion_err!("Unable to find expected 'named_struct' function")
-        })?;
-
-        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-            named_struct_func,
-            args,
-        )))
+            .collect())
     }
 
     // Handles a call to struct(...) where the arguments are not named. For example
