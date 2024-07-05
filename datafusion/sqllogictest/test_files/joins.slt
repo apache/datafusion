@@ -1380,6 +1380,7 @@ inner join join_t4 on join_t3.s3 = join_t4.s4
 {id: 2} {id: 2}
 
 # join with struct key and nulls
+# Note that intersect or except applies `null_equals_null` as true for Join.
 query ?
 SELECT * FROM join_t3
 EXCEPT
