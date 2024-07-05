@@ -173,12 +173,12 @@ impl FilterExec {
                     // Filter evaluates to single value for all partitions
                     if input_eqs.is_expr_constant(binary.left()) {
                         res_constants.push(
-                            ConstExpr::new(binary.right().clone())
+                            ConstExpr::new(Arc::clone(binary.right()))
                                 .with_across_partitions(true),
                         )
                     } else if input_eqs.is_expr_constant(binary.right()) {
                         res_constants.push(
-                            ConstExpr::new(binary.left().clone())
+                            ConstExpr::new(Arc::clone(binary.left()))
                                 .with_across_partitions(true),
                         )
                     }
