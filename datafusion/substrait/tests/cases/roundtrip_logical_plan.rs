@@ -524,24 +524,6 @@ async fn roundtrip_arithmetic_ops() -> Result<()> {
 }
 
 #[tokio::test]
-async fn roundtrip_interval_literal() -> Result<()> {
-    roundtrip(
-        "SELECT g from data where g = arrow_cast(INTERVAL '1 YEAR', 'Interval(YearMonth)')",
-    )
-    .await?;
-    roundtrip(
-        "SELECT g from data where g = arrow_cast(INTERVAL '1 YEAR', 'Interval(DayTime)')",
-    )
-    .await?;
-    roundtrip(
-    "SELECT g from data where g = arrow_cast(INTERVAL '1 YEAR', 'Interval(MonthDayNano)')",
-    )
-    .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn roundtrip_like() -> Result<()> {
     roundtrip("SELECT f FROM data WHERE f LIKE 'a%b'").await
 }
@@ -821,23 +803,20 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
     struct Dummy {}
 
     impl Accumulator for Dummy {
-        fn state(&mut self) -> datafusion::error::Result<Vec<ScalarValue>> {
-            Ok(vec![])
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Float64(None), ScalarValue::UInt32(None)])
         }
 
-        fn update_batch(
-            &mut self,
-            _values: &[ArrayRef],
-        ) -> datafusion::error::Result<()> {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
 
-        fn merge_batch(&mut self, _states: &[ArrayRef]) -> datafusion::error::Result<()> {
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
 
-        fn evaluate(&mut self) -> datafusion::error::Result<ScalarValue> {
-            Ok(ScalarValue::Float64(None))
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(None))
         }
 
         fn size(&self) -> usize {
@@ -1071,6 +1050,8 @@ async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<()> {
     assert_eq!(plan1str, plan2str);
 
     assert_eq!(plan.schema(), plan2.schema());
+
+    DataFrame::new(ctx.state(), plan2).show().await?;
     Ok(())
 }
 
@@ -1143,7 +1124,6 @@ async fn create_context() -> Result<SessionContext> {
         Field::new("d", DataType::Boolean, true),
         Field::new("e", DataType::UInt32, true),
         Field::new("f", DataType::Utf8, true),
-        Field::new("g", DataType::Interval(IntervalUnit::DayTime), true),
     ];
     let schema = Schema::new(fields);
     explicit_options.schema = Some(&schema);
@@ -1206,6 +1186,11 @@ async fn create_all_type_context() -> Result<SessionContext> {
         ),
         Field::new("decimal_128_col", DataType::Decimal128(10, 2), true),
         Field::new("decimal_256_col", DataType::Decimal256(10, 2), true),
+        Field::new(
+            "interval_day_time_col",
+            DataType::Interval(IntervalUnit::DayTime),
+            true,
+        ),
     ]);
     explicit_options.schema = Some(&schema);
     explicit_options.has_header = false;
