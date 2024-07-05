@@ -19,6 +19,7 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
+use arrow::array::builder::FixedSizeBinaryBuilder;
 use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
@@ -905,16 +906,28 @@ macro_rules! get_data_page_statistics {
                     })
                 },
                Some(DataType::FixedSizeBinary(size)) => {
-                    Ok(Arc::new(
-                        FixedSizeBinaryArray::try_from_iter(
-                            [<$stat_type_prefix FixedLenByteArrayDataPageStatsIterator>]::new($iterator)
-                            .flat_map(|x| x.into_iter())
-                            .filter_map(|x| x)
-                        ).unwrap_or_else(|e| {
-                            log::debug!("FixedSizeBinary statistics is invalid: {}", e);
-                            FixedSizeBinaryArray::new(*size, vec![].into(), None)
-                        })
-                    ))
+                    let mut builder = FixedSizeBinaryBuilder::new(*size);
+                    let iterator = [<$stat_type_prefix FixedLenByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            if x.len() == *size as usize {
+                                let _ = builder.append_value(x.data());
+                            } else {
+                                log::debug!(
+                                    "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+                                    size,
+                                    x.len(),
+                                );
+                                builder.append_null();
+                            }
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
                 },
                 _ => unimplemented!()
             }

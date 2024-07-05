@@ -539,7 +539,7 @@ async fn test_data_page_stats_with_all_null_page() {
         DataType::Timestamp(TimeUnit::Nanosecond, None),
         DataType::Binary,
         DataType::LargeBinary,
-        // DataType::FixedSizeBinary(3),
+        DataType::FixedSizeBinary(3),
         DataType::Utf8,
         DataType::LargeUtf8,
         // DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -552,7 +552,7 @@ async fn test_data_page_stats_with_all_null_page() {
 
         let reader =
             build_parquet_file(4, Some(EnabledStatistics::Page), Some(4), vec![batch]);
-        
+
         // There is one data page with 4 nulls
         // The statistics should be present but null
         Test {
