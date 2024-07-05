@@ -14,27 +14,27 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
-#![deny(clippy::clone_on_ref_ptr)]
 
-//! DataFusion execution configuration and runtime structures
+use datafusion_common::DFSchema;
+use datafusion_common::Result;
+use datafusion_expr::planner::{PlannerResult, RawDictionaryExpr, UserDefinedSQLPlanner};
 
-pub mod cache;
-pub mod config;
-pub mod disk_manager;
-pub mod memory_pool;
-pub mod object_store;
-pub mod runtime_env;
-mod stream;
-mod task;
+use super::named_struct;
 
-pub mod registry {
-    pub use datafusion_expr::registry::{
-        FunctionRegistry, MemoryFunctionRegistry, SerializerRegistry,
-    };
+#[derive(Default)]
+pub struct CoreFunctionPlanner {}
+
+impl UserDefinedSQLPlanner for CoreFunctionPlanner {
+    fn plan_dictionary_literal(
+        &self,
+        expr: RawDictionaryExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<RawDictionaryExpr>> {
+        let mut args = vec![];
+        for (k, v) in expr.keys.into_iter().zip(expr.values.into_iter()) {
+            args.push(k);
+            args.push(v);
+        }
+        Ok(PlannerResult::Planned(named_struct().call(args)))
+    }
 }
-
-pub use disk_manager::DiskManager;
-pub use registry::FunctionRegistry;
-pub use stream::{RecordBatchStream, SendableRecordBatchStream};
-pub use task::TaskContext;

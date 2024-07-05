@@ -84,7 +84,8 @@ pub trait ContextProvider {
 
 /// This trait allows users to customize the behavior of the SQL planner
 pub trait UserDefinedSQLPlanner: Send + Sync {
-    /// Plan the binary operation between two expressions, returns OriginalBinaryExpr if not possible
+    /// Plan the binary operation between two expressions, returns original
+    /// BinaryExpr if not possible
     fn plan_binary_op(
         &self,
         expr: RawBinaryExpr,
@@ -93,7 +94,9 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
         Ok(PlannerResult::Original(expr))
     }
 
-    /// Plan the field access expression, returns OriginalFieldAccessExpr if not possible
+    /// Plan the field access expression
+    ///
+    /// returns original FieldAccessExpr if not possible
     fn plan_field_access(
         &self,
         expr: RawFieldAccessExpr,
@@ -102,13 +105,33 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
         Ok(PlannerResult::Original(expr))
     }
 
-    // Plan the array literal, returns OriginalArray if not possible
+    /// Plan the array literal, returns OriginalArray if not possible
+    ///
+    /// Returns origin expression arguments if not possible
     fn plan_array_literal(
         &self,
         exprs: Vec<Expr>,
         _schema: &DFSchema,
     ) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(exprs))
+    }
+
+    /// Plan the dictionary literal `{ key: value, ...}`
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_dictionary_literal(
+        &self,
+        expr: RawDictionaryExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<RawDictionaryExpr>> {
+        Ok(PlannerResult::Original(expr))
+    }
+
+    /// Plan an extract expression, e.g., `EXTRACT(month FROM foo)`
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
     }
 }
 
@@ -134,6 +157,16 @@ pub struct RawBinaryExpr {
 pub struct RawFieldAccessExpr {
     pub field_access: GetFieldAccess,
     pub expr: Expr,
+}
+
+/// A Dictionary literal expression `{ key: value, ...}`
+///
+/// This structure is used by [`UserDefinedSQLPlanner`] to plan operators with
+/// custom expressions.
+#[derive(Debug, Clone)]
+pub struct RawDictionaryExpr {
+    pub keys: Vec<Expr>,
+    pub values: Vec<Expr>,
 }
 
 /// Result of planning a raw expr with [`UserDefinedSQLPlanner`]
