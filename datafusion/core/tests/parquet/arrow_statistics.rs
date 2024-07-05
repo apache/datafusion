@@ -386,7 +386,7 @@ async fn test_one_row_group_without_null() {
         // 3 rows
         expected_row_counts: Some(UInt64Array::from(vec![3])),
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run()
 }
@@ -413,7 +413,7 @@ async fn test_one_row_group_with_null_and_negative() {
         // 8 rows
         expected_row_counts: Some(UInt64Array::from(vec![8])),
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run()
 }
@@ -440,7 +440,7 @@ async fn test_two_row_group_with_null() {
         // row counts are [10, 5]
         expected_row_counts: Some(UInt64Array::from(vec![10, 5])),
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run()
 }
@@ -467,7 +467,7 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
         // row counts are [5, 3]
         expected_row_counts: Some(UInt64Array::from(vec![5, 3])),
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run()
 }
@@ -1408,7 +1408,7 @@ async fn test_int32_range() {
         expected_null_counts: UInt64Array::from(vec![0]),
         expected_row_counts: Some(UInt64Array::from(vec![4])),
         column_name: "i",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1431,7 +1431,7 @@ async fn test_uint32_range() {
         expected_null_counts: UInt64Array::from(vec![0]),
         expected_row_counts: Some(UInt64Array::from(vec![4])),
         column_name: "u",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1453,7 +1453,7 @@ async fn test_numeric_limits_unsigned() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "u8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1464,7 +1464,7 @@ async fn test_numeric_limits_unsigned() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "u16",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1475,7 +1475,7 @@ async fn test_numeric_limits_unsigned() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "u32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1486,7 +1486,7 @@ async fn test_numeric_limits_unsigned() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "u64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1508,7 +1508,7 @@ async fn test_numeric_limits_signed() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "i8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1519,7 +1519,7 @@ async fn test_numeric_limits_signed() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "i16",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1530,7 +1530,7 @@ async fn test_numeric_limits_signed() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "i32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1541,7 +1541,7 @@ async fn test_numeric_limits_signed() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1563,7 +1563,7 @@ async fn test_numeric_limits_float() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "f32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1574,7 +1574,7 @@ async fn test_numeric_limits_float() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "f64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1585,7 +1585,7 @@ async fn test_numeric_limits_float() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "f32_nan",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1596,7 +1596,7 @@ async fn test_numeric_limits_float() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "f64_nan",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1619,7 +1619,7 @@ async fn test_float64() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "f",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1652,7 +1652,7 @@ async fn test_float16() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "f",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1741,7 +1741,7 @@ async fn test_dictionary() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "string_dict_i8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1763,7 +1763,7 @@ async fn test_dictionary() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "int_dict_i8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1861,7 +1861,7 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "service_fixedsize",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1915,7 +1915,7 @@ async fn test_period_in_column_names() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "name",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1929,7 +1929,7 @@ async fn test_period_in_column_names() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "service.name",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -2041,7 +2041,7 @@ async fn test_missing_statistics() {
         expected_null_counts: UInt64Array::from(vec![None]),
         expected_row_counts: Some(UInt64Array::from(vec![3])), // still has row count statistics
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -2063,7 +2063,7 @@ async fn test_column_not_found() {
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
         column_name: "not_a_column",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run_col_not_found();
 }
