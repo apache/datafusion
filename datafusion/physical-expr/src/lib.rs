@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 pub mod aggregate;
 pub mod analysis;
@@ -46,7 +48,7 @@ pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
 pub use datafusion_physical_expr_common::aggregate::{
     AggregateExpr, AggregatePhysicalExpressions,
 };
-pub use equivalence::EquivalenceProperties;
+pub use equivalence::{ConstExpr, EquivalenceProperties};
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,

@@ -380,7 +380,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::ListValue(v)
             | Value::FixedSizeListValue(v)
             | Value::LargeListValue(v)
-            | Value::StructValue(v) => {
+            | Value::StructValue(v)
+            | Value::MapValue(v) => {
                 let protobuf::ScalarNestedValue {
                     ipc_message,
                     arrow_data,
@@ -479,6 +480,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     Value::StructValue(_) => {
                         Self::Struct(arr.as_struct().to_owned().into())
                     }
+                    Value::MapValue(_) => Self::Map(arr.as_map().to_owned().into()),
                     _ => unreachable!(),
                 }
             }
