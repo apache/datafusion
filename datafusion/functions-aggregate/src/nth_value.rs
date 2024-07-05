@@ -154,9 +154,9 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
-        let nth_value = AggregateUDF::from(Self::new().with_reversed(!self.reversed));
-
-        ReversedUDAF::Reversed(Arc::from(nth_value))
+        ReversedUDAF::Reversed(Arc::from(AggregateUDF::from(
+            Self::new().with_reversed(!self.reversed),
+        )))
     }
 }
 
