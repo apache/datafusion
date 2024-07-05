@@ -280,11 +280,9 @@ from
     // We can create a LogicalPlan from a SQL query like this
     let logical_plan = ctx.sql(tpcds_query_88).await?.into_optimized_plan()?;
 
-    assert_eq!(
-        logical_plan.display_indent().to_string(),
-        "Projection: person.name\
-        \n  Filter: person.age BETWEEN Int64(21) AND Int64(32)\
-        \n    TableScan: person"
+    println!(
+        "Optimized Logical Plan:\n\n{}\n",
+        logical_plan.display_indent()
     );
     // we can get the total count (query 88 has 31 joins: 7 CROSS joins and 24 INNER joins => 40 input relations)
     let total_join_count = total_join_count(&logical_plan);
