@@ -3814,6 +3814,13 @@ logical_plan
 02)--Projection: Int64(1) AS a
 03)----EmptyRelation
 
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
 # Right Hash Joins preserve the right ordering
 query IIII
 SELECT * FROM (
@@ -3827,3 +3834,37 @@ SELECT * FROM (
 ----
 NULL NULL 1 0
 1 1 3 1
+
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT 1 as a, 1 as b
+) as lhs RIGHT JOIN (
+    SELECT 1 as x, 0 as y
+    UNION ALL
+    SELECT 3 as x, 1 AS y
+    ORDER BY y
+) AS rhs ON lhs.b=rhs.y
+----
+logical_plan
+01)Right Join: lhs.b = rhs.y
+02)--SubqueryAlias: lhs
+03)----Projection: Int64(1) AS a, Int64(1) AS b
+04)------EmptyRelation
+05)--SubqueryAlias: rhs
+06)----Sort: y ASC NULLS LAST
+07)------Union
+08)--------Projection: Int64(1) AS x, Int64(0) AS y
+09)----------EmptyRelation
+10)--------Projection: Int64(3) AS x, Int64(1) AS y
+11)----------EmptyRelation
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=2
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, y@1)]
+03)----ProjectionExec: expr=[1 as a, 1 as b]
+04)------PlaceholderRowExec
+05)----SortPreservingMergeExec: [y@1 ASC NULLS LAST]
+06)------UnionExec
+07)--------ProjectionExec: expr=[1 as x, 0 as y]
+08)----------PlaceholderRowExec
+09)--------ProjectionExec: expr=[3 as x, 1 as y]
+10)----------PlaceholderRowExec
