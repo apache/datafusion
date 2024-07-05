@@ -976,9 +976,17 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_, 'n> {
     fn f_up(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
         let (down_index, is_tree, sub_expr_id, sub_expr_is_valid) = self.pop_enter_mark();
 
-        let expr_id =
-            Identifier::new(expr, is_tree, self.random_state).combine(sub_expr_id);
-        let is_valid = !expr.is_volatile_node() && sub_expr_is_valid;
+        let (expr_id, is_valid) = if is_tree {
+            (
+                Identifier::new(expr, true, self.random_state),
+                !expr.is_volatile()?,
+            )
+        } else {
+            (
+                Identifier::new(expr, false, self.random_state).combine(sub_expr_id),
+                !expr.is_volatile_node() && sub_expr_is_valid,
+            )
+        };
 
         self.id_array[down_index].0 = self.up_index;
         if is_valid && !self.expr_mask.ignores(expr) {
@@ -1863,6 +1871,32 @@ mod test {
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_volatile_short_circuits() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let rand = Expr::ScalarFunction(ScalarFunction::new_udf(math::random(), vec![]));
+        let not_extracted_volatile_short_circuit_2 =
+            rand.clone().eq(lit(0)).or(col("b").eq(lit(0)));
+        let not_extracted_volatile_short_circuit_1 =
+            col("a").eq(lit(0)).or(rand.eq(lit(0)));
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![
+                not_extracted_volatile_short_circuit_1.clone().alias("c1"),
+                not_extracted_volatile_short_circuit_1.alias("c2"),
+                not_extracted_volatile_short_circuit_2.clone().alias("c3"),
+                not_extracted_volatile_short_circuit_2.alias("c4"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: test.a = Int32(0) OR random() = Int32(0) AS c1, test.a = Int32(0) OR random() = Int32(0) AS c2, random() = Int32(0) OR test.b = Int32(0) AS c3, random() = Int32(0) OR test.b = Int32(0) AS c4\
+        \n  TableScan: test";
+
+        assert_non_optimized_plan_eq(expected, plan, None);
 
         Ok(())
     }
