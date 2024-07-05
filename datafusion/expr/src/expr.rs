@@ -1415,6 +1415,9 @@ impl Expr {
 
     /// Returns true if the expression node is volatile, i.e. whether it can return
     /// different results when evaluated multiple times with the same input.
+    /// Note: unlike [`Self::is_volatile`], this function does not consider inputs:
+    /// - `rand()` returns `true`,
+    /// - `a + rand()` returns `false`
     pub fn is_volatile_node(&self) -> bool {
         matches!(self, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile)
     }

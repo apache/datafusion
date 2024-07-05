@@ -928,8 +928,22 @@ enum VisitRecord<'n> {
 }
 
 impl<'n> ExprIdentifierVisitor<'_, 'n> {
-    /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
-    /// before it.
+    /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem` before
+    /// it. Returns a tuple that contains:
+    /// - The pre-order index of the expression we marked.
+    /// - A boolean flag if we marked an expression subtree (not just a single node).
+    ///   If true we didn't recurse into the node's children, so we need to calculate the
+    ///   hash of the marked expression tree (not just the node) and we need to validate
+    ///   the expression tree (not just the node).
+    /// - The accumulated identifier of the children of the marked expression.
+    /// - An accumulated boolean flag from the children of the marked expression if all
+    ///   children are valid for subexpression elimination (i.e. it is safe to extract the
+    ///   expression as a common expression from its children POV).
+    ///   (E.g. if any of the children of the marked expression is not valid (e.g. is
+    ///   volatile) then the expression is also not valid, so we can propagate this
+    ///   information up from children to parents via `visit_stack` during the first,
+    ///   visiting traversal and no need to test the expression's validity beforehand with
+    ///   an extra traversal).
     fn pop_enter_mark(&mut self) -> (usize, bool, Option<Identifier<'n>>, bool) {
         let mut expr_id = None;
         let mut is_valid = true;
