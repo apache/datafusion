@@ -15,22 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL planning extensions like [`ExtractPlanner`]
-
+use datafusion_common::DFSchema;
 use datafusion_common::Result;
-use datafusion_expr::{
-    expr::ScalarFunction,
-    planner::{PlannerResult, UserDefinedSQLPlanner},
-    Expr,
-};
+use datafusion_expr::planner::{PlannerResult, RawDictionaryExpr, UserDefinedSQLPlanner};
+
+use super::named_struct;
 
 #[derive(Default)]
-pub struct ExtractPlanner;
+pub struct CoreFunctionPlanner {}
 
-impl UserDefinedSQLPlanner for ExtractPlanner {
-    fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
-            ScalarFunction::new_udf(crate::datetime::date_part(), args),
-        )))
+impl UserDefinedSQLPlanner for CoreFunctionPlanner {
+    fn plan_dictionary_literal(
+        &self,
+        expr: RawDictionaryExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<RawDictionaryExpr>> {
+        let mut args = vec![];
+        for (k, v) in expr.keys.into_iter().zip(expr.values.into_iter()) {
+            args.push(k);
+            args.push(v);
+        }
+        Ok(PlannerResult::Planned(named_struct().call(args)))
     }
 }
