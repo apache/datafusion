@@ -1452,44 +1452,32 @@ fn append_probe_indices_in_order(
     // Builders for new indices:
     let mut new_build_indices = UInt64Builder::new();
     let mut new_probe_indices = UInt32Builder::new();
-
-    // Set previous index as zero for the initial loop.
+    // Set previous index as zero for the initial loop:
     let mut prev_index = range.start as u32;
-
     // Zip the two iterators.
     debug_assert!(build_indices.len() == probe_indices.len());
-    for (maybe_build_index, maybe_probe_index) in
-        build_indices.iter().zip(probe_indices.iter())
+    for (build_index, probe_index) in build_indices
+        .values()
+        .into_iter()
+        .zip(probe_indices.values().into_iter())
     {
-        // Unwrap index options.
-        debug_assert!(maybe_build_index.is_some() && maybe_probe_index.is_some());
-        let (build_index, probe_index) = match (maybe_build_index, maybe_probe_index) {
-            (Some(bi), Some(pi)) => (bi, pi),
-            // If either index is None, return an error.
-            _ => unreachable!(),
-        };
-
-        // Append values between previous and current left index with null right index.
-        for val in prev_index..probe_index {
-            new_probe_indices.append_value(val);
+        // Append values between previous and current left index with null right index:
+        for value in prev_index..*probe_index {
+            new_probe_indices.append_value(value);
             new_build_indices.append_null();
         }
-
-        // Append current indices.
-        new_probe_indices.append_value(probe_index);
-        new_build_indices.append_value(build_index);
-
-        // Set current left index as previous for the next loop.
+        // Append current indices:
+        new_probe_indices.append_value(*probe_index);
+        new_build_indices.append_value(*build_index);
+        // Set current left index as previous for the next iteration:
         prev_index = probe_index + 1;
     }
-
     // Append remaining left indices after the last valid left index with null right index.
-    for val in prev_index..range.end as u32 {
-        new_probe_indices.append_value(val);
+    for value in prev_index..range.end as u32 {
+        new_probe_indices.append_value(value);
         new_build_indices.append_null();
     }
-
-    // Build arrays and return.
+    // Build arrays and return:
     (new_build_indices.finish(), new_probe_indices.finish())
 }
 
