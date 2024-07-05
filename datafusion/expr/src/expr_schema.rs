@@ -28,7 +28,8 @@ use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema, Result, ScalarValue, TableReference
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema,
+    Result, TableReference,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -110,13 +111,7 @@ impl ExprSchemable for Expr {
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
-            Expr::Literal(l) => {
-                match l {
-                    // Interpret NULL as a missing boolean value.
-                    ScalarValue::Null => Ok(DataType::Boolean),
-                    _ => Ok(l.data_type())
-                }
-            },
+            Expr::Literal(l) => Ok(l.data_type()),
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),

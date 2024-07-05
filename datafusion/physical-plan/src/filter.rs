@@ -37,7 +37,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, BooleanArray};
 use datafusion_common::cast::{as_boolean_array, as_null_array};
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
@@ -370,14 +370,19 @@ pub(crate) fn batch_filter(
         .evaluate(batch)
         .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
-            let filter_array: BooleanArray = match as_null_array(&array) {
-                Ok(null_array) => {
-                    // if the predicate is null, then the result is also null
-                    Ok::<BooleanArray, DataFusionError>(BooleanArray::new_null(null_array.len()))
-                }
+            let filter_array = match as_boolean_array(&array) {
+                Ok(boolean_array) => {
+                    Ok(boolean_array.to_owned())
+                },
                 Err(_) => {
-                    // if the predicate is not null, then the result is a boolean array
-                    Ok(as_boolean_array(&array)?.to_owned())
+                    let Ok(null_array) = as_null_array(&array) else {
+                        return internal_err!("Cannot create filter_array from non-boolean predicates, unable to continute");
+                    };
+
+                    // if the predicate is null, then the result is also null
+                    Ok::<BooleanArray, DataFusionError>(BooleanArray::new_null(
+                        null_array.len(),
+                    ))
                 }
             }?;
 
