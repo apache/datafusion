@@ -191,7 +191,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     }
 
     #[allow(rustdoc::private_intra_doc_links)]
-    /// See [`datafusion_physical_expr_common::aggregate::tdigest::TDigest::to_scalar_state()`] for a description of the serialised
+    /// See [`TDigest::to_scalar_state()`] for a description of the serialised
     /// state.
     fn state_fields(
         &self,

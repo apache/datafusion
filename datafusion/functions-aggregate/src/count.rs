@@ -62,17 +62,15 @@ make_udaf_expr_and_func!(
     count_udaf
 );
 
-pub fn count_distinct(expr: Expr) -> datafusion_expr::Expr {
-    datafusion_expr::Expr::AggregateFunction(
-        datafusion_expr::expr::AggregateFunction::new_udf(
-            count_udaf(),
-            vec![expr],
-            true,
-            None,
-            None,
-            None,
-        ),
-    )
+pub fn count_distinct(expr: Expr) -> Expr {
+    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+        count_udaf(),
+        vec![expr],
+        true,
+        None,
+        None,
+        None,
+    ))
 }
 
 pub struct Count {

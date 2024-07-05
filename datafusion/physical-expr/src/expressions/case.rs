@@ -870,7 +870,7 @@ mod tests {
         );
         assert!(expr.is_ok());
         let result_type = expr.unwrap().data_type(schema.as_ref())?;
-        assert_eq!(DataType::Float64, result_type);
+        assert_eq!(Float64, result_type);
         Ok(())
     }
 

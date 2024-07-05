@@ -245,7 +245,7 @@ struct BitAndAccumulator<T: ArrowNumericType> {
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for BitAndAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "BitAndAccumulator({})", T::DATA_TYPE)
     }
 }
@@ -290,7 +290,7 @@ struct BitOrAccumulator<T: ArrowNumericType> {
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for BitOrAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "BitOrAccumulator({})", T::DATA_TYPE)
     }
 }
@@ -335,7 +335,7 @@ struct BitXorAccumulator<T: ArrowNumericType> {
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for BitXorAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "BitXorAccumulator({})", T::DATA_TYPE)
     }
 }
@@ -380,7 +380,7 @@ struct DistinctBitXorAccumulator<T: ArrowNumericType> {
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for DistinctBitXorAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "DistinctBitXorAccumulator({})", T::DATA_TYPE)
     }
 }
