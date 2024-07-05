@@ -635,9 +635,7 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($stat_value_type::from(
-                                        x.$func.unwrap_or_default(),
-                                    ))
+                                    x.$func.and_then(|x| Some($stat_value_type::from(x)))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -646,9 +644,7 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($stat_value_type::from(
-                                        x.$func.unwrap_or_default(),
-                                    ))
+                                    x.$func.and_then(|x| Some($stat_value_type::from(x)))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -657,9 +653,9 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($convert_func(
-                                        x.clone().$func.unwrap_or_default().data(),
-                                    ))
+                                    x.clone()
+                                        .$func
+                                        .and_then(|x| Some($convert_func(x.data())))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -668,9 +664,9 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($convert_func(
-                                        x.clone().$func.unwrap_or_default().data(),
-                                    ))
+                                    x.clone()
+                                        .$func
+                                        .and_then(|x| Some($convert_func(x.data())))
                                 })
                                 .collect::<Vec<_>>(),
                         ),

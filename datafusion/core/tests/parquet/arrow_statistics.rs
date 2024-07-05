@@ -543,8 +543,12 @@ async fn test_data_page_stats_with_all_null_page() {
         DataType::Utf8,
         DataType::LargeUtf8,
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-        // DataType::Decimal128(10, 2),
-        // DataType::Decimal256(10, 2),
+        DataType::Decimal128(8, 2),  // as INT32
+        DataType::Decimal128(10, 2), // as INT64
+        DataType::Decimal128(20, 2), // as FIXED_LEN_BYTE_ARRAY
+        DataType::Decimal256(8, 2),  // as INT32
+        DataType::Decimal256(10, 2), // as INT64
+        DataType::Decimal256(20, 2), // as FIXED_LEN_BYTE_ARRAY
     ] {
         let batch =
             RecordBatch::try_from_iter(vec![("col", new_null_array(&data_type, 4))])
@@ -552,7 +556,7 @@ async fn test_data_page_stats_with_all_null_page() {
 
         let reader =
             build_parquet_file(4, Some(EnabledStatistics::Page), Some(4), vec![batch]);
-        
+
         let expected_data_type = match data_type {
             DataType::Dictionary(_, value_type) => value_type.as_ref(),
             _ => data_type,
