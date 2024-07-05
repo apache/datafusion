@@ -36,6 +36,7 @@ use arrow::array::{
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow_array::builder::UInt64Builder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::as_boolean_array;
@@ -55,6 +56,7 @@ use datafusion_physical_expr::{
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use hashbrown::raw::RawTable;
+use itertools::Itertools;
 use parking_lot::Mutex;
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
@@ -1284,6 +1286,7 @@ pub(crate) fn adjust_indices_by_join_type(
     right_indices: UInt32Array,
     adjust_range: Range<usize>,
     join_type: JoinType,
+    preserve_order_for_right: bool,
 ) -> (UInt64Array, UInt32Array) {
     match join_type {
         JoinType::Inner => {
@@ -1300,7 +1303,12 @@ pub(crate) fn adjust_indices_by_join_type(
             // unmatched right row will be produced in this batch
             let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
             // combine the matched and unmatched right result together
-            append_right_indices(left_indices, right_indices, right_unmatched_indices)
+            append_right_indices(
+                left_indices,
+                right_indices,
+                right_unmatched_indices,
+                preserve_order_for_right,
+            )
         }
         JoinType::RightSemi => {
             // need to remove the duplicated record in the right side
@@ -1333,6 +1341,7 @@ pub(crate) fn append_right_indices(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
     right_unmatched_indices: UInt32Array,
+    preserve_order_for_right: bool,
 ) -> (UInt64Array, UInt32Array) {
     // left_indices, right_indices and right_unmatched_indices must not contain the null value
     if right_unmatched_indices.is_empty() {
@@ -1343,14 +1352,42 @@ pub(crate) fn append_right_indices(
         // the new right indices: right_indices + right_unmatched_indices
         let new_left_indices = left_indices
             .iter()
-            .chain(std::iter::repeat(None).take(unmatched_size))
-            .collect::<UInt64Array>();
-        let new_right_indices = right_indices
-            .iter()
-            .chain(right_unmatched_indices.iter())
-            .collect::<UInt32Array>();
-        (new_left_indices, new_right_indices)
+            .chain(std::iter::repeat(None).take(unmatched_size));
+        let new_right_indices =
+            right_indices.iter().chain(right_unmatched_indices.iter());
+        if preserve_order_for_right {
+            let pair = new_left_indices
+                .zip(new_right_indices)
+                .sorted_by_key(|(_lhs, rhs)| *rhs);
+            convert_to_array_pairs(pair)
+        } else {
+            (new_left_indices.collect(), new_right_indices.collect())
+        }
     }
+}
+
+fn convert_to_array_pairs<I>(iter: I) -> (UInt64Array, UInt32Array)
+where
+    I: Iterator<Item = (Option<u64>, Option<u32>)>,
+{
+    let mut builder1 = UInt64Builder::new();
+    let mut builder2 = UInt32Builder::new();
+
+    for (opt1, opt2) in iter {
+        match opt1 {
+            Some(value) => builder1.append_value(value),
+            None => builder1.append_null(),
+        }
+        match opt2 {
+            Some(value) => builder2.append_value(value),
+            None => builder2.append_null(),
+        }
+    }
+
+    let array1 = builder1.finish();
+    let array2 = builder2.finish();
+
+    (array1, array2)
 }
 
 /// Returns `range` indices which are not present in `input_indices`
@@ -2475,7 +2512,7 @@ mod tests {
                     &on_columns,
                     left_columns_len,
                     maintains_input_order,
-                    probe_side
+                    probe_side,
                 ),
                 expected[i]
             );

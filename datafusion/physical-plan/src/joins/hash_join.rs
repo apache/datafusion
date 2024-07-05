@@ -433,7 +433,10 @@ impl HashJoinExec {
             false,
             matches!(
                 join_type,
-                JoinType::Inner | JoinType::RightAnti | JoinType::RightSemi
+                JoinType::Inner
+                    | JoinType::Right
+                    | JoinType::RightAnti
+                    | JoinType::RightSemi
             ),
         ]
     }
@@ -779,6 +782,7 @@ impl ExecutionPlan for HashJoinExec {
             build_side: BuildSide::Initial(BuildSideInitialState { left_fut }),
             batch_size,
             hashes_buffer: vec![],
+            right_side_ordered: self.right.output_ordering().is_some(),
         }))
     }
 
@@ -1107,6 +1111,8 @@ struct HashJoinStream {
     batch_size: usize,
     /// Scratch space for computing hashes
     hashes_buffer: Vec<u64>,
+    // Specifies whether the right side has an ordering to potentially preserve
+    right_side_ordered: bool,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -1444,6 +1450,7 @@ impl HashJoinStream {
             right_indices,
             index_alignment_range_start..index_alignment_range_end,
             self.join_type,
+            self.right_side_ordered,
         );
 
         let result = build_batch_from_indices(
@@ -1537,7 +1544,6 @@ impl Stream for HashJoinStream {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::{
         common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
