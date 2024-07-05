@@ -238,7 +238,10 @@ impl SessionState {
             Arc::new(functions_array::planner::ArrayFunctionPlanner),
             #[cfg(feature = "array_expressions")]
             Arc::new(functions_array::planner::FieldAccessPlanner),
-            #[cfg(any(feature = "datetime_expressions", feature ="unicode_expressions"))]
+            #[cfg(any(
+                feature = "datetime_expressions",
+                feature = "unicode_expressions"
+            ))]
             Arc::new(functions::planner::UserDefinedFunctionPlanner),
         ];
 

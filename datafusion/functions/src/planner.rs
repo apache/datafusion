@@ -37,7 +37,7 @@ impl UserDefinedSQLPlanner for UserDefinedFunctionPlanner {
     ) -> Result<PlannerResult<Vec<Expr>>> {
         match sql {
             #[cfg(feature = "datetime_expressions")]
-            SQLExpr::Extract { .. } =>  Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            SQLExpr::Extract { .. } => Ok(PlannerResult::Planned(Expr::ScalarFunction(
                 ScalarFunction::new_udf(crate::datetime::date_part(), args),
             ))),
             #[cfg(feature = "unicode_expressions")]
