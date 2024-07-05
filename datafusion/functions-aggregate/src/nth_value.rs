@@ -57,8 +57,6 @@ pub struct NthValueAgg {
     /// Determines whether `N` is relative to the beginning or the end
     /// of the aggregation. When set to `true`, then `N` is from the end.
     reversed: bool,
-    /// If the input expression can have `NULL`s
-    input_nullable: bool,
 }
 
 impl NthValueAgg {
@@ -67,13 +65,7 @@ impl NthValueAgg {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
             reversed: false,
-            input_nullable: false,
         }
-    }
-
-    pub fn with_input_nullable(mut self, input_nullable: bool) -> Self {
-        self.input_nullable = input_nullable;
-        self
     }
 
     pub fn with_reversed(mut self, reversed: bool) -> Self {
@@ -144,14 +136,14 @@ impl AggregateUDFImpl for NthValueAgg {
         let mut fields = vec![Field::new_list(
             format_state_name(self.name(), "nth_value"),
             Field::new("item", args.input_type.clone(), true),
-            self.input_nullable, // This should be the same as field()
+            false,
         )];
         let orderings = args.ordering_fields.to_vec();
         if !orderings.is_empty() {
             fields.push(Field::new_list(
                 format_state_name(self.name(), "nth_value_orderings"),
                 Field::new("item", DataType::Struct(Fields::from(orderings)), true),
-                self.input_nullable,
+                false,
             ));
         }
         Ok(fields)
@@ -162,11 +154,7 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
-        let nth_value = AggregateUDF::from(
-            Self::new()
-                .with_input_nullable(self.input_nullable)
-                .with_reversed(!self.reversed),
-        );
+        let nth_value = AggregateUDF::from(Self::new().with_reversed(!self.reversed));
 
         ReversedUDAF::Reversed(Arc::from(nth_value))
     }
