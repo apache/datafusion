@@ -123,11 +123,9 @@ bool_or(expression)
 
 ### `count`
 
-Returns the number of rows in the specified column.
+Returns the number of non-null values in the specified column.
 
-Count includes _null_ values in the total count.
-To exclude _null_ values from the total count, include `<column> IS NOT NULL`
-in the `WHERE` clause.
+To include _null_ values in the total count, use `count(*)`.
 
 ```
 count(expression)
