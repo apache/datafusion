@@ -644,30 +644,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .any(|value| matches!(value, SQLExpr::Named { .. }));
 
-        let mut expressions = if is_named_struct {
+        let mut create_struct_args = if is_named_struct {
             self.create_named_struct_expr(values, schema, planner_context)?
         } else {
             self.create_struct_expr(values, schema, planner_context)?
         };
-        if is_named_struct {
-            for planner in self.planners.iter() {
-                match planner.plan_create_named_struct(expressions)? {
-                    PlannerResult::Planned(expr) => return Ok(expr),
-                    PlannerResult::Original(args) => expressions = args,
-                }
+
+        for planner in self.planners.iter() {
+            let result = if is_named_struct {
+                planner.plan_create_named_struct(create_struct_args)?
+            } else {
+                planner.plan_create_struct(create_struct_args)?
+            };
+            match result {
+                PlannerResult::Planned(expr) => return Ok(expr),
+                PlannerResult::Original(args) => create_struct_args = args,
             }
-            not_impl_err!("CreateNamedStruct not supported by UserDefinedExtensionPlanners: {expressions:?}")
-        } else {
-            for planner in self.planners.iter() {
-                match planner.plan_create_struct(expressions)? {
-                    PlannerResult::Planned(expr) => return Ok(expr),
-                    PlannerResult::Original(args) => {
-                        expressions = args;
-                    }
-                }
-            }
-            not_impl_err!("CreateStruct not supported by UserDefinedExtensionPlanners: {expressions:?}")
         }
+        not_impl_err!("CreateNamedStruct not supported by UserDefinedExtensionPlanners: {create_struct_args:?}")
     }
 
     fn try_plan_dictionary_literal(
