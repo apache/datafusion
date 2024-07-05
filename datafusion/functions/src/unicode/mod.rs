@@ -138,6 +138,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         strpos(),
         substr(),
         substr_index(),
+        substring(),
         translate(),
     ]
 }
