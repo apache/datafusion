@@ -34,7 +34,7 @@ use arrow::array::{
     UInt32BufferBuilder, UInt32Builder, UInt64Array, UInt64BufferBuilder,
 };
 use arrow::compute;
-use arrow::datatypes::{Field, Schema, SchemaBuilder};
+use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use arrow_array::builder::UInt64Builder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
@@ -56,7 +56,6 @@ use datafusion_physical_expr::{
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use hashbrown::raw::RawTable;
-use itertools::Itertools;
 use parking_lot::Mutex;
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
@@ -1287,26 +1286,23 @@ pub(crate) fn adjust_indices_by_join_type(
     adjust_range: Range<usize>,
     join_type: JoinType,
     preserve_order_for_right: bool,
-) -> (UInt64Array, UInt32Array) {
+) -> Result<(UInt64Array, UInt32Array)> {
     match join_type {
         JoinType::Inner => {
             // matched
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         }
         JoinType::Left => {
             // matched
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
             // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
         }
         JoinType::Right | JoinType::Full => {
-            // matched
-            // unmatched right row will be produced in this batch
-            let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
             // combine the matched and unmatched right result together
             append_right_indices(
                 left_indices,
                 right_indices,
-                right_unmatched_indices,
+                adjust_range,
                 preserve_order_for_right,
             )
         }
@@ -1314,22 +1310,22 @@ pub(crate) fn adjust_indices_by_join_type(
             // need to remove the duplicated record in the right side
             let right_indices = get_semi_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right semi` join
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         }
         JoinType::RightAnti => {
             // need to remove the duplicated record in the right side
             // get the anti index for the right side
             let right_indices = get_anti_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right anti` join
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // matched or unmatched left row will be produced in the end of loop
             // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
-            (
+            Ok((
                 UInt64Array::from_iter_values(vec![]),
                 UInt32Array::from_iter_values(vec![]),
-            )
+            ))
         }
     }
 }
@@ -1340,54 +1336,31 @@ pub(crate) fn adjust_indices_by_join_type(
 pub(crate) fn append_right_indices(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
-    right_unmatched_indices: UInt32Array,
+    adjust_range: Range<usize>,
     preserve_order_for_right: bool,
-) -> (UInt64Array, UInt32Array) {
-    // left_indices, right_indices and right_unmatched_indices must not contain the null value
-    if right_unmatched_indices.is_empty() {
-        (left_indices, right_indices)
+) -> Result<(UInt64Array, UInt32Array)> {
+    if preserve_order_for_right {
+        append_probe_indices_in_order(left_indices, right_indices, adjust_range)
     } else {
-        let unmatched_size = right_unmatched_indices.len();
-        // the new left indices: left_indices + null array
-        // the new right indices: right_indices + right_unmatched_indices
-        let new_left_indices = left_indices
-            .iter()
-            .chain(std::iter::repeat(None).take(unmatched_size));
-        let new_right_indices =
-            right_indices.iter().chain(right_unmatched_indices.iter());
-        if preserve_order_for_right {
-            let pair = new_left_indices
-                .zip(new_right_indices)
-                .sorted_by_key(|(_lhs, rhs)| *rhs);
-            convert_to_array_pairs(pair)
+        let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
+
+        if right_unmatched_indices.is_empty() {
+            Ok((left_indices, right_indices))
         } else {
-            (new_left_indices.collect(), new_right_indices.collect())
+            let unmatched_size = right_unmatched_indices.len();
+            // the new left indices: left_indices + null array
+            // the new right indices: right_indices + right_unmatched_indices
+            let new_left_indices = left_indices
+                .iter()
+                .chain(std::iter::repeat(None).take(unmatched_size))
+                .collect::<UInt64Array>();
+            let new_right_indices = right_indices
+                .iter()
+                .chain(right_unmatched_indices.iter())
+                .collect::<UInt32Array>();
+            Ok((new_left_indices, new_right_indices))
         }
     }
-}
-
-fn convert_to_array_pairs<I>(iter: I) -> (UInt64Array, UInt32Array)
-where
-    I: Iterator<Item = (Option<u64>, Option<u32>)>,
-{
-    let mut builder1 = UInt64Builder::new();
-    let mut builder2 = UInt32Builder::new();
-
-    for (opt1, opt2) in iter {
-        match opt1 {
-            Some(value) => builder1.append_value(value),
-            None => builder1.append_null(),
-        }
-        match opt2 {
-            Some(value) => builder2.append_value(value),
-            None => builder2.append_null(),
-        }
-    }
-
-    let array1 = builder1.finish();
-    let array2 = builder2.finish();
-
-    (array1, array2)
 }
 
 /// Returns `range` indices which are not present in `input_indices`
@@ -1446,6 +1419,77 @@ where
             (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
         })
         .collect::<PrimitiveArray<T>>()
+}
+
+/// Appends probe indices in order by considering the given build indices.
+///
+/// This function constructs new build and probe indices by iterating through
+/// the provided indices, and appends any missing values between previous and
+/// current probe index with a corresponding null build index. It handles various
+/// edge cases and returns an error if either index is `None`.
+///
+/// # Parameters
+/// - `build_indices`: `PrimitiveArray` of `UInt64Type` containing build indices.
+/// - `probe_indices`: `PrimitiveArray` of `UInt32Type` containing probe indices.
+/// - `count_probe_batch`: The number of elements in the probe batch, used for
+///   filling in any remaining indices.
+///
+/// # Returns
+/// A `Result` containing a tuple of two arrays:
+/// - A `PrimitiveArray` of `UInt64Type` with the newly constructed build indices.
+/// - A `PrimitiveArray` of `UInt32Type` with the newly constructed probe indices.
+///
+/// # Errors
+/// Returns an error if there is a failure in calculating probe indices.
+fn append_probe_indices_in_order(
+    build_indices: PrimitiveArray<UInt64Type>,
+    probe_indices: PrimitiveArray<UInt32Type>,
+    range: Range<usize>,
+) -> datafusion_common::Result<(PrimitiveArray<UInt64Type>, PrimitiveArray<UInt32Type>)> {
+    // Builders for new indices:
+    let mut new_build_indices = UInt64Builder::new();
+    let mut new_probe_indices = UInt32Builder::new();
+
+    // Set previous index as zero for the initial loop.
+    let mut prev_index = range.start as u32;
+
+    // Zip the two iterators.
+    for (maybe_build_index, maybe_probe_index) in
+        build_indices.iter().zip(probe_indices.iter())
+    {
+        // Unwrap index options.
+        let (build_index, probe_index) = match (maybe_build_index, maybe_probe_index) {
+            (Some(bi), Some(pi)) => (bi, pi),
+            // If either index is None, return an error.
+            _ => {
+                return Err(DataFusionError::Internal(
+                    "Error on probe indices calculation".to_owned(),
+                ))
+            }
+        };
+
+        // Append values between previous and current left index with null right index.
+        for val in prev_index..probe_index {
+            new_probe_indices.append_value(val);
+            new_build_indices.append_null();
+        }
+
+        // Append current indices.
+        new_probe_indices.append_value(probe_index);
+        new_build_indices.append_value(build_index);
+
+        // Set current left index as previous for the next loop.
+        prev_index = probe_index + 1;
+    }
+
+    // Append remaining left indices after the last valid left index with null right index.
+    for val in prev_index..range.end as u32 {
+        new_probe_indices.append_value(val);
+        new_build_indices.append_null();
+    }
+
+    // Build arrays and return.
+    Ok((new_build_indices.finish(), new_probe_indices.finish()))
 }
 
 /// Metrics for build & probe joins
