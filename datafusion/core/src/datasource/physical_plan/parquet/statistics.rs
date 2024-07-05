@@ -601,6 +601,31 @@ make_data_page_stats_iterator!(
     Index::DOUBLE,
     f64
 );
+make_data_page_stats_iterator!(
+    MinByteArrayDataPageStatsIterator,
+    |x: &PageIndex<ByteArray>| { x.min.clone() },
+    Index::BYTE_ARRAY,
+    ByteArray
+);
+make_data_page_stats_iterator!(
+    MaxByteArrayDataPageStatsIterator,
+    |x: &PageIndex<ByteArray>| { x.max.clone() },
+    Index::BYTE_ARRAY,
+    ByteArray
+);
+make_data_page_stats_iterator!(
+    MaxFixedLenByteArrayDataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
+
+make_data_page_stats_iterator!(
+    MinFixedLenByteArrayDataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
 
 macro_rules! get_decimal_page_stats_iterator {
     ($iterator_type: ident, $func: ident, $stat_value_type: ident, $convert_func: ident) => {
@@ -709,18 +734,6 @@ get_decimal_page_stats_iterator!(
     max,
     i256,
     from_bytes_to_i256
-);
-make_data_page_stats_iterator!(
-    MinByteArrayDataPageStatsIterator,
-    |x: &PageIndex<ByteArray>| { x.min.clone() },
-    Index::BYTE_ARRAY,
-    ByteArray
-);
-make_data_page_stats_iterator!(
-    MaxByteArrayDataPageStatsIterator,
-    |x: &PageIndex<ByteArray>| { x.max.clone() },
-    Index::BYTE_ARRAY,
-    ByteArray
 );
 
 macro_rules! get_data_page_statistics {
@@ -930,20 +943,6 @@ macro_rules! get_data_page_statistics {
         }
     }
 }
-
-make_data_page_stats_iterator!(
-    MaxFixedLenByteArrayDataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray
-);
-
-make_data_page_stats_iterator!(
-    MinFixedLenByteArrayDataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray
-);
 
 /// Lookups up the parquet column by name
 ///
