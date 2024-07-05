@@ -54,8 +54,9 @@ make_udaf_expr_and_func!(
 #[derive(Debug)]
 pub struct NthValueAgg {
     signature: Signature,
-    /// If `N` needs to be reversed for aggregation
-    reverse_n: bool,
+    /// Determines whether `N` is relative to the beginning or the end
+    /// of the aggregation. When set to `true`, then `N` is from the end.
+    reversed: bool,
     /// If the input expression can have `NULL`s
     input_nullable: bool,
 }
@@ -65,7 +66,7 @@ impl NthValueAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            reverse_n: false,
+            reversed: false,
             input_nullable: false,
         }
     }
@@ -75,8 +76,8 @@ impl NthValueAgg {
         self
     }
 
-    pub fn with_reverse_n(mut self, reverse_n: bool) -> Self {
-        self.reverse_n = reverse_n;
+    pub fn with_reversed(mut self, reversed: bool) -> Self {
+        self.reversed = reversed;
         self
     }
 }
@@ -107,7 +108,7 @@ impl AggregateUDFImpl for NthValueAgg {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let n = match acc_args.input_exprs[1] {
             Expr::Literal(ScalarValue::Int64(Some(value))) => {
-                if self.reverse_n {
+                if self.reversed {
                     Ok(-value)
                 } else {
                     Ok(value)
@@ -164,7 +165,7 @@ impl AggregateUDFImpl for NthValueAgg {
         let nth_value = AggregateUDF::from(
             Self::new()
                 .with_input_nullable(self.input_nullable)
-                .with_reverse_n(!self.reverse_n),
+                .with_reversed(!self.reversed),
         );
 
         ReversedUDAF::Reversed(Arc::from(nth_value))
