@@ -598,7 +598,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::Struct { values, fields } => {
-                self.create_struct(schema, planner_context, values, fields)
+                self.parse_struct(schema, planner_context, values, fields)
             }
             SQLExpr::Position { expr, r#in } => {
                 self.sql_position_to_expr(*expr, *r#in, schema, planner_context)
@@ -630,7 +630,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn create_struct(
+    /// Parses a struct(..) expression and plans it creation
+    fn parse_struct(
         &self,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
@@ -661,7 +662,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 PlannerResult::Original(args) => create_struct_args = args,
             }
         }
-        not_impl_err!("CreateNamedStruct not supported by UserDefinedExtensionPlanners: {create_struct_args:?}")
+        not_impl_err!("CreateStruct not supported by UserDefinedExtensionPlanners: {create_struct_args:?}")
     }
 
     fn try_plan_dictionary_literal(
