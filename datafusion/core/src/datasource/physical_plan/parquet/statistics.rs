@@ -726,20 +726,6 @@ make_data_page_stats_iterator!(
     ByteArray
 );
 
-make_data_page_stats_iterator!(
-    MaxFixedLenByteArrayDataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray
-);
-
-make_data_page_stats_iterator!(
-    MinFixedLenByteArrayDataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray
-);
-
 macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
         paste! {
@@ -757,7 +743,7 @@ macro_rules! get_data_page_statistics {
                     UInt8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| u8::try_from(x).ok())
                                 })
                             })
@@ -768,7 +754,7 @@ macro_rules! get_data_page_statistics {
                     UInt16Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| u16::try_from(x).ok())
                                 })
                             })
@@ -779,7 +765,7 @@ macro_rules! get_data_page_statistics {
                     UInt32Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| Some(x as u32))
                                 })
                             })
@@ -789,7 +775,7 @@ macro_rules! get_data_page_statistics {
                     UInt64Array::from_iter(
                         [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| Some(x as u64))
                                 })
                             })
@@ -799,7 +785,7 @@ macro_rules! get_data_page_statistics {
                     Int8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| i8::try_from(x).ok())
                                 })
                             })
@@ -810,7 +796,7 @@ macro_rules! get_data_page_statistics {
                     Int16Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| i16::try_from(x).ok())
                                 })
                             })
@@ -823,11 +809,11 @@ macro_rules! get_data_page_statistics {
                     Float16Array::from_iter(
                         [<$stat_type_prefix Float16DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
-                                    x.and_then(|x| Some(from_bytes_to_f16(x.data())))
+                                x.into_iter().map(|x| {
+                                    x.and_then(|x| from_bytes_to_f16(x.data()))
                                 })
                             })
-                            .flatten()
+                            .flatten().collect::<Vec<_>>()
                     )
                 )),
                 Some(DataType::Float32) => Ok(Arc::new(Float32Array::from_iter([<$stat_type_prefix Float32DataPageStatsIterator>]::new($iterator).flatten()))),
@@ -836,7 +822,7 @@ macro_rules! get_data_page_statistics {
                 Some(DataType::LargeBinary) => Ok(Arc::new(LargeBinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Utf8) => Ok(Arc::new(StringArray::from(
                     [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                        x.into_iter().filter_map(|x| {
+                        x.into_iter().map(|x| {
                         x.and_then(|x| {
                             let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
                             if res.is_none() {
@@ -849,7 +835,7 @@ macro_rules! get_data_page_statistics {
                 ))),
                 Some(DataType::LargeUtf8) => Ok(Arc::new(LargeStringArray::from(
                     [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                        x.into_iter().filter_map(|x| {
+                        x.into_iter().map(|x| {
                             x.and_then(|x| {
                                 let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
                                 if res.is_none() {
@@ -878,10 +864,10 @@ macro_rules! get_data_page_statistics {
                         Date64Array::from([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
                                 x.into_iter()
-                                .filter_map(|x| {
+                                .map(|x| {
                                     x.and_then(|x| i64::try_from(x).ok())
+                                    .map(|x| x * 24 * 60 * 60 * 1000)
                                 })
-                                .map(|x| x * 24 * 60 * 60 * 1000)
                             }).flatten().collect::<Vec<_>>()
                         )
                     )
@@ -935,6 +921,20 @@ macro_rules! get_data_page_statistics {
         }
     }
 }
+
+make_data_page_stats_iterator!(
+    MaxFixedLenByteArrayDataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
+
+make_data_page_stats_iterator!(
+    MinFixedLenByteArrayDataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
 
 /// Lookups up the parquet column by name
 ///
