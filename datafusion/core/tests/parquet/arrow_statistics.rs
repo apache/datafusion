@@ -542,7 +542,7 @@ async fn test_data_page_stats_with_all_null_page() {
         DataType::FixedSizeBinary(3),
         DataType::Utf8,
         DataType::LargeUtf8,
-        // DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
         // DataType::Decimal128(10, 2),
         // DataType::Decimal256(10, 2),
     ] {
@@ -552,13 +552,18 @@ async fn test_data_page_stats_with_all_null_page() {
 
         let reader =
             build_parquet_file(4, Some(EnabledStatistics::Page), Some(4), vec![batch]);
+        
+        let expected_data_type = match data_type {
+            DataType::Dictionary(_, value_type) => value_type.as_ref(),
+            _ => data_type,
+        };
 
         // There is one data page with 4 nulls
         // The statistics should be present but null
         Test {
             reader: &reader,
-            expected_min: new_null_array(data_type, 1),
-            expected_max: new_null_array(data_type, 1),
+            expected_min: new_null_array(expected_data_type, 1),
+            expected_max: new_null_array(expected_data_type, 1),
             expected_null_counts: UInt64Array::from(vec![4]),
             expected_row_counts: Some(UInt64Array::from(vec![4])),
             column_name: "col",
