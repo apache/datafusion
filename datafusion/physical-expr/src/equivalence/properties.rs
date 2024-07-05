@@ -213,13 +213,13 @@ impl EquivalenceProperties {
             // Left expression is constant, add right as constant
             if !const_exprs_contains(&self.constants, right) {
                 self.constants
-                    .push(ConstExpr::new(right.clone()).with_across_partitions(true));
+                    .push(ConstExpr::new(Arc::clone(right)).with_across_partitions(true));
             }
         } else if self.is_expr_constant(right) {
             // Right expression is constant, add left as constant
             if !const_exprs_contains(&self.constants, left) {
                 self.constants
-                    .push(ConstExpr::new(left.clone()).with_across_partitions(true));
+                    .push(ConstExpr::new(Arc::clone(left)).with_across_partitions(true));
             }
         }
 
@@ -357,7 +357,7 @@ impl EquivalenceProperties {
         constant_exprs.extend(
             self.constants
                 .iter()
-                .map(|const_expr| const_expr.expr().clone()),
+                .map(|const_expr| Arc::clone(const_expr.expr())),
         );
         let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
         // Prune redundant sections in the requirement:
@@ -832,8 +832,9 @@ impl EquivalenceProperties {
                 && !const_exprs_contains(&projected_constants, target)
             {
                 // Expression evaluates to single value
-                projected_constants
-                    .push(ConstExpr::new(target.clone()).with_across_partitions(true));
+                projected_constants.push(
+                    ConstExpr::new(Arc::clone(target)).with_across_partitions(true),
+                );
             }
         }
         projected_constants
@@ -927,7 +928,7 @@ impl EquivalenceProperties {
             // an implementation strategy confined to this function.
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
                 eq_properties = eq_properties
-                    .add_constants(std::iter::once(ConstExpr::new(expr.clone())));
+                    .add_constants(std::iter::once(ConstExpr::new(Arc::clone(expr))));
                 search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
@@ -955,9 +956,9 @@ impl EquivalenceProperties {
         let const_exprs = self
             .constants
             .iter()
-            .map(|const_expr| const_expr.expr().clone());
+            .map(|const_expr| Arc::clone(const_expr.expr()));
         let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
-        let normalized_expr = self.eq_group.normalize_expr(expr.clone());
+        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
         is_constant_recurse(&normalized_constants, &normalized_expr)
     }
 
@@ -2146,7 +2147,8 @@ mod tests {
         let col_h = &col("h", &test_schema)?;
 
         // Add column h as constant
-        eq_properties = eq_properties.add_constants(vec![ConstExpr::new(col_h.clone())]);
+        eq_properties =
+            eq_properties.add_constants(vec![ConstExpr::new(Arc::clone(col_h))]);
 
         let test_cases = vec![
             // TEST CASE 1
