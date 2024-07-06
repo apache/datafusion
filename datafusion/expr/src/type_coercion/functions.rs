@@ -243,7 +243,7 @@ fn get_valid_types(
     fn array_append_or_prepend_valid_types(
         current_types: &[DataType],
         is_append: bool,
-        ) -> Result<Vec<Vec<DataType>>> {
+    ) -> Result<Vec<Vec<DataType>>> {
         if current_types.len() != 2 {
             return Ok(vec![vec![]]);
         }
