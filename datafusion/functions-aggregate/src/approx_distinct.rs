@@ -211,7 +211,7 @@ where
 
 impl<T> Accumulator for NumericHLLAccumulator<T>
 where
-    T: ArrowPrimitiveType + std::fmt::Debug,
+    T: ArrowPrimitiveType + Debug,
     T::Native: Hash,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
