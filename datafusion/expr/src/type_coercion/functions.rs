@@ -243,7 +243,7 @@ fn get_valid_types(
     fn array_append_or_prepend_valid_types(
         current_types: &[DataType],
         is_append: bool,
-    ) -> Result<Vec<Vec<DataType>>> {
+        ) -> Result<Vec<Vec<DataType>>> {
         if current_types.len() != 2 {
             return Ok(vec![vec![]]);
         }
@@ -607,11 +607,11 @@ fn coerced_from<'a>(
         (Timestamp(unit, Some(tz)), _) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
                 Timestamp(_, Some(from_tz)) => {
-                    Some(Timestamp(unit.clone(), Some(Arc::clone(from_tz))))
+                    Some(Timestamp(*unit, Some(Arc::clone(from_tz))))
                 }
                 Null | Date32 | Utf8 | LargeUtf8 | Timestamp(_, None) => {
                     // In the absence of any other information assume the time zone is "+00" (UTC).
-                    Some(Timestamp(unit.clone(), Some("+00".into())))
+                    Some(Timestamp(*unit, Some("+00".into())))
                 }
                 _ => None,
             }
