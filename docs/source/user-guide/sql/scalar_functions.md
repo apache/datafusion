@@ -1132,6 +1132,14 @@ substr(str, start_pos[, length])
 - **length**: Number of characters to extract.
   If not specified, returns the rest of the string after the start position.
 
+#### Aliases
+
+- substring
+
+### `substring`
+
+_Alias of [substr](#substr)._
+
 ### `translate`
 
 Translates characters in a string to specified translation characters.

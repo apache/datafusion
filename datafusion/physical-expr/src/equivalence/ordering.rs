@@ -556,9 +556,9 @@ mod tests {
             let eq_group = EquivalenceGroup::new(eq_group);
             eq_properties.add_equivalence_group(eq_group);
 
-            let constants = constants.into_iter().map(|expr| {
-                ConstExpr::new(Arc::clone(expr)).with_across_partitions(true)
-            });
+            let constants = constants
+                .into_iter()
+                .map(|expr| ConstExpr::from(expr).with_across_partitions(true));
             eq_properties = eq_properties.add_constants(constants);
 
             let reqs = convert_to_sort_exprs(&reqs);
