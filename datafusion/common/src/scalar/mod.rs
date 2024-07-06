@@ -1978,16 +1978,14 @@ impl ScalarValue {
         Self::new_list(values, data_type, true)
     }
 
-    /// Create empty ListArray with specific data type
+    /// Create ListArray with Null with specific data type
     ///
-    /// This is different from `new_list(&[], data_type, nullable)`, where it has no inner array.
-    ///
-    /// - new_empty_list(i32): `ListArray[]`
-    ///
-    /// - new_list(&[], i32, nullable): `ListArray[Int32Array[]]`,
-    pub fn new_empty_list(data_type: DataType, nullable: bool) -> Self {
+    /// - new_null_list(i32, nullable, 1): `ListArray[NULL]`
+    pub fn new_null_list(data_type: DataType, nullable: bool, null_len: usize) -> Self {
         let data_type = DataType::List(Field::new_list_field(data_type, nullable).into());
-        Self::List(Arc::new(ListArray::from(ArrayData::new_empty(&data_type))))
+        Self::List(Arc::new(ListArray::from(ArrayData::new_null(
+            &data_type, null_len,
+        ))))
     }
 
     /// Converts `IntoIterator<Item = ScalarValue>` where each element has type corresponding to

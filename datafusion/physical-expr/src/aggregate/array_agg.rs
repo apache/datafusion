@@ -71,7 +71,7 @@ impl AggregateExpr for ArrayAgg {
             &self.name,
             // This should be the same as return type of AggregateFunction::ArrayAgg
             Field::new("item", self.input_data_type.clone(), self.nullable),
-            false,
+            true,
         ))
     }
 
@@ -86,7 +86,7 @@ impl AggregateExpr for ArrayAgg {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
             Field::new("item", self.input_data_type.clone(), self.nullable),
-            false,
+            true,
         )])
     }
 
@@ -167,9 +167,10 @@ impl Accumulator for ArrayAggAccumulator {
             self.values.iter().map(|a| a.as_ref()).collect();
 
         if element_arrays.is_empty() {
-            return Ok(ScalarValue::new_empty_list(
+            return Ok(ScalarValue::new_null_list(
                 self.datatype.clone(),
                 self.nullable,
+                1,
             ));
         }
 
