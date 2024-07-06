@@ -167,7 +167,7 @@ mod tests {
                         Field::new_list(
                             "c1",
                             Field::new("item", data_type.clone(), true),
-                            false,
+                            true,
                         ),
                         result_agg_phy_exprs.field().unwrap()
                     );
@@ -187,7 +187,7 @@ mod tests {
                         Field::new_list(
                             "c1",
                             Field::new("item", data_type.clone(), true),
-                            false,
+                            true,
                         ),
                         result_agg_phy_exprs.field().unwrap()
                     );
