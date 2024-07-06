@@ -327,7 +327,7 @@ async fn simple_scalar_function_pow() -> Result<()> {
 
 #[tokio::test]
 async fn simple_scalar_function_substr() -> Result<()> {
-    roundtrip("SELECT * FROM data WHERE a = SUBSTR('datafusion', 0, 3)").await
+    roundtrip("SELECT SUBSTR(f, 1, 3) FROM data").await
 }
 
 #[tokio::test]
