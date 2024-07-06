@@ -130,38 +130,41 @@ mod tests {
 
     #[test]
     fn test_make_map() -> Result<()> {
-        let mut buffer= VecDeque::new();
-        let mut key_buffer=  VecDeque::new();
-        let mut value_buffer = VecDeque::new();
 
-        let num = 10;
-        println!("Generating {} random key-value pairs", num);
-        for _ in 0..num {
-            let rand: i32 = random();
-            let key = format!("key_{}", rand.clone());
-            key_buffer.push_back(key.clone());
-            value_buffer.push_back(rand.clone());
-            buffer.push_back(ColumnarValue::Scalar(ScalarValue::Utf8(Some(key.clone()))));
-            buffer.push_back(ColumnarValue::Scalar(ScalarValue::Int32(Some(rand.clone()))));
+        // the first run is for warm up.
+        for num in vec![1, 10, 50, 100, 500, 1000] {
+            let mut buffer= VecDeque::new();
+            let mut key_buffer=  VecDeque::new();
+            let mut value_buffer = VecDeque::new();
+
+            println!("Generating {} random key-value pairs", num);
+            for _ in 0..num {
+                let rand: i32 = random();
+                let key = format!("key_{}", rand.clone());
+                key_buffer.push_back(key.clone());
+                value_buffer.push_back(rand.clone());
+                buffer.push_back(ColumnarValue::Scalar(ScalarValue::Utf8(Some(key.clone()))));
+                buffer.push_back(ColumnarValue::Scalar(ScalarValue::Int32(Some(rand.clone()))));
+            }
+
+            let record: Vec<ColumnarValue> = buffer.into();
+            let start = Instant::now();
+            let map = make_map(&record)?;
+            let duration = start.elapsed();
+
+            println!("Time elapsed in make_map() is: {:?}", duration);
+
+
+            let key_vec: Vec<String> = key_buffer.into();
+            let value_vec: Vec<i32> = value_buffer.into();
+            let key = Arc::new(StringArray::from(key_vec));
+            let value = Arc::new(Int32Array::from(value_vec));
+
+            let start = Instant::now();
+            let map = make_map_batch(&[key, value])?;
+            let duration = start.elapsed();
+            println!("Time elapsed in make_map_batch() is: {:?}", duration);
         }
-
-        let record: Vec<ColumnarValue> = buffer.into();
-        let start = Instant::now();
-        let map = make_map(&record)?;
-        let duration = start.elapsed();
-
-        println!("Time elapsed in make_map() is: {:?}", duration);
-
-
-        let key_vec: Vec<String> = key_buffer.into();
-        let value_vec: Vec<i32> = value_buffer.into();
-        let key = Arc::new(StringArray::from(key_vec));
-        let value = Arc::new(Int32Array::from(value_vec));
-
-        let start = Instant::now();
-        let map = make_map_batch(&[key, value])?;
-        let duration = start.elapsed();
-        println!("Time elapsed in make_map_batch() is: {:?}", duration);
         Ok(())
     }
 }
