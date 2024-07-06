@@ -330,6 +330,9 @@ impl ExprSchemable for Expr {
                 match func_def {
                     AggregateFunctionDefinition::BuiltIn(fun) => fun.nullable(),
                     // TODO: UDF should be able to customize nullability
+                    AggregateFunctionDefinition::UDF(udf) if udf.name() == "count" => {
+                        Ok(false)
+                    }
                     AggregateFunctionDefinition::UDF(_) => Ok(true),
                 }
             }
