@@ -40,8 +40,9 @@ pub struct PhysicalSortExpr {
 }
 
 impl PhysicalSortExpr {
+    /// Create a new PhysicalSortExpr
     pub fn new(expr: Arc<dyn PhysicalExpr>, options: SortOptions) -> Self {
-        Self {expr, options }
+        Self { expr, options }
     }
 }
 
@@ -161,10 +162,7 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
             descending: false,
             nulls_first: false,
         });
-        PhysicalSortExpr {
-            expr: value.expr,
-            options,
-        }
+        PhysicalSortExpr::new(value.expr, options)
     }
 }
 
@@ -287,16 +285,13 @@ pub fn limited_convert_logical_sort_exprs_to_physical(
         let Expr::Sort(sort) = expr else {
             return exec_err!("Expects to receive sort expression");
         };
-        sort_exprs.push(PhysicalSortExpr {
-            expr: limited_convert_logical_expr_to_physical_expr(
-                sort.expr.as_ref(),
-                schema,
-            )?,
-            options: SortOptions {
+        sort_exprs.push(PhysicalSortExpr::new(
+            limited_convert_logical_expr_to_physical_expr(sort.expr.as_ref(), schema)?,
+            SortOptions {
                 descending: !sort.asc,
                 nulls_first: sort.nulls_first,
             },
-        });
+        ))
     }
     Ok(sort_exprs)
 }
