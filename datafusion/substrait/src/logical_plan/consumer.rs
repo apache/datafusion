@@ -1544,12 +1544,22 @@ fn from_substrait_bound(
                 BoundKind::CurrentRow(SubstraitBound::CurrentRow {}) => {
                     Ok(WindowFrameBound::CurrentRow)
                 }
-                BoundKind::Preceding(SubstraitBound::Preceding { offset }) => Ok(
-                    WindowFrameBound::Preceding(ScalarValue::Int64(Some(*offset))),
-                ),
-                BoundKind::Following(SubstraitBound::Following { offset }) => Ok(
-                    WindowFrameBound::Following(ScalarValue::Int64(Some(*offset))),
-                ),
+                BoundKind::Preceding(SubstraitBound::Preceding { offset }) => {
+                    if *offset <= 0 {
+                        return plan_err!("Preceding bound must be positive");
+                    }
+                    Ok(WindowFrameBound::Preceding(ScalarValue::UInt64(Some(
+                        *offset as u64,
+                    ))))
+                }
+                BoundKind::Following(SubstraitBound::Following { offset }) => {
+                    if *offset <= 0 {
+                        return plan_err!("Following bound must be positive");
+                    }
+                    Ok(WindowFrameBound::Following(ScalarValue::UInt64(Some(
+                        *offset as u64,
+                    ))))
+                }
                 BoundKind::Unbounded(SubstraitBound::Unbounded {}) => {
                     if is_lower {
                         Ok(WindowFrameBound::Preceding(ScalarValue::Null))

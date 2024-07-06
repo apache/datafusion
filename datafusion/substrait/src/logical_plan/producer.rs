@@ -2230,6 +2230,7 @@ mod test {
     use crate::logical_plan::consumer::{
         from_substrait_literal_without_names, from_substrait_type_without_names,
     };
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow::array::GenericListArray;
     use datafusion::arrow::datatypes::Field;
     use datafusion::common::scalar::ScalarStructBuilder;
@@ -2309,6 +2310,14 @@ mod test {
         )?;
         round_trip_literal(ScalarStructBuilder::new_null(vec![c0, c1, c2]))?;
 
+        round_trip_literal(ScalarValue::IntervalYearMonth(Some(17)))?;
+        round_trip_literal(ScalarValue::IntervalMonthDayNano(Some(
+            IntervalMonthDayNano::new(17, 25, 1234567890),
+        )))?;
+        round_trip_literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime::new(
+            57, 123456,
+        ))))?;
+
         Ok(())
     }
 
@@ -2375,6 +2384,10 @@ mod test {
             ]
             .into(),
         ))?;
+
+        round_trip_type(DataType::Interval(IntervalUnit::YearMonth))?;
+        round_trip_type(DataType::Interval(IntervalUnit::MonthDayNano))?;
+        round_trip_type(DataType::Interval(IntervalUnit::DayTime))?;
 
         Ok(())
     }
