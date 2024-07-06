@@ -31,7 +31,7 @@ pub mod nvl;
 pub mod nvl2;
 pub mod planner;
 pub mod r#struct;
-
+mod map;
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, ARROW_CAST, arrow_cast);
 make_udf_function!(nullif::NullIfFunc, NULLIF, nullif);
