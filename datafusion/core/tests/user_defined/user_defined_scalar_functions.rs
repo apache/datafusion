@@ -575,7 +575,7 @@ async fn test_user_defined_functions_cast_to_i64() -> Result<()> {
 async fn test_user_defined_sql_functions() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let sql_planners = ctx.user_defined_sql_planners();
+    let sql_planners = ctx.expr_planners();
 
     assert!(!sql_planners.is_empty());
 

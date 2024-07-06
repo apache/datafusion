@@ -56,7 +56,7 @@ impl FunctionRegistry for NoRegistry {
         plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Window Function '{}'", udwf.inner().name())
     }
 
-    fn user_defined_sql_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
         vec![]
     }
 }

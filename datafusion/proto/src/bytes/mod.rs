@@ -167,7 +167,7 @@ impl Serializeable for Expr {
                 )
             }
 
-            fn user_defined_sql_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+            fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
                 vec![]
             }
         }

@@ -192,7 +192,7 @@ impl FunctionRegistry for TaskContext {
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 
-    fn user_defined_sql_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
         vec![]
     }
 }

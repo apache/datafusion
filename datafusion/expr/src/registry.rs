@@ -111,7 +111,7 @@ pub trait FunctionRegistry {
     }
 
     /// Set of all registered [`UserDefinedSQLPlanner`]s
-    fn user_defined_sql_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>>;
+    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>>;
 
     /// Registers a new [`UserDefinedSQLPlanner`] with the registry.
     fn register_user_defined_sql_planner(
@@ -196,7 +196,7 @@ impl FunctionRegistry for MemoryFunctionRegistry {
         Ok(self.udwfs.insert(udaf.name().into(), udaf))
     }
 
-    fn user_defined_sql_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
         vec![]
     }
 }

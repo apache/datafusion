@@ -1183,7 +1183,7 @@ impl FunctionRegistry for SessionState {
         Ok(())
     }
 
-    fn user_defined_sql_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
         self.user_defined_sql_planners.clone()
     }
 
