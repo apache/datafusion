@@ -234,6 +234,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
 
     Ok(())
 }
+
 #[tokio::test]
 async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     let ctx = create_join_context()?;
