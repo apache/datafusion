@@ -92,7 +92,7 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     }
 
     /// This is the description of the state. accumulator's state() must match the types here.
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<arrow_schema::Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new("prod", args.return_type.clone(), true),
             Field::new("n", DataType::UInt32, true),

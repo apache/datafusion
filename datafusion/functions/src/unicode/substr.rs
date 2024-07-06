@@ -32,6 +32,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 #[derive(Debug)]
 pub struct SubstrFunc {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
 impl Default for SubstrFunc {
@@ -53,6 +54,7 @@ impl SubstrFunc {
                 ],
                 Volatility::Immutable,
             ),
+            aliases: vec![String::from("substring")],
         }
     }
 }
@@ -80,6 +82,10 @@ impl ScalarUDFImpl for SubstrFunc {
             DataType::LargeUtf8 => make_scalar_function(substr::<i64>, vec![])(args),
             other => exec_err!("Unsupported data type {other:?} for function substr"),
         }
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }
 

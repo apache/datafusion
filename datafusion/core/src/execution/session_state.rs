@@ -240,6 +240,8 @@ impl SessionState {
             Arc::new(functions_array::planner::FieldAccessPlanner),
             #[cfg(feature = "datetime_expressions")]
             Arc::new(functions::datetime::planner::ExtractPlanner),
+            #[cfg(feature = "unicode_expressions")]
+            Arc::new(functions::unicode::planner::PositionPlanner),
         ];
 
         let mut new_self = SessionState {
