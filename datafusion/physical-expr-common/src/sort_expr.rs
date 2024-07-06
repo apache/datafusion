@@ -39,6 +39,12 @@ pub struct PhysicalSortExpr {
     pub options: SortOptions,
 }
 
+impl PhysicalSortExpr {
+    pub fn new(expr: Arc<dyn PhysicalExpr>, options: SortOptions) -> Self {
+        Self {expr, options }
+    }
+}
+
 impl PartialEq for PhysicalSortExpr {
     fn eq(&self, other: &PhysicalSortExpr) -> bool {
         self.options == other.options && self.expr.eq(&other.expr)
