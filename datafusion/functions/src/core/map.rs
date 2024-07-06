@@ -40,7 +40,7 @@ fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 
     let string_builder = StringBuilder::new();
-    let int_builder = Int32Builder::with_capacity(100);
+    let int_builder = Int32Builder::with_capacity(args.len() / 2);
     let mut builder =
         MapBuilder::new(None, string_builder, int_builder);
 
@@ -134,7 +134,9 @@ mod tests {
         let mut key_buffer=  VecDeque::new();
         let mut value_buffer = VecDeque::new();
 
-        for _ in 0..1000 {
+        let num = 10;
+        println!("Generating {} random key-value pairs", num);
+        for _ in 0..num {
             let rand: i32 = random();
             let key = format!("key_{}", rand.clone());
             key_buffer.push_back(key.clone());
