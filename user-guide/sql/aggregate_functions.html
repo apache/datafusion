@@ -1255,10 +1255,8 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 <section id="count">
 <h3><code class="docutils literal notranslate"><span class="pre">count</span></code><a class="headerlink" href="#count" title="Link to this heading">¶</a></h3>
-<p>Returns the number of rows in the specified column.</p>
-<p>Count includes <em>null</em> values in the total count.
-To exclude <em>null</em> values from the total count, include <code class="docutils literal notranslate"><span class="pre">&lt;column&gt;</span> <span class="pre">IS</span> <span class="pre">NOT</span> <span class="pre">NULL</span></code>
-in the <code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause.</p>
+<p>Returns the number of non-null values in the specified column.</p>
+<p>To include <em>null</em> values in the total count, use <code class="docutils literal notranslate"><span class="pre">count(*)</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">count</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
