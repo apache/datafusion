@@ -1212,11 +1212,16 @@ fn eq_dyn_null(
     right: &dyn Array,
     null_equals_null: bool,
 ) -> Result<BooleanArray, ArrowError> {
-    // Nested datatypes cannot use the underlying not_distinct function and must use a special
+    // Nested datatypes cannot use the underlying not_distinct/eq function and must use a special
     // implementation
     // <https://github.com/apache/datafusion/issues/10749>
-    if left.data_type().is_nested() && null_equals_null {
-        return Ok(compare_op_for_nested(&Operator::Eq, &left, &right)?);
+    if left.data_type().is_nested() {
+        let op = if null_equals_null {
+            Operator::IsNotDistinctFrom
+        } else {
+            Operator::Eq
+        };
+        return Ok(compare_op_for_nested(&op, &left, &right)?);
     }
     match (left.data_type(), right.data_type()) {
         _ if null_equals_null => not_distinct(&left, &right),
@@ -1546,6 +1551,8 @@ mod tests {
 
     use arrow::array::{Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field};
+    use arrow_array::StructArray;
+    use arrow_buffer::NullBuffer;
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
         ScalarValue,
@@ -3840,6 +3847,104 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(err.to_string(), "HashJoinInput[1]");
         }
+
+        Ok(())
+    }
+
+    fn build_table_struct(
+        struct_name: &str,
+        field_name_and_values: (&str, &Vec<Option<i32>>),
+        nulls: Option<NullBuffer>,
+    ) -> Arc<dyn ExecutionPlan> {
+        let (field_name, values) = field_name_and_values;
+        let inner_fields = vec![Field::new(field_name, DataType::Int32, true)];
+        let schema = Schema::new(vec![Field::new(
+            struct_name,
+            DataType::Struct(inner_fields.clone().into()),
+            nulls.is_some(),
+        )]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(StructArray::new(
+                inner_fields.into(),
+                vec![Arc::new(Int32Array::from(values.clone()))],
+                nulls,
+            ))],
+        )
+        .unwrap();
+        let schema_ref = batch.schema();
+        Arc::new(MemoryExec::try_new(&[vec![batch]], schema_ref, None).unwrap())
+    }
+
+    #[tokio::test]
+    async fn join_on_struct() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left =
+            build_table_struct("n1", ("a", &vec![None, Some(1), Some(2), Some(3)]), None);
+        let right =
+            build_table_struct("n2", ("a", &vec![None, Some(1), Some(2), Some(4)]), None);
+        let on = vec![(
+            Arc::new(Column::new_with_schema("n1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("n2", &right.schema())?) as _,
+        )];
+
+        let (columns, batches) =
+            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+
+        assert_eq!(columns, vec!["n1", "n2"]);
+
+        let expected = [
+            "+--------+--------+",
+            "| n1     | n2     |",
+            "+--------+--------+",
+            "| {a: }  | {a: }  |",
+            "| {a: 1} | {a: 1} |",
+            "| {a: 2} | {a: 2} |",
+            "+--------+--------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_on_struct_with_nulls() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left =
+            build_table_struct("n1", ("a", &vec![None]), Some(NullBuffer::new_null(1)));
+        let right =
+            build_table_struct("n2", ("a", &vec![None]), Some(NullBuffer::new_null(1)));
+        let on = vec![(
+            Arc::new(Column::new_with_schema("n1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("n2", &right.schema())?) as _,
+        )];
+
+        let (_, batches_null_eq) = join_collect(
+            left.clone(),
+            right.clone(),
+            on.clone(),
+            &JoinType::Inner,
+            true,
+            task_ctx.clone(),
+        )
+        .await?;
+
+        let expected_null_eq = [
+            "+----+----+",
+            "| n1 | n2 |",
+            "+----+----+",
+            "|    |    |",
+            "+----+----+",
+        ];
+        assert_batches_eq!(expected_null_eq, &batches_null_eq);
+
+        let (_, batches_null_neq) =
+            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+
+        let expected_null_neq =
+            ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
+        assert_batches_eq!(expected_null_neq, &batches_null_neq);
 
         Ok(())
     }
