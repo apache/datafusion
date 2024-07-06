@@ -80,5 +80,12 @@ query I
 select * from t0 where v0>1e100;
 ----
 
+query I
+select * from t0 where v0<1e100;
+----
+1
+2
+3
+
 statement ok
 drop table t0;
