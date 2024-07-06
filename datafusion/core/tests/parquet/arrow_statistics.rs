@@ -551,7 +551,7 @@ async fn test_data_page_stats_with_all_null_page() {
         DataType::Decimal256(20, 2), // as FIXED_LEN_BYTE_ARRAY
     ] {
         let batch =
-            RecordBatch::try_from_iter(vec![("col", new_null_array(&data_type, 4))])
+            RecordBatch::try_from_iter(vec![("col", new_null_array(data_type, 4))])
                 .expect("record batch creation");
 
         let reader =
