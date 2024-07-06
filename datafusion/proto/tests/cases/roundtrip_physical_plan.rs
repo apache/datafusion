@@ -81,7 +81,7 @@ use datafusion_expr::{
     ScalarUDFImpl, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
-use datafusion_functions_aggregate::nth_value::NthValueAgg;
+use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::StringAgg;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
@@ -364,8 +364,8 @@ fn rountrip_aggregate() -> Result<()> {
         )?],
         // NTH_VALUE
         vec![udaf::create_aggregate_expr(
-            &AggregateUDF::new_from_impl(NthValueAgg::default()),
-            &[col("b", &schema)?, lit(ScalarValue::UInt64(Some(1)))],
+            &nth_value_udaf(),
+            &[col("b", &schema)?, lit(1u64)],
             &[],
             &[],
             &[],
