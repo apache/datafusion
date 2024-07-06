@@ -366,9 +366,9 @@ mod tests {
 
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal128(10, 3),
+            Decimal128(10, 3),
             Decimal128Array,
-            DataType::Decimal128(20, 6),
+            Decimal128(20, 6),
             [
                 Some(1_234_000),
                 Some(2_222_000),
@@ -387,9 +387,9 @@ mod tests {
 
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal128(10, 3),
+            Decimal128(10, 3),
             Decimal128Array,
-            DataType::Decimal128(10, 2),
+            Decimal128(10, 2),
             [Some(123), Some(222), Some(0), Some(400), Some(500), None],
             None
         );
@@ -408,9 +408,9 @@ mod tests {
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal128(10, 0),
+            Decimal128(10, 0),
             Int8Array,
-            DataType::Int8,
+            Int8,
             [
                 Some(1_i8),
                 Some(2_i8),
@@ -430,9 +430,9 @@ mod tests {
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal128(10, 0),
+            Decimal128(10, 0),
             Int16Array,
-            DataType::Int16,
+            Int16,
             [
                 Some(1_i16),
                 Some(2_i16),
@@ -452,9 +452,9 @@ mod tests {
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal128(10, 0),
+            Decimal128(10, 0),
             Int32Array,
-            DataType::Int32,
+            Int32,
             [
                 Some(1_i32),
                 Some(2_i32),
@@ -473,9 +473,9 @@ mod tests {
             .with_precision_and_scale(10, 0)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal128(10, 0),
+            Decimal128(10, 0),
             Int64Array,
-            DataType::Int64,
+            Int64,
             [
                 Some(1_i64),
                 Some(2_i64),
@@ -503,9 +503,9 @@ mod tests {
             .with_precision_and_scale(10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal128(10, 3),
+            Decimal128(10, 3),
             Float32Array,
-            DataType::Float32,
+            Float32,
             [
                 Some(1.234_f32),
                 Some(2.222_f32),
@@ -524,9 +524,9 @@ mod tests {
             .with_precision_and_scale(20, 6)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal128(20, 6),
+            Decimal128(20, 6),
             Float64Array,
-            DataType::Float64,
+            Float64,
             [
                 Some(0.001234_f64),
                 Some(0.002222_f64),
@@ -545,10 +545,10 @@ mod tests {
         // int8
         generic_test_cast!(
             Int8Array,
-            DataType::Int8,
+            Int8,
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
-            DataType::Decimal128(3, 0),
+            Decimal128(3, 0),
             [Some(1), Some(2), Some(3), Some(4), Some(5)],
             None
         );
@@ -556,10 +556,10 @@ mod tests {
         // int16
         generic_test_cast!(
             Int16Array,
-            DataType::Int16,
+            Int16,
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
-            DataType::Decimal128(5, 0),
+            Decimal128(5, 0),
             [Some(1), Some(2), Some(3), Some(4), Some(5)],
             None
         );
@@ -567,10 +567,10 @@ mod tests {
         // int32
         generic_test_cast!(
             Int32Array,
-            DataType::Int32,
+            Int32,
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
-            DataType::Decimal128(10, 0),
+            Decimal128(10, 0),
             [Some(1), Some(2), Some(3), Some(4), Some(5)],
             None
         );
@@ -578,10 +578,10 @@ mod tests {
         // int64
         generic_test_cast!(
             Int64Array,
-            DataType::Int64,
+            Int64,
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
-            DataType::Decimal128(20, 0),
+            Decimal128(20, 0),
             [Some(1), Some(2), Some(3), Some(4), Some(5)],
             None
         );
@@ -589,10 +589,10 @@ mod tests {
         // int64 to different scale
         generic_test_cast!(
             Int64Array,
-            DataType::Int64,
+            Int64,
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
-            DataType::Decimal128(20, 2),
+            Decimal128(20, 2),
             [Some(100), Some(200), Some(300), Some(400), Some(500)],
             None
         );
@@ -600,10 +600,10 @@ mod tests {
         // float32
         generic_test_cast!(
             Float32Array,
-            DataType::Float32,
+            Float32,
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
             Decimal128Array,
-            DataType::Decimal128(10, 2),
+            Decimal128(10, 2),
             [Some(150), Some(250), Some(300), Some(112), Some(550)],
             None
         );
@@ -611,10 +611,10 @@ mod tests {
         // float64
         generic_test_cast!(
             Float64Array,
-            DataType::Float64,
+            Float64,
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
             Decimal128Array,
-            DataType::Decimal128(20, 4),
+            Decimal128(20, 4),
             [
                 Some(15000),
                 Some(25000),
@@ -631,10 +631,10 @@ mod tests {
     fn test_cast_i32_u32() -> Result<()> {
         generic_test_cast!(
             Int32Array,
-            DataType::Int32,
+            Int32,
             vec![1, 2, 3, 4, 5],
             UInt32Array,
-            DataType::UInt32,
+            UInt32,
             [
                 Some(1_u32),
                 Some(2_u32),
@@ -651,10 +651,10 @@ mod tests {
     fn test_cast_i32_utf8() -> Result<()> {
         generic_test_cast!(
             Int32Array,
-            DataType::Int32,
+            Int32,
             vec![1, 2, 3, 4, 5],
             StringArray,
-            DataType::Utf8,
+            Utf8,
             [Some("1"), Some("2"), Some("3"), Some("4"), Some("5")],
             None
         );
@@ -670,10 +670,10 @@ mod tests {
             .collect();
         generic_test_cast!(
             Int64Array,
-            DataType::Int64,
+            Int64,
             original,
             TimestampNanosecondArray,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            Timestamp(TimeUnit::Nanosecond, None),
             expected,
             None
         );
@@ -683,7 +683,7 @@ mod tests {
     #[test]
     fn invalid_cast() {
         // Ensure a useful error happens at plan time if invalid casts are used
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
 
         let result = cast(
             col("a", &schema).unwrap(),
@@ -696,11 +696,10 @@ mod tests {
     #[test]
     fn invalid_cast_with_options_error() -> Result<()> {
         // Ensure a useful error happens at plan time if invalid casts are used
-        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let schema = Schema::new(vec![Field::new("a", Utf8, false)]);
         let a = StringArray::from(vec!["9.1"]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
-        let expression =
-            cast_with_options(col("a", &schema)?, &schema, DataType::Int32, None)?;
+        let expression = cast_with_options(col("a", &schema)?, &schema, Int32, None)?;
         let result = expression.evaluate(&batch);
 
         match result {
@@ -717,15 +716,11 @@ mod tests {
     #[test]
     #[ignore] // TODO: https://github.com/apache/datafusion/issues/5396
     fn test_cast_decimal() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let schema = Schema::new(vec![Field::new("a", Int64, false)]);
         let a = Int64Array::from(vec![100]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
-        let expression = cast_with_options(
-            col("a", &schema)?,
-            &schema,
-            DataType::Decimal128(38, 38),
-            None,
-        )?;
+        let expression =
+            cast_with_options(col("a", &schema)?, &schema, Decimal128(38, 38), None)?;
         expression.evaluate(&batch)?;
         Ok(())
     }
