@@ -1,0 +1,173 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE TABLE IF NOT EXISTS t1(a DOUBLE, b DOUBLE)
+
+# Trivial common expression
+query TT
+EXPLAIN SELECT
+    a + 1 AS c1,
+    a + 1 AS c2
+FROM t1
+----
+logical_plan
+01)Projection: __common_expr_1 AS c1, __common_expr_1 AS c2
+02)--Projection: t1.a + Float64(1) AS __common_expr_1
+03)----TableScan: t1 projection=[a]
+physical_plan
+01)ProjectionExec: expr=[__common_expr_1@0 as c1, __common_expr_1@0 as c2]
+02)--ProjectionExec: expr=[a@0 + 1 as __common_expr_1]
+03)----MemoryExec: partitions=1, partition_sizes=[0]
+
+# Common volatile expression
+query TT
+EXPLAIN SELECT
+    a + random() AS c1,
+    a + random() AS c2
+FROM t1
+----
+logical_plan
+01)Projection: t1.a + random() AS c1, t1.a + random() AS c2
+02)--TableScan: t1 projection=[a]
+physical_plan
+01)ProjectionExec: expr=[a@0 + random() as c1, a@0 + random() as c2]
+02)--MemoryExec: partitions=1, partition_sizes=[0]
+
+# Volatile expression with non-volatile common child
+query TT
+EXPLAIN SELECT
+    a + 1 + random() AS c1,
+    a + 1 + random() AS c2
+FROM t1
+----
+logical_plan
+01)Projection: __common_expr_1 + random() AS c1, __common_expr_1 + random() AS c2
+02)--Projection: t1.a + Float64(1) AS __common_expr_1
+03)----TableScan: t1 projection=[a]
+physical_plan
+01)ProjectionExec: expr=[__common_expr_1@0 + random() as c1, __common_expr_1@0 + random() as c2]
+02)--ProjectionExec: expr=[a@0 + 1 as __common_expr_1]
+03)----MemoryExec: partitions=1, partition_sizes=[0]
+
+# Volatile expression with non-volatile common children
+query TT
+EXPLAIN SELECT
+    a + 1 + random() + (a + 2) AS c1,
+    a + 1 + random() + (a + 2) AS c2
+FROM t1
+----
+logical_plan
+01)Projection: __common_expr_1 + random() + __common_expr_2 AS c1, __common_expr_1 + random() + __common_expr_2 AS c2
+02)--Projection: t1.a + Float64(1) AS __common_expr_1, t1.a + Float64(2) AS __common_expr_2
+03)----TableScan: t1 projection=[a]
+physical_plan
+01)ProjectionExec: expr=[__common_expr_1@0 + random() + __common_expr_2@1 as c1, __common_expr_1@0 + random() + __common_expr_2@1 as c2]
+02)--ProjectionExec: expr=[a@0 + 1 as __common_expr_1, a@0 + 2 as __common_expr_2]
+03)----MemoryExec: partitions=1, partition_sizes=[0]
+
+# Common short-circuit expression
+query TT
+EXPLAIN SELECT
+    a = 0 AND b = 0 AS c1,
+    a = 0 AND b = 0 AS c2,
+    a = 0 OR b = 0 AS c3,
+    a = 0 OR b = 0 AS c4,
+    CASE WHEN (a = 0) THEN 0 ELSE 1 END AS c5,
+    CASE WHEN (a = 0) THEN 0 ELSE 1 END AS c6
+FROM t1
+----
+logical_plan
+01)Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 AS c3, __common_expr_2 AS c4, __common_expr_3 AS c5, __common_expr_3 AS c6
+02)--Projection: t1.a = Float64(0) AND t1.b = Float64(0) AS __common_expr_1, t1.a = Float64(0) OR t1.b = Float64(0) AS __common_expr_2, CASE WHEN t1.a = Float64(0) THEN Int64(0) ELSE Int64(1) END AS __common_expr_3
+03)----TableScan: t1 projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[__common_expr_1@0 as c1, __common_expr_1@0 as c2, __common_expr_2@1 as c3, __common_expr_2@1 as c4, __common_expr_3@2 as c5, __common_expr_3@2 as c6]
+02)--ProjectionExec: expr=[a@0 = 0 AND b@1 = 0 as __common_expr_1, a@0 = 0 OR b@1 = 0 as __common_expr_2, CASE WHEN a@0 = 0 THEN 0 ELSE 1 END as __common_expr_3]
+03)----MemoryExec: partitions=1, partition_sizes=[0]
+
+# Common children of short-circuit expression
+# TODO: consider surely executed children of "short circuited"s for CSE. i.e. `a = 0`, `a = 2`, `a = 4` should be extracted
+query TT
+EXPLAIN SELECT
+    a = 0 AND b = 0 AS c1,
+    a = 0 AND b = 1 AS c2,
+    b = 2 AND a = 1 AS c3,
+    b = 3 AND a = 1 AS c4,
+    a = 2 OR b = 4 AS c5,
+    a = 2 OR b = 5 AS c6,
+    b = 6 OR a = 3 AS c7,
+    b = 7 OR a = 3 AS c8,
+    CASE WHEN (a = 4) THEN 0 ELSE 1 END AS c9,
+    CASE WHEN (a = 4) THEN 0 ELSE 2 END AS c10,
+    CASE WHEN (b = 8) THEN a + 1 ELSE 0 END AS c11,
+    CASE WHEN (b = 9) THEN a + 1 ELSE 0 END AS c12,
+    CASE WHEN (b = 10) THEN 0 ELSE a + 2 END AS c13,
+    CASE WHEN (b = 11) THEN 0 ELSE a + 2 END AS c14
+FROM t1
+----
+logical_plan
+01)Projection: t1.a = Float64(0) AND t1.b = Float64(0) AS c1, t1.a = Float64(0) AND t1.b = Float64(1) AS c2, t1.b = Float64(2) AND t1.a = Float64(1) AS c3, t1.b = Float64(3) AND t1.a = Float64(1) AS c4, t1.a = Float64(2) OR t1.b = Float64(4) AS c5, t1.a = Float64(2) OR t1.b = Float64(5) AS c6, t1.b = Float64(6) OR t1.a = Float64(3) AS c7, t1.b = Float64(7) OR t1.a = Float64(3) AS c8, CASE WHEN t1.a = Float64(4) THEN Int64(0) ELSE Int64(1) END AS c9, CASE WHEN t1.a = Float64(4) THEN Int64(0) ELSE Int64(2) END AS c10, CASE WHEN t1.b = Float64(8) THEN t1.a + Float64(1) ELSE Float64(0) END AS c11, CASE WHEN t1.b = Float64(9) THEN t1.a + Float64(1) ELSE Float64(0) END AS c12, CASE WHEN t1.b = Float64(10) THEN Float64(0) ELSE t1.a + Float64(2) END AS c13, CASE WHEN t1.b = Float64(11) THEN Float64(0) ELSE t1.a + Float64(2) END AS c14
+02)--TableScan: t1 projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[a@0 = 0 AND b@1 = 0 as c1, a@0 = 0 AND b@1 = 1 as c2, b@1 = 2 AND a@0 = 1 as c3, b@1 = 3 AND a@0 = 1 as c4, a@0 = 2 OR b@1 = 4 as c5, a@0 = 2 OR b@1 = 5 as c6, b@1 = 6 OR a@0 = 3 as c7, b@1 = 7 OR a@0 = 3 as c8, CASE WHEN a@0 = 4 THEN 0 ELSE 1 END as c9, CASE WHEN a@0 = 4 THEN 0 ELSE 2 END as c10, CASE WHEN b@1 = 8 THEN a@0 + 1 ELSE 0 END as c11, CASE WHEN b@1 = 9 THEN a@0 + 1 ELSE 0 END as c12, CASE WHEN b@1 = 10 THEN 0 ELSE a@0 + 2 END as c13, CASE WHEN b@1 = 11 THEN 0 ELSE a@0 + 2 END as c14]
+02)--MemoryExec: partitions=1, partition_sizes=[0]
+
+# Common children of volatile, short-circuit expression
+# TODO: consider surely executed children of "short circuited"s for CSE. i.e. `a = 0`, `a = 2`, `a = 4` should be extracted
+query TT
+EXPLAIN SELECT
+    a = 0 AND b = random() AS c1,
+    a = 0 AND b = 1 + random() AS c2,
+    b = 2 + random() AND a = 1 AS c3,
+    b = 3 + random() AND a = 1 AS c4,
+    a = 2 OR b = 4 + random() AS c5,
+    a = 2 OR b = 5 + random() AS c6,
+    b = 6 + random() OR a = 3 AS c7,
+    b = 7 + random() OR a = 3 AS c8,
+    CASE WHEN (a = 4) THEN random() ELSE 1 END AS c9,
+    CASE WHEN (a = 4) THEN random() ELSE 2 END AS c10,
+    CASE WHEN (b = 8 + random()) THEN a + 1 ELSE 0 END AS c11,
+    CASE WHEN (b = 9 + random()) THEN a + 1 ELSE 0 END AS c12,
+    CASE WHEN (b = 10 + random()) THEN 0 ELSE a + 2 END AS c13,
+    CASE WHEN (b = 11 + random()) THEN 0 ELSE a + 2 END AS c14
+FROM t1
+----
+logical_plan
+01)Projection: t1.a = Float64(0) AND t1.b = random() AS c1, t1.a = Float64(0) AND t1.b = Float64(1) + random() AS c2, t1.b = Float64(2) + random() AND t1.a = Float64(1) AS c3, t1.b = Float64(3) + random() AND t1.a = Float64(1) AS c4, t1.a = Float64(2) OR t1.b = Float64(4) + random() AS c5, t1.a = Float64(2) OR t1.b = Float64(5) + random() AS c6, t1.b = Float64(6) + random() OR t1.a = Float64(3) AS c7, t1.b = Float64(7) + random() OR t1.a = Float64(3) AS c8, CASE WHEN t1.a = Float64(4) THEN random() ELSE Float64(1) END AS c9, CASE WHEN t1.a = Float64(4) THEN random() ELSE Float64(2) END AS c10, CASE WHEN t1.b = Float64(8) + random() THEN t1.a + Float64(1) ELSE Float64(0) END AS c11, CASE WHEN t1.b = Float64(9) + random() THEN t1.a + Float64(1) ELSE Float64(0) END AS c12, CASE WHEN t1.b = Float64(10) + random() THEN Float64(0) ELSE t1.a + Float64(2) END AS c13, CASE WHEN t1.b = Float64(11) + random() THEN Float64(0) ELSE t1.a + Float64(2) END AS c14
+02)--TableScan: t1 projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[a@0 = 0 AND b@1 = random() as c1, a@0 = 0 AND b@1 = 1 + random() as c2, b@1 = 2 + random() AND a@0 = 1 as c3, b@1 = 3 + random() AND a@0 = 1 as c4, a@0 = 2 OR b@1 = 4 + random() as c5, a@0 = 2 OR b@1 = 5 + random() as c6, b@1 = 6 + random() OR a@0 = 3 as c7, b@1 = 7 + random() OR a@0 = 3 as c8, CASE WHEN a@0 = 4 THEN random() ELSE 1 END as c9, CASE WHEN a@0 = 4 THEN random() ELSE 2 END as c10, CASE WHEN b@1 = 8 + random() THEN a@0 + 1 ELSE 0 END as c11, CASE WHEN b@1 = 9 + random() THEN a@0 + 1 ELSE 0 END as c12, CASE WHEN b@1 = 10 + random() THEN 0 ELSE a@0 + 2 END as c13, CASE WHEN b@1 = 11 + random() THEN 0 ELSE a@0 + 2 END as c14]
+02)--MemoryExec: partitions=1, partition_sizes=[0]
+
+# Common volatile children of short-circuit expression
+query TT
+EXPLAIN SELECT
+    a = random() AND b = 0 AS c1,
+    a = random() AND b = 1 AS c2,
+    a = 2 + random() OR b = 4 AS c3,
+    a = 2 + random() OR b = 5 AS c4,
+    CASE WHEN (a = 4 + random()) THEN 0 ELSE 1 END AS c5,
+    CASE WHEN (a = 4 + random()) THEN 0 ELSE 2 END AS c6
+FROM t1
+----
+logical_plan
+01)Projection: t1.a = random() AND t1.b = Float64(0) AS c1, t1.a = random() AND t1.b = Float64(1) AS c2, t1.a = Float64(2) + random() OR t1.b = Float64(4) AS c3, t1.a = Float64(2) + random() OR t1.b = Float64(5) AS c4, CASE WHEN t1.a = Float64(4) + random() THEN Int64(0) ELSE Int64(1) END AS c5, CASE WHEN t1.a = Float64(4) + random() THEN Int64(0) ELSE Int64(2) END AS c6
+02)--TableScan: t1 projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[a@0 = random() AND b@1 = 0 as c1, a@0 = random() AND b@1 = 1 as c2, a@0 = 2 + random() OR b@1 = 4 as c3, a@0 = 2 + random() OR b@1 = 5 as c4, CASE WHEN a@0 = 4 + random() THEN 0 ELSE 1 END as c5, CASE WHEN a@0 = 4 + random() THEN 0 ELSE 2 END as c6]
+02)--MemoryExec: partitions=1, partition_sizes=[0]
