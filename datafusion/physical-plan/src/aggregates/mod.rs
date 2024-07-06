@@ -369,6 +369,11 @@ impl AggregateExec {
         new_requirement.extend(req);
         new_requirement = collapse_lex_req(new_requirement);
 
+        // If our aggregation has grouping sets then our base grouping exprs will
+        // be expanded based on the flags in `group_by.groups` where for each
+        // group we swap the grouping expr for `null` if the flag is `true`
+        // That means that each index in `indices` is valid if and only if
+        // it is not null in every group
         let indices: Vec<usize> = indices
             .into_iter()
             .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
@@ -1204,7 +1209,6 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use crate::common::collect;
-    use datafusion_expr::Expr;
     use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
     use datafusion_physical_expr_common::expressions::Literal;
     use futures::{FutureExt, Stream};
@@ -2321,7 +2325,7 @@ mod tests {
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
             count_udaf().as_ref(),
             &[lit(1)],
-            &[Expr::Literal(ScalarValue::Int32(Some(1)))],
+            &[datafusion_expr::lit(1)],
             &[],
             &[],
             schema.as_ref(),
