@@ -165,6 +165,12 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let values: Vec<ScalarValue> = self.values.iter().cloned().collect();
+        if values.is_empty() {
+            return Ok(ScalarValue::new_empty_list(
+                self.datatype.clone(),
+                self.nullable,
+            ));
+        }
         let arr = ScalarValue::new_list(&values, &self.datatype, self.nullable);
         Ok(ScalarValue::List(arr))
     }

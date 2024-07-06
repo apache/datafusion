@@ -167,8 +167,10 @@ impl Accumulator for ArrayAggAccumulator {
             self.values.iter().map(|a| a.as_ref()).collect();
 
         if element_arrays.is_empty() {
-            let arr = ScalarValue::new_list(&[], &self.datatype, self.nullable);
-            return Ok(ScalarValue::List(arr));
+            return Ok(ScalarValue::new_empty_list(
+                self.datatype.clone(),
+                self.nullable,
+            ));
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;

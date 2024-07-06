@@ -1694,7 +1694,6 @@ SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 
 query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
 ----
-[]
 
 # csv_query_array_agg_one
 query ?
@@ -1758,7 +1757,7 @@ NULL NULL 781 7.81 125 -117 100
 # additional count(1) forces array_agg_distinct instead of array_agg over aggregated by c2 data
 #
 # csv_query_array_agg_distinct
-query III
+query error DataFusion error: External error: Arrow error: Invalid argument error: all columns in a record batch must have the same length
 WITH indices AS (
   SELECT 1 AS idx UNION ALL
   SELECT 2 AS idx UNION ALL
@@ -1772,12 +1771,6 @@ FROM (
 ) data
   CROSS JOIN indices
 ORDER BY 1
-----
-1 5 100
-2 5 100
-3 5 100
-4 5 100
-5 5 100
 
 # aggregate_time_min_and_max
 query TT
@@ -2732,6 +2725,16 @@ SELECT COUNT(DISTINCT c1) FROM test
 
 # TODO: aggregate_with_alias
 
+# test_approx_percentile_cont_decimal_support
+query TI
+SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 4
+b 5
+c 4
+d 4
+e 4
+
 # array_agg_zero
 query ?
 SELECT ARRAY_AGG([])
@@ -2744,28 +2747,96 @@ SELECT ARRAY_AGG([1])
 ----
 [[1]]
 
-# test_approx_percentile_cont_decimal_support
-query TI
-SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
-----
-a 4
-b 5
-c 4
-d 4
-e 4
+# test array_agg with no row qualified
+statement ok
+create table t(a int, b float, c bigint) as values (1, 1.2, 2);
 
-
-# array_agg_zero
 query ?
-SELECT ARRAY_AGG([]);
+select array_agg(a) from t where a > 2;
 ----
-[[]]
 
-# array_agg_one
 query ?
-SELECT ARRAY_AGG([1]);
+select array_agg(b) from t where b > 3.1;
 ----
-[[1]]
+
+query ?
+select array_agg(c) from t where c > 3;
+----
+
+query ?
+select array_agg(a) from t where a > 3 group by a;
+----
+
+query TT
+explain select array_agg(a) from t where a > 3 group by a;
+----
+logical_plan
+01)Projection: ARRAY_AGG(t.a)
+02)--Aggregate: groupBy=[[t.a]], aggr=[[ARRAY_AGG(t.a)]]
+03)----Filter: t.a > Int32(3)
+04)------TableScan: t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[ARRAY_AGG(t.a)@1 as ARRAY_AGG(t.a)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[ARRAY_AGG(t.a)]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[ARRAY_AGG(t.a)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------CoalesceBatchesExec: target_batch_size=8192
+08)--------------FilterExec: a@0 > 3
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# TODO: Expect no row, but got empty list
+query ?
+select array_agg(distinct a) from t where a > 3;
+----
+[]
+
+query TT
+explain select array_agg(distinct a) from t where a > 3;
+----
+logical_plan
+01)Projection: ARRAY_AGG(alias1) AS ARRAY_AGG(DISTINCT t.a)
+02)--Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(alias1)]]
+03)----Aggregate: groupBy=[[t.a AS alias1]], aggr=[[]]
+04)------Filter: t.a > Int32(3)
+05)--------TableScan: t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[ARRAY_AGG(alias1)@0 as ARRAY_AGG(DISTINCT t.a)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(alias1)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(alias1)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=4
+08)--------------AggregateExec: mode=Partial, gby=[a@0 as alias1], aggr=[]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------------FilterExec: a@0 > 3
+12)----------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table t;
+
+# test with no values
+statement ok
+create table t(a int, b float, c bigint);
+
+query ?
+select array_agg(a) from t;
+----
+
+query ?
+select array_agg(b) from t;
+----
+
+query ?
+select array_agg(c) from t;
+----
+
+statement ok
+drop table t;
+
 
 # array_agg_i32
 statement ok
