@@ -27,7 +27,7 @@ use datafusion::common::{
     substrait_err, DFSchema, DFSchemaRef,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::expr::{InSubquery, Sort};
+use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     aggregate_function, expr::find_df_window_func, Aggregate, BinaryExpr, Case,
@@ -1296,6 +1296,32 @@ pub async fn from_substrait_rex(
                         subquery: Arc::new(plan),
                         outer_ref_columns,
                     })))
+                }
+                SubqueryType::SetPredicate(predicate) => {
+                    match predicate.predicate_op {
+                        // exist
+                        1 => {
+                            let relations = &predicate.tuples;
+                            let plan = from_substrait_rel(
+                                ctx,
+                                &relations.clone().unwrap_or_default(),
+                                extensions,
+                            )
+                            .await?;
+                            let outer_ref_columns = plan.all_out_ref_exprs();
+                            Ok(Arc::new(Expr::Exists(Exists::new(
+                                Subquery {
+                                    subquery: Arc::new(plan),
+                                    outer_ref_columns,
+                                },
+                                false,
+                            ))))
+                        }
+                        other_type => Err(DataFusionError::Substrait(format!(
+                            "unimplemented type {:?} for set predicate",
+                            other_type
+                        ))),
+                    }
                 }
                 other_type => {
                     substrait_err!("Subquery type {:?} not implemented", other_type)
