@@ -42,12 +42,28 @@ use datafusion_common::JoinType;
 /// - `across_partitions`: A boolean flag indicating whether the constant expression is
 ///   valid across partitions. If set to `true`, the constant expression has same value for all partitions.
 ///   If set to `false`, the constant expression may have different values for different partitions.
+///
+/// # Example
+///
+/// ```rust
+/// # use datafusion_physical_expr::ConstExpr;
+/// # use datafusion_physical_expr_common::expressions::lit;
+/// let col = lit(5);
+/// // Create a constant expression from a physical expression ref
+/// let const_expr = ConstExpr::from(&col);
+/// // create a constant expression from a physical expression
+/// let const_expr = ConstExpr::from(col);
+/// ```
 pub struct ConstExpr {
     expr: Arc<dyn PhysicalExpr>,
     across_partitions: bool,
 }
 
 impl ConstExpr {
+    /// Create a new constant expression from a physical expression.
+    ///
+    /// Note you can also use `ConstExpr::from` to create a constant expression
+    /// from a reference as well
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self {
             expr,
@@ -82,6 +98,18 @@ impl ConstExpr {
             expr,
             across_partitions: self.across_partitions,
         })
+    }
+}
+
+impl From<Arc<dyn PhysicalExpr>> for ConstExpr {
+    fn from(expr: Arc<dyn PhysicalExpr>) -> Self {
+        Self::new(expr)
+    }
+}
+
+impl From<&Arc<dyn PhysicalExpr>> for ConstExpr {
+    fn from(expr: &Arc<dyn PhysicalExpr>) -> Self {
+        Self::new(Arc::clone(expr))
     }
 }
 

@@ -1392,6 +1392,10 @@ impl FunctionRegistry for SessionContext {
         self.state.write().register_function_rewrite(rewrite)
     }
 
+    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+        self.state.read().expr_planners()
+    }
+
     fn register_user_defined_sql_planner(
         &mut self,
         user_defined_sql_planner: Arc<dyn UserDefinedSQLPlanner>,

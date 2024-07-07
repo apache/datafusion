@@ -36,6 +36,9 @@ cd datafusion
 # Download test data
 git submodule update --init
 
+# Change to the examples directory
+cd datafusion-examples/examples
+
 # Run the `dataframe` example:
 # ... use the equivalent for other examples
 cargo run --example dataframe

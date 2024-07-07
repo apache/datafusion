@@ -213,13 +213,13 @@ impl EquivalenceProperties {
             // Left expression is constant, add right as constant
             if !const_exprs_contains(&self.constants, right) {
                 self.constants
-                    .push(ConstExpr::new(Arc::clone(right)).with_across_partitions(true));
+                    .push(ConstExpr::from(right).with_across_partitions(true));
             }
         } else if self.is_expr_constant(right) {
             // Right expression is constant, add left as constant
             if !const_exprs_contains(&self.constants, left) {
                 self.constants
-                    .push(ConstExpr::new(Arc::clone(left)).with_across_partitions(true));
+                    .push(ConstExpr::from(left).with_across_partitions(true));
             }
         }
 
@@ -300,7 +300,7 @@ impl EquivalenceProperties {
         {
             if !const_exprs_contains(&self.constants, &expr) {
                 let const_expr =
-                    ConstExpr::new(expr).with_across_partitions(across_partitions);
+                    ConstExpr::from(expr).with_across_partitions(across_partitions);
                 self.constants.push(const_expr);
             }
         }
@@ -404,7 +404,7 @@ impl EquivalenceProperties {
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
             eq_properties = eq_properties
-                .add_constants(std::iter::once(ConstExpr::new(normalized_req.expr)));
+                .add_constants(std::iter::once(ConstExpr::from(normalized_req.expr)));
         }
         true
     }
@@ -832,9 +832,8 @@ impl EquivalenceProperties {
                 && !const_exprs_contains(&projected_constants, target)
             {
                 // Expression evaluates to single value
-                projected_constants.push(
-                    ConstExpr::new(Arc::clone(target)).with_across_partitions(true),
-                );
+                projected_constants
+                    .push(ConstExpr::from(target).with_across_partitions(true));
             }
         }
         projected_constants
@@ -927,8 +926,8 @@ impl EquivalenceProperties {
             // Note that these expressions are not properly "constants". This is just
             // an implementation strategy confined to this function.
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
-                eq_properties = eq_properties
-                    .add_constants(std::iter::once(ConstExpr::new(Arc::clone(expr))));
+                eq_properties =
+                    eq_properties.add_constants(std::iter::once(ConstExpr::from(expr)));
                 search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
@@ -2147,8 +2146,7 @@ mod tests {
         let col_h = &col("h", &test_schema)?;
 
         // Add column h as constant
-        eq_properties =
-            eq_properties.add_constants(vec![ConstExpr::new(Arc::clone(col_h))]);
+        eq_properties = eq_properties.add_constants(vec![ConstExpr::from(col_h)]);
 
         let test_cases = vec![
             // TEST CASE 1
@@ -2458,7 +2456,7 @@ mod tests {
         for case in cases {
             let mut properties = base_properties
                 .clone()
-                .add_constants(case.constants.into_iter().map(ConstExpr::new));
+                .add_constants(case.constants.into_iter().map(ConstExpr::from));
             for [left, right] in &case.equal_conditions {
                 properties.add_equal_conditions(left, right)?
             }
