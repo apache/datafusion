@@ -29,8 +29,7 @@ the [Pandas DataFrame] interface, and are implemented as thin wrapper over a
 [`LogicalPlan`] that adds functionality for building and executing those plans.
 
 The simplest possible dataframe is one that scans a table and that table can be
-in a file or in memory. I think this might be worth including in the
-introduction.
+in a file or in memory.
 
 ## How to generate a DataFrame
 
