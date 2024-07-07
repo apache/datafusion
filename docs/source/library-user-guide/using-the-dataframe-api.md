@@ -28,6 +28,10 @@ As described in the [Users Guide], DataFusion [`DataFrame`]s are modeled after
 the [Pandas DataFrame] interface, and are implemented as thin wrapper over a
 [`LogicalPlan`] that adds functionality for building and executing those plans.
 
+The simplest possible dataframe is one that scans a table and that table can be
+in a file or in memory. I think this might be worth including in the
+introduction.
+
 ## How to generate a DataFrame
 
 You can construct [`DataFrame`]s programmatically using the API, similarly to
@@ -44,7 +48,12 @@ use datafusion::error::Result;
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
-    // Register the same in-memory table as the previous example
+    // Register an in-memory table containing the following data
+    // id | bank_account
+    // ---|-------------
+    // 1  | 9000
+    // 2  | 8000
+    // 3  | 7000
     let data = RecordBatch::try_from_iter(vec![
         ("id", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
         ("bank_account", Arc::new(Int32Array::from(vec![9000, 8000, 7000]))),
@@ -61,8 +70,8 @@ async fn main() -> Result<()> {
 }
 ```
 
-You can *also* generate a `DataFrame` from a SQL query and use the same APIs
-to manipulate the output of the query. 
+You can _also_ generate a `DataFrame` from a SQL query and use the DataFrame's APIs
+to manipulate the output of the query.
 
 ```rust
 use std::sync::Arc;
@@ -75,12 +84,7 @@ use datafusion::error::Result;
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
-    // Register an in-memory table containing the following data
-    // id | bank_account
-    // ---|-------------
-    // 1  | 9000
-    // 2  | 8000
-    // 3  | 7000
+    // Register the same in-memory table as the previous example
     let data = RecordBatch::try_from_iter(vec![
         ("id", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
         ("bank_account", Arc::new(Int32Array::from(vec![9000, 8000, 7000]))),
@@ -115,13 +119,13 @@ async fn main() -> Result<()> {
 DataFusion [`DataFrame`]s are "lazy", meaning they do no processing until
 they are executed, which allows for additional optimizations.
 
-You can run a `DataFrame` in one of three ways:  
+You can run a `DataFrame` in one of three ways:
 
 1.  `collect`: executes the query and buffers all the output into a `Vec<RecordBatch>`
 2.  `execute_stream`: begins executions and returns a `SendableRecordBatchStream` which incrementally computes output on each call to `next()`
 3.  `cache`: executes the query and buffers the output into a new in memory `DataFrame.`
 
-To collect all outputs:
+To collect all outputs into a memory buffer, use the `collect` method:
 
 ```rust
 use datafusion::prelude::*;
@@ -141,7 +145,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-You can also use `execute_stream` to incrementally generate output one `RecordBatch` at a time:
+Use `execute_stream` to incrementally generate output one `RecordBatch` at a time:
 
 ```rust
 use datafusion::prelude::*;
@@ -165,10 +169,11 @@ async fn main() -> Result<()> {
 
 # Write DataFrame to Files
 
-You can also write the contents of a `DataFrame` to a file. When writing a file, DataFusion
-executes the `DataFrame` and streams the results. DataFusion comes with support for writing
-`csv`, `json` `arrow` `avro`, and `parquet` files, and supports writing custom
-file formats via API (see [`custom_file_format.rs`] for an example)
+You can also write the contents of a `DataFrame` to a file. When writing a file,
+DataFusion executes the `DataFrame` and streams the results to the output.
+DataFusion comes with support for writing `csv`, `json` `arrow` `avro`, and
+`parquet` files, and supports writing custom file formats via API (see
+[`custom_file_format.rs`] for an example)
 
 For example, to read a CSV file and write it to a parquet file, use the
 [`DataFrame::write_parquet`] method
@@ -183,13 +188,12 @@ async fn main() -> Result<()> {
     let ctx = SessionContext::new();
     // read example.csv file into a DataFrame
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    // execute the query and write it to a parquet file
+    // stream the contents of the DataFrame to the `example.parquet` file
     df.write_parquet(
         "example.parquet",
         DataFrameWriteOptions::new(),
         None, // writer_options
-    )
-        .await;
+    ).await;
     Ok(())
 }
 ```
@@ -207,7 +211,7 @@ The output file will look like (Example Output):
 +---+---+---+
 ```
 
-## `LogicalPlan`s and `DataFrame`s
+## Relationship between `LogicalPlan`s and `DataFrame`s
 
 The `DataFrame` struct is defined like this
 
@@ -245,7 +249,7 @@ async fn main() -> Result<()>{
 ```
 
 In fact, using the [`DataFrame`]s methods you can create the same
-[`LogicalPlan`]s as when using  [`LogicalPlanBuilder`]:
+[`LogicalPlan`]s as when using [`LogicalPlanBuilder`]:
 
 ```rust
 use datafusion::prelude::*;
@@ -274,11 +278,9 @@ async fn main() -> Result<()>{
 }
 ```
 
-[Users Guide]: ../user-guide/dataframe.md
-
+[users guide]: ../user-guide/dataframe.md
 [pandas dataframe]: https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html
 [`dataframe`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html
 [`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 [`logicalplanbuilder`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.LogicalPlanBuilder.html
-
-[`DataFrame::write_parquet`] https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.write_parquet
+[`dataframe::write_parquet`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.write_parquet
