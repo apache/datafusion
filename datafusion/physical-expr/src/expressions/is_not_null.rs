@@ -20,6 +20,7 @@
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
+use crate::expressions::is_null::union_is_null;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
@@ -27,6 +28,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use arrow_array::{BooleanArray, UnionArray};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
@@ -73,9 +75,16 @@ impl PhysicalExpr for IsNotNullExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let arg = self.arg.evaluate(batch)?;
         match arg {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(Arc::new(
-                compute::is_not_null(array.as_ref())?,
-            ))),
+            ColumnarValue::Array(array) => {
+                let bool_array = if let Some(union_array) =
+                    array.as_any().downcast_ref::<UnionArray>()
+                {
+                    union_is_not_null(union_array)?
+                } else {
+                    compute::is_not_null(array.as_ref())?
+                };
+                Ok(ColumnarValue::Array(Arc::new(bool_array)))
+            }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Boolean(Some(!scalar.is_null())),
             )),
@@ -110,6 +119,14 @@ impl PartialEq<dyn Any> for IsNotNullExpr {
 /// Create an IS NOT NULL expression
 pub fn is_not_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(IsNotNullExpr::new(arg)))
+}
+
+fn union_is_not_null(union_array: &UnionArray) -> Result<BooleanArray> {
+    union_is_null(union_array).map(|is_null| {
+        compute::not(&is_null)
+            .expect("Failed to compute is not null")
+            .into()
+    })
 }
 
 #[cfg(test)]
