@@ -1033,7 +1033,7 @@ where
     get_data_page_statistics!(Min, data_type, iterator)
 }
 
-/// Extracts the min statistics from an iterator
+/// Extracts the max statistics from an iterator
 /// of parquet page [`Index`]'es to an [`ArrayRef`]
 pub(crate) fn max_page_statistics<'a, I>(
     data_type: Option<&DataType>,
