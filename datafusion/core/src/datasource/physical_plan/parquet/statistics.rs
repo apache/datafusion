@@ -887,7 +887,7 @@ macro_rules! get_data_page_statistics {
                                 }).flatten(),
                             )))
                         },
-                        "use_builder" => {
+                        "use_builder_flatten" => {
                             let mut builder = StringBuilder::new();
                             let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten();
                             for x in iterator {
@@ -903,6 +903,27 @@ macro_rules! get_data_page_statistics {
                                 };
     
                                 builder.append_value(x);
+                            }
+                            Ok(Arc::new(builder.finish()))
+                        },
+                        "use_builder" => {
+                            let mut builder = StringBuilder::new();
+                            let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten();
+                            for x in iterator {
+                                for x in x.into_iter() {
+                                    let Some(x) = x else {
+                                        builder.append_null(); // no statistics value
+                                        continue;
+                                    };
+        
+                                    let Ok(x) = std::str::from_utf8(x.data()) else {
+                                        log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                                        builder.append_null();
+                                        continue;
+                                    };
+        
+                                    builder.append_value(x);
+                                }
                             }
                             Ok(Arc::new(builder.finish()))
                         },
