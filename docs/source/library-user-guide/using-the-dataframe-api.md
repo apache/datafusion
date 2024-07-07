@@ -151,6 +151,7 @@ use futures::stream::StreamExt;
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
+    // read example.csv file into a DataFrame
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     // begin execution (returns quickly, does not compute results)
     let mut stream = df.execute_stream().await?;
@@ -180,7 +181,7 @@ use datafusion::dataframe::DataFrameWriteOptions;
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
-    // Register the in-memory table containing the data
+    // read example.csv file into a DataFrame
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     // execute the query and write it to a parquet file
     df.write_parquet(
@@ -232,7 +233,7 @@ use datafusion::logical_expr::LogicalPlanBuilder;
 #[tokio::main]
 async fn main() -> Result<()>{
     let ctx = SessionContext::new();
-    // A DataFrame to scan the "example" table
+    // read example.csv file into a DataFrame
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     // You can easily get the LogicalPlan from the DataFrame
     let (_state, plan) = df.into_parts();
@@ -253,7 +254,7 @@ use datafusion::logical_expr::LogicalPlanBuilder;
 #[tokio::main]
 async fn main() -> Result<()>{
     let ctx = SessionContext::new();
-    // Create a DataFrame to scan the "example" table
+    // read example.csv file into a DataFrame
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     // Create a new DataFrame sorted by  `id`, `bank_account`
     let new_df = df.select(vec![col("a"), col("b")])?
