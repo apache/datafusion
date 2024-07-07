@@ -15,25 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use async_recursion::async_recursion;
+use datafusion::arrow::array::GenericListArray;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
+use datafusion::common::plan_err;
 use datafusion::common::{
-    not_impl_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
+    not_impl_datafusion_err, not_impl_err, plan_datafusion_err, substrait_datafusion_err,
+    substrait_err, DFSchema, DFSchemaRef,
 };
-use substrait::proto::expression::literal::IntervalDayToSecond;
-use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
-use url::Url;
-
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use datafusion::execution::FunctionRegistry;
+use datafusion::logical_expr::expr::{InSubquery, Sort};
+
 use datafusion::logical_expr::{
     aggregate_function, expr::find_df_window_func, Aggregate, BinaryExpr, Case,
     EmptyRelation, Expr, ExprSchemable, LogicalPlan, Operator, Projection, Values,
 };
+use url::Url;
 
+use crate::variation_const::{
+    DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
+    DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+    INTERVAL_YEAR_MONTH_TYPE_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
+    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+};
+use datafusion::common::scalar::ScalarStructBuilder;
+use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
     Repartition, Subquery, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
@@ -46,10 +59,15 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
 use substrait::proto::expression::literal::user_defined::Val;
+use substrait::proto::expression::literal::IntervalDayToSecond;
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
+use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
@@ -70,54 +88,36 @@ use substrait::proto::{
 };
 use substrait::proto::{FunctionArgument, SortField};
 
-use datafusion::arrow::array::GenericListArray;
-use datafusion::common::scalar::ScalarStructBuilder;
-use datafusion::logical_expr::expr::{InList, InSubquery, Sort};
-use std::collections::HashMap;
-use std::str::FromStr;
-use std::sync::Arc;
-
-use crate::variation_const::{
-    DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
-    DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
-    INTERVAL_YEAR_MONTH_TYPE_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-};
-
-pub fn name_to_op(name: &str) -> Result<Operator> {
+pub fn name_to_op(name: &str) -> Option<Operator> {
     match name {
-        "equal" => Ok(Operator::Eq),
-        "not_equal" => Ok(Operator::NotEq),
-        "lt" => Ok(Operator::Lt),
-        "lte" => Ok(Operator::LtEq),
-        "gt" => Ok(Operator::Gt),
-        "gte" => Ok(Operator::GtEq),
-        "add" => Ok(Operator::Plus),
-        "subtract" => Ok(Operator::Minus),
-        "multiply" => Ok(Operator::Multiply),
-        "divide" => Ok(Operator::Divide),
-        "mod" => Ok(Operator::Modulo),
-        "and" => Ok(Operator::And),
-        "or" => Ok(Operator::Or),
-        "is_distinct_from" => Ok(Operator::IsDistinctFrom),
-        "is_not_distinct_from" => Ok(Operator::IsNotDistinctFrom),
-        "regex_match" => Ok(Operator::RegexMatch),
-        "regex_imatch" => Ok(Operator::RegexIMatch),
-        "regex_not_match" => Ok(Operator::RegexNotMatch),
-        "regex_not_imatch" => Ok(Operator::RegexNotIMatch),
-        "bitwise_and" => Ok(Operator::BitwiseAnd),
-        "bitwise_or" => Ok(Operator::BitwiseOr),
-        "str_concat" => Ok(Operator::StringConcat),
-        "at_arrow" => Ok(Operator::AtArrow),
-        "arrow_at" => Ok(Operator::ArrowAt),
-        "bitwise_xor" => Ok(Operator::BitwiseXor),
-        "bitwise_shift_right" => Ok(Operator::BitwiseShiftRight),
-        "bitwise_shift_left" => Ok(Operator::BitwiseShiftLeft),
-        _ => not_impl_err!("Unsupported function name: {name:?}"),
+        "equal" => Some(Operator::Eq),
+        "not_equal" => Some(Operator::NotEq),
+        "lt" => Some(Operator::Lt),
+        "lte" => Some(Operator::LtEq),
+        "gt" => Some(Operator::Gt),
+        "gte" => Some(Operator::GtEq),
+        "add" => Some(Operator::Plus),
+        "subtract" => Some(Operator::Minus),
+        "multiply" => Some(Operator::Multiply),
+        "divide" => Some(Operator::Divide),
+        "mod" => Some(Operator::Modulo),
+        "and" => Some(Operator::And),
+        "or" => Some(Operator::Or),
+        "is_distinct_from" => Some(Operator::IsDistinctFrom),
+        "is_not_distinct_from" => Some(Operator::IsNotDistinctFrom),
+        "regex_match" => Some(Operator::RegexMatch),
+        "regex_imatch" => Some(Operator::RegexIMatch),
+        "regex_not_match" => Some(Operator::RegexNotMatch),
+        "regex_not_imatch" => Some(Operator::RegexNotIMatch),
+        "bitwise_and" => Some(Operator::BitwiseAnd),
+        "bitwise_or" => Some(Operator::BitwiseOr),
+        "str_concat" => Some(Operator::StringConcat),
+        "at_arrow" => Some(Operator::AtArrow),
+        "arrow_at" => Some(Operator::ArrowAt),
+        "bitwise_xor" => Some(Operator::BitwiseXor),
+        "bitwise_shift_right" => Some(Operator::BitwiseShiftRight),
+        "bitwise_shift_left" => Some(Operator::BitwiseShiftLeft),
+        _ => None,
     }
 }
 
@@ -1124,18 +1124,33 @@ pub async fn from_substrait_rex(
                 Ok(Arc::new(Expr::ScalarFunction(
                     expr::ScalarFunction::new_udf(func.to_owned(), args),
                 )))
-            } else if let Ok(op) = name_to_op(fn_name) {
-                if args.len() != 2 {
+            } else if let Some(op) = name_to_op(fn_name) {
+                if f.arguments.len() < 2 {
                     return not_impl_err!(
-                        "Expect two arguments for binary operator {op:?}"
+                        "Expect at least two arguments for binary operator {op:?}, the provided number of operators is {:?}",
+                        f.arguments.len()
                     );
                 }
+                // Some expressions are binary in DataFusion but take in a variadic number of args in Substrait.
+                // In those cases we iterate through all the arguments, applying the binary expression against them all
+                let combined_expr = args
+                    .into_iter()
+                    .fold(None, |combined_expr: Option<Arc<Expr>>, arg: Expr| {
+                        Some(match combined_expr {
+                            Some(expr) => Arc::new(Expr::BinaryExpr(BinaryExpr {
+                                left: Box::new(
+                                    Arc::try_unwrap(expr)
+                                        .unwrap_or_else(|arc: Arc<Expr>| (*arc).clone()),
+                                ), // Avoid cloning if possible
+                                op: op.clone(),
+                                right: Box::new(arg),
+                            })),
+                            None => Arc::new(arg),
+                        })
+                    })
+                    .unwrap();
 
-                Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(args[0].to_owned()),
-                    op,
-                    right: Box::new(args[1].to_owned()),
-                })))
+                Ok(combined_expr)
             } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
                 builder.build(ctx, f, input_schema, extensions).await
             } else {
@@ -1269,7 +1284,22 @@ pub async fn from_substrait_rex(
                         }
                     }
                 }
-                _ => substrait_err!("Subquery type not implemented"),
+                SubqueryType::Scalar(query) => {
+                    let plan = from_substrait_rel(
+                        ctx,
+                        &(query.input.clone()).unwrap_or_default(),
+                        extensions,
+                    )
+                    .await?;
+                    let outer_ref_columns = plan.all_out_ref_exprs();
+                    Ok(Arc::new(Expr::ScalarSubquery(Subquery {
+                        subquery: Arc::new(plan),
+                        outer_ref_columns,
+                    })))
+                }
+                other_type => {
+                    substrait_err!("Subquery type {:?} not implemented", other_type)
+                }
             },
             None => {
                 substrait_err!("Subquery experssion without SubqueryType is not allowed")
@@ -1514,12 +1544,22 @@ fn from_substrait_bound(
                 BoundKind::CurrentRow(SubstraitBound::CurrentRow {}) => {
                     Ok(WindowFrameBound::CurrentRow)
                 }
-                BoundKind::Preceding(SubstraitBound::Preceding { offset }) => Ok(
-                    WindowFrameBound::Preceding(ScalarValue::Int64(Some(*offset))),
-                ),
-                BoundKind::Following(SubstraitBound::Following { offset }) => Ok(
-                    WindowFrameBound::Following(ScalarValue::Int64(Some(*offset))),
-                ),
+                BoundKind::Preceding(SubstraitBound::Preceding { offset }) => {
+                    if *offset <= 0 {
+                        return plan_err!("Preceding bound must be positive");
+                    }
+                    Ok(WindowFrameBound::Preceding(ScalarValue::UInt64(Some(
+                        *offset as u64,
+                    ))))
+                }
+                BoundKind::Following(SubstraitBound::Following { offset }) => {
+                    if *offset <= 0 {
+                        return plan_err!("Following bound must be positive");
+                    }
+                    Ok(WindowFrameBound::Following(ScalarValue::UInt64(Some(
+                        *offset as u64,
+                    ))))
+                }
                 BoundKind::Unbounded(SubstraitBound::Unbounded {}) => {
                     if is_lower {
                         Ok(WindowFrameBound::Preceding(ScalarValue::Null))
@@ -1699,6 +1739,7 @@ fn from_substrait_literal(
         })) => {
             ScalarValue::new_interval_dt(*days, (seconds * 1000) + (microseconds / 1000))
         }
+        Some(LiteralType::FixedChar(c)) => ScalarValue::Utf8(Some(c.clone())),
         Some(LiteralType::UserDefined(user_defined)) => {
             match user_defined.type_reference {
                 INTERVAL_YEAR_MONTH_TYPE_REF => {
@@ -1988,8 +2029,8 @@ impl BuiltinExprBuilder {
         extensions: &HashMap<u32, &String>,
     ) -> Result<Arc<Expr>> {
         let fn_name = if case_insensitive { "ILIKE" } else { "LIKE" };
-        if f.arguments.len() != 3 {
-            return substrait_err!("Expect three arguments for `{fn_name}` expr");
+        if f.arguments.len() != 2 && f.arguments.len() != 3 {
+            return substrait_err!("Expect two or three arguments for `{fn_name}` expr");
         }
 
         let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
@@ -2007,25 +2048,40 @@ impl BuiltinExprBuilder {
                 .await?
                 .as_ref()
                 .clone();
-        let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type else {
-            return substrait_err!("Invalid arguments type for `{fn_name}` expr");
-        };
-        let escape_char_expr =
-            from_substrait_rex(ctx, escape_char_substrait, input_schema, extensions)
-                .await?
-                .as_ref()
-                .clone();
-        let Expr::Literal(ScalarValue::Utf8(escape_char)) = escape_char_expr else {
-            return substrait_err!(
-                "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
-            );
+
+        // Default case: escape character is Literal(Utf8(None))
+        let escape_char = if f.arguments.len() == 3 {
+            let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type
+            else {
+                return substrait_err!("Invalid arguments type for `{fn_name}` expr");
+            };
+
+            let escape_char_expr =
+                from_substrait_rex(ctx, escape_char_substrait, input_schema, extensions)
+                    .await?
+                    .as_ref()
+                    .clone();
+
+            match escape_char_expr {
+                Expr::Literal(ScalarValue::Utf8(escape_char_string)) => {
+                    // Convert Option<String> to Option<char>
+                    escape_char_string.and_then(|s| s.chars().next())
+                }
+                _ => {
+                    return substrait_err!(
+                    "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
+                )
+                }
+            }
+        } else {
+            None
         };
 
         Ok(Arc::new(Expr::Like(Like {
             negated: false,
             expr: Box::new(expr),
             pattern: Box::new(pattern),
-            escape_char: escape_char.map(|c| c.chars().next().unwrap()),
+            escape_char,
             case_insensitive,
         })))
     }

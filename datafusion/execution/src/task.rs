@@ -20,15 +20,15 @@ use std::{
     sync::Arc,
 };
 
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
-
 use crate::{
     config::SessionConfig,
     memory_pool::MemoryPool,
     registry::FunctionRegistry,
     runtime_env::{RuntimeConfig, RuntimeEnv},
 };
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+use datafusion_expr::planner::UserDefinedSQLPlanner;
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 /// Task Execution Context
 ///
@@ -190,6 +190,10 @@ impl FunctionRegistry for TaskContext {
                 .insert(alias.clone(), Arc::clone(&udf));
         });
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
+    }
+
+    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+        vec![]
     }
 }
 
