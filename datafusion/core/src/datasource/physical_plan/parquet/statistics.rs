@@ -823,7 +823,7 @@ macro_rules! get_data_page_statistics {
                                     x.and_then(|x| from_bytes_to_f16(x.data()))
                                 })
                             })
-                            .flatten().collect::<Vec<_>>()
+                            .flatten()
                     )
                 )),
                 Some(DataType::Float32) => Ok(Arc::new(Float32Array::from_iter([<$stat_type_prefix Float32DataPageStatsIterator>]::new($iterator).flatten()))),
