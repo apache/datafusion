@@ -20,7 +20,6 @@
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::expressions::is_null::union_is_null;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
@@ -122,11 +121,8 @@ pub fn is_not_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> 
 }
 
 fn union_is_not_null(union_array: &UnionArray) -> Result<BooleanArray> {
-    union_is_null(union_array).map(|is_null| {
-        compute::not(&is_null)
-            .expect("Failed to compute is not null")
-            .into()
-    })
+    super::is_null::union_is_null(union_array)
+        .map(|is_null| compute::not(&is_null).expect("Failed to compute is not null"))
 }
 
 #[cfg(test)]

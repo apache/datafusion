@@ -131,9 +131,7 @@ fn dense_union_is_null(
     let buffer: BooleanBuffer = offsets
         .iter()
         .zip(union_array.type_ids())
-        .map(|(offset, type_id)| {
-            (&child_arrays[*type_id as usize]).value(*offset as usize)
-        })
+        .map(|(offset, type_id)| child_arrays[*type_id as usize].value(*offset as usize))
         .collect();
 
     Ok(BooleanArray::new(buffer, None))
