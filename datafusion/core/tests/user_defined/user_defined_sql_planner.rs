@@ -99,7 +99,7 @@ async fn test_custom_operators_long_arrow() {
 }
 
 #[tokio::test]
-async fn test_question_sekect() {
+async fn test_question_select() {
     let actual = plan_and_collect("select a ? 2 from (select 1 as a);")
         .await
         .unwrap();
