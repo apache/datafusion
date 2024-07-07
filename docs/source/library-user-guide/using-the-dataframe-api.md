@@ -134,6 +134,9 @@ async fn main() -> Result<()> {
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     // execute the query and collect the results as a Vec<RecordBatch>
     let batches = df.collect().await?;
+    for record_batch in batches {
+        println!("{record_batch:?}");
+    }
     Ok(())
 }
 ```
