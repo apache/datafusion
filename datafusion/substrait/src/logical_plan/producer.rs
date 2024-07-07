@@ -818,7 +818,7 @@ pub fn to_substrait_agg_measure(
                     for arg in args {
                         arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(ctx, arg, schema, 0, extension_info)?)) });
                     }
-                    let function_anchor = _register_function(fun.to_string(), extension_info);
+                    let function_anchor = register_function(fun.to_string(), extension_info);
                     Ok(Measure {
                         measure: Some(AggregateFunction {
                             function_reference: function_anchor,
@@ -849,7 +849,7 @@ pub fn to_substrait_agg_measure(
                     for arg in args {
                         arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(ctx, arg, schema, 0, extension_info)?)) });
                     }
-                    let function_anchor = _register_function(fun.name().to_string(), extension_info);
+                    let function_anchor = register_function(fun.name().to_string(), extension_info);
                     Ok(Measure {
                         measure: Some(AggregateFunction {
                             function_reference: function_anchor,
@@ -917,7 +917,7 @@ fn to_substrait_sort_field(
     }
 }
 
-fn _register_function(
+fn register_function(
     function_name: String,
     extension_info: &mut (
         Vec<extensions::SimpleExtensionDeclaration>,
@@ -926,6 +926,14 @@ fn _register_function(
 ) -> u32 {
     let (function_extensions, function_set) = extension_info;
     let function_name = function_name.to_lowercase();
+
+    // Some functions are named differently in Substrait default extensions than in DF
+    // Rename those to match the Substrait extensions for interoperability
+    let function_name = match function_name.as_str() {
+        "substr" => "substring".to_string(),
+        _ => function_name,
+    };
+
     // To prevent ambiguous references between ScalarFunctions and AggregateFunctions,
     // a plan-relative identifier starting from 0 is used as the function_anchor.
     // The consumer is responsible for correctly registering <function_anchor,function_name>
@@ -969,7 +977,7 @@ pub fn make_binary_op_scalar_func(
     ),
 ) -> Expression {
     let function_anchor =
-        _register_function(operator_to_name(op).to_string(), extension_info);
+        register_function(operator_to_name(op).to_string(), extension_info);
     Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
@@ -1044,7 +1052,7 @@ pub fn to_substrait_rex(
 
             if *negated {
                 let function_anchor =
-                    _register_function("not".to_string(), extension_info);
+                    register_function("not".to_string(), extension_info);
 
                 Ok(Expression {
                     rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -1076,7 +1084,7 @@ pub fn to_substrait_rex(
             }
 
             let function_anchor =
-                _register_function(fun.name().to_string(), extension_info);
+                register_function(fun.name().to_string(), extension_info);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference: function_anchor,
@@ -1252,7 +1260,7 @@ pub fn to_substrait_rex(
             null_treatment: _,
         }) => {
             // function reference
-            let function_anchor = _register_function(fun.to_string(), extension_info);
+            let function_anchor = register_function(fun.to_string(), extension_info);
             // arguments
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in args {
@@ -1330,7 +1338,7 @@ pub fn to_substrait_rex(
             };
             if *negated {
                 let function_anchor =
-                    _register_function("not".to_string(), extension_info);
+                    register_function("not".to_string(), extension_info);
 
                 Ok(Expression {
                     rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -1727,9 +1735,9 @@ fn make_substrait_like_expr(
     ),
 ) -> Result<Expression> {
     let function_anchor = if ignore_case {
-        _register_function("ilike".to_string(), extension_info)
+        register_function("ilike".to_string(), extension_info)
     } else {
-        _register_function("like".to_string(), extension_info)
+        register_function("like".to_string(), extension_info)
     };
     let expr = to_substrait_rex(ctx, expr, schema, col_ref_offset, extension_info)?;
     let pattern = to_substrait_rex(ctx, pattern, schema, col_ref_offset, extension_info)?;
@@ -1759,7 +1767,7 @@ fn make_substrait_like_expr(
     };
 
     if negated {
-        let function_anchor = _register_function("not".to_string(), extension_info);
+        let function_anchor = register_function("not".to_string(), extension_info);
 
         Ok(Expression {
             rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -2128,7 +2136,7 @@ fn to_substrait_unary_scalar_fn(
         HashMap<String, u32>,
     ),
 ) -> Result<Expression> {
-    let function_anchor = _register_function(fn_name.to_string(), extension_info);
+    let function_anchor = register_function(fn_name.to_string(), extension_info);
     let substrait_expr =
         to_substrait_rex(ctx, arg, schema, col_ref_offset, extension_info)?;
 
@@ -2222,6 +2230,7 @@ mod test {
     use crate::logical_plan::consumer::{
         from_substrait_literal_without_names, from_substrait_type_without_names,
     };
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow::array::GenericListArray;
     use datafusion::arrow::datatypes::Field;
     use datafusion::common::scalar::ScalarStructBuilder;
@@ -2301,6 +2310,14 @@ mod test {
         )?;
         round_trip_literal(ScalarStructBuilder::new_null(vec![c0, c1, c2]))?;
 
+        round_trip_literal(ScalarValue::IntervalYearMonth(Some(17)))?;
+        round_trip_literal(ScalarValue::IntervalMonthDayNano(Some(
+            IntervalMonthDayNano::new(17, 25, 1234567890),
+        )))?;
+        round_trip_literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime::new(
+            57, 123456,
+        ))))?;
+
         Ok(())
     }
 
@@ -2367,6 +2384,10 @@ mod test {
             ]
             .into(),
         ))?;
+
+        round_trip_type(DataType::Interval(IntervalUnit::YearMonth))?;
+        round_trip_type(DataType::Interval(IntervalUnit::MonthDayNano))?;
+        round_trip_type(DataType::Interval(IntervalUnit::DayTime))?;
 
         Ok(())
     }

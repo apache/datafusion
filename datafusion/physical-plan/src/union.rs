@@ -188,7 +188,7 @@ fn calculate_union_eq_properties(
                         // TODO: Check whether constant expressions evaluates the same value or not for each partition
                         let across_partitions = false;
                         return Some(
-                            ConstExpr::new(meet_constant.owned_expr())
+                            ConstExpr::from(meet_constant.owned_expr())
                                 .with_across_partitions(across_partitions),
                         );
                     }

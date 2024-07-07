@@ -41,6 +41,17 @@ mod tests {
             .await
     }
 
+    async fn create_context_tpch1() -> Result<SessionContext> {
+        let ctx = SessionContext::new();
+        register_csv(
+            &ctx,
+            "FILENAME_PLACEHOLDER_0",
+            "tests/testdata/tpch/lineitem.csv",
+        )
+        .await?;
+        Ok(ctx)
+    }
+
     async fn create_context_tpch2() -> Result<SessionContext> {
         let ctx = SessionContext::new();
 
@@ -63,14 +74,19 @@ mod tests {
         Ok(ctx)
     }
 
-    async fn create_context_tpch1() -> Result<SessionContext> {
+    async fn create_context_tpch3() -> Result<SessionContext> {
         let ctx = SessionContext::new();
-        register_csv(
-            &ctx,
-            "FILENAME_PLACEHOLDER_0",
-            "tests/testdata/tpch/lineitem.csv",
-        )
-        .await?;
+
+        let registrations = vec![
+            ("FILENAME_PLACEHOLDER_0", "tests/testdata/tpch/customer.csv"),
+            ("FILENAME_PLACEHOLDER_1", "tests/testdata/tpch/orders.csv"),
+            ("FILENAME_PLACEHOLDER_2", "tests/testdata/tpch/lineitem.csv"),
+        ];
+
+        for (table_name, file_path) in registrations {
+            register_csv(&ctx, table_name, file_path).await?;
+        }
+
         Ok(ctx)
     }
 
@@ -137,6 +153,31 @@ mod tests {
             \n              TableScan: FILENAME_PLACEHOLDER_3 projection=[n_nationkey, n_name, n_regionkey, n_comment]\
             \n            TableScan: FILENAME_PLACEHOLDER_4 projection=[r_regionkey, r_name, r_comment]"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tpch_test_3() -> Result<()> {
+        let ctx = create_context_tpch3().await?;
+        let path = "tests/testdata/tpch_substrait_plans/query_3.json";
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+
+        let plan = from_substrait_plan(&ctx, &proto).await?;
+        let plan_str = format!("{:?}", plan);
+        assert_eq!(plan_str, "Projection: FILENAME_PLACEHOLDER_2.l_orderkey AS L_ORDERKEY, sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount) AS REVENUE, FILENAME_PLACEHOLDER_1.o_orderdate AS O_ORDERDATE, FILENAME_PLACEHOLDER_1.o_shippriority AS O_SHIPPRIORITY\
+        \n  Limit: skip=0, fetch=10\
+        \n    Sort: sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount) DESC NULLS FIRST, FILENAME_PLACEHOLDER_1.o_orderdate ASC NULLS LAST\
+        \n      Projection: FILENAME_PLACEHOLDER_2.l_orderkey, sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount), FILENAME_PLACEHOLDER_1.o_orderdate, FILENAME_PLACEHOLDER_1.o_shippriority\
+        \n        Aggregate: groupBy=[[FILENAME_PLACEHOLDER_2.l_orderkey, FILENAME_PLACEHOLDER_1.o_orderdate, FILENAME_PLACEHOLDER_1.o_shippriority]], aggr=[[sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount)]]\
+        \n          Projection: FILENAME_PLACEHOLDER_2.l_orderkey, FILENAME_PLACEHOLDER_1.o_orderdate, FILENAME_PLACEHOLDER_1.o_shippriority, FILENAME_PLACEHOLDER_2.l_extendedprice * (CAST(Int32(1) AS Decimal128(19, 0)) - FILENAME_PLACEHOLDER_2.l_discount)\
+        \n            Filter: FILENAME_PLACEHOLDER_0.c_mktsegment = CAST(Utf8(\"HOUSEHOLD\") AS Utf8) AND FILENAME_PLACEHOLDER_0.c_custkey = FILENAME_PLACEHOLDER_1.o_custkey AND FILENAME_PLACEHOLDER_2.l_orderkey = FILENAME_PLACEHOLDER_1.o_orderkey AND FILENAME_PLACEHOLDER_1.o_orderdate < Date32(\"1995-03-25\") AND FILENAME_PLACEHOLDER_2.l_shipdate > Date32(\"1995-03-25\")\
+        \n              Inner Join:  Filter: Boolean(true)\
+        \n                Inner Join:  Filter: Boolean(true)\
+        \n                  TableScan: FILENAME_PLACEHOLDER_0 projection=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment]\
+        \n                  TableScan: FILENAME_PLACEHOLDER_1 projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]\n                TableScan: FILENAME_PLACEHOLDER_2 projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment]");
         Ok(())
     }
 }
