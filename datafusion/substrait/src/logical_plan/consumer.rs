@@ -33,6 +33,7 @@ use datafusion::logical_expr::{
     aggregate_function, expr::find_df_window_func, Aggregate, BinaryExpr, Case,
     EmptyRelation, Expr, ExprSchemable, LogicalPlan, Operator, Projection, Values,
 };
+use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use url::Url;
 
 use crate::variation_const::{
@@ -1298,9 +1299,9 @@ pub async fn from_substrait_rex(
                     })))
                 }
                 SubqueryType::SetPredicate(predicate) => {
-                    match predicate.predicate_op {
+                    match predicate.predicate_op() {
                         // exist
-                        1 => {
+                        PredicateOp::Exists => {
                             let relations = &predicate.tuples;
                             let plan = from_substrait_rel(
                                 ctx,
