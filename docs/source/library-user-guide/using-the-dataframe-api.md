@@ -196,7 +196,7 @@ async fn main() -> Result<()> {
 
 [`custom_file_format.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_file_format.rs
 
-and the file will look like (Example Output):
+The output file will look like (Example Output):
 
 ```sql
 > select * from '../datafusion/core/example.parquet';
@@ -222,8 +222,8 @@ pub struct DataFrame {
 }
 ```
 
-As shown above, `DataFrame` is just a very thin wrapper of `LogicalPlan`, so you
-can easily go back and forth between them.
+As shown above, `DataFrame` is a thin wrapper of `LogicalPlan`, so you can
+easily go back and forth between them.
 
 ```rust
 use datafusion::prelude::*;
@@ -244,7 +244,8 @@ async fn main() -> Result<()>{
 }
 ```
 
-Note that can build up [`DataFrame`]s using its methods, similarly to building [`LogicalPlan`]s using [`LogicalPlanBuilder`]:
+In fact, using the [`DataFrame`]s methods you can create the same
+[`LogicalPlan`]s as when using  [`LogicalPlanBuilder`]:
 
 ```rust
 use datafusion::prelude::*;
@@ -260,6 +261,7 @@ async fn main() -> Result<()>{
     let new_df = df.select(vec![col("a"), col("b")])?
         .sort(vec![col("a")])?;
     // Build the same plan using the LogicalPlanBuilder
+    // Similar to `SELECT a, b FROM example.csv ORDER BY a`
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     let (_state, plan) = df.into_parts(); // get the DataFrame's LogicalPlan
     let plan = LogicalPlanBuilder::from(plan)
