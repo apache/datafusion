@@ -83,7 +83,9 @@ impl OptimizerRule for EliminateNestedUnion {
                             })),
                         ))))
                     }
-                    plan => Ok(Transformed::no(plan)),
+                    nested_plan => Ok(Transformed::no(LogicalPlan::Distinct(
+                        Distinct::All(Arc::new(nested_plan)),
+                    ))),
                 }
             }
             _ => Ok(Transformed::no(plan)),
