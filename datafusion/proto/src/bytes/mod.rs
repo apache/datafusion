@@ -39,6 +39,7 @@ use std::sync::Arc;
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_expr::planner::UserDefinedSQLPlanner;
 
 mod registry;
 
@@ -164,6 +165,10 @@ impl Serializeable for Expr {
                 datafusion_common::internal_err!(
                     "register_udwf called in Placeholder Registry!"
                 )
+            }
+
+            fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+                vec![]
             }
         }
         Expr::from_bytes_with_registry(&bytes, &PlaceHolderRegistry)?;
