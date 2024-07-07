@@ -19,7 +19,7 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
-use arrow::array::{FixedSizeBinaryBuilder, LargeStringBuilder, StringBuilder};
+use arrow::array::{LargeStringBuilder, StringBuilder};
 use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
@@ -436,30 +436,46 @@ macro_rules! get_statistics {
                 }
                 Ok(Arc::new(builder.finish()))
             }
-            DataType::FixedSizeBinary(size) => {
-                let iterator = MaxFixedLenByteArrayStatsIterator::new($iterator);
-                let mut builder = FixedSizeBinaryBuilder::new(*size);
-                for x in iterator {
-                    let Some(x) = x else {
-                        builder.append_null(); // no statistics value
-                        continue;
-                    };
+            // DataType::FixedSizeBinary(size) => {
+            //     let iterator = MaxFixedLenByteArrayStatsIterator::new($iterator);
+            //     let mut builder = FixedSizeBinaryBuilder::new(*size);
+            //     for x in iterator {
+            //         let Some(x) = x else {
+            //             builder.append_null(); // no statistics value
+            //             continue;
+            //         };
 
-                    // ignore invalid values
-                    if x.len().try_into() != Ok(*size){
-                        log::debug!(
-                            "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
-                            size,
-                            x.len(),
-                        );
-                        builder.append_null();
-                        continue;
-                    }
+            //         // ignore invalid values
+            //         if x.len().try_into() != Ok(*size){
+            //             log::debug!(
+            //                 "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+            //                 size,
+            //                 x.len(),
+            //             );
+            //             builder.append_null();
+            //             continue;
+            //         }
 
-                    builder.append_value(x).expect("ensure to append successfully here, because size have been checked before");
-                }
-                Ok(Arc::new(builder.finish()))
-            }
+            //         builder.append_value(x).expect("ensure to append successfully here, because size have been checked before");
+            //     }
+            //     Ok(Arc::new(builder.finish()))
+            // }
+            DataType::FixedSizeBinary(size) => Ok(Arc::new(FixedSizeBinaryArray::from(
+                [<$stat_type_prefix FixedLenByteArrayStatsIterator>]::new($iterator).map(|x| {
+                    x.and_then(|x| {
+                        if x.len().try_into() == Ok(*size) {
+                            Some(x)
+                        } else {
+                            log::debug!(
+                                "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+                                size,
+                                x.len(),
+                            );
+                            None
+                        }
+                    })
+                }).collect::<Vec<_>>(),
+            ))),
             DataType::Decimal128(precision, scale) => {
                 let arr = Decimal128Array::from_iter(
                     [<$stat_type_prefix Decimal128StatsIterator>]::new($iterator)
@@ -769,7 +785,11 @@ macro_rules! get_data_page_statistics {
             match $data_type {
                 Some(DataType::Boolean) => Ok(Arc::new(
                     BooleanArray::from_iter(
-                        [<$stat_type_prefix BooleanDataPageStatsIterator>]::new($iterator).flatten()
+                        [<$stat_type_prefix BooleanDataPageStatsIterator>]::new($iterator)
+                        .flatten()
+                        // BooleanArray::from_iter required a sized iterator, so collect into Vec first
+                        .collect::<Vec<_>>()
+                        .into_iter()
                     )
                 )),
                 Some(DataType::UInt8) => Ok(Arc::new(
@@ -875,7 +895,7 @@ macro_rules! get_data_page_statistics {
                     Ok(Arc::new(builder.finish()))
                 },
                 Some(DataType::LargeUtf8) => {
-                    let mut builder = StringBuilder::new();
+                    let mut builder = LargeStringBuilder::new();
                     let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
                     for x in iterator {
                         for x in x.into_iter() {
