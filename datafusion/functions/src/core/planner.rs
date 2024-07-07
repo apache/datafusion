@@ -45,14 +45,15 @@ impl UserDefinedSQLPlanner for CoreFunctionPlanner {
         args: Vec<Expr>,
         is_named_struct: bool,
     ) -> Result<PlannerResult<Vec<Expr>>> {
-        if is_named_struct {
-            Ok(PlannerResult::Planned(Expr::ScalarFunction(
-                ScalarFunction::new_udf(crate::core::named_struct(), args),
-            )))
-        } else {
-            Ok(PlannerResult::Planned(Expr::ScalarFunction(
-                ScalarFunction::new_udf(crate::core::r#struct(), args),
-            )))
-        }
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(
+                if is_named_struct {
+                    crate::core::named_struct()
+                } else {
+                    crate::core::r#struct()
+                },
+                args,
+            ),
+        )))
     }
 }
