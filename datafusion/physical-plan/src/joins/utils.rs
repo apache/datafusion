@@ -1356,11 +1356,11 @@ pub(crate) fn append_right_indices(
             let new_left_indices = left_indices
                 .iter()
                 .chain(std::iter::repeat(None).take(unmatched_size))
-                .collect::<UInt64Array>();
+                .collect();
             let new_right_indices = right_indices
                 .iter()
                 .chain(right_unmatched_indices.iter())
-                .collect::<UInt32Array>();
+                .collect();
             (new_left_indices, new_right_indices)
         }
     }
@@ -1392,7 +1392,7 @@ where
         .filter_map(|idx| {
             (!bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
         })
-        .collect::<PrimitiveArray<T>>()
+        .collect()
 }
 
 /// Returns intersection of `range` and `input_indices` omitting duplicates
@@ -1421,29 +1421,26 @@ where
         .filter_map(|idx| {
             (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
         })
-        .collect::<PrimitiveArray<T>>()
+        .collect()
 }
 
 /// Appends probe indices in order by considering the given build indices.
 ///
 /// This function constructs new build and probe indices by iterating through
 /// the provided indices, and appends any missing values between previous and
-/// current probe index with a corresponding null build index. It handles various
-/// edge cases and returns an error if either index is `None`.
+/// current probe index with a corresponding null build index.
 ///
 /// # Parameters
+///
 /// - `build_indices`: `PrimitiveArray` of `UInt64Type` containing build indices.
 /// - `probe_indices`: `PrimitiveArray` of `UInt32Type` containing probe indices.
-/// - `count_probe_batch`: The number of elements in the probe batch, used for
-///   filling in any remaining indices.
+/// - `range`: The range of indices to consider.
 ///
 /// # Returns
-/// A `Result` containing a tuple of two arrays:
+///
+/// A tuple of two arrays:
 /// - A `PrimitiveArray` of `UInt64Type` with the newly constructed build indices.
 /// - A `PrimitiveArray` of `UInt32Type` with the newly constructed probe indices.
-///
-/// # Errors
-/// Returns an error if there is a failure in calculating probe indices.
 fn append_probe_indices_in_order(
     build_indices: PrimitiveArray<UInt64Type>,
     probe_indices: PrimitiveArray<UInt32Type>,
@@ -1452,7 +1449,7 @@ fn append_probe_indices_in_order(
     // Builders for new indices:
     let mut new_build_indices = UInt64Builder::new();
     let mut new_probe_indices = UInt32Builder::new();
-    // Set previous index as zero for the initial loop:
+    // Set previous index as the start index for the initial loop:
     let mut prev_index = range.start as u32;
     // Zip the two iterators.
     debug_assert!(build_indices.len() == probe_indices.len());
@@ -1461,7 +1458,7 @@ fn append_probe_indices_in_order(
         .into_iter()
         .zip(probe_indices.values().into_iter())
     {
-        // Append values between previous and current left index with null right index:
+        // Append values between previous and current probe index with null build index:
         for value in prev_index..*probe_index {
             new_probe_indices.append_value(value);
             new_build_indices.append_null();
@@ -1469,10 +1466,10 @@ fn append_probe_indices_in_order(
         // Append current indices:
         new_probe_indices.append_value(*probe_index);
         new_build_indices.append_value(*build_index);
-        // Set current left index as previous for the next iteration:
+        // Set current probe index as previous for the next iteration:
         prev_index = probe_index + 1;
     }
-    // Append remaining left indices after the last valid left index with null right index.
+    // Append remaining probe indices after the last valid probe index with null build index.
     for value in prev_index..range.end as u32 {
         new_probe_indices.append_value(value);
         new_build_indices.append_null();

@@ -1111,7 +1111,7 @@ struct HashJoinStream {
     batch_size: usize,
     /// Scratch space for computing hashes
     hashes_buffer: Vec<u64>,
-    // Specifies whether the right side has an ordering to potentially preserve
+    /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
 }
 
