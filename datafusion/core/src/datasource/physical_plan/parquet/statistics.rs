@@ -19,7 +19,7 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
-use arrow::array::{StringBuilder, UInt64Builder};
+use arrow::array::StringBuilder;
 use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
@@ -40,7 +40,6 @@ use parquet::file::page_index::index::{Index, PageIndex};
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use paste::paste;
-use std::env;
 use std::sync::Arc;
 
 // Convert the bytes array to i128.
@@ -787,49 +786,16 @@ macro_rules! get_data_page_statistics {
                             })
                             .flatten()
                 ))),
-                // Some(DataType::UInt64) => Ok(Arc::new(
-                //     UInt64Array::from_iter(
-                //         [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator)
-                //             .map(|x| {
-                //                 x.into_iter().map(|x| {
-                //                     x.and_then(|x| Some(x as u64))
-                //                 })
-                //             })
-                //             .flatten()
-                // ))),
-
-                // Some(DataType::UInt64) => {
-                //     let iterator = [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator)
-                //             .map(|x| {
-                //                 x.into_iter().map(|x| {
-                //                     x.and_then(|x| Some(x as u64))
-                //                 })
-                //             })
-                //             .flatten();
-                //     let mut builder = UInt64Builder::with_capacity(512);
-                //     // let mut builder = UInt64Builder::new();
-                //     for x in iterator {
-                //         let Some(x) = x else {
-                //             builder.append_null();
-                //             continue;
-                //         };
-                //         builder.append_value(x as u64);
-                //     }
-                //     Ok(Arc::new(builder.finish()))
-                // },
-
-                Some(DataType::UInt64) => {
-                    let iterator = [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator)
+                Some(DataType::UInt64) => Ok(Arc::new(
+                    UInt64Array::from_iter(
+                        [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
                                 x.into_iter().map(|x| {
                                     x.and_then(|x| Some(x as u64))
                                 })
                             })
-                            .flatten();
-                    let mut builder = UInt64Builder::with_capacity(512);
-                    builder.extend(iterator);
-                    Ok(Arc::new(builder.finish()))
-                },
+                            .flatten()
+                ))),
                 Some(DataType::Int8) => Ok(Arc::new(
                     Int8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
@@ -870,93 +836,47 @@ macro_rules! get_data_page_statistics {
                 Some(DataType::Binary) => Ok(Arc::new(BinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::LargeBinary) => Ok(Arc::new(LargeBinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Utf8) => {
-                    let mode = env::var("MODE").unwrap_or_default();
-                    match mode.as_str() {
-                        "from_iter" => {
-                            Ok(Arc::new(StringArray::from_iter(
-                                [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                                    x.into_iter().map(|x| {
-                                    x.and_then(|x| {
-                                        let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
-                                        if res.is_none() {
-                                            log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
-                                        }
-                                        res
-                                    })
-                                })
-                                }).flatten(),
-                            )))
-                        },
-                        "use_builder_flatten" => {
-                            let mut builder = StringBuilder::new();
-                            let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten();
-                            for x in iterator {
-                                let Some(x) = x else {
-                                    builder.append_null(); // no statistics value
-                                    continue;
-                                };
-    
-                                let Ok(x) = std::str::from_utf8(x.data()) else {
-                                    log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
-                                    builder.append_null();
-                                    continue;
-                                };
-    
-                                builder.append_value(x);
-                            }
-                            Ok(Arc::new(builder.finish()))
-                        },
-                        "use_builder" => {
-                            let mut builder = StringBuilder::new();
-                            let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten();
-                            for x in iterator {
-                                for x in x.into_iter() {
-                                    let Some(x) = x else {
-                                        builder.append_null(); // no statistics value
-                                        continue;
-                                    };
-        
-                                    let Ok(x) = std::str::from_utf8(x.data()) else {
-                                        log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
-                                        builder.append_null();
-                                        continue;
-                                    };
-        
-                                    builder.append_value(x);
-                                }
-                            }
-                            Ok(Arc::new(builder.finish()))
-                        },
-                        _ => {
-                            Ok(Arc::new(StringArray::from(
-                                [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                                    x.into_iter().map(|x| {
-                                    x.and_then(|x| {
-                                        let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
-                                        if res.is_none() {
-                                            log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
-                                        }
-                                        res
-                                    })
-                                })
-                                }).flatten().collect::<Vec<_>>(),
-                            )))
+                    let mut builder = StringBuilder::new();
+                    let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            let Ok(x) = std::str::from_utf8(x.data()) else {
+                                log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                                builder.append_null();
+                                continue;
+                            };
+
+                            builder.append_value(x);
                         }
                     }
+                    Ok(Arc::new(builder.finish()))
                 },
-                Some(DataType::LargeUtf8) => Ok(Arc::new(LargeStringArray::from(
-                    [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                        x.into_iter().filter_map(|x| {
-                            x.and_then(|x| {
-                                let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
-                                if res.is_none() {
-                                    log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
-                                }
-                                res
-                            })
-                    })
-                    }).flatten().collect::<Vec<_>>(),
-                ))),
+                Some(DataType::LargeUtf8) => {
+                    let mut builder = StringBuilder::new();
+                    let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            let Ok(x) = std::str::from_utf8(x.data()) else {
+                                log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
+                                builder.append_null();
+                                continue;
+                            };
+
+                            builder.append_value(x);
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
                 Some(DataType::Dictionary(_, value_type)) => {
                     [<$stat_type_prefix:lower _ page_statistics>](Some(value_type), $iterator)
                 },
@@ -1093,19 +1013,6 @@ where
 
 /// Extracts the min statistics from an iterator
 /// of parquet page [`Index`]'es to an [`ArrayRef`]
-pub(crate) fn max_page_statistics<'a, I>(
-    data_type: Option<&DataType>,
-    iterator: I,
-) -> Result<ArrayRef>
-where
-    I: Iterator<Item = (usize, &'a Index)>,
-{
-    let mode = env::var("MODE").unwrap_or_default();
-    get_data_page_statistics!(Max, data_type, iterator)
-}
-
-/// Extracts the max statistics from an iterator
-/// of parquet page [`Index`]'es to an [`ArrayRef`]
 // pub(crate) fn max_page_statistics<'a, I>(
 //     data_type: Option<&DataType>,
 //     iterator: I,
@@ -1113,209 +1020,211 @@ where
 // where
 //     I: Iterator<Item = (usize, &'a Index)>,
 // {
-//     match data_type {
-//         Some(DataType::Boolean) => Ok(Arc::new(BooleanArray::from_iter(
-//             MaxBooleanDataPageStatsIterator::new(iterator)
-//                 .flatten()
-//                 .collect::<Vec<_>>()
-//                 .into_iter(),
-//         ))),
-//         Some(DataType::UInt8) => Ok(Arc::new(UInt8Array::from_iter(
-//             MaxInt32DataPageStatsIterator::new(iterator)
-//                 .map(|x| {
-//                     x.into_iter()
-//                         .filter_map(|x| x.and_then(|x| u8::try_from(x).ok()))
-//                 })
-//                 .flatten(),
-//         ))),
-//         Some(DataType::UInt16) => Ok(Arc::new(UInt16Array::from_iter(
-//             MaxInt32DataPageStatsIterator::new(iterator)
-//                 .map(|x| {
-//                     x.into_iter()
-//                         .filter_map(|x| x.and_then(|x| u16::try_from(x).ok()))
-//                 })
-//                 .flatten(),
-//         ))),
-//         Some(DataType::UInt32) => Ok(Arc::new(UInt32Array::from_iter(
-//             MaxInt32DataPageStatsIterator::new(iterator)
-//                 .map(|x| x.into_iter().filter_map(|x| x.and_then(|x| Some(x as u32))))
-//                 .flatten(),
-//         ))),
-//         // Some(DataType::UInt64) => Ok(Arc::new(UInt64Array::from_iter(
-//         //     MaxInt64DataPageStatsIterator::new(iterator)
-//         //         .map(|x| x.into_iter().filter_map(|x| x.and_then(|x| Some(x as u64))))
-//         //         .flatten(),
-//         // ))),
-//         Some(DataType::UInt64) => {
-//             let mut builder = UInt64Builder::new();
-//             let iterator = MaxInt64DataPageStatsIterator::new(iterator);
-//             builder.extend(iterator);
-//             for x in iterator {
-//                 for x in x.into_iter() {
-//                     let Some(x) = x else {
-//                         builder.append_null();
-//                         continue;
-//                     };
-//                     builder.append_value(x);
-//                 }
-//             }
-//         }
-//         Some(DataType::Int8) => Ok(Arc::new(Int8Array::from_iter(
-//             MaxInt32DataPageStatsIterator::new(iterator)
-//                 .map(|x| {
-//                     x.into_iter()
-//                         .filter_map(|x| x.and_then(|x| i8::try_from(x).ok()))
-//                 })
-//                 .flatten(),
-//         ))),
-//         Some(DataType::Int16) => Ok(Arc::new(Int16Array::from_iter(
-//             MaxInt32DataPageStatsIterator::new(iterator)
-//                 .map(|x| {
-//                     x.into_iter()
-//                         .filter_map(|x| x.and_then(|x| i16::try_from(x).ok()))
-//                 })
-//                 .flatten(),
-//         ))),
-//         Some(DataType::Int32) => Ok(Arc::new(Int32Array::from_iter(
-//             MaxInt32DataPageStatsIterator::new(iterator).flatten(),
-//         ))),
-//         Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter(
-//             MaxInt64DataPageStatsIterator::new(iterator).flatten(),
-//         ))),
-//         Some(DataType::Float16) => Ok(Arc::new(Float16Array::from_iter(
-//             MaxFloat16DataPageStatsIterator::new(iterator)
-//                 .map(|x| {
-//                     x.into_iter()
-//                         .filter_map(|x| x.and_then(|x| Some(from_bytes_to_f16(x.data()))))
-//                 })
-//                 .flatten(),
-//         ))),
-//         Some(DataType::Float32) => Ok(Arc::new(Float32Array::from_iter(
-//             MaxFloat32DataPageStatsIterator::new(iterator).flatten(),
-//         ))),
-//         Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter(
-//             MaxFloat64DataPageStatsIterator::new(iterator).flatten(),
-//         ))),
-//         Some(DataType::Binary) => Ok(Arc::new(BinaryArray::from_iter(
-//             MaxByteArrayDataPageStatsIterator::new(iterator).flatten(),
-//         ))),
-//         Some(DataType::LargeBinary) => Ok(Arc::new(LargeBinaryArray::from_iter(
-//             MaxByteArrayDataPageStatsIterator::new(iterator).flatten(),
-//         ))),
-//         Some(DataType::Utf8) => {
-//             Ok(Arc::new(StringArray::from_iter(
-//                 MaxByteArrayDataPageStatsIterator::new(iterator)
-//                     .map(|x| {
-//                         x.into_iter().map(|x| {
-//                             x.and_then(|x|{
-//                                 let res = std::str::from_utf8(x.data()).map(|s|s.to_string()).ok();
-//                                 if res.is_none() {
-//                                     log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
-//                                 }
-//                                 res
-//                             })
-//                         })
-//                     })
-//                     .flatten(),
-//             )))
-//         }
-//         Some(DataType::LargeUtf8) => Ok(Arc::new(LargeStringArray::from(
-//             MaxByteArrayDataPageStatsIterator::new(iterator)
-//                 .map(|x| {
-//                     x.into_iter().filter_map(|x| {
-//                         x.and_then(|x|{
-//                 let res = std::str::from_utf8(x.data()).map(|s|s.to_string()).ok();
-//                 if res.is_none(){
-//                     log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
-//                 }res
-//             })
-//                     })
-//                 })
-//                 .flatten()
-//                 .collect::<Vec<_>>(),
-//         ))),
-//         Some(DataType::Dictionary(_, value_type)) => {
-//             max_page_statistics(Some(value_type), iterator)
-//         }
-//         Some(DataType::Timestamp(unit, timezone)) => {
-//             let iter = MaxInt64DataPageStatsIterator::new(iterator).flatten();
-//             Ok(match unit {
-//                 TimeUnit::Second => Arc::new(
-//                     TimestampSecondArray::from_iter(iter)
-//                         .with_timezone_opt(timezone.clone()),
-//                 ),
-//                 TimeUnit::Millisecond => Arc::new(
-//                     TimestampMillisecondArray::from_iter(iter)
-//                         .with_timezone_opt(timezone.clone()),
-//                 ),
-//                 TimeUnit::Microsecond => Arc::new(
-//                     TimestampMicrosecondArray::from_iter(iter)
-//                         .with_timezone_opt(timezone.clone()),
-//                 ),
-//                 TimeUnit::Nanosecond => Arc::new(
-//                     TimestampNanosecondArray::from_iter(iter)
-//                         .with_timezone_opt(timezone.clone()),
-//                 ),
-//             })
-//         }
-//         Some(DataType::Date32) => Ok(Arc::new(Date32Array::from_iter(
-//             MaxInt32DataPageStatsIterator::new(iterator).flatten(),
-//         ))),
-//         Some(DataType::Date64) => Ok(Arc::new(Date64Array::from(
-//             MaxInt32DataPageStatsIterator::new(iterator)
-//                 .map(|x| {
-//                     x.into_iter()
-//                         .filter_map(|x| x.and_then(|x| i64::try_from(x).ok()))
-//                         .map(|x| x * 24 * 60 * 60 * 1000)
-//                 })
-//                 .flatten()
-//                 .collect::<Vec<_>>(),
-//         ))),
-//         Some(DataType::Decimal128(precision, scale)) => Ok(Arc::new(
-//             Decimal128Array::from_iter(
-//                 MaxDecimal128DataPageStatsIterator::new(iterator).flatten(),
-//             )
-//             .with_precision_and_scale(*precision, *scale)?,
-//         )),
-//         Some(DataType::Decimal256(precision, scale)) => Ok(Arc::new(
-//             Decimal256Array::from_iter(
-//                 MaxDecimal256DataPageStatsIterator::new(iterator).flatten(),
-//             )
-//             .with_precision_and_scale(*precision, *scale)?,
-//         )),
-//         Some(DataType::Time32(unit)) => Ok(match unit {
-//             TimeUnit::Second => Arc::new(Time32SecondArray::from_iter(
-//                 MaxInt32DataPageStatsIterator::new(iterator).flatten(),
-//             )),
-//             TimeUnit::Millisecond => Arc::new(Time32MillisecondArray::from_iter(
-//                 MaxInt32DataPageStatsIterator::new(iterator).flatten(),
-//             )),
-//             _ => new_empty_array(&DataType::Time32(unit.clone())),
-//         }),
-//         Some(DataType::Time64(unit)) => Ok(match unit {
-//             TimeUnit::Microsecond => Arc::new(Time64MicrosecondArray::from_iter(
-//                 MaxInt64DataPageStatsIterator::new(iterator).flatten(),
-//             )),
-//             TimeUnit::Nanosecond => Arc::new(Time64NanosecondArray::from_iter(
-//                 MaxInt64DataPageStatsIterator::new(iterator).flatten(),
-//             )),
-//             _ => new_empty_array(&DataType::Time64(unit.clone())),
-//         }),
-//         Some(DataType::FixedSizeBinary(size)) => Ok(Arc::new(
-//             FixedSizeBinaryArray::try_from_iter(
-//                 MaxFixedLenByteArrayDataPageStatsIterator::new(iterator)
-//                     .flat_map(|x| x.into_iter())
-//                     .filter_map(|x| x),
-//             )
-//             .unwrap_or_else(|e| {
-//                 log::debug!("FixedSizeBinary statistics is invalid: {}", e);
-//                 FixedSizeBinaryArray::new(*size, vec![].into(), None)
-//             }),
-//         )),
-//         _ => unimplemented!(),
-//     }
+//     let mode = env::var("MODE").unwrap_or_default();
+//     get_data_page_statistics!(Max, data_type, iterator)
 // }
 
+/// Extracts the max statistics from an iterator
+/// of parquet page [`Index`]'es to an [`ArrayRef`]
+pub(crate) fn max_page_statistics<'a, I>(
+    data_type: Option<&DataType>,
+    iterator: I,
+) -> Result<ArrayRef>
+where
+    I: Iterator<Item = (usize, &'a Index)>,
+{
+    match data_type {
+        Some(DataType::Boolean) => Ok(Arc::new(BooleanArray::from_iter(
+            MaxBooleanDataPageStatsIterator::new(iterator)
+                .flatten()
+                .collect::<Vec<_>>()
+                .into_iter(),
+        ))),
+        Some(DataType::UInt8) => Ok(Arc::new(UInt8Array::from_iter(
+            MaxInt32DataPageStatsIterator::new(iterator)
+                .map(|x| {
+                    x.into_iter()
+                        .filter_map(|x| x.and_then(|x| u8::try_from(x).ok()))
+                })
+                .flatten(),
+        ))),
+        Some(DataType::UInt16) => Ok(Arc::new(UInt16Array::from_iter(
+            MaxInt32DataPageStatsIterator::new(iterator)
+                .map(|x| {
+                    x.into_iter()
+                        .filter_map(|x| x.and_then(|x| u16::try_from(x).ok()))
+                })
+                .flatten(),
+        ))),
+        Some(DataType::UInt32) => Ok(Arc::new(UInt32Array::from_iter(
+            MaxInt32DataPageStatsIterator::new(iterator)
+                .map(|x| x.into_iter().filter_map(|x| x.and_then(|x| Some(x as u32))))
+                .flatten(),
+        ))),
+        Some(DataType::UInt64) => Ok(Arc::new(UInt64Array::from_iter(
+            MaxInt64DataPageStatsIterator::new(iterator)
+                .map(|x| x.into_iter().filter_map(|x| x.and_then(|x| Some(x as u64))))
+                .flatten(),
+        ))),
+        Some(DataType::Int8) => Ok(Arc::new(Int8Array::from_iter(
+            MaxInt32DataPageStatsIterator::new(iterator)
+                .map(|x| {
+                    x.into_iter()
+                        .filter_map(|x| x.and_then(|x| i8::try_from(x).ok()))
+                })
+                .flatten(),
+        ))),
+        Some(DataType::Int16) => Ok(Arc::new(Int16Array::from_iter(
+            MaxInt32DataPageStatsIterator::new(iterator)
+                .map(|x| {
+                    x.into_iter()
+                        .filter_map(|x| x.and_then(|x| i16::try_from(x).ok()))
+                })
+                .flatten(),
+        ))),
+        Some(DataType::Int32) => Ok(Arc::new(Int32Array::from_iter(
+            MaxInt32DataPageStatsIterator::new(iterator).flatten(),
+        ))),
+        Some(DataType::Int64) => Ok(Arc::new(Int64Array::from_iter(
+            MaxInt64DataPageStatsIterator::new(iterator).flatten(),
+        ))),
+        Some(DataType::Float16) => Ok(Arc::new(Float16Array::from_iter(
+            MaxFloat16DataPageStatsIterator::new(iterator)
+                .map(|x| {
+                    x.into_iter()
+                        .filter_map(|x| x.and_then(|x| Some(from_bytes_to_f16(x.data()))))
+                })
+                .flatten(),
+        ))),
+        Some(DataType::Float32) => Ok(Arc::new(Float32Array::from_iter(
+            MaxFloat32DataPageStatsIterator::new(iterator).flatten(),
+        ))),
+        Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter(
+            MaxFloat64DataPageStatsIterator::new(iterator).flatten(),
+        ))),
+        Some(DataType::Binary) => Ok(Arc::new(BinaryArray::from_iter(
+            MaxByteArrayDataPageStatsIterator::new(iterator).flatten(),
+        ))),
+        Some(DataType::LargeBinary) => Ok(Arc::new(LargeBinaryArray::from_iter(
+            MaxByteArrayDataPageStatsIterator::new(iterator).flatten(),
+        ))),
+        Some(DataType::Utf8) => {
+            let mut builder = StringBuilder::new();
+            let iterator = MaxByteArrayDataPageStatsIterator::new(iterator);
+            for x in iterator {
+                for x in x {
+                    let Some(x) = x else {
+                        builder.append_null(); // no statistics value
+                        continue;
+                    };
+
+                    let Ok(x) = std::str::from_utf8(x.data()) else {
+                        log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                        builder.append_null();
+                        continue;
+                    };
+
+                    builder.append_value(x);
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        Some(DataType::LargeUtf8) => Ok(Arc::new(LargeStringArray::from(
+            MaxByteArrayDataPageStatsIterator::new(iterator)
+                .map(|x| {
+                    x.into_iter().filter_map(|x| {
+                        x.and_then(|x|{
+                let res = std::str::from_utf8(x.data()).map(|s|s.to_string()).ok();
+                if res.is_none(){
+                    log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
+                }res
+            })
+                    })
+                })
+                .flatten()
+                .collect::<Vec<_>>(),
+        ))),
+        Some(DataType::Dictionary(_, value_type)) => {
+            max_page_statistics(Some(value_type), iterator)
+        }
+        Some(DataType::Timestamp(unit, timezone)) => {
+            let iter = MaxInt64DataPageStatsIterator::new(iterator).flatten();
+            Ok(match unit {
+                TimeUnit::Second => Arc::new(
+                    TimestampSecondArray::from_iter(iter)
+                        .with_timezone_opt(timezone.clone()),
+                ),
+                TimeUnit::Millisecond => Arc::new(
+                    TimestampMillisecondArray::from_iter(iter)
+                        .with_timezone_opt(timezone.clone()),
+                ),
+                TimeUnit::Microsecond => Arc::new(
+                    TimestampMicrosecondArray::from_iter(iter)
+                        .with_timezone_opt(timezone.clone()),
+                ),
+                TimeUnit::Nanosecond => Arc::new(
+                    TimestampNanosecondArray::from_iter(iter)
+                        .with_timezone_opt(timezone.clone()),
+                ),
+            })
+        }
+        Some(DataType::Date32) => Ok(Arc::new(Date32Array::from_iter(
+            MaxInt32DataPageStatsIterator::new(iterator).flatten(),
+        ))),
+        Some(DataType::Date64) => Ok(Arc::new(Date64Array::from(
+            MaxInt32DataPageStatsIterator::new(iterator)
+                .map(|x| {
+                    x.into_iter()
+                        .filter_map(|x| x.and_then(|x| i64::try_from(x).ok()))
+                        .map(|x| x * 24 * 60 * 60 * 1000)
+                })
+                .flatten()
+                .collect::<Vec<_>>(),
+        ))),
+        Some(DataType::Decimal128(precision, scale)) => Ok(Arc::new(
+            Decimal128Array::from_iter(
+                MaxDecimal128DataPageStatsIterator::new(iterator).flatten(),
+            )
+            .with_precision_and_scale(*precision, *scale)?,
+        )),
+        Some(DataType::Decimal256(precision, scale)) => Ok(Arc::new(
+            Decimal256Array::from_iter(
+                MaxDecimal256DataPageStatsIterator::new(iterator).flatten(),
+            )
+            .with_precision_and_scale(*precision, *scale)?,
+        )),
+        Some(DataType::Time32(unit)) => Ok(match unit {
+            TimeUnit::Second => Arc::new(Time32SecondArray::from_iter(
+                MaxInt32DataPageStatsIterator::new(iterator).flatten(),
+            )),
+            TimeUnit::Millisecond => Arc::new(Time32MillisecondArray::from_iter(
+                MaxInt32DataPageStatsIterator::new(iterator).flatten(),
+            )),
+            _ => new_empty_array(&DataType::Time32(unit.clone())),
+        }),
+        Some(DataType::Time64(unit)) => Ok(match unit {
+            TimeUnit::Microsecond => Arc::new(Time64MicrosecondArray::from_iter(
+                MaxInt64DataPageStatsIterator::new(iterator).flatten(),
+            )),
+            TimeUnit::Nanosecond => Arc::new(Time64NanosecondArray::from_iter(
+                MaxInt64DataPageStatsIterator::new(iterator).flatten(),
+            )),
+            _ => new_empty_array(&DataType::Time64(unit.clone())),
+        }),
+        Some(DataType::FixedSizeBinary(size)) => Ok(Arc::new(
+            FixedSizeBinaryArray::try_from_iter(
+                MaxFixedLenByteArrayDataPageStatsIterator::new(iterator)
+                    .flat_map(|x| x.into_iter())
+                    .filter_map(|x| x),
+            )
+            .unwrap_or_else(|e| {
+                log::debug!("FixedSizeBinary statistics is invalid: {}", e);
+                FixedSizeBinaryArray::new(*size, vec![].into(), None)
+            }),
+        )),
+        _ => unimplemented!(),
+    }
+}
 
 /// Extracts the null count statistics from an iterator
 /// of parquet page [`Index`]'es to an [`ArrayRef`]
