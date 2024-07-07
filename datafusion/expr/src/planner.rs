@@ -141,10 +141,9 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
     }
 
     /// Plans a struct `struct(expression1[, ..., expression_n])`
-    /// or named struct `named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])`
     /// literal based on the given input expressions.
     /// This function takes a vector of expressions and a boolean flag indicating whether
-    /// the struct is a named struct.
+    /// the struct uses the optional name
     ///
     /// Returns a `PlannerResult` containing either the planned struct expressions or the original
     /// input expressions if planning is not possible.
