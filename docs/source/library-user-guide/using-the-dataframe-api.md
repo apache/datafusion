@@ -19,20 +19,55 @@
 
 # Using the DataFrame API
 
+The [Users Guide] introduces the [`DataFrame`] API and this section describes
+that API in more depth.
+
 ## What is a DataFrame?
 
-DataFusion [`DataFrame`]s are modeled after the [Pandas DataFrame] interface,
-and is implemented as thin wrapper over a [`LogicalPlan`] that adds
-functionality for building and executing those plans.
+As described in the [Users Guide], DataFusion [`DataFrame`]s are modeled after
+the [Pandas DataFrame] interface, and are implemented as thin wrapper over a
+[`LogicalPlan`] that adds functionality for building and executing those plans.
 
 ## How to generate a DataFrame
 
-You can directly use the `DataFrame` API or generate a `DataFrame` from a SQL
-query. For example, to use `sql` to construct a `DataFrame`:
+You can construct [`DataFrame`]s programmatically using the API, similarly to
+other DataFrame APIs. For example, you can read an in memory `RecordBatch` into
+a `DataFrame`:
 
 ```rust
 use std::sync::Arc;
 use datafusion::prelude::*;
+use datafusion::arrow::array::{ArrayRef, Int32Array};
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::error::Result;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SessionContext::new();
+    // Register the same in-memory table as the previous example
+    let data = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
+        ("bank_account", Arc::new(Int32Array::from(vec![9000, 8000, 7000]))),
+    ])?;
+    // Create a DataFrame that scans the user table, and finds
+    // all users with a bank account at least 8000
+    // and sorts the results by bank account in descending order
+    let dataframe = ctx
+        .read_batch(data)?
+        .filter(col("bank_account").gt_eq(lit(8000)))? // bank_account >= 8000
+        .sort(vec![col("bank_account").sort(false, true)])?; // ORDER BY bank_account DESC
+
+    Ok(())
+}
+```
+
+You can *also* generate a `DataFrame` from a SQL query and use the same APIs
+to manipulate the output of the query. 
+
+```rust
+use std::sync::Arc;
+use datafusion::prelude::*;
+use datafusion::assert_batches_eq;
 use datafusion::arrow::array::{ArrayRef, Int32Array};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
@@ -52,38 +87,25 @@ async fn main() -> Result<()> {
     ])?;
     ctx.register_batch("users", data)?;
     // Create a DataFrame using SQL
-    let dataframe = ctx.sql("SELECT * FROM users;").await?;
-    Ok(())
-}
-```
-
-You can also construct [`DataFrame`]s programmatically using the API:
-
-```rust
-use std::sync::Arc;
-use datafusion::prelude::*;
-use datafusion::arrow::array::{ArrayRef, Int32Array};
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::error::Result;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let ctx = SessionContext::new();
-    // Register the same in-memory table as the previous example
-    let data = RecordBatch::try_from_iter(vec![
-        ("id", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
-        ("bank_account", Arc::new(Int32Array::from(vec![9000, 8000, 7000]))),
-    ])?;
-    ctx.register_batch("users", data)?;
-    // Create a DataFrame that scans the user table, and finds
-    // all users with a bank account at least 8000
-    // and sorts the results by bank account in descending order
-    let dataframe = ctx
-        .table("users")
+    let dataframe = ctx.sql("SELECT * FROM users;")
         .await?
-        .filter(col("bank_account").gt_eq(lit(8000)))? // bank_account >= 8000
-        .sort(vec![col("bank_account").sort(false, true)])?; // ORDER BY bank_account DESC
+        // Note we can filter the output of the query using the DataFrame API
+        .filter(col("bank_account").gt_eq(lit(8000)))?; // bank_account >= 8000
 
+    let results = &dataframe.collect().await?;
+
+    // use the `assert_batches_eq` macro to show the output
+    assert_batches_eq!(
+        vec![
+            "+----+--------------+",
+            "| id | bank_account |",
+            "+----+--------------+",
+            "| 1  | 9000         |",
+            "| 2  | 8000         |",
+            "+----+--------------+",
+        ],
+        &results
+    );
     Ok(())
 }
 ```
@@ -93,7 +115,7 @@ async fn main() -> Result<()> {
 DataFusion [`DataFrame`]s are "lazy", meaning they do no processing until
 they are executed, which allows for additional optimizations.
 
-When you have a `DataFrame`, you can run it in one of three ways:
+You can run a `DataFrame` in one of three ways:  
 
 1.  `collect`: executes the query and buffers all the output into a `Vec<RecordBatch>`
 2.  `execute_stream`: begins executions and returns a `SendableRecordBatchStream` which incrementally computes output on each call to `next()`
@@ -245,6 +267,8 @@ async fn main() -> Result<()>{
     Ok(())
 }
 ```
+
+[Users Guide]: ../user-guide/dataframe.md
 
 [pandas dataframe]: https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html
 [`dataframe`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html
