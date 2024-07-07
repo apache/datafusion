@@ -29,6 +29,7 @@ use datafusion_expr::expr::InSubquery;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{Expr, LogicalPlan};
 
+use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;
 use crate::analyzer::subquery::check_subquery_expr;
 use crate::analyzer::type_coercion::TypeCoercion;
@@ -36,6 +37,7 @@ use crate::utils::log_plan;
 
 use self::function_rewrite::ApplyFunctionRewrites;
 
+pub mod count_wildcard_rule;
 pub mod function_rewrite;
 pub mod inline_table_scan;
 pub mod subquery;
@@ -88,6 +90,7 @@ impl Analyzer {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(InlineTableScan::new()),
             Arc::new(TypeCoercion::new()),
+            Arc::new(CountWildcardRule::new()),
         ];
         Self::with_rules(rules)
     }

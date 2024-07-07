@@ -226,11 +226,14 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
         .collect()
         .await?;
 
+    let left = pretty_format_batches(&sql_results)?.to_string();
+    let right = pretty_format_batches(&df_results)?.to_string();
+
+    eprintln!("left: {}", left);
+    eprintln!("right: {}", right);
+
     //make sure sql plan same with df plan
-    assert_eq!(
-        pretty_format_batches(&sql_results)?.to_string(),
-        pretty_format_batches(&df_results)?.to_string()
-    );
+    assert_eq!(left, right);
 
     Ok(())
 }
