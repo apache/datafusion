@@ -2197,6 +2197,15 @@ async fn write_parquet_results() -> Result<()> {
     Ok(())
 }
 
+fn union_fields() -> UnionFields {
+    [
+        (0, Arc::new(Field::new("A", DataType::Int32, false))),
+        (1, Arc::new(Field::new("B", DataType::Float64, false))),
+    ]
+    .into_iter()
+    .collect()
+}
+
 #[tokio::test]
 async fn sparse_union_is_null() {
     // union of [{A=1}, null, {B=3.2}, {A=34}]
@@ -2204,21 +2213,13 @@ async fn sparse_union_is_null() {
     let float_array = Float64Array::from(vec![None, None, Some(3.2), None]);
     let type_ids = [0, 0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
 
-    let union_fields = [
-        (0, Arc::new(Field::new("A", DataType::Int32, false))),
-        (1, Arc::new(Field::new("B", DataType::Float64, false))),
-    ]
-    .into_iter()
-    .collect::<UnionFields>();
-
     let children = vec![Arc::new(int_array) as Arc<dyn Array>, Arc::new(float_array)];
 
-    let array =
-        UnionArray::try_new(union_fields.clone(), type_ids, None, children).unwrap();
+    let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
 
     let schema = Arc::new(Schema::new(vec![Field::new(
         "my_union",
-        DataType::Union(union_fields, UnionMode::Sparse),
+        DataType::Union(union_fields(), UnionMode::Sparse),
         false,
     )]));
 
@@ -2263,22 +2264,14 @@ async fn dense_union_is_null() {
     let type_ids = [0, 0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
     let offsets = [0, 1, 0, 2].into_iter().collect::<ScalarBuffer<i32>>();
 
-    let union_fields = [
-        (0, Arc::new(Field::new("A", DataType::Int32, false))),
-        (1, Arc::new(Field::new("B", DataType::Float64, false))),
-    ]
-    .into_iter()
-    .collect::<UnionFields>();
-
     let children = vec![Arc::new(int_array) as Arc<dyn Array>, Arc::new(float_array)];
 
     let array =
-        UnionArray::try_new(union_fields.clone(), type_ids, Some(offsets), children)
-            .unwrap();
+        UnionArray::try_new(union_fields(), type_ids, Some(offsets), children).unwrap();
 
     let schema = Arc::new(Schema::new(vec![Field::new(
         "my_union",
-        DataType::Union(union_fields, UnionMode::Dense),
+        DataType::Union(union_fields(), UnionMode::Dense),
         false,
     )]));
 
@@ -2313,4 +2306,25 @@ async fn dense_union_is_null() {
         "+----------+",
     ];
     assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
+}
+
+/// these should definitely be moved somewhere else, but I'm just adding it here for simplicity now
+#[tokio::test]
+async fn sparse_union_is_null_scalar() {
+    let sparse_scalar = ScalarValue::Union(
+        Some((0_i8, Box::new(ScalarValue::Int32(None)))),
+        union_fields(),
+        UnionMode::Sparse,
+    );
+    assert!(sparse_scalar.is_null());
+}
+
+#[tokio::test]
+async fn dense_union_is_null_scalar() {
+    let dense_scalar = ScalarValue::Union(
+        Some((0_i8, Box::new(ScalarValue::Int32(None)))),
+        union_fields(),
+        UnionMode::Dense,
+    );
+    assert!(dense_scalar.is_null());
 }
