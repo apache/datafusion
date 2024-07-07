@@ -39,29 +39,20 @@ impl UserDefinedSQLPlanner for CoreFunctionPlanner {
         }
         Ok(PlannerResult::Planned(named_struct().call(args)))
     }
-}
 
-#[derive(Default)]
-pub struct CreateStructPlanner;
-
-impl UserDefinedSQLPlanner for CreateStructPlanner {
-    fn plan_create_struct(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
-            ScalarFunction::new_udf(crate::core::r#struct(), args),
-        )))
-    }
-}
-
-#[derive(Default)]
-pub struct CreateNamedStructPlanner;
-
-impl UserDefinedSQLPlanner for CreateNamedStructPlanner {
-    fn plan_create_named_struct(
+    fn plan_struct_literal(
         &self,
         args: Vec<Expr>,
+        is_named_struct: bool,
     ) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
-            ScalarFunction::new_udf(crate::core::named_struct(), args),
-        )))
+        if is_named_struct {
+            Ok(PlannerResult::Planned(Expr::ScalarFunction(
+                ScalarFunction::new_udf(crate::core::named_struct(), args),
+            )))
+        } else {
+            Ok(PlannerResult::Planned(Expr::ScalarFunction(
+                ScalarFunction::new_udf(crate::core::r#struct(), args),
+            )))
+        }
     }
 }

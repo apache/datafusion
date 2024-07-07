@@ -140,13 +140,18 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
         Ok(PlannerResult::Original(args))
     }
 
-    fn plan_create_struct(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Original(args))
-    }
-
-    fn plan_create_named_struct(
+    /// Plans a struct `struct(expression1[, ..., expression_n])`
+    /// or named struct `named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])`
+    /// literal based on the given input expressions.
+    /// This function takes a vector of expressions and a boolean flag indicating whether
+    /// the struct is a named struct.
+    ///
+    /// Returns a `PlannerResult` containing either the planned struct expressions or the original
+    /// input expressions if planning is not possible.
+    fn plan_struct_literal(
         &self,
         args: Vec<Expr>,
+        _is_named_struct: bool,
     ) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }

@@ -652,17 +652,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         for planner in self.planners.iter() {
-            let result = if is_named_struct {
-                planner.plan_create_named_struct(create_struct_args)?
-            } else {
-                planner.plan_create_struct(create_struct_args)?
-            };
-            match result {
+            match planner.plan_struct_literal(create_struct_args, is_named_struct)? {
                 PlannerResult::Planned(expr) => return Ok(expr),
                 PlannerResult::Original(args) => create_struct_args = args,
             }
         }
-        not_impl_err!("CreateStruct not supported by UserDefinedExtensionPlanners: {create_struct_args:?}")
+        not_impl_err!("Struct not supported by UserDefinedExtensionPlanners: {create_struct_args:?}")
     }
 
     fn sql_position_to_expr(
