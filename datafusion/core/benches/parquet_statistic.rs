@@ -198,9 +198,7 @@ fn make_dict_batch() -> RecordBatch {
 fn criterion_benchmark(c: &mut Criterion) {
     let row_groups = 100;
     use TestTypes::*;
-    // let types = vec![Int64, UInt64, F64, String, Dictionary];
-    // let types = vec![String];
-    let types = vec![String];
+    let types = vec![Int64, UInt64, F64, String, Dictionary];
     let data_page_row_count_limits = vec![None, Some(1)];
 
     for dtype in types {
@@ -217,8 +215,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             let statistic_type = if data_page_row_count_limit.is_some() {
                 "data page"
             } else {
-                // "row group"
-                continue;
+                "row group"
             };
 
             let mut group = c.benchmark_group(format!(
