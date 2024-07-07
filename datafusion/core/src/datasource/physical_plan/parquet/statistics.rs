@@ -40,6 +40,7 @@ use parquet::file::page_index::index::{Index, PageIndex};
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use paste::paste;
+use std::env;
 use std::sync::Arc;
 
 // Convert the bytes array to i128.
@@ -868,54 +869,62 @@ macro_rules! get_data_page_statistics {
                 Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter([<$stat_type_prefix Float64DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Binary) => Ok(Arc::new(BinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::LargeBinary) => Ok(Arc::new(LargeBinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
-                // Some(DataType::Utf8) => Ok(Arc::new(StringArray::from_iter(
-                //     [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                //         x.into_iter().map(|x| {
-                //         x.and_then(|x| {
-                //             let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
-                //             if res.is_none() {
-                //                 log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
-                //             }
-                //             res
-                //         })
-                //     })
-                //     }).flatten(),
-                // ))),
                 Some(DataType::Utf8) => {
-                    let mut builder = StringBuilder::new();
-                    let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
-                    for x in iterator {
-                        for x in x.into_iter() {
-                            let Some(x) = x else {
-                                builder.append_null(); // no statistics value
-                                continue;
-                            };
-
-                            let Ok(x) = std::str::from_utf8(x.data()) else {
-                                log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
-                                builder.append_null();
-                                continue;
-                            };
-
-                            builder.append_value(x);
+                    let mode = env::var("MODE").unwrap_or_default();
+                    match mode.as_str() {
+                        "from_iter" => {
+                            Ok(Arc::new(StringArray::from_iter(
+                                [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
+                                    x.into_iter().map(|x| {
+                                    x.and_then(|x| {
+                                        let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
+                                        if res.is_none() {
+                                            log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                                        }
+                                        res
+                                    })
+                                })
+                                }).flatten(),
+                            )))
+                        },
+                        "use_builder" => {
+                            let mut builder = StringBuilder::new();
+                            let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
+                            for x in iterator {
+                                for x in x.into_iter() {
+                                    let Some(x) = x else {
+                                        builder.append_null(); // no statistics value
+                                        continue;
+                                    };
+        
+                                    let Ok(x) = std::str::from_utf8(x.data()) else {
+                                        log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                                        builder.append_null();
+                                        continue;
+                                    };
+        
+                                    builder.append_value(x);
+                                }
+                            }
+                            Ok(Arc::new(builder.finish()))
+                        },
+                        _ => {
+                            Ok(Arc::new(StringArray::from(
+                                [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
+                                    x.into_iter().map(|x| {
+                                    x.and_then(|x| {
+                                        let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
+                                        if res.is_none() {
+                                            log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                                        }
+                                        res
+                                    })
+                                })
+                                }).flatten().collect::<Vec<_>>(),
+                            )))
                         }
                     }
-                    Ok(Arc::new(builder.finish()))
                 },
-                // Some(DataType::Utf8) => Ok(Arc::new(StringArray::from(
-                //     [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                //         x.into_iter().map(|x| {
-                //         x.and_then(|x| {
-                //             let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
-                //             if res.is_none() {
-                //                 log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
-                //             }
-                //             res
-                //         })
-                //     })
-                //     }).flatten().collect::<Vec<_>>(),
-                // ))),
-
                 Some(DataType::LargeUtf8) => Ok(Arc::new(LargeStringArray::from(
                     [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
                         x.into_iter().filter_map(|x| {
@@ -1072,6 +1081,7 @@ pub(crate) fn max_page_statistics<'a, I>(
 where
     I: Iterator<Item = (usize, &'a Index)>,
 {
+    let mode = env::var("MODE").unwrap_or_default();
     get_data_page_statistics!(Max, data_type, iterator)
 }
 
