@@ -445,17 +445,18 @@ macro_rules! get_statistics {
                         continue;
                     };
 
+                    // ignore invalid values
                     if x.len().try_into() != Ok(*size){
                         log::debug!(
                             "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
                             size,
                             x.len(),
                         );
-                        builder.append_null(); // no statistics value
+                        builder.append_null();
                         continue;
                     }
 
-                    let _ = builder.append_value(x);
+                    builder.append_value(x).expect("ensure to append successfully here, because size have been checked before");
                 }
                 Ok(Arc::new(builder.finish()))
             }
