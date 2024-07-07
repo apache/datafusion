@@ -2824,6 +2824,21 @@ select array_agg(c) from t;
 ----
 NULL
 
+query ?I
+select array_agg(distinct a), count(1) from t;
+----
+NULL 0
+
+query ?I
+select array_agg(distinct b), count(1) from t;
+----
+NULL 0
+
+query ?I
+select array_agg(distinct b), count(1) from t;
+----
+NULL 0
+
 statement ok
 drop table t;
 
