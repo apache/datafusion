@@ -17,13 +17,12 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-
 use arrow::array::{Array, ArrayData, ArrayRef, Int32Builder, MapArray, MapBuilder, StringBuilder, StructArray};
 use arrow::datatypes::{DataType, Field};
 use arrow_buffer::{Buffer, ToByteSlice};
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::Result;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Signature, Volatility};
 
 fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.is_empty() {
@@ -66,8 +65,41 @@ fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 
+fn make_map_from(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.is_empty() {
+        return exec_err!(
+            "map requires at least one pair of arguments, got 0 instead"
+        );
+    }
 
-fn make_map_batch(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() % 2 != 0 {
+        return exec_err!(
+            "map requires an even number of arguments, got {} instead",
+            args.len()
+        );
+    }
+    let mut key_buffer = VecDeque::new();
+    let mut value_buffer = VecDeque::new();
+
+    args.chunks_exact(2)
+        .enumerate()
+        .for_each(|(_, chunk)| {
+            let key = chunk[0].clone();
+            let value = chunk[1].clone();
+            key_buffer.push_back(key);
+            value_buffer.push_back(value);
+        });
+
+    let key: Vec<_> = key_buffer.into();
+    let value: Vec<_> = value_buffer.into();
+    let key = ColumnarValue::values_to_arrays(&key)?;
+    let value = ColumnarValue::values_to_arrays(&value)?;
+
+    make_map_batch(&[key[0].clone(), value[0].clone()])
+}
+
+
+fn make_map_batch(args: &[ArrayRef]) -> Result<ColumnarValue> {
     if args.len() % 2 != 0 {
         return exec_err!("map requires an even number of arguments, got {} instead", args.len());
     }
@@ -112,9 +144,27 @@ fn make_map_batch(args: &[ArrayRef]) -> Result<ArrayRef> {
         .add_child_data(entry_struct.to_data())
         .build()?;
 
-    Ok(Arc::new(MapArray::from(map_data)))
+    Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
 }
 
+pub struct MapFunc {
+    signature: Signature,
+}
+
+impl Default for MapFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MapFunc {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -132,7 +182,7 @@ mod tests {
     fn test_make_map() -> Result<()> {
 
         // the first run is for warm up.
-        for num in vec![1, 10, 50, 100, 500, 1000] {
+        for num in vec![1, 2, 4, 8, 10, 50, 100, 1000] {
             let mut buffer= VecDeque::new();
             let mut key_buffer=  VecDeque::new();
             let mut value_buffer = VecDeque::new();
@@ -147,12 +197,19 @@ mod tests {
                 buffer.push_back(ColumnarValue::Scalar(ScalarValue::Int32(Some(rand.clone()))));
             }
 
-            let record: Vec<ColumnarValue> = buffer.into();
+            let record: Vec<ColumnarValue> = buffer.clone().into();
             let start = Instant::now();
             let map = make_map(&record)?;
             let duration = start.elapsed();
 
             println!("Time elapsed in make_map() is: {:?}", duration);
+
+            let record: Vec<ColumnarValue> = buffer.into();
+            let start = Instant::now();
+            let map = make_map_from(&record)?;
+            let duration = start.elapsed();
+
+            println!("Time elapsed in make_map_from() is: {:?}", duration);
 
 
             let key_vec: Vec<String> = key_buffer.into();
