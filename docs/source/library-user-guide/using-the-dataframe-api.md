@@ -212,7 +212,7 @@ The output file will look like (Example Output):
 
 ## Relationship between `LogicalPlan`s and `DataFrame`s
 
-The `DataFrame` struct is defined like this
+The `DataFrame` struct is defined like this:
 
 ```rust
 use datafusion::execution::session_state::SessionState;
