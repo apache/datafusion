@@ -410,14 +410,11 @@ pub async fn from_substrait_rel(
                         from_substrait_rex(ctx, e, input.clone().schema(), extensions)
                             .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
-                    match &*x {
-                        Expr::WindowFunction(_) => {
-                            // Adding the same expression here and in the project below
-                            // works because the project's builder uses columnize_expr(..)
-                            // to transform it into a column reference
-                            input = input.window(vec![x.as_ref().clone()])?
-                        }
-                        _ => {}
+                    if let Expr::WindowFunction(_) = x.as_ref() {
+                        // Adding the same expression here and in the project below
+                        // works because the project's builder uses columnize_expr(..)
+                        // to transform it into a column reference
+                        input = input.window(vec![x.as_ref().clone()])?
                     }
                     // Ensure the expression has a unique display name, so that project's
                     // validate_unique_names doesn't fail
