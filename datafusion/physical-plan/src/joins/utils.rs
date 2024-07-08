@@ -1333,9 +1333,21 @@ pub(crate) fn adjust_indices_by_join_type(
     }
 }
 
-/// Appends the `right_unmatched_indices` to the `right_indices`,
-/// and fills Null to tail of `left_indices` to
-/// keep the length of `right_indices` and `left_indices` consistent.
+/// Appends right indices to left indices based on the specified order mode.
+///
+/// The function operates in two modes:
+/// 1. If `preserve_order_for_right` is true, probe matched and unmatched indices
+///    are inserted in order using the `append_probe_indices_in_order()` method.
+/// 2. Otherwise, unmatched probe indices are simply appended after matched ones.
+///
+/// # Parameters
+/// - `left_indices`: UInt64Array of left indices.
+/// - `right_indices`: UInt32Array of right indices.
+/// - `adjust_range`: Range to adjust the right indices.
+/// - `preserve_order_for_right`: Boolean flag to determine the mode of operation.
+///
+/// # Returns
+/// A tuple of updated `UInt64Array` and `UInt32Array`.
 pub(crate) fn append_right_indices(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
