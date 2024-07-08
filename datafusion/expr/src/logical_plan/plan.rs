@@ -2130,7 +2130,10 @@ impl Filter {
             }
         }
 
-        Ok(Self { predicate, input })
+        Ok(Self {
+            predicate: predicate.unalias(),
+            input,
+        })
     }
 
     /// Is this filter guaranteed to return 0 or 1 row in a given instantiation?
