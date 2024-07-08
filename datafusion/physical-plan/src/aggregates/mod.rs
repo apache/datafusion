@@ -2339,12 +2339,15 @@ mod tests {
                 let b = Arc::new(Float32Array::from(vec![0.; 8192]));
                 let c = Arc::new(Int32Array::from(vec![1; 8192]));
 
-                RecordBatch::try_new(schema.clone(), vec![a, b, c]).unwrap()
+                RecordBatch::try_new(Arc::clone(&schema), vec![a, b, c]).unwrap()
             })
             .collect();
 
-        let input =
-            Arc::new(MemoryExec::try_new(&[input_batches], schema.clone(), None)?);
+        let input = Arc::new(MemoryExec::try_new(
+            &[input_batches],
+            Arc::clone(&schema),
+            None,
+        )?);
 
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,

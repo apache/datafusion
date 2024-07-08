@@ -3955,12 +3955,12 @@ mod tests {
         )];
 
         let (_, batches_null_eq) = join_collect(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             &JoinType::Inner,
             true,
-            task_ctx.clone(),
+            Arc::clone(&task_ctx),
         )
         .await?;
 
