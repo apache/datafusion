@@ -111,10 +111,9 @@ pub mod expr_fn {
         now,
         "returns the current timestamp in nanoseconds, using the same value for all instances of now() in same statement",
     ),
-    // TODO chunchun: add more doc examples
     (
         to_local_time,
-        "strips off the timezone from the timestamp, converts a timestamp with a timezone to local time without timezone",
+        "converts a timezone-aware timestamp to local time (with no offset or timezone information), i.e. strips off the timezone from the timestamp",
         args,
     ),
     (

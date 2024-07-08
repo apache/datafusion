@@ -39,6 +39,35 @@ use datafusion_expr::{
     ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
 
+/// A UDF function that converts a timezone-aware timestamp to local time (with no offset or
+/// timezone information). In other words, this function strips off the timezone from the timestamp,
+/// while keep the display value of the timestamp the same.
+///
+/// # Example
+///
+/// ```
+/// # use datafusion_common::ScalarValue;
+/// # use datafusion_expr::ColumnarValue;
+///
+/// // 2019-03-31 01:00:00 +01:00
+/// let res = ToLocalTimeFunc::new()
+/// .invoke(&[ColumnarValue::Scalar(ScalarValue::TimestampSecond(
+///     Some(1_553_990_400),
+///     Some("Europe/Brussels".into()),
+/// ))])
+/// .unwrap();
+///
+/// // 2019-03-31 01:00:00 <-- this timestamp no longer has +01:00 offset
+/// let expected = ScalarValue::TimestampSecond(Some(1_553_994_000), None);
+///
+/// match res {
+/// ColumnarValue::Scalar(res) => {
+///     assert_eq!(res, expected);
+/// }
+/// _ => panic!("unexpected return type"),
+/// }
+/// ```
+
 #[derive(Debug)]
 pub struct ToLocalTimeFunc {
     signature: Signature,
@@ -50,8 +79,6 @@ impl Default for ToLocalTimeFunc {
     }
 }
 
-// TODO chunchun: add description, with example
-// strip timezone
 impl ToLocalTimeFunc {
     pub fn new() -> Self {
         let base_sig = |array_type: TimeUnit| {
