@@ -604,6 +604,7 @@ fn join_left_and_right_batch(
                 right_side,
                 0..right_batch.num_rows(),
                 join_type,
+                false,
             );
 
             build_batch_from_indices(
@@ -647,7 +648,6 @@ impl RecordBatchStream for NestedLoopJoinStream {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::{
         common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
