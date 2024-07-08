@@ -30,7 +30,7 @@ definition.
 The query can be executed by calling the [`collect`] method.
 
 DataFusion DataFrames use lazy evaluation, meaning that each transformation
-creates a new plan but does not actually perform any transformations. This
+creates a new plan but does not actually perform any immediate actions. This
 approach allows for the overall plan to be optimized before execution. The plan
 is evaluated (executed) when an action method is invoked, such as [`collect`].
 See the [Library Users Guide] for more details.
