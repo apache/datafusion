@@ -1235,17 +1235,17 @@ pub fn build_join_schema(
             JoinType::Inner => {
                 // left then right
                 let left_fields = left_fields
-                    .map(|(q, f)| (q.cloned(), f.clone()))
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                     .collect::<Vec<_>>();
                 let right_fields = right_fields
-                    .map(|(q, f)| (q.cloned(), f.clone()))
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                     .collect::<Vec<_>>();
                 left_fields.into_iter().chain(right_fields).collect()
             }
             JoinType::Left => {
                 // left then right, right set to nullable in case of not matched scenario
                 let left_fields = left_fields
-                    .map(|(q, f)| (q.cloned(), f.clone()))
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                     .collect::<Vec<_>>();
                 left_fields
                     .into_iter()
@@ -1255,7 +1255,7 @@ pub fn build_join_schema(
             JoinType::Right => {
                 // left then right, left set to nullable in case of not matched scenario
                 let right_fields = right_fields
-                    .map(|(q, f)| (q.cloned(), f.clone()))
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                     .collect::<Vec<_>>();
                 nullify_fields(left_fields)
                     .into_iter()
@@ -1271,11 +1271,15 @@ pub fn build_join_schema(
             }
             JoinType::LeftSemi | JoinType::LeftAnti => {
                 // Only use the left side for the schema
-                left_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
+                left_fields
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                .collect()
             }
             JoinType::RightSemi | JoinType::RightAnti => {
                 // Only use the right side for the schema
-                right_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
+                right_fields
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                .collect()
             }
         };
     let func_dependencies = left.functional_dependencies().join(
@@ -1472,7 +1476,6 @@ pub fn project(
             _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
         }
     }
-
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
@@ -1705,7 +1708,10 @@ pub fn unnest_with_options(
                 }
                 None => {
                     dependency_indices.push(index);
-                    Ok(vec![(original_qualifier.cloned(), original_field.clone())])
+                    Ok(vec![(
+                        original_qualifier.cloned(),
+                        Arc::clone(original_field),
+                    )])
                 }
             }
         })

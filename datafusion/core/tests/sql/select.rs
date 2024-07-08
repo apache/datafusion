@@ -192,7 +192,7 @@ async fn prepared_statement_invalid_types() -> Result<()> {
         .with_param_values(vec![ScalarValue::from("1")]);
     assert_eq!(
         results.unwrap_err().strip_backtrace(),
-        "Error during planning: Expected parameter of type Int32, got Utf8 at index 0"
+        "Error during planning: Expected parameter of type TypeRelation(NativeType { logical: Int32, physical: Int32 }), got Utf8 at index 0"
     );
     Ok(())
 }

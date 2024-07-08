@@ -468,7 +468,8 @@ pub(crate) fn assert_schema_is_the_same(
     prev_schema: &DFSchema,
     new_plan: &LogicalPlan,
 ) -> Result<()> {
-    let equivalent = new_plan.schema().equivalent_names_and_types(prev_schema);
+    // TODO(@notfilippo): this was changed from equivalent_names_and_types because of arrow_cast. Is it ok?
+    let equivalent = new_plan.schema().logically_equivalent_names_and_types(prev_schema);
 
     if !equivalent {
         let e = DataFusionError::Internal(format!(

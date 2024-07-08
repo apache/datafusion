@@ -2512,23 +2512,7 @@ mod tests {
             .create_physical_plan(&logical_plan, &session_state)
             .await;
 
-        let expected_error: &str = "Error during planning: \
-            Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
-            LogicalPlan schema: \
-            DFSchema { inner: LogicalSchema { fields: \
-                [LogicalField { name: \"a\", \
-                data_type: Int32, \
-                nullable: false, \
-                metadata: {} }], \
-                metadata: {} }, field_qualifiers: [None], \
-                functional_dependencies: FunctionalDependencies { deps: [] } }, \
-            ExecutionPlan schema: Schema { fields: \
-                [Field { name: \"b\", \
-                data_type: Int32, \
-                nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, metadata: {} }], \
-                metadata: {} }";
+        let expected_error: &str = r#"Error during planning: Extension planner for NoOp created an ExecutionPlan with mismatched schema. LogicalPlan schema: DFSchema { inner: LogicalSchema { fields: [LogicalField { name: "a", data_type: TypeRelation(NativeType { logical: Int32, physical: Int32 }), nullable: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }, ExecutionPlan schema: Schema { fields: [Field { name: "b", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }"#;
         match plan {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(
@@ -2574,7 +2558,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]"#
+            r#"Can not find compatible types to compare TypeRelation(NativeType { logical: Boolean, physical: Boolean }) with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]"#
         );
 
         Ok(())

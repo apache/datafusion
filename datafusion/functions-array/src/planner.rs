@@ -32,8 +32,7 @@ use crate::{
     make_array::make_array,
 };
 
-#[derive(Default)]
-pub struct ArrayFunctionPlanner {}
+pub struct ArrayFunctionPlanner;
 
 impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
     fn plan_binary_op(
@@ -100,8 +99,7 @@ impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
     }
 }
 
-#[derive(Default)]
-pub struct FieldAccessPlanner {}
+pub struct FieldAccessPlanner;
 
 impl UserDefinedSQLPlanner for FieldAccessPlanner {
     fn plan_field_access(

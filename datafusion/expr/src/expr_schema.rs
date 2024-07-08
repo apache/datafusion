@@ -131,14 +131,14 @@ impl ExprSchemable for Expr {
                     LogicalType::List(field) =>{
                         Ok(field.data_type().clone())
                     }
-                    LogicalType::Struct(_) => {
-                        Ok(arg_data_type)
-                    }
+                    LogicalType::Struct(_) => Ok(arg_data_type),
                     LogicalType::Null => {
                         not_impl_err!("unnest() does not support null yet")
                     }
                     _ => {
-                        plan_err!("unnest() can only be applied to array, struct and null")
+                        plan_err!(
+                            "unnest() can only be applied to array, struct and null"
+                        )
                     }
                 }
             }
@@ -187,7 +187,8 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 match fun {
                     WindowFunctionDefinition::AggregateUDF(udf) => {
-                        let new_types = data_types_with_aggregate_udf(&data_types, udf).map_err(|err| {
+                        let new_types = data_types_with_aggregate_udf(&data_types, udf)
+                            .map_err(|err| {
                             plan_datafusion_err!(
                                 "{} {}",
                                 err,
@@ -200,9 +201,7 @@ impl ExprSchemable for Expr {
                         })?;
                         Ok(fun.return_type(&new_types, &nullability)?.into())
                     }
-                    _ => {
-                        Ok(fun.return_type(&data_types, &nullability)?.into())
-                    }
+                    _ => Ok(fun.return_type(&data_types, &nullability)?.into()),
                 }
             }
             Expr::AggregateFunction(AggregateFunction { func_def, args, .. }) => {
@@ -224,7 +223,8 @@ impl ExprSchemable for Expr {
                         Ok(fun.return_type(&data_types, &nullability)?.into())
                     }
                     AggregateFunctionDefinition::UDF(fun) => {
-                        let new_types = data_types_with_aggregate_udf(&data_types, fun).map_err(|err| {
+                        let new_types = data_types_with_aggregate_udf(&data_types, fun)
+                            .map_err(|err| {
                             plan_datafusion_err!(
                                 "{} {}",
                                 err,
@@ -264,7 +264,11 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean.into()),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 data_type.clone().ok_or_else(|| {
-                    plan_datafusion_err!("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values.")
+                    plan_datafusion_err!(
+                        "Placeholder type could not be resolved. Make sure that the \
+                         placeholder is bound to a concrete type, e.g. by providing \
+                         parameter values."
+                    )
                 })
             }
             Expr::Wildcard { qualifier } => {
@@ -559,7 +563,7 @@ pub fn cast_subquery(
                 .cast_to(cast_to_type, projection.input.schema())?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
-                projection.input.clone(),
+                Arc::clone(&projection.input),
             )?)
         }
         _ => {

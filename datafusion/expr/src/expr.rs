@@ -360,6 +360,11 @@ impl Unnest {
             expr: Box::new(expr),
         }
     }
+
+    /// Create a new Unnest expression.
+    pub fn new_boxed(boxed: Box<Expr>) -> Self {
+        Self { expr: boxed }
+    }
 }
 
 /// Alias expression
