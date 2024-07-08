@@ -56,7 +56,7 @@ impl ToLocalTimeFunc {
     pub fn new() -> Self {
         let base_sig = |array_type: TimeUnit| {
             vec![
-                Exact(vec![Timestamp(array_type.clone(), None)]),
+                Exact(vec![Timestamp(array_type, None)]),
                 Exact(vec![Timestamp(array_type, Some(TIMEZONE_WILDCARD.into()))]),
             ]
         };
@@ -270,6 +270,7 @@ mod tests {
     use arrow::array::{types::TimestampNanosecondType, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
+    use chrono::{TimeZone, Utc};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -327,42 +328,124 @@ mod tests {
 
     #[test]
     fn test_to_local_time_scalar() {
+        let timestamps_without_timezone = vec![
+            (
+                ScalarValue::TimestampNanosecond(Some(1_123_123_000_000_000_000), None),
+                ScalarValue::TimestampNanosecond(Some(1_123_123_000_000_000_000), None),
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(Some(1_123_123_000_000_000), None),
+                ScalarValue::TimestampMicrosecond(Some(1_123_123_000_000_000), None),
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(1_123_123_000_000), None),
+                ScalarValue::TimestampMillisecond(Some(1_123_123_000_000), None),
+            ),
+            (
+                ScalarValue::TimestampSecond(Some(1_123_123_000), None),
+                ScalarValue::TimestampSecond(Some(1_123_123_000), None),
+            ),
+        ];
+
+        for (input, expected) in timestamps_without_timezone {
+            test_to_local_time_helpfer(input, expected);
+        }
+
         let timezone = Some("Europe/Brussels".into());
+        let timestamps_with_timezone = vec![
+            (
+                ScalarValue::TimestampNanosecond(
+                    Some(1_123_123_000_000_000_000),
+                    timezone.clone(),
+                ),
+                ScalarValue::TimestampNanosecond(Some(1_123_130_200_000_000_000), None),
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(
+                    Some(1_123_123_000_000_000),
+                    timezone.clone(),
+                ),
+                ScalarValue::TimestampMicrosecond(Some(1_123_130_200_000_000), None),
+            ),
+            (
+                ScalarValue::TimestampMillisecond(
+                    Some(1_123_123_000_000),
+                    timezone.clone(),
+                ),
+                ScalarValue::TimestampMillisecond(Some(1_123_130_200_000), None),
+            ),
+            (
+                ScalarValue::TimestampSecond(Some(1_123_123_000), timezone),
+                ScalarValue::TimestampSecond(Some(1_123_130_200), None),
+            ),
+        ];
 
-        // Test for nanosecond precision with timezone
-        let input_ns = ScalarValue::TimestampNanosecond(
-            Some(1_123_123_000_000_000_000),
-            timezone.clone(),
-        );
-        let expected_ns =
-            ScalarValue::TimestampNanosecond(Some(1_123_130_200_000_000_000), None);
-        test_to_local_time_helpfer(input_ns, expected_ns);
+        for (input, expected) in timestamps_with_timezone {
+            test_to_local_time_helpfer(input, expected);
+        }
+    }
 
-        // Test for microsecond precision with timezone
-        let input_us = ScalarValue::TimestampMicrosecond(
-            Some(1_123_123_000_000_000),
-            timezone.clone(),
-        );
-        let expected_us =
-            ScalarValue::TimestampMicrosecond(Some(1_123_130_200_000_000), None);
-        test_to_local_time_helpfer(input_us, expected_us);
+    #[test]
+    fn test_timezone_with_daylight_savings() {
+        let timezone_str = "America/New_York";
+        let tz: arrow::array::timezone::Tz =
+            timezone_str.parse().expect("Invalid timezone");
 
-        // Test for millisecond precision with timezone
-        let input_ms =
-            ScalarValue::TimestampMillisecond(Some(1_123_123_000_000), timezone.clone());
-        let expected_ms =
-            ScalarValue::TimestampMillisecond(Some(1_123_130_200_000), None);
-        test_to_local_time_helpfer(input_ms, expected_ms);
+        // Test data:
+        // (
+        //    input timestamp in second,
+        //    the string display of the input timestamp,
+        //    the expected timestamp after applied `to_local_time`,
+        //    the string display of the expected timestamp,
+        // )
+        let test_cases = vec![
+            (
+                // DST time
+                1_585_676_400,
+                "2020-03-31 13:40:00 -04:00",
+                1_585_662_000,
+                "2020-03-31 13:40:00 UTC",
+            ),
+            (
+                // End of DST
+                1_604_516_800,
+                "2020-11-04 14:06:40 -05:00",
+                1_604_498_800,
+                "2020-11-04 14:06:40 UTC",
+            ),
+        ];
 
-        // Test for second precision with timezone
-        let input_s = ScalarValue::TimestampSecond(Some(1_123_123_000), timezone);
-        let expected_s = ScalarValue::TimestampSecond(Some(1_123_130_200), None);
-        test_to_local_time_helpfer(input_s, expected_s);
+        for (
+            input_timestamp_s,
+            expected_input_timestamp_display,
+            expected_adjusted_timstamp,
+            expected_adjusted_timstamp_display,
+        ) in test_cases
+        {
+            let input_timestamp_display = Utc
+                .timestamp_opt(input_timestamp_s, 0)
+                .unwrap()
+                .with_timezone(&tz)
+                .to_string();
+            assert_eq!(input_timestamp_display, expected_input_timestamp_display);
 
-        // Test for second precision without timezone
-        let input_s = ScalarValue::TimestampSecond(Some(1_123_123_000), None);
-        let expected_s = ScalarValue::TimestampSecond(Some(1_123_123_000), None);
-        test_to_local_time_helpfer(input_s, expected_s);
+            let dst_timestamp = ScalarValue::TimestampSecond(
+                Some(input_timestamp_s),
+                Some(timezone_str.into()),
+            );
+            let expected_dst_timestamp =
+                ScalarValue::TimestampSecond(Some(expected_adjusted_timstamp), None);
+            test_to_local_time_helpfer(dst_timestamp, expected_dst_timestamp);
+
+            let adjusted_timstamp_display = Utc
+                .timestamp_opt(expected_adjusted_timstamp, 0)
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                adjusted_timstamp_display,
+                expected_adjusted_timstamp_display
+            )
+        }
     }
 
     fn test_to_local_time_helpfer(input: ScalarValue, expected: ScalarValue) {
