@@ -19,7 +19,9 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
-use arrow::array::{FixedSizeBinaryBuilder, LargeStringBuilder, StringBuilder};
+use arrow::array::{
+    BooleanBuilder, FixedSizeBinaryBuilder, LargeStringBuilder, StringBuilder,
+};
 use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
