@@ -103,8 +103,8 @@ impl PhysicalExpr for IsNullExpr {
     }
 }
 
-/// workaround https://github.com/apache/arrow-rs/issues/6017,
-/// this can be removed once `arrow::compute::is_null` is fixed
+/// workaround <https://github.com/apache/arrow-rs/issues/6017>,
+/// this can be replaced with a direct call to `arrow::compute::is_null` once it's fixed.
 pub(crate) fn compute_is_null(array: ArrayRef) -> Result<BooleanArray> {
     if let Some(union_array) = array.as_any().downcast_ref::<UnionArray>() {
         if let Some(offsets) = union_array.offsets() {
