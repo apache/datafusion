@@ -42,12 +42,28 @@ use datafusion_common::JoinType;
 /// - `across_partitions`: A boolean flag indicating whether the constant expression is
 ///   valid across partitions. If set to `true`, the constant expression has same value for all partitions.
 ///   If set to `false`, the constant expression may have different values for different partitions.
+///
+/// # Example
+///
+/// ```rust
+/// # use datafusion_physical_expr::ConstExpr;
+/// # use datafusion_physical_expr_common::expressions::lit;
+/// let col = lit(5);
+/// // Create a constant expression from a physical expression ref
+/// let const_expr = ConstExpr::from(&col);
+/// // create a constant expression from a physical expression
+/// let const_expr = ConstExpr::from(col);
+/// ```
 pub struct ConstExpr {
     expr: Arc<dyn PhysicalExpr>,
     across_partitions: bool,
 }
 
 impl ConstExpr {
+    /// Create a new constant expression from a physical expression.
+    ///
+    /// Note you can also use `ConstExpr::from` to create a constant expression
+    /// from a reference as well
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self {
             expr,
@@ -82,6 +98,18 @@ impl ConstExpr {
             expr,
             across_partitions: self.across_partitions,
         })
+    }
+}
+
+impl From<Arc<dyn PhysicalExpr>> for ConstExpr {
+    fn from(expr: Arc<dyn PhysicalExpr>) -> Self {
+        Self::new(expr)
+    }
+}
+
+impl From<&Arc<dyn PhysicalExpr>> for ConstExpr {
+    fn from(expr: &Arc<dyn PhysicalExpr>) -> Self {
+        Self::new(Arc::clone(expr))
     }
 }
 
@@ -267,17 +295,19 @@ impl EquivalenceGroup {
             }
             (Some(group_idx), None) => {
                 // Right side is new, extend left side's class:
-                self.classes[group_idx].push(right.clone());
+                self.classes[group_idx].push(Arc::clone(right));
             }
             (None, Some(group_idx)) => {
                 // Left side is new, extend right side's class:
-                self.classes[group_idx].push(left.clone());
+                self.classes[group_idx].push(Arc::clone(left));
             }
             (None, None) => {
                 // None of the expressions is among existing classes.
                 // Create a new equivalence class and extend the group.
-                self.classes
-                    .push(EquivalenceClass::new(vec![left.clone(), right.clone()]));
+                self.classes.push(EquivalenceClass::new(vec![
+                    Arc::clone(left),
+                    Arc::clone(right),
+                ]));
             }
         }
     }
@@ -328,7 +358,7 @@ impl EquivalenceGroup {
     /// The expression is replaced with the first expression in the equivalence
     /// class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
-        expr.clone()
+        Arc::clone(&expr)
             .transform(|expr| {
                 for cls in self.iter() {
                     if cls.contains(&expr) {
@@ -429,7 +459,7 @@ impl EquivalenceGroup {
                     .get_equivalence_class(source)
                     .map_or(false, |group| group.contains(expr))
                 {
-                    return Some(target.clone());
+                    return Some(Arc::clone(target));
                 }
             }
         }
@@ -443,7 +473,7 @@ impl EquivalenceGroup {
             .into_iter()
             .map(|child| self.project_expr(mapping, child))
             .collect::<Option<Vec<_>>>()
-            .map(|children| expr.clone().with_new_children(children).unwrap())
+            .map(|children| Arc::clone(expr).with_new_children(children).unwrap())
     }
 
     /// Projects this equivalence group according to the given projection mapping.
@@ -461,13 +491,13 @@ impl EquivalenceGroup {
         let mut new_classes = vec![];
         for (source, target) in mapping.iter() {
             if new_classes.is_empty() {
-                new_classes.push((source, vec![target.clone()]));
+                new_classes.push((source, vec![Arc::clone(target)]));
             }
             if let Some((_, values)) =
                 new_classes.iter_mut().find(|(key, _)| key.eq(source))
             {
                 if !physical_exprs_contains(values, target) {
-                    values.push(target.clone());
+                    values.push(Arc::clone(target));
                 }
             }
         }
@@ -515,10 +545,9 @@ impl EquivalenceGroup {
                 // are equal in the resulting table.
                 if join_type == &JoinType::Inner {
                     for (lhs, rhs) in on.iter() {
-                        let new_lhs = lhs.clone() as _;
+                        let new_lhs = Arc::clone(lhs) as _;
                         // Rewrite rhs to point to the right side of the join:
-                        let new_rhs = rhs
-                            .clone()
+                        let new_rhs = Arc::clone(rhs)
                             .transform(|expr| {
                                 if let Some(column) =
                                     expr.as_any().downcast_ref::<Column>()
@@ -649,7 +678,7 @@ mod tests {
         let eq_group = eq_properties.eq_group();
         for (expr, expected_eq) in expressions {
             assert!(
-                expected_eq.eq(&eq_group.normalize_expr(expr.clone())),
+                expected_eq.eq(&eq_group.normalize_expr(Arc::clone(expr))),
                 "error in test: expr: {expr:?}"
             );
         }
@@ -669,9 +698,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
 
-        let cls1 = EquivalenceClass::new(vec![lit_true.clone(), lit_false.clone()]);
-        let cls2 = EquivalenceClass::new(vec![lit_true.clone(), col_b_expr.clone()]);
-        let cls3 = EquivalenceClass::new(vec![lit2.clone(), lit1.clone()]);
+        let cls1 =
+            EquivalenceClass::new(vec![Arc::clone(&lit_true), Arc::clone(&lit_false)]);
+        let cls2 =
+            EquivalenceClass::new(vec![Arc::clone(&lit_true), Arc::clone(&col_b_expr)]);
+        let cls3 = EquivalenceClass::new(vec![Arc::clone(&lit2), Arc::clone(&lit1)]);
 
         // lit_true is common
         assert!(cls1.contains_any(&cls2));

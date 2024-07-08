@@ -295,6 +295,21 @@ fn eliminate_nested_filters() {
 }
 
 #[test]
+fn eliminate_redundant_null_check_on_count() {
+    let sql = "\
+        SELECT col_int32, count(*) c
+        FROM test
+        GROUP BY col_int32
+        HAVING c IS NOT NULL";
+    let plan = test_sql(sql).unwrap();
+    let expected = "\
+        Projection: test.col_int32, count(*) AS c\
+        \n  Aggregate: groupBy=[[test.col_int32]], aggr=[[count(Int64(1)) AS count(*)]]\
+        \n    TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
+#[test]
 fn test_propagate_empty_relation_inner_join_and_unions() {
     let sql = "\
         SELECT A.col_int32 FROM test AS A \

@@ -24,7 +24,7 @@ use arrow_schema::*;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
 };
-use datafusion_expr::planner::UserDefinedSQLPlanner;
+use datafusion_expr::planner::ExprPlanner;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
@@ -187,7 +187,7 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) options: ParserOptions,
     pub(crate) normalizer: IdentNormalizer,
     /// user defined planner extensions
-    pub(crate) planners: Vec<Arc<dyn UserDefinedSQLPlanner>>,
+    pub(crate) planners: Vec<Arc<dyn ExprPlanner>>,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -197,10 +197,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// add an user defined planner
-    pub fn with_user_defined_planner(
-        mut self,
-        planner: Arc<dyn UserDefinedSQLPlanner>,
-    ) -> Self {
+    pub fn with_user_defined_planner(mut self, planner: Arc<dyn ExprPlanner>) -> Self {
         self.planners.push(planner);
         self
     }

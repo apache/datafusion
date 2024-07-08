@@ -25,7 +25,7 @@ use std::sync::Arc;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Alias, Placeholder, Sort as SortExpr, WindowFunction};
+use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -2130,16 +2130,10 @@ impl Filter {
             }
         }
 
-        // filter predicates should not be aliased
-        if let Expr::Alias(Alias { expr, name, .. }) = predicate {
-            return plan_err!(
-                "Attempted to create Filter predicate with \
-                expression `{expr}` aliased as '{name}'. Filter predicates should not be \
-                aliased."
-            );
-        }
-
-        Ok(Self { predicate, input })
+        Ok(Self {
+            predicate: predicate.unalias_nested().data,
+            input,
+        })
     }
 
     /// Is this filter guaranteed to return 0 or 1 row in a given instantiation?
