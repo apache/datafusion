@@ -24,7 +24,7 @@ use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
     new_empty_array, new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array,
+    Decimal128Array, Decimal256Array, Float16Array, Float32Array,
     Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
     Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
     Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
@@ -623,6 +623,31 @@ make_data_page_stats_iterator!(
     Index::DOUBLE,
     f64
 );
+make_data_page_stats_iterator!(
+    MinByteArrayDataPageStatsIterator,
+    |x: &PageIndex<ByteArray>| { x.min.clone() },
+    Index::BYTE_ARRAY,
+    ByteArray
+);
+make_data_page_stats_iterator!(
+    MaxByteArrayDataPageStatsIterator,
+    |x: &PageIndex<ByteArray>| { x.max.clone() },
+    Index::BYTE_ARRAY,
+    ByteArray
+);
+make_data_page_stats_iterator!(
+    MaxFixedLenByteArrayDataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
+
+make_data_page_stats_iterator!(
+    MinFixedLenByteArrayDataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
 
 macro_rules! get_decimal_page_stats_iterator {
     ($iterator_type: ident, $func: ident, $stat_value_type: ident, $convert_func: ident) => {
@@ -657,9 +682,7 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($stat_value_type::from(
-                                        x.$func.unwrap_or_default(),
-                                    ))
+                                    x.$func.and_then(|x| Some($stat_value_type::from(x)))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -668,9 +691,7 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($stat_value_type::from(
-                                        x.$func.unwrap_or_default(),
-                                    ))
+                                    x.$func.and_then(|x| Some($stat_value_type::from(x)))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -679,9 +700,9 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($convert_func(
-                                        x.clone().$func.unwrap_or_default().data(),
-                                    ))
+                                    x.clone()
+                                        .$func
+                                        .and_then(|x| Some($convert_func(x.data())))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -690,9 +711,9 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($convert_func(
-                                        x.clone().$func.unwrap_or_default().data(),
-                                    ))
+                                    x.clone()
+                                        .$func
+                                        .and_then(|x| Some($convert_func(x.data())))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -736,32 +757,6 @@ get_decimal_page_stats_iterator!(
     i256,
     from_bytes_to_i256
 );
-make_data_page_stats_iterator!(
-    MinByteArrayDataPageStatsIterator,
-    |x: &PageIndex<ByteArray>| { x.min.clone() },
-    Index::BYTE_ARRAY,
-    ByteArray
-);
-make_data_page_stats_iterator!(
-    MaxByteArrayDataPageStatsIterator,
-    |x: &PageIndex<ByteArray>| { x.max.clone() },
-    Index::BYTE_ARRAY,
-    ByteArray
-);
-
-make_data_page_stats_iterator!(
-    MaxFixedLenByteArrayDataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray
-);
-
-make_data_page_stats_iterator!(
-    MinFixedLenByteArrayDataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray
-);
 
 macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
@@ -780,7 +775,7 @@ macro_rules! get_data_page_statistics {
                     UInt8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| u8::try_from(x).ok())
                                 })
                             })
@@ -791,7 +786,7 @@ macro_rules! get_data_page_statistics {
                     UInt16Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| u16::try_from(x).ok())
                                 })
                             })
@@ -802,7 +797,7 @@ macro_rules! get_data_page_statistics {
                     UInt32Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| Some(x as u32))
                                 })
                             })
@@ -822,7 +817,7 @@ macro_rules! get_data_page_statistics {
                     Int8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| i8::try_from(x).ok())
                                 })
                             })
@@ -833,7 +828,7 @@ macro_rules! get_data_page_statistics {
                     Int16Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| i16::try_from(x).ok())
                                 })
                             })
@@ -846,8 +841,8 @@ macro_rules! get_data_page_statistics {
                     Float16Array::from_iter(
                         [<$stat_type_prefix Float16DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
-                                    x.and_then(|x| Some(from_bytes_to_f16(x.data())))
+                                x.into_iter().map(|x| {
+                                    x.and_then(|x| from_bytes_to_f16(x.data()))
                                 })
                             })
                             .flatten()
@@ -958,16 +953,28 @@ macro_rules! get_data_page_statistics {
                     })
                 },
                Some(DataType::FixedSizeBinary(size)) => {
-                    Ok(Arc::new(
-                        FixedSizeBinaryArray::try_from_iter(
-                            [<$stat_type_prefix FixedLenByteArrayDataPageStatsIterator>]::new($iterator)
-                            .flat_map(|x| x.into_iter())
-                            .filter_map(|x| x)
-                        ).unwrap_or_else(|e| {
-                            log::debug!("FixedSizeBinary statistics is invalid: {}", e);
-                            FixedSizeBinaryArray::new(*size, vec![].into(), None)
-                        })
-                    ))
+                    let mut builder = FixedSizeBinaryBuilder::new(*size);
+                    let iterator = [<$stat_type_prefix FixedLenByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            if x.len() == *size as usize {
+                                let _ = builder.append_value(x.data());
+                            } else {
+                                log::debug!(
+                                    "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+                                    size,
+                                    x.len(),
+                                );
+                                builder.append_null();
+                            }
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
                 },
                 _ => unimplemented!()
             }

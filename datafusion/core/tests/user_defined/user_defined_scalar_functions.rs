@@ -572,6 +572,17 @@ async fn test_user_defined_functions_cast_to_i64() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_user_defined_sql_functions() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql_planners = ctx.expr_planners();
+
+    assert!(!sql_planners.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn deregister_udf() -> Result<()> {
     let cast2i64 = ScalarUDF::from(CastToI64UDF::new());
     let ctx = SessionContext::new();
