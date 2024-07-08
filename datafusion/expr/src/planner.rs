@@ -139,6 +139,28 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
+
+    /// Plan an substring expression, e.g., `SUBSTRING(<expr> [FROM <expr>] [FOR <expr>])`
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_substring(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
+
+    /// Plans a struct `struct(expression1[, ..., expression_n])`
+    /// literal based on the given input expressions.
+    /// This function takes a vector of expressions and a boolean flag indicating whether
+    /// the struct uses the optional name
+    ///
+    /// Returns a `PlannerResult` containing either the planned struct expressions or the original
+    /// input expressions if planning is not possible.
+    fn plan_struct_literal(
+        &self,
+        args: Vec<Expr>,
+        _is_named_struct: bool,
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
 }
 
 /// An operator with two arguments to plan

@@ -268,7 +268,7 @@ impl PartitionEvaluator for MyPartitionEvaluator {
     }
 }
 
-/// Create a `PartitionEvalutor` to evaluate this function on a new
+/// Create a `PartitionEvaluator` to evaluate this function on a new
 /// partition.
 fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
     Ok(Box::new(MyPartitionEvaluator::new()))
@@ -474,7 +474,7 @@ impl Accumulator for GeometricMean {
 
 ### registering an Aggregate UDF
 
-To register a Aggreate UDF, you need to wrap the function implementation in a [`AggregateUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
+To register a Aggregate UDF, you need to wrap the function implementation in a [`AggregateUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udaf.rs`].
 
 ```rust
