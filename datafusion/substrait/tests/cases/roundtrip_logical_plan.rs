@@ -759,7 +759,7 @@ async fn duplicate_column() -> Result<()> {
     // colliding names.
     assert_expected_plan(
         "SELECT a + 1 as sum_a, a + 1 as sum_a_2 FROM data",
-        "Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS data.a + Int64(1)_0 AS sum_a_2\
+        "Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS data.a + Int64(1)__temp__0 AS sum_a_2\
             \n  Projection: data.a + Int64(1)\
             \n    TableScan: data projection=[a]",
         true,
