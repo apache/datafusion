@@ -48,6 +48,8 @@ use datafusion_expr::{
 /// ```
 /// # use datafusion_common::ScalarValue;
 /// # use datafusion_expr::ColumnarValue;
+/// # use datafusion_functions::datetime::to_local_time::ToLocalTimeFunc;
+/// # use datafusion_expr::ScalarUDFImpl;
 ///
 /// // 2019-03-31 01:00:00 +01:00
 /// let res = ToLocalTimeFunc::new()
@@ -74,6 +76,8 @@ use datafusion_expr::{
 /// # use datafusion_common::ScalarValue;
 /// # use datafusion_expr::ColumnarValue;
 /// # use chrono::NaiveDateTime;
+/// # use datafusion_functions::datetime::to_local_time::ToLocalTimeFunc;
+/// # use datafusion_expr::ScalarUDFImpl;
 ///
 /// let timestamp_str = "2020-03-31T13:40:00";
 /// let timezone_str = "America/New_York";
@@ -106,7 +110,6 @@ use datafusion_expr::{
 ///         assert_eq!(res, expected);
 ///         }
 ///     _ => panic!("unexpected return type"),
-///        }
 /// }
 /// ```
 #[derive(Debug)]
@@ -268,26 +271,26 @@ impl ToLocalTimeFunc {
 ///
 /// For example,
 ///
-/// ```
+/// ```text
 /// '2019-03-31T01:00:00Z'::timestamp at time zone 'Europe/Brussels'
 /// ```
 ///
 /// is displayed as follows in datafusion-cli:
 ///
-/// ```
+/// ```text
 /// 2019-03-31T01:00:00+01:00
 /// ```
 ///
 /// and is represented in DataFusion as:
 ///
-/// ```
+/// ```text
 /// TimestampNanosecond(Some(1_553_990_400_000_000_000), Some("Europe/Brussels"))
 /// ```
 ///
 /// To strip off the timezone while keeping the display value the same, we need to
 /// adjust the underlying timestamp with the timezone offset value using `adjust_to_local_time()`
 ///
-/// ```
+/// ```text
 /// adjust_to_local_time(1_553_990_400_000_000_000, "Europe/Brussels") --> 1_553_994_000_000_000_000
 /// ```
 ///
@@ -296,13 +299,13 @@ impl ToLocalTimeFunc {
 /// offset for "Europe/Brussels". Consequently, DataFusion can represent the timestamp in
 /// local time (with no offset or timezone information) as
 ///
-/// ```
+/// ```text
 /// TimestampNanosecond(Some(1_553_994_000_000_000_000), None)
 /// ```
 ///
 /// which is displayed as follows in datafusion-cli:
 ///
-/// ```
+/// ```text
 /// 2019-03-31T01:00:00
 /// ```
 fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, timezone: &str) -> i64 {
