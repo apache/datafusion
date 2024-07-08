@@ -38,7 +38,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
-use datafusion::physical_expr::expressions::{Max, NthValueAgg};
+use datafusion::physical_expr::expressions::Max;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -81,6 +81,7 @@ use datafusion_expr::{
     ScalarUDFImpl, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::StringAgg;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
@@ -362,15 +363,17 @@ fn rountrip_aggregate() -> Result<()> {
             false,
         )?],
         // NTH_VALUE
-        vec![Arc::new(NthValueAgg::new(
-            col("b", &schema)?,
-            1,
-            "NTH_VALUE(b, 1)".to_string(),
-            DataType::Int64,
+        vec![udaf::create_aggregate_expr(
+            &nth_value_udaf(),
+            &[col("b", &schema)?, lit(1u64)],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "NTH_VALUE(b, 1)",
             false,
-            Vec::new(),
-            Vec::new(),
-        ))],
+            false,
+        )?],
         // STRING_AGG
         vec![udaf::create_aggregate_expr(
             &AggregateUDF::new_from_impl(StringAgg::new()),

@@ -30,10 +30,10 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
-use crate::expressions::{self, Literal};
+use crate::expressions::{self};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 
 /// Create a physical aggregation expression.
@@ -102,26 +102,6 @@ pub fn create_aggregate_expr(
             name,
             data_type,
         )),
-        (AggregateFunction::NthValue, _) => {
-            let expr = &input_phy_exprs[0];
-            let Some(n) = input_phy_exprs[1]
-                .as_any()
-                .downcast_ref::<Literal>()
-                .map(|literal| literal.value())
-            else {
-                return exec_err!("Second argument of NTH_VALUE needs to be a literal");
-            };
-            let nullable = expr.nullable(input_schema)?;
-            Arc::new(expressions::NthValueAgg::new(
-                Arc::clone(expr),
-                n.clone().try_into()?,
-                name,
-                input_phy_types[0].clone(),
-                nullable,
-                ordering_types,
-                ordering_req.to_vec(),
-            ))
-        }
     })
 }
 

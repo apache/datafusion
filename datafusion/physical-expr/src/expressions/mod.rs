@@ -39,7 +39,6 @@ pub use crate::aggregate::array_agg_distinct::DistinctArrayAgg;
 pub use crate::aggregate::array_agg_ordered::OrderSensitiveArrayAgg;
 pub use crate::aggregate::build_in::create_aggregate_expr;
 pub use crate::aggregate::min_max::{Max, MaxAccumulator, Min, MinAccumulator};
-pub use crate::aggregate::nth_value::NthValueAgg;
 pub use crate::aggregate::stats::StatsType;
 pub use crate::window::cume_dist::{cume_dist, CumeDist};
 pub use crate::window::lead_lag::{lag, lead, WindowShift};
