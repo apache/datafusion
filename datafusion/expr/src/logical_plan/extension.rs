@@ -349,5 +349,9 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
 }
 
 fn get_all_columns_from_schema(schema: &DFSchema) -> HashSet<String> {
-    schema.fields().iter().map(|f| f.name().to_string()).collect()
+    schema
+        .fields()
+        .iter()
+        .map(|f| f.name().to_string())
+        .collect()
 }

@@ -149,9 +149,9 @@ impl SimplifyExpressions {
 mod tests {
     use std::ops::Not;
 
+    use crate::optimizer::Optimizer;
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, Utc};
-    use crate::optimizer::Optimizer;
     use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
@@ -702,7 +702,8 @@ mod tests {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        let left_key = col("t1.a") + lit(1i64).cast_to(&DataType::UInt32.into(), t1.schema())?;
+        let left_key =
+            col("t1.a") + lit(1i64).cast_to(&DataType::UInt32.into(), t1.schema())?;
         let right_key =
             col("t2.a") + lit(2i64).cast_to(&DataType::UInt32.into(), t2.schema())?;
         let plan = LogicalPlanBuilder::from(t1)

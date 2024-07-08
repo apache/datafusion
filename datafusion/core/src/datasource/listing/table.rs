@@ -41,7 +41,10 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
-use datafusion_common::{config_datafusion_err, internal_err, plan_err, project_schema, Constraints, ToDFSchema, SchemaExt};
+use datafusion_common::{
+    config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
+    SchemaExt, ToDFSchema,
+};
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_physical_expr::{
@@ -49,10 +52,10 @@ use datafusion_physical_expr::{
 };
 
 use async_trait::async_trait;
+use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
-use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
 
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
@@ -786,7 +789,8 @@ impl TableProvider for ListingTable {
 
         let filters = if let Some(expr) = conjunction(filters.to_vec()) {
             // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
-            let table_df_schema = LogicalSchema::from(self.table_schema.as_ref().clone()).to_dfschema()?;
+            let table_df_schema =
+                LogicalSchema::from(self.table_schema.as_ref().clone()).to_dfschema()?;
             let filters =
                 create_physical_expr(&expr, &table_df_schema, state.execution_props())?;
             Some(filters)
@@ -857,9 +861,7 @@ impl TableProvider for ListingTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = SchemaRef::new(self.schema().as_ref().clone().into());
         // Check that the schema of the plan matches the schema of this table.
-        if !schema
-            .logically_equivalent_names_and_types(&input.schema())
-        {
+        if !schema.logically_equivalent_names_and_types(&input.schema()) {
             return plan_err!(
                 // Return an error if schema of the input query does not match with the table schema.
                 "Inserting query must have the same schema with the table."
@@ -980,13 +982,9 @@ impl ListingTable {
             .buffered(ctx.config_options().execution.meta_fetch_concurrency);
 
         let schema = SchemaRef::new(self.schema().as_ref().clone().into());
-        let (files, statistics) = get_statistics_with_limit(
-            files,
-            schema,
-            limit,
-            self.options.collect_stat,
-        )
-        .await?;
+        let (files, statistics) =
+            get_statistics_with_limit(files, schema, limit, self.options.collect_stat)
+                .await?;
 
         Ok((
             split_files(files, self.options.target_partitions),
@@ -1879,8 +1877,13 @@ mod tests {
         // Since logical plan contains a filter, increasing parallelism is helpful.
         // Therefore, we will have 8 partitions in the final plan.
         // Create an insert plan to insert the source data into the initial table
-        let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema.as_ref().clone().into(), false)?.build()?;
+        let insert_into_table = LogicalPlanBuilder::insert_into(
+            scan_plan,
+            "t",
+            &schema.as_ref().clone().into(),
+            false,
+        )?
+        .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

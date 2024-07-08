@@ -23,7 +23,10 @@ use arrow_buffer::IntervalDayTime;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::cast::as_int32_array;
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::schema::LogicalSchema;
 use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
@@ -38,9 +41,6 @@ use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use std::sync::Arc;
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
-use datafusion_common::logical_type::schema::LogicalSchema;
 
 /// In order to simplify expressions, DataFusion must have information
 /// about the expressions.

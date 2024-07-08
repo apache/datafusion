@@ -19,8 +19,8 @@
 
 use crate::{Expr, LogicalPlan};
 
-use datafusion_common::{Constraints, Result};
 use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::{Constraints, Result};
 
 use std::any::Any;
 

@@ -30,6 +30,8 @@ use arrow::datatypes::{
 };
 use arrow::ipc::{reader::read_record_batch, root_as_message};
 
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{
     arrow_datafusion_err,
     config::{
@@ -42,8 +44,6 @@ use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
 };
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::TypeRelation;
 
 #[derive(Debug)]
 pub enum Error {
@@ -160,19 +160,21 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
         df_schema: &protobuf::DfSchema,
     ) -> datafusion_common::Result<Self, Self::Error> {
         let df_fields = df_schema.columns.clone();
-        let qualifiers_and_fields: Vec<(Option<TableReference>, Arc<LogicalField>)> = df_fields
-            .iter()
-            .map(|df_field| {
-                let field: LogicalField = df_field.field.as_ref().required("field")?;
-                Ok((
-                    df_field
-                        .qualifier
-                        .as_ref()
-                        .map(|q| q.relation.clone().into()),
-                    Arc::new(field),
-                ))
-            })
-            .collect::<datafusion_common::Result<Vec<_>, Error>>()?;
+        let qualifiers_and_fields: Vec<(Option<TableReference>, Arc<LogicalField>)> =
+            df_fields
+                .iter()
+                .map(|df_field| {
+                    let field: LogicalField =
+                        df_field.field.as_ref().required("field")?;
+                    Ok((
+                        df_field
+                            .qualifier
+                            .as_ref()
+                            .map(|q| q.relation.clone().into()),
+                        Arc::new(field),
+                    ))
+                })
+                .collect::<datafusion_common::Result<Vec<_>, Error>>()?;
 
         Ok(DFSchema::new_with_metadata(
             qualifiers_and_fields,
@@ -343,7 +345,6 @@ impl TryFrom<&protobuf::Field> for Field {
         Ok(field)
     }
 }
-
 
 impl TryFrom<&protobuf::Field> for LogicalField {
     type Error = Error;

@@ -23,12 +23,12 @@ use arrow::datatypes::{DataType, IntervalUnit};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     DataFusionError, Result, ScalarValue,
 };
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
     InSubquery, Like, ScalarFunction, WindowFunction,
@@ -268,9 +268,12 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     )
                 })?;
                 let expr = match left_type {
-                    _ => Box::new(expr.cast_to(&coerced_type.clone().into(), self.schema)?),
+                    _ => {
+                        Box::new(expr.cast_to(&coerced_type.clone().into(), self.schema)?)
+                    }
                 };
-                let pattern = Box::new(pattern.cast_to(&coerced_type.into(), self.schema)?);
+                let pattern =
+                    Box::new(pattern.cast_to(&coerced_type.into(), self.schema)?);
                 Ok(Transformed::yes(Expr::Like(Like::new(
                     negated,
                     expr,
@@ -331,10 +334,16 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 let expr_data_type = expr.get_type(self.schema)?;
                 let list_data_types = list
                     .iter()
-                    .map(|list_expr| list_expr.get_type(self.schema).map(|t| t.physical().clone()))
+                    .map(|list_expr| {
+                        list_expr
+                            .get_type(self.schema)
+                            .map(|t| t.physical().clone())
+                    })
                     .collect::<Result<Vec<_>>>()?;
-                let result_type =
-                    get_coerce_type_for_list(&expr_data_type.physical(), &list_data_types);
+                let result_type = get_coerce_type_for_list(
+                    &expr_data_type.physical(),
+                    &list_data_types,
+                );
                 match result_type {
                     None => plan_err!(
                         "Can not find compatible types to compare {expr_data_type:?} with {list_data_types:?}"
@@ -580,7 +589,8 @@ fn coerce_window_frame(
         }
         WindowFrameUnits::Rows | WindowFrameUnits::Groups => DataType::UInt64.into(),
     };
-    window_frame.start_bound = coerce_frame_bound(&target_type, window_frame.start_bound)?;
+    window_frame.start_bound =
+        coerce_frame_bound(&target_type, window_frame.start_bound)?;
     window_frame.end_bound = coerce_frame_bound(&target_type, window_frame.end_bound)?;
     Ok(window_frame)
 }
@@ -589,7 +599,11 @@ fn coerce_window_frame(
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
-    get_input_types(&left_type.physical(), &Operator::IsDistinctFrom, &DataType::Boolean)?;
+    get_input_types(
+        &left_type.physical(),
+        &Operator::IsDistinctFrom,
+        &DataType::Boolean,
+    )?;
     expr.cast_to(&DataType::Boolean.into(), schema)
 }
 
@@ -731,8 +745,10 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
                 .iter()
                 .map(|(when, _then)| when.get_type(schema).map(|t| t.physical().clone()))
                 .collect::<Result<Vec<_>>>()?;
-            let coerced_type =
-                get_coerce_type_for_case_expression(&when_types, Some(&case_type.physical()));
+            let coerced_type = get_coerce_type_for_case_expression(
+                &when_types,
+                Some(&case_type.physical()),
+            );
             coerced_type.ok_or_else(|| {
                 plan_datafusion_err!(
                     "Failed to coerce case ({case_type:?}) and when ({when_types:?}) \
@@ -755,7 +771,9 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
     let case_expr = case
         .expr
         .zip(case_when_coerce_type.as_ref())
-        .map(|(case_expr, coercible_type)| case_expr.cast_to(&coercible_type.into(), schema))
+        .map(|(case_expr, coercible_type)| {
+            case_expr.cast_to(&coercible_type.into(), schema)
+        })
         .transpose()?
         .map(Box::new);
     let when_then = case
@@ -793,10 +811,10 @@ mod test {
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
-    use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_common::logical_type::field::LogicalField;
     use datafusion_common::logical_type::TypeRelation;
+    use datafusion_common::tree_node::{TransformedResult, TreeNode};
+    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection};
     use datafusion_expr::test::function_stub::avg_udaf;

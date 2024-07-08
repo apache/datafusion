@@ -19,9 +19,9 @@
 use crate::expr::Case;
 use crate::{expr_schema::ExprSchemable, Expr};
 use arrow::datatypes::DataType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{plan_err, DFSchema, Result};
 use std::collections::HashSet;
-use datafusion_common::logical_type::TypeRelation;
 
 /// Helper struct for building [Expr::Case]
 pub struct CaseBuilder {

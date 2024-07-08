@@ -29,13 +29,13 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
 use datafusion_common::{assert_batches_eq, DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
 use std::fs::File;
 use std::io::Seek;
 use std::path::Path;
 use std::sync::Arc;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
 
 /// test simple udtf with define read_csv with parameters
 #[tokio::test]

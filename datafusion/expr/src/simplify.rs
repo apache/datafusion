@@ -17,10 +17,10 @@
 
 //! Structs and traits to provide the information needed for expression simplification.
 
-use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::{DFSchemaRef, DataFusionError, Result};
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
+use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::{DFSchemaRef, DataFusionError, Result};
 
 /// Provides the information necessary to apply algebraic simplification to an
 /// [Expr]. See [SimplifyContext] for one concrete implementation.
@@ -75,7 +75,9 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
     /// returns true if this Expr has boolean type
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
         for schema in &self.schema {
-            if let Ok(LogicalType::Boolean) = expr.get_type(schema).map(|t| t.logical().clone()) {
+            if let Ok(LogicalType::Boolean) =
+                expr.get_type(schema).map(|t| t.logical().clone())
+            {
                 return Ok(true);
             }
         }

@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
-use std::str::FromStr;
-use std::sync::Arc;
-use arrow_schema::SchemaRef;
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
     LexOrdering, Statement as DFStatement,
@@ -28,7 +23,15 @@ use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
 };
 use crate::utils::normalize_ident;
+use arrow_schema::SchemaRef;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
+use std::str::FromStr;
+use std::sync::Arc;
 
+use datafusion_common::logical_type::fields::LogicalFields;
+use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
@@ -59,9 +62,6 @@ use sqlparser::ast::{
     TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
-use datafusion_common::logical_type::fields::LogicalFields;
-use datafusion_common::logical_type::TypeRelation;
-use datafusion_common::logical_type::schema::LogicalSchema;
 
 fn ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())

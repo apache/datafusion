@@ -55,10 +55,10 @@ use datafusion_common::{
 use crate::display::PgJsonVisitor;
 use crate::logical_plan::tree_node::unwrap_arc;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
-pub use datafusion_common::{JoinConstraint, JoinType};
 use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+pub use datafusion_common::{JoinConstraint, JoinType};
 
 /// A `LogicalPlan` is a node in a tree of relational operators (such as
 /// Projection or Filter).
@@ -356,10 +356,13 @@ impl LogicalPlan {
 
     /// Returns the (fixed) output schema for explain plans
     pub fn explain_schema() -> LogicalSchemaRef {
-        LogicalSchemaRef::new(Schema::new(vec![
-            Field::new("plan_type", DataType::Utf8, false),
-            Field::new("plan", DataType::Utf8, false),
-        ]).into())
+        LogicalSchemaRef::new(
+            Schema::new(vec![
+                Field::new("plan_type", DataType::Utf8, false),
+                Field::new("plan", DataType::Utf8, false),
+            ])
+            .into(),
+        )
     }
 
     /// Returns the (fixed) output schema for `DESCRIBE` plans
@@ -368,7 +371,8 @@ impl LogicalPlan {
             Field::new("column_name", DataType::Utf8, false),
             Field::new("data_type", DataType::Utf8, false),
             Field::new("is_nullable", DataType::Utf8, false),
-        ]).into()
+        ])
+        .into()
     }
 
     /// Returns all expressions (non-recursively) evaluated by the current
@@ -2382,9 +2386,7 @@ impl TableScan {
 
                 let df_schema = DFSchema::new_with_metadata(
                     p.iter()
-                        .map(|i| {
-                            (Some(table_name.clone()), schema.field(*i).clone())
-                        })
+                        .map(|i| (Some(table_name.clone()), schema.field(*i).clone()))
                         .collect(),
                     schema.metadata.clone(),
                 )?;

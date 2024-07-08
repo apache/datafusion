@@ -34,6 +34,8 @@ use crate::{
 use crate::{window_frame, Volatility};
 
 use arrow::datatypes::DataType;
+use datafusion_common::logical_type::field::LogicalFieldRef;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -41,8 +43,6 @@ use datafusion_common::{
     internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::NullTreatment;
-use datafusion_common::logical_type::field::LogicalFieldRef;
-use datafusion_common::logical_type::TypeRelation;
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
 ///
@@ -567,7 +567,10 @@ pub struct Cast {
 impl Cast {
     /// Create a new Cast expression
     pub fn new(expr: Box<Expr>, data_type: impl Into<TypeRelation>) -> Self {
-        Self { expr, data_type: data_type.into() }
+        Self {
+            expr,
+            data_type: data_type.into(),
+        }
     }
 }
 
@@ -583,7 +586,10 @@ pub struct TryCast {
 impl TryCast {
     /// Create a new TryCast expression
     pub fn new(expr: Box<Expr>, data_type: impl Into<TypeRelation>) -> Self {
-        Self { expr, data_type: data_type.into() }
+        Self {
+            expr,
+            data_type: data_type.into(),
+        }
     }
 }
 

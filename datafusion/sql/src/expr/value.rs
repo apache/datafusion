@@ -18,6 +18,7 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -28,7 +29,6 @@ use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
 use std::borrow::Cow;
-use datafusion_common::logical_type::TypeRelation;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn parse_value(

@@ -41,7 +41,7 @@ use datafusion_common::{
 
 use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::logical_type::schema::LogicalSchema;
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 
 ///  The value to which `COUNT(*)` is expanded to in
@@ -838,8 +838,7 @@ pub fn can_hash(data_type: &TypeRelation) -> bool {
     use LogicalType::*;
     matches!(
         data_type.logical(),
-        Null
-            | Boolean
+        Null | Boolean
             | Int8
             | Int16
             | Int32

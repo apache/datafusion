@@ -158,7 +158,8 @@ fn simplify_demo() -> Result<()> {
     // However, DataFusion's simplification logic can do this for you
 
     // you need to tell DataFusion the type of column "ts":
-    let schema = LogicalSchema::from(Schema::new(vec![make_ts_field("ts")])).to_dfschema_ref()?;
+    let schema =
+        LogicalSchema::from(Schema::new(vec![make_ts_field("ts")])).to_dfschema_ref()?;
 
     // And then build a simplifier
     // the ExecutionProps carries information needed to simplify
@@ -213,7 +214,8 @@ fn simplify_demo() -> Result<()> {
     // String --> Date simplification
     // `cast('2020-09-01' as date)` --> 18500
     assert_eq!(
-        simplifier.simplify(lit("2020-09-01").cast_to(&DataType::Date32.into(), &schema)?)?,
+        simplifier
+            .simplify(lit("2020-09-01").cast_to(&DataType::Date32.into(), &schema)?)?,
         lit(ScalarValue::Date32(Some(18506)))
     );
 

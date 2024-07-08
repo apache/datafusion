@@ -17,11 +17,11 @@
 
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit
+    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
 use datafusion::common::logical_type::field::LogicalField;
 use datafusion::common::logical_type::schema::LogicalSchema;
-use datafusion::common::logical_type::{TypeRelation, ExtensionType};
+use datafusion::common::logical_type::{ExtensionType, TypeRelation};
 use datafusion::common::{
     not_impl_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
     substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
@@ -366,14 +366,14 @@ fn make_renamed_schema(
             let name = next_struct_field_name(0, dfs_names, &mut name_idx)?;
             Ok((
                 q.cloned(),
-                (**f)
-                    .to_owned()
-                    .with_name(name)
-                    .with_data_type(rename_inner_fields(
+                (**f).to_owned().with_name(name).with_data_type(
+                    rename_inner_fields(
                         f.data_type().physical(),
                         dfs_names,
                         &mut name_idx,
-                    )?.into()),
+                    )?
+                    .into(),
+                ),
             ))
         })
         .collect::<Result<Vec<_>>>()?
@@ -1462,7 +1462,9 @@ fn from_substrait_struct_type(
     for (i, f) in s.types.iter().enumerate() {
         let field = Field::new(
             next_struct_field_name(i, dfs_names, name_idx)?,
-            from_substrait_type(f, dfs_names, name_idx)?.physical().clone(),
+            from_substrait_type(f, dfs_names, name_idx)?
+                .physical()
+                .clone(),
             true, // We assume everything to be nullable since that's easier than ensuring it matches
         );
         fields.push(field);
@@ -1670,9 +1672,9 @@ fn from_substrait_literal(
                 name_idx,
             )?;
             match lit.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
-                    ScalarValue::List(ScalarValue::new_list_nullable(&[], &element_type.physical()))
-                }
+                DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::List(
+                    ScalarValue::new_list_nullable(&[], &element_type.physical()),
+                ),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeList(
                     ScalarValue::new_large_list(&[], &element_type.physical()),
                 ),
@@ -1861,19 +1863,25 @@ fn from_substrait_null(
                     true,
                 );
                 match l.type_variation_reference {
-                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::List(
-                        Arc::new(GenericListArray::new_null(FieldRef::new(field.into()), 1)),
-                    )),
-                    LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::LargeList(
-                        Arc::new(GenericListArray::new_null(FieldRef::new(field.into()), 1)),
-                    )),
+                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
+                        Ok(ScalarValue::List(Arc::new(GenericListArray::new_null(
+                            FieldRef::new(field.into()),
+                            1,
+                        ))))
+                    }
+                    LARGE_CONTAINER_TYPE_VARIATION_REF => {
+                        Ok(ScalarValue::LargeList(Arc::new(
+                            GenericListArray::new_null(FieldRef::new(field.into()), 1),
+                        )))
+                    }
                     v => not_impl_err!(
                         "Unsupported Substrait type variation {v} of type {kind:?}"
                     ),
                 }
             }
             r#type::Kind::Struct(s) => {
-                let fields: Fields = from_substrait_struct_type(s, dfs_names, name_idx)?.into();
+                let fields: Fields =
+                    from_substrait_struct_type(s, dfs_names, name_idx)?.into();
                 Ok(ScalarStructBuilder::new_null(fields))
             }
             _ => not_impl_err!("Unsupported Substrait type for null: {kind:?}"),

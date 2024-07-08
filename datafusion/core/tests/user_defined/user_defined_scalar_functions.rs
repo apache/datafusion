@@ -25,6 +25,7 @@ use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionS
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::{as_float64_array, as_int32_array};
+use datafusion_common::logical_type::ExtensionType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
@@ -39,7 +40,6 @@ use datafusion_expr::{
 use datafusion_functions_array::range::range_udf;
 use parking_lot::Mutex;
 use sqlparser::ast::Ident;
-use datafusion_common::logical_type::ExtensionType;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -646,7 +646,11 @@ impl ScalarUDFImpl for TakeUDF {
             );
         };
 
-        arg_exprs.get(take_idx).unwrap().get_type(schema).map(|t| t.physical().clone())
+        arg_exprs
+            .get(take_idx)
+            .unwrap()
+            .get_type(schema)
+            .map(|t| t.physical().clone())
     }
 
     // The actual implementation
@@ -837,7 +841,8 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
             return_type: definition
                 .return_type
                 .expect("Return type has to be defined!")
-                .physical().clone(),
+                .physical()
+                .clone(),
             // TODO(@notfilippo): avoid conversion to physical type
             signature: Signature::exact(
                 definition

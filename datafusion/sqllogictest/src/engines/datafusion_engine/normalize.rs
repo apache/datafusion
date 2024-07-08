@@ -265,9 +265,9 @@ pub(crate) fn convert_schema_to_types(columns: &LogicalFields) -> Vec<DFColumnTy
             | LogicalType::Decimal128(_, _)
             | LogicalType::Decimal256(_, _) => DFColumnType::Float,
             LogicalType::Utf8 => DFColumnType::Text,
-            LogicalType::Date
-            | LogicalType::Time32(_)
-            | LogicalType::Time64(_) => DFColumnType::DateTime,
+            LogicalType::Date | LogicalType::Time32(_) | LogicalType::Time64(_) => {
+                DFColumnType::DateTime
+            }
             LogicalType::Timestamp(_, _) => DFColumnType::Timestamp,
             _ => DFColumnType::Another,
         })

@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::error::{_plan_datafusion_err, _plan_err};
+use crate::logical_type::TypeRelation;
 use crate::{Result, ScalarValue};
 use std::collections::HashMap;
-use crate::logical_type::TypeRelation;
 
 /// The parameter value corresponding to the placeholder
 #[derive(Debug, Clone)]

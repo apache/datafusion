@@ -43,8 +43,8 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::{ExecutionMode, PlanProperties};
 
 use async_trait::async_trait;
-use futures::stream::Stream;
 use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use futures::stream::Stream;
 
 mod provider_filter_pushdown;
 mod statistics;

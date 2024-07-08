@@ -42,6 +42,7 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -60,7 +61,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
 
 /// This example demonstrates using low level DataFusion APIs to read only
 /// certain row groups and ranges from parquet files, based on external
@@ -301,8 +301,7 @@ impl IndexTableProvider {
         // analyze the predicate. In a real system, using
         // `PruningPredicate::prune` would likely be easier to do.
         let schema = SchemaRef::new(self.schema().as_ref().clone().into());
-        let pruning_predicate =
-            PruningPredicate::try_new(Arc::clone(predicate), schema)?;
+        let pruning_predicate = PruningPredicate::try_new(Arc::clone(predicate), schema)?;
 
         // The PruningPredicate's guarantees must all be satisfied in order for
         // the predicate to possibly evaluate to true.

@@ -22,9 +22,9 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, Result};
 use datafusion_common::logical_type::schema::LogicalSchemaRef;
 use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_functions_aggregate::average::avg_udaf;

@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use crate::datasource::TableProvider;
 
-use datafusion_common::{internal_err, Constraints};
 use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::{internal_err, Constraints};
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
 
 /// DataFusion default table source, wrapping TableProvider.

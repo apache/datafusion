@@ -107,8 +107,8 @@ mod tests {
         WindowFrameUnits,
     };
     use datafusion_functions_aggregate::count::count_udaf;
-    use std::sync::Arc;
     use datafusion_functions_aggregate::expr_fn::{count, sum};
+    use std::sync::Arc;
 
     fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(

@@ -51,12 +51,16 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::{get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference, UnnestOptions, ToDFSchema};
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::logical_type::fields::LogicalFields;
 use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::{
+    get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference, ToDFSchema, UnnestOptions,
+};
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -194,7 +198,9 @@ impl LogicalPlanBuilder {
                 }
                 if let Some(prev_type) = common_type {
                     // get common type of each column values.
-                    let Some(new_type) = values_coercion(&data_type.physical(), &prev_type.physical()) else {
+                    let Some(new_type) =
+                        values_coercion(&data_type.physical(), &prev_type.physical())
+                    else {
                         return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
                     };
                     common_type = Some(new_type.into());
@@ -1191,7 +1197,11 @@ pub fn change_redundant_column(fields: &LogicalFields) -> Vec<LogicalField> {
             *counter += 1;
             if *counter > 1 {
                 let new_name = format!("{}:{}", field.name(), *counter - 1);
-                LogicalField::new(new_name, field.data_type().clone(), field.is_nullable())
+                LogicalField::new(
+                    new_name,
+                    field.data_type().clone(),
+                    field.is_nullable(),
+                )
             } else {
                 field.as_ref().clone()
             }
@@ -1220,53 +1230,54 @@ pub fn build_join_schema(
     let right_fields = right.iter();
     let left_fields = left.iter();
 
-    let qualified_fields: Vec<(Option<TableReference>, Arc<LogicalField>)> = match join_type {
-        JoinType::Inner => {
-            // left then right
-            let left_fields = left_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
-                .collect::<Vec<_>>();
-            let right_fields = right_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
-                .collect::<Vec<_>>();
-            left_fields.into_iter().chain(right_fields).collect()
-        }
-        JoinType::Left => {
-            // left then right, right set to nullable in case of not matched scenario
-            let left_fields = left_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
-                .collect::<Vec<_>>();
-            left_fields
-                .into_iter()
-                .chain(nullify_fields(right_fields))
-                .collect()
-        }
-        JoinType::Right => {
-            // left then right, left set to nullable in case of not matched scenario
-            let right_fields = right_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
-                .collect::<Vec<_>>();
-            nullify_fields(left_fields)
-                .into_iter()
-                .chain(right_fields)
-                .collect()
-        }
-        JoinType::Full => {
-            // left then right, all set to nullable in case of not matched scenario
-            nullify_fields(left_fields)
-                .into_iter()
-                .chain(nullify_fields(right_fields))
-                .collect()
-        }
-        JoinType::LeftSemi | JoinType::LeftAnti => {
-            // Only use the left side for the schema
-            left_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
-        }
-        JoinType::RightSemi | JoinType::RightAnti => {
-            // Only use the right side for the schema
-            right_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
-        }
-    };
+    let qualified_fields: Vec<(Option<TableReference>, Arc<LogicalField>)> =
+        match join_type {
+            JoinType::Inner => {
+                // left then right
+                let left_fields = left_fields
+                    .map(|(q, f)| (q.cloned(), f.clone()))
+                    .collect::<Vec<_>>();
+                let right_fields = right_fields
+                    .map(|(q, f)| (q.cloned(), f.clone()))
+                    .collect::<Vec<_>>();
+                left_fields.into_iter().chain(right_fields).collect()
+            }
+            JoinType::Left => {
+                // left then right, right set to nullable in case of not matched scenario
+                let left_fields = left_fields
+                    .map(|(q, f)| (q.cloned(), f.clone()))
+                    .collect::<Vec<_>>();
+                left_fields
+                    .into_iter()
+                    .chain(nullify_fields(right_fields))
+                    .collect()
+            }
+            JoinType::Right => {
+                // left then right, left set to nullable in case of not matched scenario
+                let right_fields = right_fields
+                    .map(|(q, f)| (q.cloned(), f.clone()))
+                    .collect::<Vec<_>>();
+                nullify_fields(left_fields)
+                    .into_iter()
+                    .chain(right_fields)
+                    .collect()
+            }
+            JoinType::Full => {
+                // left then right, all set to nullable in case of not matched scenario
+                nullify_fields(left_fields)
+                    .into_iter()
+                    .chain(nullify_fields(right_fields))
+                    .collect()
+            }
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                // Only use the left side for the schema
+                left_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                // Only use the right side for the schema
+                right_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
+            }
+        };
     let func_dependencies = left.functional_dependencies().join(
         right.functional_dependencies(),
         join_type,
@@ -1394,7 +1405,11 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     })?;
                     Ok((
                         left_qualifier.cloned(),
-                        Arc::new(LogicalField::new(left_field.name(), data_type, nullable)),
+                        Arc::new(LogicalField::new(
+                            left_field.name(),
+                            data_type,
+                            nullable,
+                        )),
                     ))
                 },
             )
@@ -1718,11 +1733,11 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType, Field, Fields};
-    use datafusion_common::logical_type::ExtensionType;
     use super::*;
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
+    use arrow::datatypes::{DataType, Field, Fields};
+    use datafusion_common::logical_type::ExtensionType;
 
     use datafusion_common::SchemaError;
 
@@ -2146,7 +2161,10 @@ mod tests {
 
         // Check unnested struct list field should be a struct.
         let field = plan.schema().field_with_name(None, "structs").unwrap();
-        assert!(matches!(field.data_type().logical(), LogicalType::Struct(_)));
+        assert!(matches!(
+            field.data_type().logical(),
+            LogicalType::Struct(_)
+        ));
 
         // Unnesting multiple fields at the same time
         let cols = vec!["strings", "structs", "struct_singular"]

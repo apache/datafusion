@@ -28,12 +28,12 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDF};
 
+use super::log::LogFunc;
 use arrow::array::{ArrayRef, Float64Array, Int64Array};
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
-use super::log::LogFunc;
 
 #[derive(Debug)]
 pub struct PowerFunc {

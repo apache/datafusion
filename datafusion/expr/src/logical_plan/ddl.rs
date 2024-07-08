@@ -24,9 +24,9 @@ use std::{
 
 use crate::{Expr, LogicalPlan, Volatility};
 
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReference};
 use sqlparser::ast::Ident;
-use datafusion_common::logical_type::TypeRelation;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Clone, PartialEq, Eq, Hash)]

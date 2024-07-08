@@ -33,7 +33,12 @@ impl std::fmt::Debug for LogicalFields {
 
 impl From<&Fields> for LogicalFields {
     fn from(value: &Fields) -> Self {
-        Self(value.iter().map(|v| LogicalFieldRef::new(v.into())).collect())
+        Self(
+            value
+                .iter()
+                .map(|v| LogicalFieldRef::new(v.into()))
+                .collect(),
+        )
     }
 }
 
@@ -48,7 +53,7 @@ impl Into<Fields> for LogicalFields {
         Fields::from(
             self.iter()
                 .map(|f| f.as_ref().clone().into())
-                .collect::<Vec<Field>>()
+                .collect::<Vec<Field>>(),
         )
     }
 }
@@ -60,13 +65,13 @@ impl Default for LogicalFields {
 }
 
 impl FromIterator<LogicalField> for LogicalFields {
-    fn from_iter<T: IntoIterator<Item=LogicalField>>(iter: T) -> Self {
+    fn from_iter<T: IntoIterator<Item = LogicalField>>(iter: T) -> Self {
         iter.into_iter().map(Arc::new).collect()
     }
 }
 
 impl FromIterator<LogicalFieldRef> for LogicalFields {
-    fn from_iter<T: IntoIterator<Item=LogicalFieldRef>>(iter: T) -> Self {
+    fn from_iter<T: IntoIterator<Item = LogicalFieldRef>>(iter: T) -> Self {
         Self(iter.into_iter().collect())
     }
 }
@@ -135,7 +140,11 @@ impl FromIterator<(i8, LogicalFieldRef)> for LogicalUnionFields {
 
 impl From<&UnionFields> for LogicalUnionFields {
     fn from(value: &UnionFields) -> Self {
-        Self::from_iter(value.iter().map(|(i, f)| (i, LogicalFieldRef::new(f.into()))))
+        Self::from_iter(
+            value
+                .iter()
+                .map(|(i, f)| (i, LogicalFieldRef::new(f.into()))),
+        )
     }
 }
 

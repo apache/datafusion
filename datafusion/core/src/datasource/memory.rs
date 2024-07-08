@@ -17,10 +17,6 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::fmt::{self, Debug};
-use std::sync::Arc;
 use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -33,6 +29,10 @@ use crate::physical_plan::{
     Partitioning, SendableRecordBatchStream,
 };
 use crate::physical_planner::create_physical_sort_exprs;
+use std::any::Any;
+use std::collections::HashMap;
+use std::fmt::{self, Debug};
+use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -41,12 +41,12 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -218,8 +218,11 @@ impl TableProvider for MemTable {
             partitions.push(inner_vec.clone())
         }
 
-        let mut exec =
-            MemoryExec::try_new(&partitions, SchemaRef::new(self.schema().as_ref().clone().into()), projection.cloned())?;
+        let mut exec = MemoryExec::try_new(
+            &partitions,
+            SchemaRef::new(self.schema().as_ref().clone().into()),
+            projection.cloned(),
+        )?;
 
         let show_sizes = state.config_options().explain.show_sizes;
         exec = exec.with_show_sizes(show_sizes);
@@ -269,9 +272,7 @@ impl TableProvider for MemTable {
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
         let schema = SchemaRef::new(self.schema.as_ref().clone());
-        if !schema
-            .logically_equivalent_names_and_types(&input.schema())
-        {
+        if !schema.logically_equivalent_names_and_types(&input.schema()) {
             return plan_err!(
                 "Inserting query must have the same schema with the table."
             );
@@ -624,8 +625,13 @@ mod tests {
         // Create a table scan logical plan to read from the source table
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
-        let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema.as_ref().clone().into(), false)?.build()?;
+        let insert_into_table = LogicalPlanBuilder::insert_into(
+            scan_plan,
+            "t",
+            &schema.as_ref().clone().into(),
+            false,
+        )?
+        .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

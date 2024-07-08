@@ -419,10 +419,10 @@ impl<'a> ColOpLit<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::OnceLock;
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use super::*;
     use crate::planner::logical2physical;
+    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use std::sync::OnceLock;
 
     use datafusion_expr::expr_fn::*;
     use datafusion_expr::{lit, Expr};

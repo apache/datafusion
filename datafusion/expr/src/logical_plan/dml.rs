@@ -20,12 +20,12 @@ use std::fmt::{self, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::LogicalPlan;
 use arrow::datatypes::DataType;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::logical_type::schema::LogicalSchema;
-use crate::LogicalPlan;
+use datafusion_common::{DFSchemaRef, TableReference};
 
 /// Operator that copies the contents of a database to file(s)
 #[derive(Clone)]
@@ -131,6 +131,8 @@ impl Display for WriteOp {
 
 fn make_count_schema() -> DFSchemaRef {
     Arc::new(
-        LogicalSchema::new(vec![LogicalField::new("count", DataType::UInt64, false)]).try_into().unwrap()
+        LogicalSchema::new(vec![LogicalField::new("count", DataType::UInt64, false)])
+            .try_into()
+            .unwrap(),
     )
 }

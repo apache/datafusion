@@ -28,9 +28,9 @@ use datafusion_sql::unparser::dialect::{
 };
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 
+use crate::common::MockContextProvider;
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
-use crate::common::MockContextProvider;
 
 #[test]
 fn roundtrip_expr() {

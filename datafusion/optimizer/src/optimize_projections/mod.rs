@@ -807,10 +807,10 @@ mod tests {
     };
     use crate::{OptimizerContext, OptimizerRule};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::logical_type::field::LogicalField;
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
     };
-    use datafusion_common::logical_type::field::LogicalField;
     use datafusion_expr::AggregateExt;
     use datafusion_expr::{
         binary_expr, build_join_schema,

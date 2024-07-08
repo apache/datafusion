@@ -17,9 +17,9 @@
 
 use arrow_schema::DataType;
 use datafusion::prelude::{CsvReadOptions, SessionContext};
-use datafusion_common::{DFSchemaRef, Result, ToDFSchema};
 use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::{DFSchemaRef, Result, ToDFSchema};
 use datafusion_expr::Expr;
 use datafusion_sql::unparser::Unparser;
 

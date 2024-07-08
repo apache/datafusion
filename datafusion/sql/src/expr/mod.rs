@@ -21,11 +21,11 @@ use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::planner::RawFieldAccessExpr;
 use sqlparser::ast::{CastKind, Expr as SQLExpr, Subscript, TrimWhereField, Value};
 
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
     ScalarValue,
 };
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
@@ -332,7 +332,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     {
                         Expr::Cast(Cast::new(
                             Box::new(expr),
-                            TypeRelation::from(DataType::Timestamp(TimeUnit::Second, tz.clone())),
+                            TypeRelation::from(DataType::Timestamp(
+                                TimeUnit::Second,
+                                tz.clone(),
+                            )),
                         ))
                     }
                     _ => expr,
@@ -610,9 +613,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     planner_context,
                 )?),
                 match *time_zone {
-                    SQLExpr::Value(Value::SingleQuotedString(s)) => {
-                        TypeRelation::from(DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())))
-                    }
+                    SQLExpr::Value(Value::SingleQuotedString(s)) => TypeRelation::from(
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
+                    ),
                     _ => {
                         return not_impl_err!(
                             "Unsupported ast node in sqltorel: {time_zone:?}"
@@ -759,7 +762,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
-        if !matches!(pattern_type.logical(), LogicalType::Utf8 | LogicalType::Null) {
+        if !matches!(
+            pattern_type.logical(),
+            LogicalType::Utf8 | LogicalType::Null
+        ) {
             return plan_err!("Invalid pattern in LIKE expression");
         }
         let escape_char = if let Some(char) = escape_char {
@@ -790,7 +796,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
-        if !matches!(pattern_type.logical(), LogicalType::Utf8 | LogicalType::Null) {
+        if !matches!(
+            pattern_type.logical(),
+            LogicalType::Utf8 | LogicalType::Null
+        ) {
             return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
         let escape_char = if let Some(char) = escape_char {

@@ -1,17 +1,17 @@
+use arrow::util::pretty::pretty_format_batches;
+use arrow_schema::{DataType, Field, TimeUnit};
 use datafusion::datasource::TableProvider;
+use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::SessionContext;
+use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
-use datafusion::error::Result;
+use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::ExtensionType;
 use datafusion_expr::{Expr, TableType};
 use std::any::Any;
 use std::sync::Arc;
-use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::{DataType, Field, TimeUnit};
-use datafusion::prelude::SessionContext;
-use datafusion_common::logical_type::{ExtensionType};
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::signature::LogicalType;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
 #[derive(Debug)]
 struct CustomMagicalType {
     logical: LogicalType,
-    physical: DataType
+    physical: DataType,
 }
 
 impl Default for CustomMagicalType {
@@ -64,7 +64,8 @@ impl TableProvider for ExampleTableSource {
 
     fn schema(&self) -> LogicalSchemaRef {
         // TODO: ugly?
-        let custom_magical_type: Arc<dyn ExtensionType + Send + Sync> = Arc::new(CustomMagicalType::default());
+        let custom_magical_type: Arc<dyn ExtensionType + Send + Sync> =
+            Arc::new(CustomMagicalType::default());
 
         // This schema will be equivalent to:
         // a -> Timestamp(Microsecond, None)
@@ -75,20 +76,16 @@ impl TableProvider for ExampleTableSource {
                 "a",
                 DataType::RunEndEncoded(
                     Arc::new(Field::new("run_ends", DataType::Int64, false)),
-                    Arc::new(Field::new("values", DataType::Timestamp(TimeUnit::Microsecond, None), false))
+                    Arc::new(Field::new(
+                        "values",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        false,
+                    )),
                 ),
-                false
+                false,
             ),
-            LogicalField::new(
-                "b",
-                custom_magical_type,
-                false
-            ),
-            LogicalField::new(
-                "c",
-                DataType::Int64,
-                true,
-            )
+            LogicalField::new("b", custom_magical_type, false),
+            LogicalField::new("c", DataType::Int64, true),
         ]))
     }
 

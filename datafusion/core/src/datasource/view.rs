@@ -21,8 +21,8 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::Column;
 use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::Column;
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
 
 use crate::{

@@ -37,13 +37,13 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf,
 };
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
-use datafusion_common::logical_type::TypeRelation;
 
 mod cases;
 mod common;
@@ -3836,7 +3836,8 @@ Projection: person.id, orders.order_id
     let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
     let actual_types = plan.get_parameter_types().unwrap();
-    let expected_types = HashMap::from([("$1".to_string(), Some(TypeRelation::from(DataType::Int32)))]);
+    let expected_types =
+        HashMap::from([("$1".to_string(), Some(TypeRelation::from(DataType::Int32)))]);
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
@@ -3868,7 +3869,8 @@ Projection: person.id, person.age
     let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
     let actual_types = plan.get_parameter_types().unwrap();
-    let expected_types = HashMap::from([("$1".to_string(), Some(TypeRelation::from(DataType::Int32)))]);
+    let expected_types =
+        HashMap::from([("$1".to_string(), Some(TypeRelation::from(DataType::Int32)))]);
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
@@ -3901,7 +3903,7 @@ Projection: person.id, person.age
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([
         ("$1".to_string(), Some(TypeRelation::from(DataType::Int32))),
-            ("$2".to_string(), Some(TypeRelation::from(DataType::Int32))),
+        ("$2".to_string(), Some(TypeRelation::from(DataType::Int32))),
     ]);
     assert_eq!(actual_types, expected_types);
 
@@ -3939,7 +3941,8 @@ Projection: person.id, person.age
     let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
     let actual_types = plan.get_parameter_types().unwrap();
-    let expected_types = HashMap::from([("$1".to_string(), Some(TypeRelation::from(DataType::UInt32)))]);
+    let expected_types =
+        HashMap::from([("$1".to_string(), Some(TypeRelation::from(DataType::UInt32)))]);
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
@@ -3978,7 +3981,7 @@ Dml: op=[Update] table=[person]
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([
         ("$1".to_string(), Some(TypeRelation::from(DataType::Int32))),
-            ("$2".to_string(), Some(TypeRelation::from(DataType::UInt32))),
+        ("$2".to_string(), Some(TypeRelation::from(DataType::UInt32))),
     ]);
     assert_eq!(actual_types, expected_types);
 

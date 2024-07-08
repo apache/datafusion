@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
     ScalarValue, TableReference,
 };
 use datafusion_expr::{expr::ScalarFunction, lit, Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
-use datafusion_common::logical_type::field::LogicalField;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_identifier_to_expr(

@@ -63,11 +63,11 @@ use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
 };
 
+use self::to_proto::serialize_expr;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_proto_common::ArrowType;
 use prost::bytes::BufMut;
 use prost::Message;
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
-use datafusion_proto_common::ArrowType;
-use self::to_proto::serialize_expr;
 
 pub mod file_formats;
 pub mod from_proto;
@@ -935,7 +935,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 ..
             }) => {
                 let provider = source_as_provider(source)?;
-                let schema= SchemaRef::new(provider.schema().as_ref().clone().into());
+                let schema = SchemaRef::new(provider.schema().as_ref().clone().into());
                 let source = provider.as_any();
 
                 let projection = match projection {

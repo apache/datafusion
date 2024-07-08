@@ -17,8 +17,8 @@
 
 //! Variable provider
 
-use datafusion_common::{Result, ScalarValue};
 use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::{Result, ScalarValue};
 
 /// Variable type, system/user defined
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

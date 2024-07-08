@@ -111,7 +111,7 @@ impl From<LogicalSchema> for LogicalSchemaBuilder {
 }
 
 impl Extend<LogicalFieldRef> for LogicalSchemaBuilder {
-    fn extend<T: IntoIterator<Item=LogicalFieldRef>>(&mut self, iter: T) {
+    fn extend<T: IntoIterator<Item = LogicalFieldRef>>(&mut self, iter: T) {
         let iter = iter.into_iter();
         self.fields.reserve(iter.size_hint().0);
         for f in iter {
@@ -121,7 +121,7 @@ impl Extend<LogicalFieldRef> for LogicalSchemaBuilder {
 }
 
 impl Extend<LogicalField> for LogicalSchemaBuilder {
-    fn extend<T: IntoIterator<Item=LogicalField>>(&mut self, iter: T) {
+    fn extend<T: IntoIterator<Item = LogicalField>>(&mut self, iter: T) {
         let iter = iter.into_iter();
         self.fields.reserve(iter.size_hint().0);
         for f in iter {
@@ -174,14 +174,16 @@ impl Into<Schema> for LogicalSchema {
     }
 }
 
-
 impl LogicalSchema {
     pub fn new(fields: impl Into<LogicalFields>) -> Self {
         Self::new_with_metadata(fields, HashMap::new())
     }
 
     #[inline]
-    pub fn new_with_metadata(fields: impl Into<LogicalFields>, metadata: HashMap<String, String>) -> Self {
+    pub fn new_with_metadata(
+        fields: impl Into<LogicalFields>,
+        metadata: HashMap<String, String>,
+    ) -> Self {
         Self {
             fields: fields.into(),
             metadata,

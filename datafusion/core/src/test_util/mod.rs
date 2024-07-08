@@ -49,9 +49,9 @@ use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
 use futures::Stream;
 use tempfile::TempDir;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
 // backwards compatibility
 #[cfg(feature = "parquet")]
 pub use datafusion_common::test_util::parquet_test_data;

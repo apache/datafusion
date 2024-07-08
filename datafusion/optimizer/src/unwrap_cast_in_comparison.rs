@@ -26,13 +26,13 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::utils::NamePreserver;
 use arrow::datatypes::{
-    DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION
+    DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan, Operator};
@@ -278,8 +278,7 @@ fn is_comparison_op(op: &Operator) -> bool {
 
 /// Returns true if [UnwrapCastExprRewriter] supports this data type
 fn is_supported_type(data_type: &TypeRelation) -> bool {
-    is_supported_numeric_type(data_type)
-        || is_supported_string_type(data_type)
+    is_supported_numeric_type(data_type) || is_supported_string_type(data_type)
 }
 
 /// Returns true if [[UnwrapCastExprRewriter]] suppors this numeric type
@@ -479,7 +478,11 @@ fn try_cast_string_literal(
 }
 
 /// Cast a timestamp value from one unit to another
-fn cast_between_timestamp(from: impl Into<TypeRelation>, to: impl Into<TypeRelation>, value: i128) -> Option<i64> {
+fn cast_between_timestamp(
+    from: impl Into<TypeRelation>,
+    to: impl Into<TypeRelation>,
+    value: i128,
+) -> Option<i64> {
     let value = value as i64;
     let from_scale = match from.into().logical() {
         LogicalType::Timestamp(TimeUnit::Second, _) => 1,
@@ -510,7 +513,10 @@ mod tests {
 
     use super::*;
 
-    use arrow::{compute::{cast_with_options, CastOptions}, datatypes::DataType};
+    use arrow::{
+        compute::{cast_with_options, CastOptions},
+        datatypes::DataType,
+    };
     use datafusion_common::logical_type::field::LogicalField;
     use datafusion_common::tree_node::TransformedResult;
     use datafusion_expr::{cast, col, in_list, try_cast};
@@ -1138,8 +1144,10 @@ mod tests {
                 if let (
                     DataType::Timestamp(left_unit, left_tz),
                     DataType::Timestamp(right_unit, right_tz),
-                ) = (actual_value.data_type().into(), expected_value.data_type().into())
-                {
+                ) = (
+                    actual_value.data_type().into(),
+                    expected_value.data_type().into(),
+                ) {
                     assert_eq!(left_unit, right_unit);
                     assert_eq!(left_tz, right_tz);
                 }

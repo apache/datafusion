@@ -18,6 +18,7 @@
 //! Column
 
 use crate::error::_schema_err;
+use crate::logical_type::field::{LogicalField, LogicalFieldRef};
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{DFSchema, DataFusionError, Result, SchemaError, TableReference};
 use std::collections::HashSet;
@@ -25,7 +26,6 @@ use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
-use crate::logical_type::field::{LogicalField, LogicalFieldRef};
 
 /// A named reference to a qualified field in a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

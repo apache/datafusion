@@ -17,8 +17,8 @@
 
 //! SQL planning extensions like [`ArrayFunctionPlanner`] and [`FieldAccessPlanner`]
 
-use datafusion_common::{utils::list_ndims, DFSchema, Result};
 use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::{utils::list_ndims, DFSchema, Result};
 use datafusion_expr::{
     planner::{PlannerResult, RawBinaryExpr, RawFieldAccessExpr, UserDefinedSQLPlanner},
     sqlparser, AggregateFunction, Expr, ExprSchemable, GetFieldAccess,

@@ -42,8 +42,8 @@ use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use futures::StreamExt;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
 #[derive(Debug, Default)]

@@ -153,11 +153,11 @@ mod test {
     use std::ops::Add;
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
     use crate::{
         cast, col, lit, logical_plan::builder::LogicalTableSource, min,
         test::function_stub::avg, try_cast, LogicalPlanBuilder,
     };
+    use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
 

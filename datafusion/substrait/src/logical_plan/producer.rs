@@ -1440,56 +1440,56 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
         r#type::Nullability::Required as i32
     };
     match dt {
-      DataType::Null => internal_err!("Null cast is not valid"),
-      DataType::Boolean => Ok(substrait::proto::Type {
+        DataType::Null => internal_err!("Null cast is not valid"),
+        DataType::Boolean => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Bool(r#type::Boolean {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-      DataType::Int8 => Ok(substrait::proto::Type {
+        DataType::Int8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I8(r#type::I8 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-      DataType::UInt8 => Ok(substrait::proto::Type {
+        DataType::UInt8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I8(r#type::I8 {
                 type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-      DataType::Int16 => Ok(substrait::proto::Type {
+        DataType::Int16 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I16(r#type::I16 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-      DataType::UInt16 => Ok(substrait::proto::Type {
+        DataType::UInt16 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I16(r#type::I16 {
                 type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-      DataType::Int32 => Ok(substrait::proto::Type {
+        DataType::Int32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I32(r#type::I32 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-      DataType::UInt32 => Ok(substrait::proto::Type {
+        DataType::UInt32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I32(r#type::I32 {
                 type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-      DataType::Int64 => Ok(substrait::proto::Type {
+        DataType::Int64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I64(r#type::I64 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
-      DataType::UInt64 => Ok(substrait::proto::Type {
+        DataType::UInt64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I64(r#type::I64 {
                 type_variation_reference: UNSIGNED_INTEGER_TYPE_VARIATION_REF,
                 nullability,

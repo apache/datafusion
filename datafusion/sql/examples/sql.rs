@@ -17,6 +17,7 @@
 
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::WindowUDF;
 use datafusion_expr::{
@@ -30,7 +31,6 @@ use datafusion_sql::{
     TableReference,
 };
 use std::{collections::HashMap, sync::Arc};
-use datafusion_common::logical_type::TypeRelation;
 
 fn main() {
     let sql = "SELECT \

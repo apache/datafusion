@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::*;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::test_util::TestTableFactory;
 use datafusion_common::logical_type::ExtensionType;
-use super::*;
 
 #[tokio::test]
 async fn create_custom_table() -> Result<()> {
@@ -67,9 +67,18 @@ async fn create_external_table_with_ddl() -> Result<()> {
 
     assert_eq!(3, table_schema.fields().len());
 
-    assert_eq!(&DataType::Int32, table_schema.field(0).data_type().physical());
-    assert_eq!(&DataType::Utf8, table_schema.field(1).data_type().physical());
-    assert_eq!(&DataType::Boolean, table_schema.field(2).data_type().physical());
+    assert_eq!(
+        &DataType::Int32,
+        table_schema.field(0).data_type().physical()
+    );
+    assert_eq!(
+        &DataType::Utf8,
+        table_schema.field(1).data_type().physical()
+    );
+    assert_eq!(
+        &DataType::Boolean,
+        table_schema.field(2).data_type().physical()
+    );
 
     Ok(())
 }

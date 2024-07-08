@@ -36,15 +36,16 @@ pub mod binary;
 pub mod functions;
 pub mod other;
 
-use datafusion_common::logical_type::{signature::LogicalType, TypeRelation, ExtensionType};
+use datafusion_common::logical_type::{
+    signature::LogicalType, ExtensionType, TypeRelation,
+};
 
 /// Determine whether the given data type `dt` represents signed numeric values.
 pub fn is_signed_numeric(dt: &TypeRelation) -> bool {
     use LogicalType::*;
     matches!(
         dt.logical(),
-        Int8
-            | Int16
+        Int8 | Int16
             | Int32
             | Int64
             | Float16
@@ -85,5 +86,8 @@ pub fn is_utf8_or_large_utf8(dt: &TypeRelation) -> bool {
 
 /// Determine whether the given data type `dt` is a `Decimal`.
 pub fn is_decimal(dt: &TypeRelation) -> bool {
-    matches!(dt.logical(), LogicalType::Decimal128(_, _) | LogicalType::Decimal256(_, _))
+    matches!(
+        dt.logical(),
+        LogicalType::Decimal128(_, _) | LogicalType::Decimal256(_, _)
+    )
 }

@@ -413,7 +413,8 @@ mod test {
             .map(|f| Arc::new(LogicalField::new(f.to_string(), DataType::Int8, false)))
             .collect::<Vec<_>>();
         let schema = Arc::new(LogicalSchema::new(fields));
-        DFSchema::from_field_specific_qualified_schema(qualifiers, &schema.into()).unwrap()
+        DFSchema::from_field_specific_qualified_schema(qualifiers, &schema.into())
+            .unwrap()
     }
 
     #[test]

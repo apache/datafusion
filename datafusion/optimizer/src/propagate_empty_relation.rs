@@ -248,8 +248,8 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Fields, Schema};
 
-    use datafusion_common::{Column, DFSchema, JoinType, ScalarValue};
     use datafusion_common::logical_type::fields::LogicalFields;
+    use datafusion_common::{Column, DFSchema, JoinType, ScalarValue};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, Operator,

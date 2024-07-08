@@ -20,7 +20,10 @@ use std::sync::Arc;
 
 use arrow_schema::{IntervalUnit, TimeUnit};
 
-use super::{field::LogicalFieldRef, fields::{LogicalFields, LogicalUnionFields}};
+use super::{
+    field::LogicalFieldRef,
+    fields::{LogicalFields, LogicalUnionFields},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LogicalType {
@@ -50,8 +53,7 @@ pub enum LogicalType {
     Map(LogicalFieldRef, bool),
     Decimal128(u8, i8),
     Decimal256(u8, i8),
-    Union(LogicalUnionFields)
-    // TODO: extension signatures?
+    Union(LogicalUnionFields), // TODO: extension signatures?
 }
 
 impl fmt::Display for LogicalType {

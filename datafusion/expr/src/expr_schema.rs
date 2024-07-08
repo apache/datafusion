@@ -27,15 +27,15 @@ use crate::type_coercion::functions::{
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
+use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema,
     Result, TableReference,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 
 /// trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
@@ -55,11 +55,17 @@ pub trait ExprSchemable {
     ) -> Result<(Option<TableReference>, Arc<LogicalField>)>;
 
     /// cast to a type with respect to a schema
-    fn cast_to(self, cast_to_type: &TypeRelation, schema: &dyn ExprSchema) -> Result<Expr>;
+    fn cast_to(
+        self,
+        cast_to_type: &TypeRelation,
+        schema: &dyn ExprSchema,
+    ) -> Result<Expr>;
 
     /// given a schema, return the type and nullability of the expr
-    fn data_type_and_nullable(&self, schema: &dyn ExprSchema)
-        -> Result<(TypeRelation, bool)>;
+    fn data_type_and_nullable(
+        &self,
+        schema: &dyn ExprSchema,
+    ) -> Result<(TypeRelation, bool)>;
 }
 
 impl ExprSchemable for Expr {
@@ -454,7 +460,10 @@ impl ExprSchemable for Expr {
                 let left = left.data_type_and_nullable(schema)?;
                 let right = right.data_type_and_nullable(schema)?;
                 // TODO(@notfilippo): do not convert to physical type
-                Ok((get_result_type(&left.0.physical(), op, &right.0.physical())?.into(), left.1 || right.1))
+                Ok((
+                    get_result_type(&left.0.physical(), op, &right.0.physical())?.into(),
+                    left.1 || right.1,
+                ))
             }
             _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
         }
@@ -505,7 +514,11 @@ impl ExprSchemable for Expr {
     ///
     /// This function errors when it is impossible to cast the
     /// expression to the target [arrow::datatypes::DataType].
-    fn cast_to(self, cast_to_type: &TypeRelation, schema: &dyn ExprSchema) -> Result<Expr> {
+    fn cast_to(
+        self,
+        cast_to_type: &TypeRelation,
+        schema: &dyn ExprSchema,
+    ) -> Result<Expr> {
         let this_type = self.get_type(schema)?;
         if this_type == *cast_to_type {
             return Ok(self);
@@ -530,7 +543,10 @@ impl ExprSchemable for Expr {
 }
 
 /// cast subquery in InSubquery/ScalarSubquery to a given type.
-pub fn cast_subquery(subquery: Subquery, cast_to_type: &TypeRelation) -> Result<Subquery> {
+pub fn cast_subquery(
+    subquery: Subquery,
+    cast_to_type: &TypeRelation,
+) -> Result<Subquery> {
     if subquery.subquery.schema().field(0).data_type() == cast_to_type {
         return Ok(subquery);
     }
@@ -664,7 +680,8 @@ mod tests {
         assert_eq!(
             &LogicalType::Utf8,
             expr.get_type(&MockExprSchema::new().with_data_type(DataType::Utf8.into()))
-                .unwrap().logical()
+                .unwrap()
+                .logical()
         );
     }
 
@@ -692,8 +709,9 @@ mod tests {
         );
 
         let schema = DFSchema::from_unqualified_fields(
-            vec![LogicalField::new("foo", DataType::Int32, true).with_metadata(meta.clone())]
-                .into(),
+            vec![LogicalField::new("foo", DataType::Int32, true)
+                .with_metadata(meta.clone())]
+            .into(),
             HashMap::new(),
         )
         .unwrap();

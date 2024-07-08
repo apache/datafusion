@@ -28,7 +28,9 @@ use arrow::{
 };
 
 use datafusion_common::{
-    cast::{as_large_list_array, as_list_array}, logical_type::ExtensionType, tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter}
+    cast::{as_large_list_array, as_list_array},
+    logical_type::ExtensionType,
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
@@ -1244,7 +1246,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if expr_contains(&left, &right, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&left, &right, false);
                 Transformed::yes(if expr == *right {
-                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&right)?.physical())?)
+                    Expr::Literal(ScalarValue::new_zero(
+                        &info.get_data_type(&right)?.physical(),
+                    )?)
                 } else {
                     expr
                 })
@@ -1258,7 +1262,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if expr_contains(&right, &left, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&right, &left, true);
                 Transformed::yes(if expr == *left {
-                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?.physical())?)
+                    Expr::Literal(ScalarValue::new_zero(
+                        &info.get_data_type(&left)?.physical(),
+                    )?)
                 } else {
                     expr
                 })
@@ -1768,7 +1774,13 @@ fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::{assert_contains, logical_type::signature::LogicalType, DFSchemaRef, ToDFSchema};
+    use crate::simplify_expressions::SimplifyContext;
+    use crate::test::test_table_scan_with_name;
+    use datafusion_common::logical_type::field::LogicalField;
+    use datafusion_common::logical_type::schema::LogicalSchema;
+    use datafusion_common::{
+        assert_contains, logical_type::signature::LogicalType, DFSchemaRef, ToDFSchema,
+    };
     use datafusion_expr::{
         function::{
             AccumulatorArgs, AggregateFunctionSimplification,
@@ -1782,10 +1794,6 @@ mod tests {
         ops::{BitAnd, BitOr, BitXor},
         sync::Arc,
     };
-    use datafusion_common::logical_type::field::LogicalField;
-    use datafusion_common::logical_type::schema::LogicalSchema;
-    use crate::simplify_expressions::SimplifyContext;
-    use crate::test::test_table_scan_with_name;
 
     use super::*;
 
@@ -3102,7 +3110,10 @@ mod tests {
     #[test]
     fn simplify_expr_eq() {
         let schema = expr_test_schema();
-        assert_eq!(col("c2").get_type(&schema).unwrap().logical(), &LogicalType::Boolean);
+        assert_eq!(
+            col("c2").get_type(&schema).unwrap().logical(),
+            &LogicalType::Boolean
+        );
 
         // true = true -> true
         assert_eq!(simplify(lit(true).eq(lit(true))), lit(true));
@@ -3126,7 +3137,10 @@ mod tests {
         // expression to non-boolean.
         //
         // Make sure c1 column to be used in tests is not boolean type
-        assert_eq!(col("c1").get_type(&schema).unwrap().logical(), &LogicalType::Utf8);
+        assert_eq!(
+            col("c1").get_type(&schema).unwrap().logical(),
+            &LogicalType::Utf8
+        );
 
         // don't fold c1 = foo
         assert_eq!(simplify(col("c1").eq(lit("foo"))), col("c1").eq(lit("foo")),);
@@ -3136,7 +3150,10 @@ mod tests {
     fn simplify_expr_not_eq() {
         let schema = expr_test_schema();
 
-        assert_eq!(col("c2").get_type(&schema).unwrap().logical(), &LogicalType::Boolean);
+        assert_eq!(
+            col("c2").get_type(&schema).unwrap().logical(),
+            &LogicalType::Boolean
+        );
 
         // c2 != true -> !c2
         assert_eq!(simplify(col("c2").not_eq(lit(true))), col("c2").not(),);
@@ -3157,7 +3174,10 @@ mod tests {
         // when one of the operand is not of boolean type, folding the
         // other boolean constant will change return type of
         // expression to non-boolean.
-        assert_eq!(col("c1").get_type(&schema).unwrap().logical(), &LogicalType::Utf8);
+        assert_eq!(
+            col("c1").get_type(&schema).unwrap().logical(),
+            &LogicalType::Utf8
+        );
 
         assert_eq!(
             simplify(col("c1").not_eq(lit("foo"))),

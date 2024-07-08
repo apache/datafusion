@@ -30,15 +30,15 @@ use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::fields::LogicalFields;
+use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::TableReference;
 use datafusion_common::{
     not_impl_err, plan_err, unqualified_field_not_found, DFSchema, DataFusionError,
     Result,
 };
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::fields::LogicalFields;
-use datafusion_common::logical_type::TypeRelation;
-use datafusion_common::logical_type::schema::LogicalSchema;
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
@@ -341,7 +341,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
     }
 
-    pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<TypeRelation> {
+    pub(crate) fn convert_data_type(
+        &self,
+        sql_type: &SQLDataType,
+    ) -> Result<TypeRelation> {
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type))
             | SQLDataType::Array(ArrayElemTypeDef::SquareBracket(inner_sql_type, _)) => {

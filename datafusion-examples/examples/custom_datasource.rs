@@ -37,9 +37,9 @@ use datafusion_expr::LogicalPlanBuilder;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
-use tokio::time::timeout;
 use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use tokio::time::timeout;
 
 /// This example demonstrates executing a simple query against a custom datasource
 #[tokio::main]

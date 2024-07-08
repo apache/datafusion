@@ -19,13 +19,13 @@
 
 use std::sync::Arc;
 
+use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
 use arrow::datatypes::SchemaRef;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
-use datafusion_common::logical_type::TypeRelation;
-use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
 
 /// Provides the `SQL` query planner  meta-data about tables and
 /// functions referenced in SQL statements, without a direct dependency on other

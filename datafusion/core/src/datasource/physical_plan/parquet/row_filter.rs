@@ -425,8 +425,6 @@ mod test {
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use rand::prelude::*;
 
-
-
     // We should ignore predicate that read non-primitive columns
     #[test]
     fn test_filter_candidate_builder_ignore_complex_types() {

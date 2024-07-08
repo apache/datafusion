@@ -37,6 +37,7 @@ use datafusion::parquet::arrow::{
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -54,7 +55,6 @@ use std::sync::{
 };
 use tempfile::TempDir;
 use url::Url;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
 
 /// This example demonstrates building a secondary index over multiple Parquet
 /// files and using that index during query to skip ("prune") files that do not

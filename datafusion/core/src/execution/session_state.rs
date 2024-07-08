@@ -50,6 +50,7 @@ use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     config_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
@@ -85,7 +86,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
-use datafusion_common::logical_type::{TypeRelation, ExtensionType};
 
 /// Execution context for registering data sources and executing queries.
 /// See [`SessionContext`] for a higher level API.

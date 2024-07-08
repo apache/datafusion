@@ -70,7 +70,9 @@ impl NativeType {
     pub fn new_list(inner: TypeRelation, nullable: bool) -> Self {
         Self {
             physical: DataType::new_list(inner.physical().clone(), nullable),
-            logical: LogicalType::List(LogicalFieldRef::new(LogicalField::new_list_field(inner, nullable))),
+            logical: LogicalType::List(LogicalFieldRef::new(
+                LogicalField::new_list_field(inner, nullable),
+            )),
         }
     }
 
@@ -161,9 +163,7 @@ impl From<&DataType> for LogicalType {
             DataType::Float16 => LogicalType::Float16,
             DataType::Float32 => LogicalType::Float32,
             DataType::Float64 => LogicalType::Float64,
-            DataType::Timestamp(tu, tz) => {
-                LogicalType::Timestamp(tu.clone(), tz.clone())
-            }
+            DataType::Timestamp(tu, tz) => LogicalType::Timestamp(tu.clone(), tz.clone()),
             DataType::Date32 | DataType::Date64 => LogicalType::Date,
             DataType::Time32(tu) => LogicalType::Time32(tu.clone()),
             DataType::Time64(tu) => LogicalType::Time64(tu.clone()),

@@ -29,12 +29,14 @@ use crate::{
     SchemaError, TableReference,
 };
 
-use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use crate::logical_type::field::{LogicalField, LogicalFieldRef};
 use crate::logical_type::fields::LogicalFields;
-use crate::logical_type::{TypeRelation, ExtensionType};
-use crate::logical_type::schema::{LogicalSchema, LogicalSchemaBuilder, LogicalSchemaRef};
+use crate::logical_type::schema::{
+    LogicalSchema, LogicalSchemaBuilder, LogicalSchemaRef,
+};
+use crate::logical_type::{ExtensionType, TypeRelation};
+use arrow::compute::can_cast_types;
+use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -296,12 +298,8 @@ impl DFSchema {
 
         let self_fields: HashSet<(Option<&TableReference>, &LogicalFieldRef)> =
             self.iter().collect();
-        let self_unqualified_names: HashSet<&str> = self
-            .inner
-            .fields
-            .iter()
-            .map(|field| field.name())
-            .collect();
+        let self_unqualified_names: HashSet<&str> =
+            self.inner.fields.iter().map(|field| field.name()).collect();
 
         let mut schema_builder = LogicalSchemaBuilder::from(self.inner.fields.clone());
         let mut qualifiers = Vec::new();
@@ -432,7 +430,10 @@ impl DFSchema {
     }
 
     /// Find all fields having the given qualifier
-    pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&LogicalField> {
+    pub fn fields_with_qualified(
+        &self,
+        qualifier: &TableReference,
+    ) -> Vec<&LogicalField> {
         self.iter()
             .filter(|(q, _)| q.map(|q| q.eq(qualifier)).unwrap_or(false))
             .map(|(_, f)| f.as_ref())
@@ -481,9 +482,7 @@ impl DFSchema {
     /// Return all `Column`s for the schema
     pub fn columns(&self) -> Vec<Column> {
         self.iter()
-            .map(|(qualifier, field)| {
-                Column::new(qualifier.cloned(), field.name())
-            })
+            .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name()))
             .collect()
     }
 
@@ -674,7 +673,10 @@ impl DFSchema {
         self_fields.zip(other_fields).all(|((q1, f1), (q2, f2))| {
             q1 == q2
                 && f1.name() == f2.name()
-                && Self::datatype_is_semantically_equal(&f1.data_type().physical(), &f2.data_type().physical())
+                && Self::datatype_is_semantically_equal(
+                    &f1.data_type().physical(),
+                    &f2.data_type().physical(),
+                )
         })
     }
 
@@ -775,7 +777,9 @@ impl DFSchema {
     }
 
     /// Iterate over the qualifiers and fields in the DFSchema
-    pub fn iter(&self) -> impl Iterator<Item = (Option<&TableReference>, &LogicalFieldRef)> {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (Option<&TableReference>, &LogicalFieldRef)> {
         self.field_qualifiers
             .iter()
             .zip(self.inner.fields.iter())
@@ -1048,7 +1052,8 @@ mod tests {
             &Schema::new(vec![
                 Field::new("CapitalColumn", DataType::Boolean, true),
                 Field::new("field.with.period", DataType::Boolean, true),
-            ]).into(),
+            ])
+            .into(),
         )?;
 
         // lookup with unqualified name "t1.c0"
@@ -1095,7 +1100,10 @@ mod tests {
                     Some("t0".into()),
                     Arc::new(Field::new("c0", DataType::Boolean, true).into()),
                 ),
-                (None, Arc::new(Field::new("c1", DataType::Boolean, true).into())),
+                (
+                    None,
+                    Arc::new(Field::new("c1", DataType::Boolean, true).into()),
+                ),
             ],
             HashMap::new(),
         )?;
@@ -1274,7 +1282,8 @@ mod tests {
         Schema::new(vec![
             Field::new("c0", DataType::Boolean, true),
             Field::new("c1", DataType::Boolean, true),
-        ]).into()
+        ])
+        .into()
     }
     #[test]
     fn test_dfschema_to_schema_convertion() {

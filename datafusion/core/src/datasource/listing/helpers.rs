@@ -38,13 +38,13 @@ use futures::stream::FuturesUnordered;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use log::{debug, trace};
 
+use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DataFusionError};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
-use datafusion_common::logical_type::field::LogicalField;
 
 /// Check whether the given expression can be resolved using only the columns `col_names`.
 /// This means that if this function returns true:

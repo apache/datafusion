@@ -558,7 +558,8 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?);
-            let data_type: TypeRelation = cast.arrow_type.as_ref().required("arrow_type")?;
+            let data_type: TypeRelation =
+                cast.arrow_type.as_ref().required("arrow_type")?;
             Ok(Expr::Cast(Cast::new(expr, data_type)))
         }
         ExprType::TryCast(cast) => {
@@ -568,7 +569,8 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?);
-            let data_type: TypeRelation = cast.arrow_type.as_ref().required("arrow_type")?;
+            let data_type: TypeRelation =
+                cast.arrow_type.as_ref().required("arrow_type")?;
             Ok(Expr::TryCast(TryCast::new(expr, data_type)))
         }
         ExprType::Sort(sort) => Ok(Expr::Sort(Sort::new(

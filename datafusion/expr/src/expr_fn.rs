@@ -35,12 +35,12 @@ use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{Column, Result, ScalarValue};
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Not;
 use std::sync::Arc;
-use datafusion_common::logical_type::TypeRelation;
 
 /// Create a column expression based on a qualified or unqualified column name. Will
 /// normalize unquoted identifiers according to SQL rules (identifiers will become lowercase).

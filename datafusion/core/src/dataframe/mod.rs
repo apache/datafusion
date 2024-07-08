@@ -59,8 +59,8 @@ use datafusion_expr::{
 use datafusion_functions_aggregate::expr_fn::{avg, count, median, stddev, sum};
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::ExtensionType;
 use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::ExtensionType;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -669,7 +669,10 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| {
-                        !matches!(f.data_type().logical(), LogicalType::Binary | LogicalType::Boolean)
+                        !matches!(
+                            f.data_type().logical(),
+                            LogicalType::Binary | LogicalType::Boolean
+                        )
                     })
                     .map(|f| min(col(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
@@ -680,7 +683,10 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| {
-                        !matches!(f.data_type().logical(), LogicalType::Binary | LogicalType::Boolean)
+                        !matches!(
+                            f.data_type().logical(),
+                            LogicalType::Binary | LogicalType::Boolean
+                        )
                     })
                     .map(|f| max(col(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),

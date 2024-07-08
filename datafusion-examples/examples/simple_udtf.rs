@@ -27,6 +27,7 @@ use datafusion::execution::context::{ExecutionProps, SessionState};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
 use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{Expr, TableType};
@@ -35,7 +36,6 @@ use std::fs::File;
 use std::io::Seek;
 use std::path::Path;
 use std::sync::Arc;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
 // To define your own table function, you only need to do the following 3 things:
 // 1. Implement your own [`TableProvider`]
 // 2. Implement your own [`TableFunctionImpl`] and return your [`TableProvider`]

@@ -24,9 +24,11 @@ use crate::{
 };
 
 use arrow::datatypes::Schema;
-use datafusion_common::logical_type::ExtensionType;
-use datafusion_common::{exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema};
 use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::{
+    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
+};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
@@ -378,7 +380,8 @@ mod tests {
         let expr = col("letter").eq(lit("A"));
 
         let schema = Schema::new(vec![Field::new("letter", DataType::Utf8, false)]);
-        let df_schema = DFSchema::try_from_qualified_schema("data", &schema.clone().into())?;
+        let df_schema =
+            DFSchema::try_from_qualified_schema("data", &schema.clone().into())?;
         let p = create_physical_expr(&expr, &df_schema, &ExecutionProps::new())?;
 
         let batch = RecordBatch::try_new(

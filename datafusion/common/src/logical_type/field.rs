@@ -39,7 +39,7 @@ impl From<&Field> for LogicalField {
             name: value.name().clone(),
             data_type: value.data_type().clone().into(),
             nullable: value.is_nullable(),
-            metadata: value.metadata().clone()
+            metadata: value.metadata().clone(),
         }
     }
 }
@@ -64,11 +64,8 @@ impl From<FieldRef> for LogicalField {
 
 impl Into<Field> for LogicalField {
     fn into(self) -> Field {
-       Field::new(
-           self.name,
-           self.data_type.physical().clone(),
-           self.nullable
-       ).with_metadata(self.metadata)
+        Field::new(self.name, self.data_type.physical().clone(), self.nullable)
+            .with_metadata(self.metadata)
     }
 }
 
@@ -100,7 +97,11 @@ impl Hash for LogicalField {
 }
 
 impl LogicalField {
-    pub fn new(name: impl Into<String>, data_type: impl Into<TypeRelation>, nullable: bool) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        data_type: impl Into<TypeRelation>,
+        nullable: bool,
+    ) -> Self {
         LogicalField {
             name: name.into(),
             data_type: data_type.into(),

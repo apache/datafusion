@@ -23,8 +23,12 @@ use crate::protobuf_common::{
 };
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::csv::WriterBuilder;
-use arrow::datatypes::{DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode};
+use arrow::datatypes::{
+    DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
+    SchemaRef, TimeUnit, UnionMode,
+};
 use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator};
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 use datafusion_common::{
     config::{
         ColumnOptions, CsvOptions, JsonOptions, ParquetOptions, TableParquetOptions,
@@ -36,7 +40,6 @@ use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, JoinSide, ScalarValue, Statistics,
 };
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 
 #[derive(Debug)]
 pub enum Error {

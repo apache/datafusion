@@ -2387,9 +2387,9 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from(
-               LogicalSchema::from((*test_provider.schema()).clone()),
-            )?),
+            projected_schema: Arc::new(DFSchema::try_from(LogicalSchema::from(
+                (*test_provider.schema()).clone(),
+            ))?),
             projection: None,
             source: Arc::new(test_provider),
             fetch: None,
@@ -2459,9 +2459,9 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
-            projected_schema: Arc::new(DFSchema::try_from(
-                LogicalSchema::from((*test_provider.schema()).clone()),
-            )?),
+            projected_schema: Arc::new(DFSchema::try_from(LogicalSchema::from(
+                (*test_provider.schema()).clone(),
+            ))?),
             projection: Some(vec![0]),
             source: Arc::new(test_provider),
             fetch: None,
@@ -2488,9 +2488,9 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from(
-                LogicalSchema::from((*test_provider.schema()).clone()),
-            )?),
+            projected_schema: Arc::new(DFSchema::try_from(LogicalSchema::from(
+                (*test_provider.schema()).clone(),
+            ))?),
             projection: Some(vec![0]),
             source: Arc::new(test_provider),
             fetch: None,

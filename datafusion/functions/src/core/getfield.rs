@@ -21,13 +21,13 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::ExtensionType;
 use datafusion_common::{
     exec_err, plan_datafusion_err, plan_err, ExprSchema, Result, ScalarValue,
 };
 use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use datafusion_common::logical_type::ExtensionType;
 
 #[derive(Debug)]
 pub struct GetFieldFunc {
