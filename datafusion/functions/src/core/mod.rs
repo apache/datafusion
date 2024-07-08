@@ -93,7 +93,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         nvl(),
         nvl2(),
         arrow_typeof(),
-        r#struct(),
         named_struct(),
         get_field(),
         coalesce(),

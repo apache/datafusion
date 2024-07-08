@@ -19,7 +19,7 @@ use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow_schema::DataType;
 use datafusion::prelude::SessionContext;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{assert_batches_eq, Result, ScalarValue};
 use datafusion_expr::{
     BinaryExpr, ColumnarValue, Expr, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
@@ -54,39 +54,46 @@ pub async fn main() -> Result<()> {
 
     // We can see the effect of our rewrite on the output plan that the filter
     // has been rewritten to `my_eq`
-    //
-    // Filter: my_eq(person.age, Int32(22))
-    //   TableScan: person projection=[name, age]
-    println!("Logical Plan:\n\n{}\n", plan.display_indent());
+    assert_eq!(
+        plan.display_indent().to_string(),
+        "Filter: my_eq(person.age, Int32(22))\
+        \n  TableScan: person projection=[name, age]"
+    );
 
     // The query below doesn't respect a filter `where age = 22` because
     // the plan has been rewritten using UDF which returns always true
     //
     // And the output verifies the predicates have been changed (as the my_eq
     // function always returns true)
-    //
-    // +--------+-----+
-    // | name   | age |
-    // +--------+-----+
-    // | Andy   | 11  |
-    // | Andrew | 22  |
-    // | Oleks  | 33  |
-    // +--------+-----+
-    ctx.sql(sql).await?.show().await?;
+    assert_batches_eq!(
+        [
+            "+--------+-----+",
+            "| name   | age |",
+            "+--------+-----+",
+            "| Andy   | 11  |",
+            "| Andrew | 22  |",
+            "| Oleks  | 33  |",
+            "+--------+-----+",
+        ],
+        &ctx.sql(sql).await?.collect().await?
+    );
 
     // however we can see the rule doesn't trigger for queries with predicates
     // other than `=`
-    //
-    // +-------+-----+
-    // | name  | age |
-    // +-------+-----+
-    // | Andy  | 11  |
-    // | Oleks | 33  |
-    // +-------+-----+
-    ctx.sql("SELECT * FROM person WHERE age <> 22")
-        .await?
-        .show()
-        .await?;
+    assert_batches_eq!(
+        [
+            "+-------+-----+",
+            "| name  | age |",
+            "+-------+-----+",
+            "| Andy  | 11  |",
+            "| Oleks | 33  |",
+            "+-------+-----+",
+        ],
+        &ctx.sql("SELECT * FROM person WHERE age <> 22")
+            .await?
+            .collect()
+            .await?
+    );
 
     Ok(())
 }

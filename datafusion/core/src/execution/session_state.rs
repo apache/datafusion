@@ -238,8 +238,11 @@ impl SessionState {
             Arc::new(functions_array::planner::ArrayFunctionPlanner),
             #[cfg(feature = "array_expressions")]
             Arc::new(functions_array::planner::FieldAccessPlanner),
-            #[cfg(feature = "datetime_expressions")]
-            Arc::new(functions::datetime::planner::ExtractPlanner),
+            #[cfg(any(
+                feature = "datetime_expressions",
+                feature = "unicode_expressions"
+            ))]
+            Arc::new(functions::planner::UserDefinedFunctionPlanner),
         ];
 
         let mut new_self = SessionState {
@@ -1179,6 +1182,10 @@ impl FunctionRegistry for SessionState {
     ) -> datafusion_common::Result<()> {
         self.analyzer.add_function_rewrite(rewrite);
         Ok(())
+    }
+
+    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+        self.user_defined_sql_planners.clone()
     }
 
     fn register_user_defined_sql_planner(

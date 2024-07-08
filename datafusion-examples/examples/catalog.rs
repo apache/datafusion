@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
     // register our catalog in the context
     ctx.register_catalog("dircat", Arc::new(catalog));
     {
-        // catalog was passed down into our custom catalog list since we overide the ctx's default
+        // catalog was passed down into our custom catalog list since we override the ctx's default
         let catalogs = catlist.catalogs.read().unwrap();
         assert!(catalogs.contains_key("dircat"));
     };
