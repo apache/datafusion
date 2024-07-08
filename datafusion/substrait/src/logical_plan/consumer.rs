@@ -1302,10 +1302,10 @@ pub async fn from_substrait_rex(
                     match predicate.predicate_op() {
                         // exist
                         PredicateOp::Exists => {
-                            let relations = &predicate.tuples;
+                            let relation = &predicate.tuples;
                             let plan = from_substrait_rel(
                                 ctx,
-                                &relations.clone().unwrap_or_default(),
+                                &relation.clone().unwrap_or_default(),
                                 extensions,
                             )
                             .await?;
