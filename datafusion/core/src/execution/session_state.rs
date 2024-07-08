@@ -248,7 +248,7 @@ impl SessionState {
         let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
-            expr_planners: expr_planners,
+            expr_planners,
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
