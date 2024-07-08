@@ -29,8 +29,9 @@ use arrow::{
     },
     record_batch::RecordBatch,
 };
-use arrow_array::Float32Array;
-use arrow_schema::ArrowError;
+use arrow_array::{Array, Float32Array, Float64Array, UnionArray};
+use arrow_buffer::ScalarBuffer;
+use arrow_schema::{ArrowError, UnionFields, UnionMode};
 use datafusion_functions_aggregate::count::count_udaf;
 use object_store::local::LocalFileSystem;
 use std::fs;
@@ -2194,4 +2195,164 @@ async fn write_parquet_results() -> Result<()> {
     assert_eq!(allparts_count, 40);
 
     Ok(())
+}
+
+fn union_fields() -> UnionFields {
+    [
+        (0, Arc::new(Field::new("A", DataType::Int32, true))),
+        (1, Arc::new(Field::new("B", DataType::Float64, true))),
+        (2, Arc::new(Field::new("C", DataType::Utf8, true))),
+    ]
+    .into_iter()
+    .collect()
+}
+
+#[tokio::test]
+async fn sparse_union_is_null() {
+    // union of [{A=1}, {A=}, {B=3.2}, {B=}, {C="a"}, {C=}]
+    let int_array = Int32Array::from(vec![Some(1), None, None, None, None, None]);
+    let float_array = Float64Array::from(vec![None, None, Some(3.2), None, None, None]);
+    let str_array = StringArray::from(vec![None, None, None, None, Some("a"), None]);
+    let type_ids = [0, 0, 1, 1, 2, 2].into_iter().collect::<ScalarBuffer<i8>>();
+
+    let children = vec![
+        Arc::new(int_array) as Arc<dyn Array>,
+        Arc::new(float_array),
+        Arc::new(str_array),
+    ];
+
+    let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
+
+    let field = Field::new(
+        "my_union",
+        DataType::Union(union_fields(), UnionMode::Sparse),
+        true,
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("union_batch", batch).unwrap();
+
+    let df = ctx.table("union_batch").await.unwrap();
+
+    // view_all
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=1}    |",
+        "| {A=}     |",
+        "| {B=3.2}  |",
+        "| {B=}     |",
+        "| {C=a}    |",
+        "| {C=}     |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &df.clone().collect().await.unwrap());
+
+    // filter where is null
+    let result_df = df.clone().filter(col("my_union").is_null()).unwrap();
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=}     |",
+        "| {B=}     |",
+        "| {C=}     |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
+
+    // filter where is not null
+    let result_df = df.filter(col("my_union").is_not_null()).unwrap();
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=1}    |",
+        "| {B=3.2}  |",
+        "| {C=a}    |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
+}
+
+#[tokio::test]
+async fn dense_union_is_null() {
+    // union of [{A=1}, null, {B=3.2}, {A=34}]
+    let int_array = Int32Array::from(vec![Some(1), None]);
+    let float_array = Float64Array::from(vec![Some(3.2), None]);
+    let str_array = StringArray::from(vec![Some("a"), None]);
+    let type_ids = [0, 0, 1, 1, 2, 2].into_iter().collect::<ScalarBuffer<i8>>();
+    let offsets = [0, 1, 0, 1, 0, 1]
+        .into_iter()
+        .collect::<ScalarBuffer<i32>>();
+
+    let children = vec![
+        Arc::new(int_array) as Arc<dyn Array>,
+        Arc::new(float_array),
+        Arc::new(str_array),
+    ];
+
+    let array =
+        UnionArray::try_new(union_fields(), type_ids, Some(offsets), children).unwrap();
+
+    let field = Field::new(
+        "my_union",
+        DataType::Union(union_fields(), UnionMode::Dense),
+        true,
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("union_batch", batch).unwrap();
+
+    let df = ctx.table("union_batch").await.unwrap();
+
+    // view_all
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=1}    |",
+        "| {A=}     |",
+        "| {B=3.2}  |",
+        "| {B=}     |",
+        "| {C=a}    |",
+        "| {C=}     |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &df.clone().collect().await.unwrap());
+
+    // filter where is null
+    let result_df = df.clone().filter(col("my_union").is_null()).unwrap();
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=}     |",
+        "| {B=}     |",
+        "| {C=}     |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
+
+    // filter where is not null
+    let result_df = df.filter(col("my_union").is_not_null()).unwrap();
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=1}    |",
+        "| {B=3.2}  |",
+        "| {C=a}    |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
 }
