@@ -2131,7 +2131,7 @@ impl Filter {
         }
 
         Ok(Self {
-            predicate: predicate.unalias(),
+            predicate: predicate.unalias_nested().data,
             input,
         })
     }
