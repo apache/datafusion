@@ -39,7 +39,7 @@ use std::sync::Arc;
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_expr::planner::UserDefinedSQLPlanner;
+use datafusion_expr::planner::ExprPlanner;
 
 mod registry;
 
@@ -167,7 +167,7 @@ impl Serializeable for Expr {
                 )
             }
 
-            fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+            fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
                 vec![]
             }
         }

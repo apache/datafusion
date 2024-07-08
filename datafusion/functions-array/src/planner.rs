@@ -19,7 +19,7 @@
 
 use datafusion_common::{utils::list_ndims, DFSchema, Result};
 use datafusion_expr::{
-    planner::{PlannerResult, RawBinaryExpr, RawFieldAccessExpr, UserDefinedSQLPlanner},
+    planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
     sqlparser, AggregateFunction, Expr, ExprSchemable, GetFieldAccess,
 };
 use datafusion_functions::expr_fn::get_field;
@@ -34,7 +34,7 @@ use crate::{
 
 pub struct ArrayFunctionPlanner;
 
-impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
+impl ExprPlanner for ArrayFunctionPlanner {
     fn plan_binary_op(
         &self,
         expr: RawBinaryExpr,
@@ -101,7 +101,7 @@ impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
 
 pub struct FieldAccessPlanner;
 
-impl UserDefinedSQLPlanner for FieldAccessPlanner {
+impl ExprPlanner for FieldAccessPlanner {
     fn plan_field_access(
         &self,
         expr: RawFieldAccessExpr,
