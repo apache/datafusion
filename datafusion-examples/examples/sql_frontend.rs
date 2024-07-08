@@ -17,6 +17,9 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{
     AggregateUDF, Expr, LogicalPlan, ScalarUDF, TableProviderFilterPushDown, TableSource,
@@ -31,9 +34,6 @@ use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
 use std::any::Any;
 use std::sync::Arc;
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
-use datafusion_common::logical_type::TypeRelation;
 
 /// This example shows how to use DataFusion's SQL planner to parse SQL text and
 /// build `LogicalPlan`s without executing them.

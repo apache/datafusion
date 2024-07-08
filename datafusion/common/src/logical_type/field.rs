@@ -35,11 +35,7 @@ pub struct LogicalField {
 
 impl From<&Field> for LogicalField {
     fn from(value: &Field) -> Self {
-        Self::new(
-            value.name().clone(),
-            value.data_type(),
-            value.is_nullable(),
-        )
+        Self::new(value.name().clone(), value.data_type(), value.is_nullable())
     }
 }
 

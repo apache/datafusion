@@ -128,9 +128,7 @@ impl ExprSchemable for Expr {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
                 match arg_data_type.logical() {
-                    LogicalType::List(field) =>{
-                        Ok(field.data_type().clone())
-                    }
+                    LogicalType::List(field) => Ok(field.data_type().clone()),
                     LogicalType::Struct(_) => Ok(arg_data_type),
                     LogicalType::Null => {
                         not_impl_err!("unnest() does not support null yet")
@@ -169,7 +167,9 @@ impl ExprSchemable for Expr {
 
                 // perform additional function arguments validation (due to limited
                 // expressiveness of `TypeSignature`), then infer return type
-                Ok(func.return_type_from_exprs(args, schema, &arg_data_types)?.into())
+                Ok(func
+                    .return_type_from_exprs(args, schema, &arg_data_types)?
+                    .into())
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
@@ -260,7 +260,12 @@ impl ExprSchemable for Expr {
                 ref right,
                 ref op,
                 // TODO(@notfilippo): do not convert to physical type
-            }) => Ok(get_result_type(&left.get_type(schema)?.physical(), op, &right.get_type(schema)?.physical())?.into()),
+            }) => Ok(get_result_type(
+                &left.get_type(schema)?.physical(),
+                op,
+                &right.get_type(schema)?.physical(),
+            )?
+            .into()),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean.into()),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 data_type.clone().ok_or_else(|| {

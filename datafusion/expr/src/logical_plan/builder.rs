@@ -1272,14 +1272,14 @@ pub fn build_join_schema(
             JoinType::LeftSemi | JoinType::LeftAnti => {
                 // Only use the left side for the schema
                 left_fields
-                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-                .collect()
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                    .collect()
             }
             JoinType::RightSemi | JoinType::RightAnti => {
                 // Only use the right side for the schema
                 right_fields
-                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-                .collect()
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                    .collect()
             }
         };
     let func_dependencies = left.functional_dependencies().join(
