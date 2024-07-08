@@ -55,7 +55,7 @@ use datafusion::logical_expr::{
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
-    error::{DataFusionError, Result},
+    error::Result,
     logical_expr::utils::split_conjunction,
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
@@ -1250,10 +1250,7 @@ pub async fn from_substrait_rex(
             Some(subquery_type) => match subquery_type {
                 SubqueryType::InPredicate(in_predicate) => {
                     if in_predicate.needles.len() != 1 {
-                        Err(DataFusionError::Substrait(
-                            "InPredicate Subquery type must have exactly one Needle expression"
-                                .to_string(),
-                        ))
+                        substrait_err!("InPredicate Subquery type must have exactly one Needle expression")
                     } else {
                         let needle_expr = &in_predicate.needles[0];
                         let haystack_expr = &in_predicate.haystack;
@@ -1318,10 +1315,10 @@ pub async fn from_substrait_rex(
                                 false,
                             ))))
                         }
-                        other_type => Err(DataFusionError::Substrait(format!(
+                        other_type => substrait_err!(
                             "unimplemented type {:?} for set predicate",
                             other_type
-                        ))),
+                        ),
                     }
                 }
                 other_type => {
