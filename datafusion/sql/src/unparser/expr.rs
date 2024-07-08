@@ -1012,7 +1012,7 @@ impl Unparser<'_> {
             LogicalType::Struct(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            LogicalType::Union(_) => {
+            LogicalType::Union(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
             LogicalType::Decimal128(precision, scale)

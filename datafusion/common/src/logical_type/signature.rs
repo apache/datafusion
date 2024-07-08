@@ -18,7 +18,7 @@
 use core::fmt;
 use std::sync::Arc;
 
-use arrow_schema::{IntervalUnit, TimeUnit};
+use arrow_schema::{DataType, FieldRef, IntervalUnit, TimeUnit, UnionMode};
 
 use super::{
     field::LogicalFieldRef,
@@ -53,7 +53,7 @@ pub enum LogicalType {
     Map(LogicalFieldRef, bool),
     Decimal128(u8, i8),
     Decimal256(u8, i8),
-    Union(LogicalUnionFields), // TODO: extension signatures?
+    Union(LogicalUnionFields, UnionMode), // TODO: extension signatures?
 }
 
 impl fmt::Display for LogicalType {
@@ -133,5 +133,43 @@ impl LogicalType {
     pub fn is_null(&self) -> bool {
         use LogicalType::*;
         matches!(self, Null)
+    }
+}
+
+impl Into<DataType> for LogicalType {
+    fn into(self) -> DataType {
+        match self {
+            LogicalType::Null => DataType::Null,
+            LogicalType::Int8 => DataType::Int8,
+            LogicalType::Int16 => DataType::Int16,
+            LogicalType::Int32 => DataType::Int32,
+            LogicalType::Int64 => DataType::Int64,
+            LogicalType::UInt8 => DataType::UInt8,
+            LogicalType::UInt16 => DataType::UInt16,
+            LogicalType::UInt32 => DataType::UInt32,
+            LogicalType::UInt64 => DataType::UInt64,
+            LogicalType::Boolean => DataType::Boolean,
+            LogicalType::Float16 => DataType::Float16,
+            LogicalType::Float32 => DataType::Float32,
+            LogicalType::Float64 => DataType::Float64,
+            LogicalType::Utf8 => DataType::Utf8,
+            LogicalType::Binary => DataType::Binary,
+            LogicalType::Date => DataType::Date32,
+            LogicalType::Time32(tu) => DataType::Time32(tu),
+            LogicalType::Time64(tu) => DataType::Time64(tu),
+            LogicalType::Timestamp(tu, tz) => DataType::Timestamp(tu, tz),
+            LogicalType::Duration(tu) => DataType::Duration(tu),
+            LogicalType::Interval(iu) => DataType::Interval(iu),
+            LogicalType::List(field) => {
+                DataType::List(FieldRef::new(field.as_ref().clone().into()))
+            }
+            LogicalType::Struct(fields) => DataType::Struct(fields.into()),
+            LogicalType::Map(field, v) => {
+                DataType::Map(FieldRef::new(field.as_ref().clone().into()), v)
+            }
+            LogicalType::Decimal128(a, b) => DataType::Decimal128(a, b),
+            LogicalType::Decimal256(a, b) => DataType::Decimal256(a, b),
+            LogicalType::Union(union, mode) => DataType::Union(union.into(), mode),
+        }
     }
 }

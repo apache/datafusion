@@ -18,7 +18,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use arrow_schema::{Field, Fields, UnionFields};
+use arrow_schema::{Field, FieldRef, Fields, UnionFields};
 
 use super::field::{LogicalField, LogicalFieldRef};
 
@@ -151,5 +151,15 @@ impl From<&UnionFields> for LogicalUnionFields {
 impl From<UnionFields> for LogicalUnionFields {
     fn from(value: UnionFields) -> Self {
         Self::from(&value)
+    }
+}
+
+impl Into<UnionFields> for LogicalUnionFields {
+    fn into(self) -> UnionFields {
+        UnionFields::from_iter(
+            self.0
+                .into_iter()
+                .map(|(i, f)| (*i, FieldRef::new(f.as_ref().clone().into()))),
+        )
     }
 }

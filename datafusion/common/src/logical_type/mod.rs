@@ -196,7 +196,7 @@ impl From<&DataType> for LogicalType {
                 sorted.clone(),
             ),
             DataType::RunEndEncoded(_, f) => f.data_type().into(),
-            DataType::Union(f, _) => LogicalType::Union(f.into()),
+            DataType::Union(f, mode) => LogicalType::Union(f.into(), mode.clone()),
         }
     }
 }

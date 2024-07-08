@@ -8,7 +8,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
 use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::{ExtensionType, ExtensionTypeRef};
 use datafusion_expr::{Expr, TableType};
 use std::any::Any;
 use std::sync::Arc;
@@ -64,7 +64,7 @@ impl TableProvider for ExampleTableSource {
 
     fn schema(&self) -> LogicalSchemaRef {
         // TODO: ugly?
-        let custom_magical_type: Arc<dyn ExtensionType + Send + Sync> =
+        let custom_magical_type: ExtensionTypeRef =
             Arc::new(CustomMagicalType::default());
 
         // This schema will be equivalent to:
