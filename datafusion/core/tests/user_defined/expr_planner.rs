@@ -24,12 +24,12 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::Operator;
 use datafusion::prelude::*;
 use datafusion::sql::sqlparser::ast::BinaryOperator;
-use datafusion_expr::planner::{PlannerResult, RawBinaryExpr, UserDefinedSQLPlanner};
+use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
 use datafusion_expr::BinaryExpr;
 
 struct MyCustomPlanner;
 
-impl UserDefinedSQLPlanner for MyCustomPlanner {
+impl ExprPlanner for MyCustomPlanner {
     fn plan_binary_op(
         &self,
         expr: RawBinaryExpr,
@@ -57,7 +57,7 @@ impl UserDefinedSQLPlanner for MyCustomPlanner {
 
 async fn plan_and_collect(sql: &str) -> Result<Vec<RecordBatch>> {
     let mut ctx = SessionContext::new();
-    ctx.register_user_defined_sql_planner(Arc::new(MyCustomPlanner))?;
+    ctx.register_expr_planner(Arc::new(MyCustomPlanner))?;
     ctx.sql(sql).await?.collect().await
 }
 
