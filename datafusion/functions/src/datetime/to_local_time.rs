@@ -43,7 +43,7 @@ use datafusion_expr::{
 /// timezone information). In other words, this function strips off the timezone from the timestamp,
 /// while keep the display value of the timestamp the same.
 ///
-/// # Example
+/// # Example 1
 ///
 /// ```
 /// # use datafusion_common::ScalarValue;
@@ -51,23 +51,64 @@ use datafusion_expr::{
 ///
 /// // 2019-03-31 01:00:00 +01:00
 /// let res = ToLocalTimeFunc::new()
-/// .invoke(&[ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-///     Some(1_553_990_400),
-///     Some("Europe/Brussels".into()),
-/// ))])
-/// .unwrap();
+///     .invoke(&[ColumnarValue::Scalar(ScalarValue::TimestampSecond(
+///         Some(1_553_990_400),
+///         Some("Europe/Brussels".into()),
+///     ))])
+///     .unwrap();
 ///
 /// // 2019-03-31 01:00:00 <-- this timestamp no longer has +01:00 offset
 /// let expected = ScalarValue::TimestampSecond(Some(1_553_994_000), None);
 ///
 /// match res {
-/// ColumnarValue::Scalar(res) => {
-///     assert_eq!(res, expected);
-/// }
-/// _ => panic!("unexpected return type"),
+///   ColumnarValue::Scalar(res) => {
+///       assert_eq!(res, expected);
+///   }
+///   _ => panic!("unexpected return type"),
 /// }
 /// ```
-
+///
+/// # Example 2
+///
+/// ```
+/// # use datafusion_common::ScalarValue;
+/// # use datafusion_expr::ColumnarValue;
+/// # use chrono::NaiveDateTime;
+///
+/// let timestamp_str = "2020-03-31T13:40:00";
+/// let timezone_str = "America/New_York";
+/// let tz: arrow::array::timezone::Tz =
+///     timezone_str.parse().expect("Invalid timezone");
+///
+/// let timestamp = timestamp_str
+///     .parse::<NaiveDateTime>()
+///     .unwrap()
+///     .and_local_timezone(tz) // this is in a local timezone
+///     .unwrap()
+///     .timestamp_nanos_opt()
+///     .unwrap();
+///
+/// let expected_timestamp = timestamp_str
+///     .parse::<NaiveDateTime>()
+///     .unwrap()
+///     .and_utc() // this is in UTC
+///     .timestamp_nanos_opt()
+///     .unwrap();
+///
+/// let input =
+///     ScalarValue::TimestampNanosecond(Some(timestamp), Some(timezone_str.into()));
+/// let res = ToLocalTimeFunc::new()
+///     .invoke(&[ColumnarValue::Scalar(input)])
+///     .unwrap();
+/// let expected = ScalarValue::TimestampNanosecond(Some(expected_timestamp), None);
+/// match res {
+///     ColumnarValue::Scalar(res) => {
+///         assert_eq!(res, expected);
+///         }
+///     _ => panic!("unexpected return type"),
+///        }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct ToLocalTimeFunc {
     signature: Signature,
@@ -297,7 +338,7 @@ mod tests {
     use arrow::array::{types::TimestampNanosecondType, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
-    use chrono::{TimeZone, Utc};
+    use chrono::NaiveDateTime;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -355,29 +396,6 @@ mod tests {
 
     #[test]
     fn test_to_local_time_scalar() {
-        let timestamps_without_timezone = vec![
-            (
-                ScalarValue::TimestampNanosecond(Some(1_123_123_000_000_000_000), None),
-                ScalarValue::TimestampNanosecond(Some(1_123_123_000_000_000_000), None),
-            ),
-            (
-                ScalarValue::TimestampMicrosecond(Some(1_123_123_000_000_000), None),
-                ScalarValue::TimestampMicrosecond(Some(1_123_123_000_000_000), None),
-            ),
-            (
-                ScalarValue::TimestampMillisecond(Some(1_123_123_000_000), None),
-                ScalarValue::TimestampMillisecond(Some(1_123_123_000_000), None),
-            ),
-            (
-                ScalarValue::TimestampSecond(Some(1_123_123_000), None),
-                ScalarValue::TimestampSecond(Some(1_123_123_000), None),
-            ),
-        ];
-
-        for (input, expected) in timestamps_without_timezone {
-            test_to_local_time_helpfer(input, expected);
-        }
-
         let timezone = Some("Europe/Brussels".into());
         let timestamps_with_timezone = vec![
             (
@@ -415,63 +433,43 @@ mod tests {
     #[test]
     fn test_timezone_with_daylight_savings() {
         let timezone_str = "America/New_York";
-        let tz: arrow::array::timezone::Tz =
-            timezone_str.parse().expect("Invalid timezone");
 
-        // Test data:
-        // (
-        //    input timestamp in second,
-        //    the string display of the input timestamp,
-        //    the expected timestamp after applied `to_local_time`,
-        //    the string display of the expected timestamp,
-        // )
         let test_cases = vec![
-            (
-                // DST time
-                1_585_676_400,
-                "2020-03-31 13:40:00 -04:00",
-                1_585_662_000,
-                "2020-03-31 13:40:00 UTC",
-            ),
-            (
-                // End of DST
-                1_604_516_800,
-                "2020-11-04 14:06:40 -05:00",
-                1_604_498_800,
-                "2020-11-04 14:06:40 UTC",
-            ),
+            // DST time
+            "2019-03-31T04:00:00",
+            "2020-03-31T13:40:00",
+            // End of DST
+            "2019-11-04T04:06:40",
+            "2020-11-04T14:06:40",
         ];
 
-        for (
-            input_timestamp_s,
-            expected_input_timestamp_display,
-            expected_adjusted_timstamp,
-            expected_adjusted_timstamp_display,
-        ) in test_cases
-        {
-            let input_timestamp_display = Utc
-                .timestamp_opt(input_timestamp_s, 0)
+        for timestamp_str in test_cases {
+            // timestamp in local timezone
+            let tz: arrow::array::timezone::Tz =
+                timezone_str.parse().expect("Invalid timezone");
+            let timestamp = timestamp_str
+                .parse::<NaiveDateTime>()
                 .unwrap()
-                .with_timezone(&tz)
-                .to_string();
-            assert_eq!(input_timestamp_display, expected_input_timestamp_display);
+                .and_local_timezone(tz) // this is in a local timezone
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap();
 
-            let dst_timestamp = ScalarValue::TimestampSecond(
-                Some(input_timestamp_s),
+            // timestamp with no timezone
+            let expected_timestamp = timestamp_str
+                .parse::<NaiveDateTime>()
+                .unwrap()
+                .and_utc() // this is in UTC
+                .timestamp_nanos_opt()
+                .unwrap();
+
+            let input = ScalarValue::TimestampNanosecond(
+                Some(timestamp),
                 Some(timezone_str.into()),
             );
-            let expected_dst_timestamp =
-                ScalarValue::TimestampSecond(Some(expected_adjusted_timstamp), None);
-            test_to_local_time_helpfer(dst_timestamp, expected_dst_timestamp);
-
-            let adjusted_timstamp_display = Utc
-                .timestamp_opt(expected_adjusted_timstamp, 0)
-                .unwrap()
-                .to_string();
-            assert_eq!(
-                adjusted_timstamp_display,
-                expected_adjusted_timstamp_display
-            )
+            let expected =
+                ScalarValue::TimestampNanosecond(Some(expected_timestamp), None);
+            test_to_local_time_helpfer(input, expected)
         }
     }
 
@@ -493,11 +491,11 @@ mod tests {
         let cases = [
             (
                 vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T01:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T03:00:00Z",
-                    "2020-09-08T04:00:00Z",
+                    "2020-09-08T00:00:00",
+                    "2020-09-08T01:00:00",
+                    "2020-09-08T02:00:00",
+                    "2020-09-08T03:00:00",
+                    "2020-09-08T04:00:00",
                 ],
                 None::<Arc<str>>,
                 vec![
