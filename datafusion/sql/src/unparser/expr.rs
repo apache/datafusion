@@ -981,8 +981,13 @@ impl Unparser<'_> {
             }
             LogicalType::Float32 => Ok(ast::DataType::Float(None)),
             LogicalType::Float64 => Ok(ast::DataType::Double),
-            LogicalType::Timestamp(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            LogicalType::Timestamp(_, tz) => {
+                let tz_info = match tz {
+                    Some(_) => TimezoneInfo::WithTimeZone,
+                    None => TimezoneInfo::None,
+                };
+
+                Ok(ast::DataType::Timestamp(None, tz_info))
             }
             LogicalType::Date => Ok(ast::DataType::Date),
             LogicalType::Time32(_) => {
@@ -1035,6 +1040,7 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{any::Any, sync::Arc, vec};
 
+    use arrow::datatypes::TimeUnit;
     use arrow::datatypes::{Field, Schema};
     use arrow_schema::DataType;
     use datafusion_common::TableReference;
@@ -1128,6 +1134,23 @@ mod tests {
                     data_type: DataType::Date64.into(),
                 }),
                 r#"CAST(a AS DATETIME)"#,
+            ),
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(col("a")),
+                    data_type: DataType::Timestamp(
+                        TimeUnit::Nanosecond,
+                        Some("+08:00".into()),
+                    ),
+                }),
+                r#"CAST(a AS TIMESTAMP WITH TIME ZONE)"#,
+            ),
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(col("a")),
+                    data_type: DataType::Timestamp(TimeUnit::Millisecond, None),
+                }),
+                r#"CAST(a AS TIMESTAMP)"#,
             ),
             (
                 Expr::Cast(Cast {

@@ -28,7 +28,7 @@ use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
 };
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::logical_type::signature::LogicalType;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
@@ -836,26 +836,32 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
 /// in equal_rows(hash join), add those data types here to generate join logical plan.
 pub fn can_hash(data_type: &TypeRelation) -> bool {
     use LogicalType::*;
-    matches!(
-        data_type.logical(),
-        Null | Boolean
-            | Int8
-            | Int16
-            | Int32
-            | Int64
-            | UInt8
-            | UInt16
-            | UInt32
-            | UInt64
-            | Float16
-            | Float32
-            | Float64
-            | Timestamp(_, _)
-            | Utf8
-            | Decimal128(_, _)
-            | Date
-            | List(_)
-    )
+    match data_type.logical() {
+        Null => true,
+        Boolean => true,
+        Int8 => true,
+        Int16 => true,
+        Int32 => true,
+        Int64 => true,
+        UInt8 => true,
+        UInt16 => true,
+        UInt32 => true,
+        UInt64 => true,
+        Float32 => true,
+        Float64 => true,
+        Timestamp(time_unit, _) => match time_unit {
+            TimeUnit::Second => true,
+            TimeUnit::Millisecond => true,
+            TimeUnit::Microsecond => true,
+            TimeUnit::Nanosecond => true,
+        },
+        Utf8 => true,
+        Decimal128(_, _) => true,
+        Date => true,
+        List(_) => true,
+        Struct(fields) => fields.iter().all(|f| can_hash(f.data_type())),
+        _ => false,
+    }
 }
 
 /// Check whether all columns are from the schema.

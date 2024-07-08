@@ -91,36 +91,36 @@ use substrait::proto::{
 };
 use substrait::proto::{FunctionArgument, SortField};
 
-pub fn name_to_op(name: &str) -> Result<Operator> {
+pub fn name_to_op(name: &str) -> Option<Operator> {
     match name {
-        "equal" => Ok(Operator::Eq),
-        "not_equal" => Ok(Operator::NotEq),
-        "lt" => Ok(Operator::Lt),
-        "lte" => Ok(Operator::LtEq),
-        "gt" => Ok(Operator::Gt),
-        "gte" => Ok(Operator::GtEq),
-        "add" => Ok(Operator::Plus),
-        "subtract" => Ok(Operator::Minus),
-        "multiply" => Ok(Operator::Multiply),
-        "divide" => Ok(Operator::Divide),
-        "mod" => Ok(Operator::Modulo),
-        "and" => Ok(Operator::And),
-        "or" => Ok(Operator::Or),
-        "is_distinct_from" => Ok(Operator::IsDistinctFrom),
-        "is_not_distinct_from" => Ok(Operator::IsNotDistinctFrom),
-        "regex_match" => Ok(Operator::RegexMatch),
-        "regex_imatch" => Ok(Operator::RegexIMatch),
-        "regex_not_match" => Ok(Operator::RegexNotMatch),
-        "regex_not_imatch" => Ok(Operator::RegexNotIMatch),
-        "bitwise_and" => Ok(Operator::BitwiseAnd),
-        "bitwise_or" => Ok(Operator::BitwiseOr),
-        "str_concat" => Ok(Operator::StringConcat),
-        "at_arrow" => Ok(Operator::AtArrow),
-        "arrow_at" => Ok(Operator::ArrowAt),
-        "bitwise_xor" => Ok(Operator::BitwiseXor),
-        "bitwise_shift_right" => Ok(Operator::BitwiseShiftRight),
-        "bitwise_shift_left" => Ok(Operator::BitwiseShiftLeft),
-        _ => not_impl_err!("Unsupported function name: {name:?}"),
+        "equal" => Some(Operator::Eq),
+        "not_equal" => Some(Operator::NotEq),
+        "lt" => Some(Operator::Lt),
+        "lte" => Some(Operator::LtEq),
+        "gt" => Some(Operator::Gt),
+        "gte" => Some(Operator::GtEq),
+        "add" => Some(Operator::Plus),
+        "subtract" => Some(Operator::Minus),
+        "multiply" => Some(Operator::Multiply),
+        "divide" => Some(Operator::Divide),
+        "mod" => Some(Operator::Modulo),
+        "and" => Some(Operator::And),
+        "or" => Some(Operator::Or),
+        "is_distinct_from" => Some(Operator::IsDistinctFrom),
+        "is_not_distinct_from" => Some(Operator::IsNotDistinctFrom),
+        "regex_match" => Some(Operator::RegexMatch),
+        "regex_imatch" => Some(Operator::RegexIMatch),
+        "regex_not_match" => Some(Operator::RegexNotMatch),
+        "regex_not_imatch" => Some(Operator::RegexNotIMatch),
+        "bitwise_and" => Some(Operator::BitwiseAnd),
+        "bitwise_or" => Some(Operator::BitwiseOr),
+        "str_concat" => Some(Operator::StringConcat),
+        "at_arrow" => Some(Operator::AtArrow),
+        "arrow_at" => Some(Operator::ArrowAt),
+        "bitwise_xor" => Some(Operator::BitwiseXor),
+        "bitwise_shift_right" => Some(Operator::BitwiseShiftRight),
+        "bitwise_shift_left" => Some(Operator::BitwiseShiftLeft),
+        _ => None,
     }
 }
 
@@ -1127,7 +1127,7 @@ pub async fn from_substrait_rex(
                 Ok(Arc::new(Expr::ScalarFunction(
                     expr::ScalarFunction::new_udf(func.to_owned(), args),
                 )))
-            } else if let Ok(op) = name_to_op(fn_name) {
+            } else if let Some(op) = name_to_op(fn_name) {
                 if f.arguments.len() < 2 {
                     return not_impl_err!(
                         "Expect at least two arguments for binary operator {op:?}, the provided number of operators is {:?}",
@@ -1549,12 +1549,22 @@ fn from_substrait_bound(
                 BoundKind::CurrentRow(SubstraitBound::CurrentRow {}) => {
                     Ok(WindowFrameBound::CurrentRow)
                 }
-                BoundKind::Preceding(SubstraitBound::Preceding { offset }) => Ok(
-                    WindowFrameBound::Preceding(ScalarValue::Int64(Some(*offset))),
-                ),
-                BoundKind::Following(SubstraitBound::Following { offset }) => Ok(
-                    WindowFrameBound::Following(ScalarValue::Int64(Some(*offset))),
-                ),
+                BoundKind::Preceding(SubstraitBound::Preceding { offset }) => {
+                    if *offset <= 0 {
+                        return plan_err!("Preceding bound must be positive");
+                    }
+                    Ok(WindowFrameBound::Preceding(ScalarValue::UInt64(Some(
+                        *offset as u64,
+                    ))))
+                }
+                BoundKind::Following(SubstraitBound::Following { offset }) => {
+                    if *offset <= 0 {
+                        return plan_err!("Following bound must be positive");
+                    }
+                    Ok(WindowFrameBound::Following(ScalarValue::UInt64(Some(
+                        *offset as u64,
+                    ))))
+                }
                 BoundKind::Unbounded(SubstraitBound::Unbounded {}) => {
                     if is_lower {
                         Ok(WindowFrameBound::Preceding(ScalarValue::Null))

@@ -182,7 +182,9 @@ impl OptimizerRule for PropagateEmptyRelation {
                         },
                     )))
                 } else if new_inputs.len() == 1 {
-                    let child = unwrap_arc(new_inputs[0].clone());
+                    let mut new_inputs = new_inputs;
+                    let input_plan = new_inputs.pop().unwrap(); // length checked
+                    let child = unwrap_arc(input_plan);
                     if child.schema().eq(plan.schema()) {
                         Ok(Transformed::yes(child))
                     } else {
