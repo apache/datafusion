@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{internal_datafusion_err, plan_err};
+use datafusion_common::{not_impl_err, plan_err};
 use datafusion_common::{DFSchema, Result, ScalarValue};
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::Expr;
 use sqlparser::ast::Expr as SQLExpr;
 
@@ -31,7 +31,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let args = match (substring_from, substring_for) {
+        let mut substring_args = match (substring_from, substring_for) {
             (Some(from_expr), Some(for_expr)) => {
                 let arg =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
@@ -68,13 +68,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        let fun = self
-            .context_provider
-            .get_function_meta("substr")
-            .ok_or_else(|| {
-                internal_datafusion_err!("Unable to find expected 'substr' function")
-            })?;
+        for planner in self.planners.iter() {
+            match planner.plan_substring(substring_args)? {
+                PlannerResult::Planned(expr) => return Ok(expr),
+                PlannerResult::Original(args) => {
+                    substring_args = args;
+                }
+            }
+        }
 
-        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
+        not_impl_err!(
+            "Substring not supported by UserDefinedExtensionPlanners: {substring_args:?}"
+        )
     }
 }
