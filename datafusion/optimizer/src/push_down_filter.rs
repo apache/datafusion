@@ -761,11 +761,11 @@ impl OptimizerRule for PushDownFilter {
 
                 // Push down non-unnest filter predicate
                 // Unnest
-                //   Unenst Input (Projection)
+                //   Unnest Input (Projection)
                 // -> rewritten to
                 // Unnest
                 //   Filter
-                //     Unenst Input (Projection)
+                //     Unnest Input (Projection)
 
                 let unnest_input = std::mem::take(&mut unnest.input);
 

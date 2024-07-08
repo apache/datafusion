@@ -344,12 +344,10 @@ impl CommonSubexprEliminate {
         self.try_unary_plan(expr, input, config)?
             .transform_data(|(mut new_expr, new_input)| {
                 assert_eq!(new_expr.len(), 1); // passed in vec![predicate]
-                let new_predicate = new_expr
-                    .pop()
-                    .unwrap()
-                    .unalias_nested()
-                    .update_data(|new_predicate| (new_predicate, new_input));
-                Ok(new_predicate)
+                let new_predicate = new_expr.pop().unwrap();
+                // the closure didn't transform the expr, but will be
+                // combined with the result of try_unary_plan
+                Ok(Transformed::no((new_predicate, new_input)))
             })?
             .map_data(|(new_predicate, new_input)| {
                 Filter::try_new(new_predicate, Arc::new(new_input))
