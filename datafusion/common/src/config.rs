@@ -209,6 +209,9 @@ config_namespace! {
         /// specified. The Arrow type system does not have a notion of maximum
         /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
+
+        /// When set to true, SQL parser will normalize options value (convert value to lowercase)
+        pub enable_options_value_normalization: bool, default = true
     }
 }
 
