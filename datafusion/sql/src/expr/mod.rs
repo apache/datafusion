@@ -670,18 +670,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let substr =
             self.sql_expr_to_logical_expr(substr_expr, schema, planner_context)?;
         let fullstr = self.sql_expr_to_logical_expr(str_expr, schema, planner_context)?;
-        let mut extract_args = vec![fullstr, substr];
+        let mut position_args = vec![fullstr, substr];
         for planner in self.planners.iter() {
-            match planner.plan_position(extract_args)? {
+            match planner.plan_position(position_args)? {
                 PlannerResult::Planned(expr) => return Ok(expr),
                 PlannerResult::Original(args) => {
-                    extract_args = args;
+                    position_args = args;
                 }
             }
         }
 
         not_impl_err!(
-            "Position not supported by UserDefinedExtensionPlanners: {extract_args:?}"
+            "Position not supported by UserDefinedExtensionPlanners: {position_args:?}"
         )
     }
 
