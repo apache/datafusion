@@ -46,7 +46,7 @@ use datafusion_expr::{AggregateExt, ColumnarValue, ExprSchemable, Operator};
 ///
 /// The code in this example shows how to:
 /// 1. Create [`Expr`]s using different APIs: [`main`]`
-/// 2. Use the fluent API to easly create complex [`Expr`]s:  [`expr_fn_demo`]
+/// 2. Use the fluent API to easily create complex [`Expr`]s:  [`expr_fn_demo`]
 /// 3. Evaluate [`Expr`]s against data: [`evaluate_demo`]
 /// 4. Simplify expressions: [`simplify_demo`]
 /// 5. Analyze predicates for boundary ranges: [`range_analysis_demo`]
