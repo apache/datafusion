@@ -649,8 +649,7 @@ fn try_pushdown_through_hash_join(
             &projection_as_columns[0..=far_right_left_col_ind as _],
             &projection_as_columns[far_left_right_col_ind as _..],
             filter,
-            hash_join.left(),
-            hash_join.right(),
+            hash_join.left().schema().fields().len(),
         ) {
             Some(updated_filter) => Some(updated_filter),
             None => return Ok(None),
@@ -750,8 +749,7 @@ fn try_swapping_with_nested_loop_join(
             &projection_as_columns[0..=far_right_left_col_ind as _],
             &projection_as_columns[far_left_right_col_ind as _..],
             filter,
-            nl_join.left(),
-            nl_join.right(),
+            nl_join.left().schema().fields().len(),
         ) {
             Some(updated_filter) => Some(updated_filter),
             None => return Ok(None),
@@ -868,8 +866,7 @@ fn try_swapping_with_sym_hash_join(
             &projection_as_columns[0..=far_right_left_col_ind as _],
             &projection_as_columns[far_left_right_col_ind as _..],
             filter,
-            sym_join.left(),
-            sym_join.right(),
+            sym_join.left().schema().fields().len(),
         ) {
             Some(updated_filter) => Some(updated_filter),
             None => return Ok(None),
@@ -1160,21 +1157,20 @@ fn update_join_filter(
     projection_left_exprs: &[(Column, String)],
     projection_right_exprs: &[(Column, String)],
     join_filter: &JoinFilter,
-    join_left: &Arc<dyn ExecutionPlan>,
-    join_right: &Arc<dyn ExecutionPlan>,
+    left_field_size: usize,
 ) -> Option<JoinFilter> {
     let mut new_left_indices = new_indices_for_join_filter(
         join_filter,
         JoinSide::Left,
         projection_left_exprs,
-        join_left.schema(),
+        0,
     )
     .into_iter();
     let mut new_right_indices = new_indices_for_join_filter(
         join_filter,
         JoinSide::Right,
         projection_right_exprs,
-        join_right.schema(),
+        left_field_size,
     )
     .into_iter();
 
@@ -1204,20 +1200,24 @@ fn update_join_filter(
 /// This function determines and returns a vector of indices representing the
 /// positions of columns in `projection_exprs` that are involved in `join_filter`,
 /// and correspond to a particular side (`join_side`) of the join operation.
+///
+/// Column indices in the projection expressions are based on the join schema,
+/// whereas the join filter is based on the join child schema. `column_index_diff`
+/// represents the difference between them.
 fn new_indices_for_join_filter(
     join_filter: &JoinFilter,
     join_side: JoinSide,
     projection_exprs: &[(Column, String)],
-    join_child_schema: SchemaRef,
+    column_index_diff: usize,
 ) -> Vec<usize> {
     join_filter
         .column_indices()
         .iter()
         .filter(|col_idx| col_idx.side == join_side)
         .filter_map(|col_idx| {
-            projection_exprs.iter().position(|(col, _)| {
-                col.name() == join_child_schema.fields()[col_idx.index].name()
-            })
+            projection_exprs
+                .iter()
+                .position(|(col, _)| col_idx.index + column_index_diff == col.index())
         })
         .collect()
 }
