@@ -113,7 +113,7 @@ async fn query_parquet_demo() -> Result<()> {
             vec![df.parse_sql_expr("SUM(int_col) as sum_int_col")?],
         )?
         // Directly parsing the SQL text into a sort expression is not supported yet, so
-        // construct it programatically
+        // construct it programmatically
         .sort(vec![col("double_col").sort(false, false)])?
         .limit(0, Some(1))?;
 

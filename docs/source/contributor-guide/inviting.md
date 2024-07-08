@@ -294,7 +294,7 @@ Subject: [DISCUSS] $NEW_PMC_MEMBER for PMC
 
 I would like to propose adding $NEW_PMC_MEMBER[1] to the DataFusion PMC.
 
-$NEW_PMC_MEMBMER has been a committer since $COMMITER_MONTH [2], has a
+$NEW_PMC_MEMBMER has been a committer since $COMMITTER_MONTH [2], has a
 strong and sustained contribution record for more than a year, and focused on
 helping the community and the project grow[3].
 

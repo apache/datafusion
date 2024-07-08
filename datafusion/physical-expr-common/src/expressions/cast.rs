@@ -36,6 +36,11 @@ const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     format_options: DEFAULT_FORMAT_OPTIONS,
 };
 
+const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
+    safe: true,
+    format_options: DEFAULT_FORMAT_OPTIONS,
+};
+
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
 #[derive(Debug, Clone)]
 pub struct CastExpr {
@@ -150,9 +155,9 @@ impl PhysicalExpr for CastExpr {
         let child_interval = children[0];
         // Get child's datatype:
         let cast_type = child_interval.data_type();
-        Ok(Some(
-            vec![interval.cast_to(&cast_type, &self.cast_options)?],
-        ))
+        Ok(Some(vec![
+            interval.cast_to(&cast_type, &DEFAULT_SAFE_CAST_OPTIONS)?
+        ]))
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {

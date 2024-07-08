@@ -104,10 +104,7 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
     order_bys
         .iter()
-        .map(|e| PhysicalSortExpr {
-            expr: e.expr.clone(),
-            options: !e.options,
-        })
+        .map(|e| PhysicalSortExpr::new(e.expr.clone(), !e.options))
         .collect()
 }
 
