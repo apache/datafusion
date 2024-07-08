@@ -213,13 +213,13 @@ impl EquivalenceProperties {
             // Left expression is constant, add right as constant
             if !const_exprs_contains(&self.constants, right) {
                 self.constants
-                    .push(ConstExpr::new(right.clone()).with_across_partitions(true));
+                    .push(ConstExpr::from(right).with_across_partitions(true));
             }
         } else if self.is_expr_constant(right) {
             // Right expression is constant, add left as constant
             if !const_exprs_contains(&self.constants, left) {
                 self.constants
-                    .push(ConstExpr::new(left.clone()).with_across_partitions(true));
+                    .push(ConstExpr::from(left).with_across_partitions(true));
             }
         }
 
@@ -300,7 +300,7 @@ impl EquivalenceProperties {
         {
             if !const_exprs_contains(&self.constants, &expr) {
                 let const_expr =
-                    ConstExpr::new(expr).with_across_partitions(across_partitions);
+                    ConstExpr::from(expr).with_across_partitions(across_partitions);
                 self.constants.push(const_expr);
             }
         }
@@ -357,7 +357,7 @@ impl EquivalenceProperties {
         constant_exprs.extend(
             self.constants
                 .iter()
-                .map(|const_expr| const_expr.expr().clone()),
+                .map(|const_expr| Arc::clone(const_expr.expr())),
         );
         let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
         // Prune redundant sections in the requirement:
@@ -404,7 +404,7 @@ impl EquivalenceProperties {
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
             eq_properties = eq_properties
-                .add_constants(std::iter::once(ConstExpr::new(normalized_req.expr)));
+                .add_constants(std::iter::once(ConstExpr::from(normalized_req.expr)));
         }
         true
     }
@@ -424,11 +424,11 @@ impl EquivalenceProperties {
     fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
         let ExprProperties {
             sort_properties, ..
-        } = self.get_expr_properties(req.expr.clone());
+        } = self.get_expr_properties(Arc::clone(&req.expr));
         match sort_properties {
             SortProperties::Ordered(options) => {
                 let sort_expr = PhysicalSortExpr {
-                    expr: req.expr.clone(),
+                    expr: Arc::clone(&req.expr),
                     options,
                 };
                 sort_expr.satisfy(req, self.schema())
@@ -572,7 +572,7 @@ impl EquivalenceProperties {
                             && cast_expr.is_bigger_cast(expr_type)
                         {
                             res.push(PhysicalSortExpr {
-                                expr: r_expr.clone(),
+                                expr: Arc::clone(&r_expr),
                                 options: sort_expr.options,
                             });
                         }
@@ -715,8 +715,9 @@ impl EquivalenceProperties {
             map: mapping
                 .iter()
                 .map(|(source, target)| {
-                    let normalized_source = self.eq_group.normalize_expr(source.clone());
-                    (normalized_source, target.clone())
+                    let normalized_source =
+                        self.eq_group.normalize_expr(Arc::clone(source));
+                    (normalized_source, Arc::clone(target))
                 })
                 .collect(),
         }
@@ -758,7 +759,7 @@ impl EquivalenceProperties {
                 })
                 .flat_map(|(options, relevant_deps)| {
                     let sort_expr = PhysicalSortExpr {
-                        expr: target.clone(),
+                        expr: Arc::clone(target),
                         options,
                     };
                     // Generate dependent orderings (i.e. prefixes for `sort_expr`):
@@ -832,7 +833,7 @@ impl EquivalenceProperties {
             {
                 // Expression evaluates to single value
                 projected_constants
-                    .push(ConstExpr::new(target.clone()).with_across_partitions(true));
+                    .push(ConstExpr::from(target).with_across_partitions(true));
             }
         }
         projected_constants
@@ -889,11 +890,11 @@ impl EquivalenceProperties {
                 .flat_map(|&idx| {
                     let ExprProperties {
                         sort_properties, ..
-                    } = eq_properties.get_expr_properties(exprs[idx].clone());
+                    } = eq_properties.get_expr_properties(Arc::clone(&exprs[idx]));
                     match sort_properties {
                         SortProperties::Ordered(options) => Some((
                             PhysicalSortExpr {
-                                expr: exprs[idx].clone(),
+                                expr: Arc::clone(&exprs[idx]),
                                 options,
                             },
                             idx,
@@ -903,7 +904,7 @@ impl EquivalenceProperties {
                             let options = SortOptions::default();
                             Some((
                                 PhysicalSortExpr {
-                                    expr: exprs[idx].clone(),
+                                    expr: Arc::clone(&exprs[idx]),
                                     options,
                                 },
                                 idx,
@@ -925,8 +926,8 @@ impl EquivalenceProperties {
             // Note that these expressions are not properly "constants". This is just
             // an implementation strategy confined to this function.
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
-                eq_properties = eq_properties
-                    .add_constants(std::iter::once(ConstExpr::new(expr.clone())));
+                eq_properties =
+                    eq_properties.add_constants(std::iter::once(ConstExpr::from(expr)));
                 search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
@@ -954,9 +955,9 @@ impl EquivalenceProperties {
         let const_exprs = self
             .constants
             .iter()
-            .map(|const_expr| const_expr.expr().clone());
+            .map(|const_expr| Arc::clone(const_expr.expr()));
         let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
-        let normalized_expr = self.eq_group.normalize_expr(expr.clone());
+        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
         is_constant_recurse(&normalized_constants, &normalized_expr)
     }
 
@@ -1022,7 +1023,9 @@ fn update_properties(
             Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?
     }
     // Now, check what we know about orderings:
-    let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
+    let normalized_expr = eq_properties
+        .eq_group
+        .normalize_expr(Arc::clone(&node.expr));
     if eq_properties.is_expr_constant(&normalized_expr) {
         node.data.sort_properties = SortProperties::Singleton;
     } else if let Some(options) = eq_properties
@@ -1108,7 +1111,7 @@ fn referred_dependencies(
         .keys()
         .filter(|sort_expr| expr_refers(source, &sort_expr.expr))
     {
-        let key = ExprWrapper(sort_expr.expr.clone());
+        let key = ExprWrapper(Arc::clone(&sort_expr.expr));
         expr_to_sort_exprs
             .entry(key)
             .or_default()
@@ -1484,25 +1487,25 @@ mod tests {
             Field::new("c", DataType::Int64, true),
         ]));
 
-        let input_properties = EquivalenceProperties::new(input_schema.clone());
+        let input_properties = EquivalenceProperties::new(Arc::clone(&input_schema));
         let col_a = col("a", &input_schema)?;
 
         // a as a1, a as a2, a as a3, a as a3
         let proj_exprs = vec![
-            (col_a.clone(), "a1".to_string()),
-            (col_a.clone(), "a2".to_string()),
-            (col_a.clone(), "a3".to_string()),
-            (col_a.clone(), "a4".to_string()),
+            (Arc::clone(&col_a), "a1".to_string()),
+            (Arc::clone(&col_a), "a2".to_string()),
+            (Arc::clone(&col_a), "a3".to_string()),
+            (Arc::clone(&col_a), "a4".to_string()),
         ];
         let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
 
         let out_schema = output_schema(&projection_mapping, &input_schema)?;
         // a as a1, a as a2, a as a3, a as a3
         let proj_exprs = vec![
-            (col_a.clone(), "a1".to_string()),
-            (col_a.clone(), "a2".to_string()),
-            (col_a.clone(), "a3".to_string()),
-            (col_a.clone(), "a4".to_string()),
+            (Arc::clone(&col_a), "a1".to_string()),
+            (Arc::clone(&col_a), "a2".to_string()),
+            (Arc::clone(&col_a), "a3".to_string()),
+            (Arc::clone(&col_a), "a4".to_string()),
         ];
         let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
 
@@ -1532,8 +1535,8 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let offset = schema.fields.len();
-        let col_a2 = &add_offset_to_expr(col_a.clone(), offset);
-        let col_b2 = &add_offset_to_expr(col_b.clone(), offset);
+        let col_a2 = &add_offset_to_expr(Arc::clone(col_a), offset);
+        let col_b2 = &add_offset_to_expr(Arc::clone(col_b), offset);
         let option_asc = SortOptions {
             descending: false,
             nulls_first: false,
@@ -1577,8 +1580,8 @@ mod tests {
             ),
         ];
         for (left_orderings, right_orderings, expected) in test_cases {
-            let mut left_eq_properties = EquivalenceProperties::new(schema.clone());
-            let mut right_eq_properties = EquivalenceProperties::new(schema.clone());
+            let mut left_eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+            let mut right_eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
             let left_orderings = convert_to_orderings(&left_orderings);
             let right_orderings = convert_to_orderings(&right_orderings);
             let expected = convert_to_orderings(&expected);
@@ -1626,17 +1629,17 @@ mod tests {
         let col_b = col("b", &schema)?;
         let col_d = col("d", &schema)?;
         let b_plus_d = Arc::new(BinaryExpr::new(
-            col_b.clone(),
+            Arc::clone(&col_b),
             Operator::Plus,
-            col_d.clone(),
+            Arc::clone(&col_d),
         )) as Arc<dyn PhysicalExpr>;
 
-        let constants = vec![col_a.clone(), col_b.clone()];
-        let expr = b_plus_d.clone();
+        let constants = vec![Arc::clone(&col_a), Arc::clone(&col_b)];
+        let expr = Arc::clone(&b_plus_d);
         assert!(!is_constant_recurse(&constants, &expr));
 
-        let constants = vec![col_a.clone(), col_b.clone(), col_d.clone()];
-        let expr = b_plus_d.clone();
+        let constants = vec![Arc::clone(&col_a), Arc::clone(&col_b), Arc::clone(&col_d)];
+        let expr = Arc::clone(&b_plus_d);
         assert!(is_constant_recurse(&constants, &expr));
         Ok(())
     }
@@ -1726,11 +1729,11 @@ mod tests {
         eq_properties.add_equal_conditions(&col_a_expr, &col_c_expr)?;
         let others = vec![
             vec![PhysicalSortExpr {
-                expr: col_b_expr.clone(),
+                expr: Arc::clone(&col_b_expr),
                 options: sort_options,
             }],
             vec![PhysicalSortExpr {
-                expr: col_c_expr.clone(),
+                expr: Arc::clone(&col_c_expr),
                 options: sort_options,
             }],
         ];
@@ -1739,11 +1742,11 @@ mod tests {
         let mut expected_eqs = EquivalenceProperties::new(Arc::new(schema));
         expected_eqs.add_new_orderings([
             vec![PhysicalSortExpr {
-                expr: col_b_expr.clone(),
+                expr: Arc::clone(&col_b_expr),
                 options: sort_options,
             }],
             vec![PhysicalSortExpr {
-                expr: col_c_expr.clone(),
+                expr: Arc::clone(&col_c_expr),
                 options: sort_options,
             }],
         ]);
@@ -1766,7 +1769,7 @@ mod tests {
         ]);
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
-        let required_columns = [col_b.clone(), col_a.clone()];
+        let required_columns = [Arc::clone(col_b), Arc::clone(col_a)];
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
         eq_properties.add_new_orderings([vec![
             PhysicalSortExpr {
@@ -1784,11 +1787,11 @@ mod tests {
             result,
             vec![
                 PhysicalSortExpr {
-                    expr: col_b.clone(),
+                    expr: Arc::clone(col_b),
                     options: sort_options_not
                 },
                 PhysicalSortExpr {
-                    expr: col_a.clone(),
+                    expr: Arc::clone(col_a),
                     options: sort_options
                 }
             ]
@@ -1801,7 +1804,7 @@ mod tests {
         ]);
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
-        let required_columns = [col_b.clone(), col_a.clone()];
+        let required_columns = [Arc::clone(col_b), Arc::clone(col_a)];
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
         eq_properties.add_new_orderings([
             vec![PhysicalSortExpr {
@@ -1825,11 +1828,11 @@ mod tests {
             result,
             vec![
                 PhysicalSortExpr {
-                    expr: col_b.clone(),
+                    expr: Arc::clone(col_b),
                     options: sort_options_not
                 },
                 PhysicalSortExpr {
-                    expr: col_a.clone(),
+                    expr: Arc::clone(col_a),
                     options: sort_options
                 }
             ]
@@ -1890,11 +1893,11 @@ mod tests {
         // [b ASC], [d ASC]
         eq_properties.add_new_orderings(vec![
             vec![PhysicalSortExpr {
-                expr: col_b.clone(),
+                expr: Arc::clone(col_b),
                 options: option_asc,
             }],
             vec![PhysicalSortExpr {
-                expr: col_d.clone(),
+                expr: Arc::clone(col_d),
                 options: option_asc,
             }],
         ]);
@@ -1903,22 +1906,22 @@ mod tests {
             // d + b
             (
                 Arc::new(BinaryExpr::new(
-                    col_d.clone(),
+                    Arc::clone(col_d),
                     Operator::Plus,
-                    col_b.clone(),
+                    Arc::clone(col_b),
                 )) as Arc<dyn PhysicalExpr>,
                 SortProperties::Ordered(option_asc),
             ),
             // b
-            (col_b.clone(), SortProperties::Ordered(option_asc)),
+            (Arc::clone(col_b), SortProperties::Ordered(option_asc)),
             // a
-            (col_a.clone(), SortProperties::Ordered(option_asc)),
+            (Arc::clone(col_a), SortProperties::Ordered(option_asc)),
             // a + c
             (
                 Arc::new(BinaryExpr::new(
-                    col_a.clone(),
+                    Arc::clone(col_a),
                     Operator::Plus,
-                    col_c.clone(),
+                    Arc::clone(col_c),
                 )),
                 SortProperties::Unordered,
             ),
@@ -1929,7 +1932,7 @@ mod tests {
                 .iter()
                 .flat_map(|ordering| ordering.first().cloned())
                 .collect::<Vec<_>>();
-            let expr_props = eq_properties.get_expr_properties(expr.clone());
+            let expr_props = eq_properties.get_expr_properties(Arc::clone(&expr));
             let err_msg = format!(
                 "expr:{:?}, expected: {:?}, actual: {:?}, leading_orderings: {leading_orderings:?}",
                 expr, expected, expr_props.sort_properties
@@ -1987,7 +1990,7 @@ mod tests {
                         .iter()
                         .zip(ordering.iter())
                         .map(|(&idx, sort_expr)| PhysicalSortExpr {
-                            expr: exprs[idx].clone(),
+                            expr: Arc::clone(&exprs[idx]),
                             options: sort_expr.options,
                         })
                         .collect::<Vec<_>>();
@@ -2034,9 +2037,9 @@ mod tests {
         let col_h = &col("h", &test_schema)?;
         // a + d
         let a_plus_d = Arc::new(BinaryExpr::new(
-            col_a.clone(),
+            Arc::clone(col_a),
             Operator::Plus,
-            col_d.clone(),
+            Arc::clone(col_d),
         )) as Arc<dyn PhysicalExpr>;
 
         let option_asc = SortOptions {
@@ -2050,11 +2053,11 @@ mod tests {
         // [d ASC, h DESC] also satisfies schema.
         eq_properties.add_new_orderings([vec![
             PhysicalSortExpr {
-                expr: col_d.clone(),
+                expr: Arc::clone(col_d),
                 options: option_asc,
             },
             PhysicalSortExpr {
-                expr: col_h.clone(),
+                expr: Arc::clone(col_h),
                 options: option_desc,
             },
         ]]);
@@ -2143,7 +2146,7 @@ mod tests {
         let col_h = &col("h", &test_schema)?;
 
         // Add column h as constant
-        eq_properties = eq_properties.add_constants(vec![ConstExpr::new(col_h.clone())]);
+        eq_properties = eq_properties.add_constants(vec![ConstExpr::from(col_h)]);
 
         let test_cases = vec![
             // TEST CASE 1
@@ -2382,20 +2385,21 @@ mod tests {
             Field::new("b", DataType::Utf8, true),
             Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
         ]));
-        let base_properties = EquivalenceProperties::new(schema.clone()).with_reorder(
-            ["a", "b", "c"]
-                .into_iter()
-                .map(|c| {
-                    col(c, schema.as_ref()).map(|expr| PhysicalSortExpr {
-                        expr,
-                        options: SortOptions {
-                            descending: false,
-                            nulls_first: true,
-                        },
+        let base_properties = EquivalenceProperties::new(Arc::clone(&schema))
+            .with_reorder(
+                ["a", "b", "c"]
+                    .into_iter()
+                    .map(|c| {
+                        col(c, schema.as_ref()).map(|expr| PhysicalSortExpr {
+                            expr,
+                            options: SortOptions {
+                                descending: false,
+                                nulls_first: true,
+                            },
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>>>()?,
-        );
+                    .collect::<Result<Vec<_>>>()?,
+            );
 
         struct TestCase {
             name: &'static str,
@@ -2414,8 +2418,11 @@ mod tests {
             TestCase {
                 name: "(a, b, c) -> (c)",
                 // b is constant, so it should be removed from the sort order
-                constants: vec![col_b.clone()],
-                equal_conditions: vec![[cast_c.clone(), col_a.clone()]],
+                constants: vec![Arc::clone(&col_b)],
+                equal_conditions: vec![[
+                    Arc::clone(&cast_c) as Arc<dyn PhysicalExpr>,
+                    Arc::clone(&col_a),
+                ]],
                 sort_columns: &["c"],
                 should_satisfy_ordering: true,
             },
@@ -2425,7 +2432,10 @@ mod tests {
                 name: "(a, b, c) -> (c)",
                 // b is constant, so it should be removed from the sort order
                 constants: vec![col_b],
-                equal_conditions: vec![[col_a.clone(), cast_c.clone()]],
+                equal_conditions: vec![[
+                    Arc::clone(&col_a),
+                    Arc::clone(&cast_c) as Arc<dyn PhysicalExpr>,
+                ]],
                 sort_columns: &["c"],
                 should_satisfy_ordering: true,
             },
@@ -2434,7 +2444,10 @@ mod tests {
                 // b is not constant anymore
                 constants: vec![],
                 // a and c are still compatible, but this is irrelevant since the original ordering is (a, b, c)
-                equal_conditions: vec![[cast_c.clone(), col_a.clone()]],
+                equal_conditions: vec![[
+                    Arc::clone(&cast_c) as Arc<dyn PhysicalExpr>,
+                    Arc::clone(&col_a),
+                ]],
                 sort_columns: &["c"],
                 should_satisfy_ordering: false,
             },
@@ -2443,7 +2456,7 @@ mod tests {
         for case in cases {
             let mut properties = base_properties
                 .clone()
-                .add_constants(case.constants.into_iter().map(ConstExpr::new));
+                .add_constants(case.constants.into_iter().map(ConstExpr::from));
             for [left, right] in &case.equal_conditions {
                 properties.add_equal_conditions(left, right)?
             }

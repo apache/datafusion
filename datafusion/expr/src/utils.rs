@@ -864,6 +864,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::List(_) => true,
         DataType::LargeList(_) => true,
         DataType::FixedSizeList(_, _) => true,
+        DataType::Struct(fields) => fields.iter().all(|f| can_hash(f.data_type())),
         _ => false,
     }
 }
@@ -1199,7 +1200,7 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 /// merge inputs schema into a single schema.
 pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     if inputs.len() == 1 {
-        inputs[0].schema().clone().as_ref().clone()
+        inputs[0].schema().as_ref().clone()
     } else {
         inputs.iter().map(|input| input.schema()).fold(
             DFSchema::empty(),

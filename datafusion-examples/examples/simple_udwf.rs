@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Create a `PartitionEvalutor` to evaluate this function on a new
+/// Create a `PartitionEvaluator` to evaluate this function on a new
 /// partition.
 fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
     Ok(Box::new(MyPartitionEvaluator::new()))

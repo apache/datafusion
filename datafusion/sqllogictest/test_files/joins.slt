@@ -53,6 +53,20 @@ AS VALUES
 (44, 'x', 3),
 (55, 'w', 3);
 
+statement ok
+CREATE TABLE join_t3(s3 struct<id INT>)
+  AS VALUES
+  (NULL),
+  (struct(1)),
+  (struct(2));
+
+statement ok
+CREATE TABLE join_t4(s4 struct<id INT>)
+  AS VALUES
+  (NULL),
+  (struct(2)),
+  (struct(3));
+
 # Left semi anti join
 
 statement ok
@@ -1335,6 +1349,44 @@ physical_plan
 09)--------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
 10)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 11)------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# Join on struct
+query TT
+explain select join_t3.s3, join_t4.s4
+from join_t3
+inner join join_t4 on join_t3.s3 = join_t4.s4
+----
+logical_plan
+01)Inner Join: join_t3.s3 = join_t4.s4
+02)--TableScan: join_t3 projection=[s3]
+03)--TableScan: join_t4 projection=[s4]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=2
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s3@0, s4@0)]
+03)----CoalesceBatchesExec: target_batch_size=2
+04)------RepartitionExec: partitioning=Hash([s3@0], 2), input_partitions=2
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=2
+08)------RepartitionExec: partitioning=Hash([s4@0], 2), input_partitions=2
+09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)----------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ??
+select join_t3.s3, join_t4.s4
+from join_t3
+inner join join_t4 on join_t3.s3 = join_t4.s4
+----
+{id: 2} {id: 2}
+
+# join with struct key and nulls
+# Note that intersect or except applies `null_equals_null` as true for Join.
+query ?
+SELECT * FROM join_t3
+EXCEPT
+SELECT * FROM join_t4
+----
+{id: 1}
 
 query TT
 EXPLAIN
@@ -3813,3 +3865,182 @@ logical_plan
 01)SubqueryAlias: b
 02)--Projection: Int64(1) AS a
 03)----EmptyRelation
+
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.execution.batch_size = 3;
+
+# Right Hash Joins preserve the right ordering
+# No nulls on build side:
+statement ok
+CREATE TABLE left_table_no_nulls(a INT UNSIGNED, b INT UNSIGNED)
+AS VALUES
+(11, 1),
+(12, 3),
+(13, 5),
+(14, 2),
+(15, 4);
+
+statement ok
+CREATE TABLE right_table_no_nulls(a INT UNSIGNED, b INT UNSIGNED)
+AS VALUES
+(21, 1),
+(22, 2),
+(23, 3),
+(24, 4);
+
+query IIII
+SELECT * FROM (
+    SELECT * from left_table_no_nulls
+) as lhs RIGHT JOIN (
+    SELECT * from right_table_no_nulls
+    ORDER BY b
+) AS rhs ON lhs.b=rhs.b
+----
+11 1 21 1
+14 2 22 2
+12 3 23 3
+15 4 24 4
+
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT * from left_table_no_nulls
+) as lhs RIGHT JOIN (
+    SELECT * from right_table_no_nulls
+    ORDER BY b
+) AS rhs ON lhs.b=rhs.b
+----
+logical_plan
+01)Right Join: lhs.b = rhs.b
+02)--SubqueryAlias: lhs
+03)----TableScan: left_table_no_nulls projection=[a, b]
+04)--SubqueryAlias: rhs
+05)----Sort: right_table_no_nulls.b ASC NULLS LAST
+06)------TableScan: right_table_no_nulls projection=[a, b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)------MemoryExec: partitions=1, partition_sizes=[1]
+
+
+# Missing probe index in the middle of the batch:
+statement ok
+CREATE TABLE left_table_missing_probe(a INT UNSIGNED, b INT UNSIGNED)
+AS VALUES
+(11, 1),
+(12, 2),
+(13, 3),
+(14, 6),
+(15, 8);
+
+statement ok
+CREATE TABLE right_table_missing_probe(a INT UNSIGNED, b INT UNSIGNED)
+AS VALUES
+(21, 1),
+(22, 4),
+(23, 6),
+(24, 7),
+(25, 8);
+
+query IIII
+SELECT * FROM (
+    SELECT * from left_table_missing_probe
+) as lhs RIGHT JOIN (
+    SELECT * from right_table_missing_probe
+    ORDER BY b
+) AS rhs ON lhs.b=rhs.b
+----
+11 1 21 1
+NULL NULL 22 4
+14 6 23 6
+NULL NULL 24 7
+15 8 25 8
+
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT * from left_table_no_nulls
+) as lhs RIGHT JOIN (
+    SELECT * from right_table_no_nulls
+    ORDER BY b
+) AS rhs ON lhs.b=rhs.b
+----
+logical_plan
+01)Right Join: lhs.b = rhs.b
+02)--SubqueryAlias: lhs
+03)----TableScan: left_table_no_nulls projection=[a, b]
+04)--SubqueryAlias: rhs
+05)----Sort: right_table_no_nulls.b ASC NULLS LAST
+06)------TableScan: right_table_no_nulls projection=[a, b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)------MemoryExec: partitions=1, partition_sizes=[1]
+
+
+# Null build indices:
+statement ok
+CREATE TABLE left_table_append_null_build(a INT UNSIGNED, b INT UNSIGNED)
+AS VALUES
+(11, 1),
+(12, 1),
+(13, 5),
+(14, 5),
+(15, 3);
+
+statement ok
+CREATE TABLE right_table_append_null_build(a INT UNSIGNED, b INT UNSIGNED)
+AS VALUES
+(21, 4),
+(22, 5),
+(23, 6),
+(24, 7),
+(25, 8);
+
+query IIII
+SELECT * FROM (
+    SELECT * from left_table_append_null_build
+) as lhs RIGHT JOIN (
+    SELECT * from right_table_append_null_build
+    ORDER BY b
+) AS rhs ON lhs.b=rhs.b
+----
+NULL NULL 21 4
+13 5 22 5
+14 5 22 5
+NULL NULL 23 6
+NULL NULL 24 7
+NULL NULL 25 8
+
+
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT * from left_table_no_nulls
+) as lhs RIGHT JOIN (
+    SELECT * from right_table_no_nulls
+    ORDER BY b
+) AS rhs ON lhs.b=rhs.b
+----
+logical_plan
+01)Right Join: lhs.b = rhs.b
+02)--SubqueryAlias: lhs
+03)----TableScan: left_table_no_nulls projection=[a, b]
+04)--SubqueryAlias: rhs
+05)----Sort: right_table_no_nulls.b ASC NULLS LAST
+06)------TableScan: right_table_no_nulls projection=[a, b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)------MemoryExec: partitions=1, partition_sizes=[1]
+

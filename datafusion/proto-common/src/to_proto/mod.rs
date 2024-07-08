@@ -364,6 +364,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             ScalarValue::Struct(arr) => {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
+            ScalarValue::Map(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
             ScalarValue::Date32(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date32Value(*s))
             }
@@ -938,7 +941,7 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
 
-// ScalarValue::List / FixedSizeList / LargeList / Struct are serialized using
+// ScalarValue::List / FixedSizeList / LargeList / Struct / Map are serialized using
 // Arrow IPC messages as a single column RecordBatch
 fn encode_scalar_nested_value(
     arr: ArrayRef,
@@ -991,6 +994,9 @@ fn encode_scalar_nested_value(
             value: Some(protobuf::scalar_value::Value::StructValue(
                 scalar_list_value,
             )),
+        }),
+        ScalarValue::Map(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::MapValue(scalar_list_value)),
         }),
         _ => unreachable!(),
     }

@@ -231,10 +231,24 @@ impl SessionState {
             );
         }
 
+        let user_defined_sql_planners: Vec<Arc<dyn UserDefinedSQLPlanner>> = vec![
+            Arc::new(functions::core::planner::CoreFunctionPlanner::default()),
+            // register crate of array expressions (if enabled)
+            #[cfg(feature = "array_expressions")]
+            Arc::new(functions_array::planner::ArrayFunctionPlanner),
+            #[cfg(feature = "array_expressions")]
+            Arc::new(functions_array::planner::FieldAccessPlanner),
+            #[cfg(any(
+                feature = "datetime_expressions",
+                feature = "unicode_expressions"
+            ))]
+            Arc::new(functions::planner::UserDefinedFunctionPlanner),
+        ];
+
         let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
-            user_defined_sql_planners: vec![],
+            user_defined_sql_planners,
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
@@ -958,23 +972,7 @@ impl SessionState {
             query = query.with_user_defined_planner(planner.clone());
         }
 
-        // register crate of array expressions (if enabled)
-        #[cfg(feature = "array_expressions")]
-        {
-            let array_planner =
-                Arc::new(functions_array::planner::ArrayFunctionPlanner) as _;
-
-            let field_access_planner =
-                Arc::new(functions_array::planner::FieldAccessPlanner) as _;
-
-            query
-                .with_user_defined_planner(array_planner)
-                .with_user_defined_planner(field_access_planner)
-        }
-        #[cfg(not(feature = "array_expressions"))]
-        {
-            query
-        }
+        query
     }
 }
 
@@ -1184,6 +1182,10 @@ impl FunctionRegistry for SessionState {
     ) -> datafusion_common::Result<()> {
         self.analyzer.add_function_rewrite(rewrite);
         Ok(())
+    }
+
+    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+        self.user_defined_sql_planners.clone()
     }
 
     fn register_user_defined_sql_planner(
