@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL planning extensions like [`ExtractPlanner`]
+//! SQL planning extensions like [`UserDefinedFunctionPlanner`]
 
 use datafusion_common::Result;
 use datafusion_expr::{
@@ -25,12 +25,20 @@ use datafusion_expr::{
 };
 
 #[derive(Default)]
-pub struct ExtractPlanner;
+pub struct UserDefinedFunctionPlanner;
 
-impl UserDefinedSQLPlanner for ExtractPlanner {
+impl UserDefinedSQLPlanner for UserDefinedFunctionPlanner {
+    #[cfg(feature = "datetime_expressions")]
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(crate::datetime::date_part(), args),
+        )))
+    }
+
+    #[cfg(feature = "unicode_expressions")]
+    fn plan_position(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::unicode::strpos(), args),
         )))
     }
 }

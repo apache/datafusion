@@ -238,10 +238,11 @@ impl SessionState {
             Arc::new(functions_array::planner::ArrayFunctionPlanner),
             #[cfg(feature = "array_expressions")]
             Arc::new(functions_array::planner::FieldAccessPlanner),
-            #[cfg(feature = "datetime_expressions")]
-            Arc::new(functions::datetime::planner::ExtractPlanner),
-            #[cfg(feature = "unicode_expressions")]
-            Arc::new(functions::unicode::planner::PositionPlanner),
+            #[cfg(any(
+                feature = "datetime_expressions",
+                feature = "unicode_expressions"
+            ))]
+            Arc::new(functions::planner::UserDefinedFunctionPlanner),
         ];
 
         let mut new_self = SessionState {
