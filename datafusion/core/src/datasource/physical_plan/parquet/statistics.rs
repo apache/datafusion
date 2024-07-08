@@ -24,8 +24,8 @@ use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
     new_empty_array, new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+    Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
     Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
     Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
@@ -762,15 +762,20 @@ macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
         paste! {
             match $data_type {
-                Some(DataType::Boolean) => Ok(Arc::new(
-                    BooleanArray::from_iter(
-                        [<$stat_type_prefix BooleanDataPageStatsIterator>]::new($iterator)
-                        .flatten()
-                        // BooleanArray::from_iter required a sized iterator, so collect into Vec first
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                    )
-                )),
+                Some(DataType::Boolean) => {
+                    let iterator = [<$stat_type_prefix BooleanDataPageStatsIterator>]::new($iterator);
+                    let mut builder = BooleanBuilder::new();
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+                            builder.append_value(x);
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
                 Some(DataType::UInt8) => Ok(Arc::new(
                     UInt8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
