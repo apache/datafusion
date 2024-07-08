@@ -84,7 +84,7 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
             name,
             Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![vec![]]).unwrap()),
         )
-           .unwrap();
+        .unwrap();
     });
     ctx
 }
