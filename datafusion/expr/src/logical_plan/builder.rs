@@ -48,9 +48,14 @@ use crate::{
     WriteOp,
 };
 
-use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::fields::LogicalFields;
+use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 use datafusion_common::{
     get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -182,32 +187,34 @@ impl LogicalPlanBuilder {
         }
 
         let empty_schema = DFSchema::empty();
-        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+        let mut field_types: Vec<TypeRelation> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
-            let mut common_type: Option<DataType> = None;
+            let mut common_type: Option<TypeRelation> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
                 let data_type = value.get_type(&empty_schema)?;
-                if data_type == DataType::Null {
+                if *data_type.logical() == LogicalType::Null {
                     continue;
                 }
                 if let Some(prev_type) = common_type {
                     // get common type of each column values.
-                    let Some(new_type) = values_coercion(&data_type, &prev_type) else {
+                    let Some(new_type) =
+                        values_coercion(&data_type.physical(), &prev_type.physical())
+                    else {
                         return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
                     };
-                    common_type = Some(new_type);
+                    common_type = Some(new_type.into());
                 } else {
                     common_type = Some(data_type.clone());
                 }
             }
-            field_types.push(common_type.unwrap_or(DataType::Utf8));
+            field_types.push(common_type.unwrap_or(DataType::Utf8.into()));
         }
         // wrap cast if data type is not same as common type.
         for row in &mut values {
             for (j, field_type) in field_types.iter().enumerate() {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
-                    row[j] = Expr::Literal(ScalarValue::try_from(field_type.clone())?);
+                    row[j] = Expr::Literal(ScalarValue::try_from(field_type.physical())?);
                 } else {
                     row[j] =
                         std::mem::take(&mut row[j]).cast_to(field_type, &empty_schema)?;
@@ -220,7 +227,7 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                Field::new(name, data_type.clone(), true)
+                LogicalField::new(name, data_type.clone(), true)
             })
             .collect::<Vec<_>>();
         let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
@@ -289,7 +296,7 @@ impl LogicalPlanBuilder {
     pub fn insert_into(
         input: LogicalPlan,
         table_name: impl Into<TableReference>,
-        table_schema: &Schema,
+        table_schema: &LogicalSchema,
         overwrite: bool,
     ) -> Result<Self> {
         let table_schema = table_schema.clone().to_dfschema_ref()?;
@@ -383,7 +390,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Make a builder for a prepare logical plan from the builder's plan
-    pub fn prepare(self, name: String, data_types: Vec<DataType>) -> Result<Self> {
+    pub fn prepare(self, name: String, data_types: Vec<TypeRelation>) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Prepare(Prepare {
             name,
             data_types,
@@ -1181,7 +1188,7 @@ impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
     }
 }
 
-pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
+pub fn change_redundant_column(fields: &LogicalFields) -> Vec<LogicalField> {
     let mut name_map = HashMap::new();
     fields
         .into_iter()
@@ -1190,7 +1197,11 @@ pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
             *counter += 1;
             if *counter > 1 {
                 let new_name = format!("{}:{}", field.name(), *counter - 1);
-                Field::new(new_name, field.data_type().clone(), field.is_nullable())
+                LogicalField::new(
+                    new_name,
+                    field.data_type().clone(),
+                    field.is_nullable(),
+                )
             } else {
                 field.as_ref().clone()
             }
@@ -1205,8 +1216,8 @@ pub fn build_join_schema(
     join_type: &JoinType,
 ) -> Result<DFSchema> {
     fn nullify_fields<'a>(
-        fields: impl Iterator<Item = (Option<&'a TableReference>, &'a Arc<Field>)>,
-    ) -> Vec<(Option<TableReference>, Arc<Field>)> {
+        fields: impl Iterator<Item = (Option<&'a TableReference>, &'a Arc<LogicalField>)>,
+    ) -> Vec<(Option<TableReference>, Arc<LogicalField>)> {
         fields
             .map(|(q, f)| {
                 // TODO: find a good way to do that
@@ -1219,57 +1230,58 @@ pub fn build_join_schema(
     let right_fields = right.iter();
     let left_fields = left.iter();
 
-    let qualified_fields: Vec<(Option<TableReference>, Arc<Field>)> = match join_type {
-        JoinType::Inner => {
-            // left then right
-            let left_fields = left_fields
-                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-                .collect::<Vec<_>>();
-            let right_fields = right_fields
-                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-                .collect::<Vec<_>>();
-            left_fields.into_iter().chain(right_fields).collect()
-        }
-        JoinType::Left => {
-            // left then right, right set to nullable in case of not matched scenario
-            let left_fields = left_fields
-                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-                .collect::<Vec<_>>();
-            left_fields
-                .into_iter()
-                .chain(nullify_fields(right_fields))
-                .collect()
-        }
-        JoinType::Right => {
-            // left then right, left set to nullable in case of not matched scenario
-            let right_fields = right_fields
-                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-                .collect::<Vec<_>>();
-            nullify_fields(left_fields)
-                .into_iter()
-                .chain(right_fields)
-                .collect()
-        }
-        JoinType::Full => {
-            // left then right, all set to nullable in case of not matched scenario
-            nullify_fields(left_fields)
-                .into_iter()
-                .chain(nullify_fields(right_fields))
-                .collect()
-        }
-        JoinType::LeftSemi | JoinType::LeftAnti => {
-            // Only use the left side for the schema
-            left_fields
-                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-                .collect()
-        }
-        JoinType::RightSemi | JoinType::RightAnti => {
-            // Only use the right side for the schema
-            right_fields
-                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-                .collect()
-        }
-    };
+    let qualified_fields: Vec<(Option<TableReference>, Arc<LogicalField>)> =
+        match join_type {
+            JoinType::Inner => {
+                // left then right
+                let left_fields = left_fields
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                    .collect::<Vec<_>>();
+                let right_fields = right_fields
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                    .collect::<Vec<_>>();
+                left_fields.into_iter().chain(right_fields).collect()
+            }
+            JoinType::Left => {
+                // left then right, right set to nullable in case of not matched scenario
+                let left_fields = left_fields
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                    .collect::<Vec<_>>();
+                left_fields
+                    .into_iter()
+                    .chain(nullify_fields(right_fields))
+                    .collect()
+            }
+            JoinType::Right => {
+                // left then right, left set to nullable in case of not matched scenario
+                let right_fields = right_fields
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                    .collect::<Vec<_>>();
+                nullify_fields(left_fields)
+                    .into_iter()
+                    .chain(right_fields)
+                    .collect()
+            }
+            JoinType::Full => {
+                // left then right, all set to nullable in case of not matched scenario
+                nullify_fields(left_fields)
+                    .into_iter()
+                    .chain(nullify_fields(right_fields))
+                    .collect()
+            }
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                // Only use the left side for the schema
+                left_fields
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                    .collect()
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                // Only use the right side for the schema
+                right_fields
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                    .collect()
+            }
+        };
     let func_dependencies = left.functional_dependencies().join(
         right.functional_dependencies(),
         join_type,
@@ -1381,9 +1393,10 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
             .map(
                 |((left_qualifier, left_field), (_right_qualifier, right_field))| {
                     let nullable = left_field.is_nullable() || right_field.is_nullable();
+                    // TODO(@notfilippo): do not convert to physical type
                     let data_type = comparison_coercion(
-                        left_field.data_type(),
-                        right_field.data_type(),
+                        &left_field.data_type().physical(),
+                        &right_field.data_type().physical(),
                     )
                     .ok_or_else(|| {
                         plan_datafusion_err!(
@@ -1396,7 +1409,11 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     })?;
                     Ok((
                         left_qualifier.cloned(),
-                        Arc::new(Field::new(left_field.name(), data_type, nullable)),
+                        Arc::new(LogicalField::new(
+                            left_field.name(),
+                            data_type,
+                            nullable,
+                        )),
                     ))
                 },
             )
@@ -1580,8 +1597,8 @@ impl TableSource for LogicalTableSource {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.table_schema)
+    fn schema(&self) -> LogicalSchemaRef {
+        LogicalSchemaRef::new(self.table_schema.clone().into())
     }
 
     fn supports_filters_pushdown(
@@ -1605,15 +1622,13 @@ pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
 // - Struct(field1, field2) returns ["a.field1","a.field2"]
 pub fn get_unnested_columns(
     col_name: &String,
-    data_type: &DataType,
-) -> Result<Vec<(Column, Arc<Field>)>> {
+    data_type: &TypeRelation,
+) -> Result<Vec<(Column, Arc<LogicalField>)>> {
     let mut qualified_columns = Vec::with_capacity(1);
 
-    match data_type {
-        DataType::List(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => {
-            let new_field = Arc::new(Field::new(
+    match data_type.logical() {
+        LogicalType::List(field) => {
+            let new_field = Arc::new(LogicalField::new(
                 col_name.clone(),
                 field.data_type().clone(),
                 // Unnesting may produce NULLs even if the list is not null.
@@ -1624,7 +1639,7 @@ pub fn get_unnested_columns(
             // let column = Column::from((None, &new_field));
             qualified_columns.push((column, new_field));
         }
-        DataType::Struct(fields) => {
+        LogicalType::Struct(fields) => {
             qualified_columns.extend(fields.iter().map(|f| {
                 let new_name = format!("{}.{}", col_name, f.name());
                 let column = Column::from_name(&new_name);
@@ -1672,11 +1687,9 @@ pub fn unnest_with_options(
                         &column_to_unnest.name,
                         original_field.data_type(),
                     )?;
-                    match original_field.data_type() {
-                        DataType::List(_)
-                        | DataType::FixedSizeList(_, _)
-                        | DataType::LargeList(_) => list_columns.push(index),
-                        DataType::Struct(_) => struct_columns.push(index),
+                    match original_field.data_type().logical() {
+                        LogicalType::List(_) => list_columns.push(index),
+                        LogicalType::Struct(_) => struct_columns.push(index),
                         _ => {
                             panic!(
                                 "not reachable, should be caught by get_unnested_columns"
@@ -1688,7 +1701,7 @@ pub fn unnest_with_options(
                         .extend(std::iter::repeat(index).take(flatten_columns.len()));
                     Ok(flatten_columns
                         .iter()
-                        .map(|col: &(Column, Arc<Field>)| {
+                        .map(|col: &(Column, Arc<LogicalField>)| {
                             (col.0.relation.to_owned(), col.1.to_owned())
                         })
                         .collect())
@@ -1729,6 +1742,8 @@ mod tests {
     use super::*;
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
+    use arrow::datatypes::{DataType, Field, Fields};
+    use datafusion_common::logical_type::ExtensionType;
 
     use datafusion_common::SchemaError;
 
@@ -1758,7 +1773,7 @@ mod tests {
                 .unwrap();
         let expected = DFSchema::try_from_qualified_schema(
             TableReference::bare("employee_csv"),
-            &schema,
+            &schema.clone().into(),
         )
         .unwrap();
         assert_eq!(&expected, plan.schema().as_ref());
@@ -2115,7 +2130,7 @@ mod tests {
 
         // Check unnested field is a scalar
         let field = plan.schema().field_with_name(None, "strings").unwrap();
-        assert_eq!(&DataType::Utf8, field.data_type());
+        assert_eq!(&LogicalType::Utf8, field.data_type().logical());
 
         // Unnesting the singular struct column result into 2 new columns for each subfield
         let plan = nested_table_scan("test_table")?
@@ -2133,7 +2148,7 @@ mod tests {
                 .schema()
                 .field_with_name(None, &format!("struct_singular.{}", field_name))
                 .unwrap();
-            assert_eq!(&DataType::UInt32, field.data_type());
+            assert_eq!(&LogicalType::UInt32, field.data_type().logical());
         }
 
         // Unnesting multiple fields in separate plans
@@ -2152,7 +2167,10 @@ mod tests {
 
         // Check unnested struct list field should be a struct.
         let field = plan.schema().field_with_name(None, "structs").unwrap();
-        assert!(matches!(field.data_type(), DataType::Struct(_)));
+        assert!(matches!(
+            field.data_type().logical(),
+            LogicalType::Struct(_)
+        ));
 
         // Unnesting multiple fields at the same time
         let cols = vec!["strings", "structs", "struct_singular"]
@@ -2226,23 +2244,23 @@ mod tests {
 
     #[test]
     fn test_change_redundant_column() -> Result<()> {
-        let t1_field_1 = Field::new("a", DataType::Int32, false);
-        let t2_field_1 = Field::new("a", DataType::Int32, false);
-        let t2_field_3 = Field::new("a", DataType::Int32, false);
-        let t1_field_2 = Field::new("b", DataType::Int32, false);
-        let t2_field_2 = Field::new("b", DataType::Int32, false);
+        let t1_field_1 = LogicalField::new("a", DataType::Int32, false);
+        let t2_field_1 = LogicalField::new("a", DataType::Int32, false);
+        let t2_field_3 = LogicalField::new("a", DataType::Int32, false);
+        let t1_field_2 = LogicalField::new("b", DataType::Int32, false);
+        let t2_field_2 = LogicalField::new("b", DataType::Int32, false);
 
         let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3];
-        let remove_redundant = change_redundant_column(&Fields::from(field_vec));
+        let remove_redundant = change_redundant_column(&LogicalFields::from(field_vec));
 
         assert_eq!(
             remove_redundant,
             vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("a:1", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-                Field::new("b:1", DataType::Int32, false),
-                Field::new("a:2", DataType::Int32, false),
+                LogicalField::new("a", DataType::Int32, false),
+                LogicalField::new("a:1", DataType::Int32, false),
+                LogicalField::new("b", DataType::Int32, false),
+                LogicalField::new("b:1", DataType::Int32, false),
+                LogicalField::new("a:2", DataType::Int32, false),
             ]
         );
         Ok(())

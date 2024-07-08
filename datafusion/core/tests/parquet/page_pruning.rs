@@ -32,6 +32,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
 
+use datafusion_common::logical_type::schema::LogicalSchema;
 use futures::StreamExt;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -66,7 +67,9 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
         extensions: None,
     };
 
-    let df_schema = schema.clone().to_dfschema().unwrap();
+    let df_schema = LogicalSchema::from(schema.as_ref().clone())
+        .to_dfschema()
+        .unwrap();
     let execution_props = ExecutionProps::new();
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 

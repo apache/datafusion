@@ -37,6 +37,7 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf,
 };
@@ -3647,8 +3648,8 @@ fn test_prepare_statement_should_infer_types() {
     let plan = logical_plan(sql).unwrap();
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([
-        ("$1".to_string(), Some(DataType::Int32)),
-        ("$2".to_string(), Some(DataType::Int64)),
+        ("$1".to_string(), Some(TypeRelation::from(DataType::Int32))),
+        ("$2".to_string(), Some(TypeRelation::from(DataType::Int64))),
     ]);
     assert_eq!(actual_types, expected_types);
 }
@@ -3661,7 +3662,7 @@ fn test_non_prepare_statement_should_infer_types() {
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([
         // constant 1 is inferred to be int64
-        ("$1".to_string(), Some(DataType::Int64)),
+        ("$1".to_string(), Some(TypeRelation::from(DataType::Int64))),
     ]);
     assert_eq!(actual_types, expected_types);
 }
@@ -3836,7 +3837,8 @@ Projection: person.id, orders.order_id
     let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
     let actual_types = plan.get_parameter_types().unwrap();
-    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
+    let expected_types =
+        HashMap::from([("$1".to_string(), Some(TypeRelation::from(DataType::Int32)))]);
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
@@ -3868,7 +3870,8 @@ Projection: person.id, person.age
     let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
     let actual_types = plan.get_parameter_types().unwrap();
-    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
+    let expected_types =
+        HashMap::from([("$1".to_string(), Some(TypeRelation::from(DataType::Int32)))]);
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
@@ -3900,8 +3903,8 @@ Projection: person.id, person.age
 
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([
-        ("$1".to_string(), Some(DataType::Int32)),
-        ("$2".to_string(), Some(DataType::Int32)),
+        ("$1".to_string(), Some(TypeRelation::from(DataType::Int32))),
+        ("$2".to_string(), Some(TypeRelation::from(DataType::Int32))),
     ]);
     assert_eq!(actual_types, expected_types);
 
@@ -3939,7 +3942,8 @@ Projection: person.id, person.age
     let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
     let actual_types = plan.get_parameter_types().unwrap();
-    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::UInt32))]);
+    let expected_types =
+        HashMap::from([("$1".to_string(), Some(TypeRelation::from(DataType::UInt32)))]);
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
@@ -3977,8 +3981,8 @@ Dml: op=[Update] table=[person]
 
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([
-        ("$1".to_string(), Some(DataType::Int32)),
-        ("$2".to_string(), Some(DataType::UInt32)),
+        ("$1".to_string(), Some(TypeRelation::from(DataType::Int32))),
+        ("$2".to_string(), Some(TypeRelation::from(DataType::UInt32))),
     ]);
     assert_eq!(actual_types, expected_types);
 
@@ -4012,9 +4016,9 @@ fn test_prepare_statement_insert_infer() {
 
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([
-        ("$1".to_string(), Some(DataType::UInt32)),
-        ("$2".to_string(), Some(DataType::Utf8)),
-        ("$3".to_string(), Some(DataType::Utf8)),
+        ("$1".to_string(), Some(TypeRelation::from(DataType::UInt32))),
+        ("$2".to_string(), Some(TypeRelation::from(DataType::Utf8))),
+        ("$3".to_string(), Some(TypeRelation::from(DataType::Utf8))),
     ]);
     assert_eq!(actual_types, expected_types);
 

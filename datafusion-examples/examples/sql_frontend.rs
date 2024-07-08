@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{
     AggregateUDF, Expr, LogicalPlan, ScalarUDF, TableProviderFilterPushDown, TableSource,
@@ -139,9 +142,9 @@ impl ContextProvider for MyContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         if name.table() == "person" {
             Ok(Arc::new(MyTableSource {
-                schema: Arc::new(Schema::new(vec![
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("age", DataType::UInt8, false),
+                schema: Arc::new(LogicalSchema::new(vec![
+                    LogicalField::new("name", DataType::Utf8, false),
+                    LogicalField::new("age", DataType::UInt8, false),
                 ])),
             }))
         } else {
@@ -157,7 +160,7 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
-    fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+    fn get_variable_type(&self, _variable_names: &[String]) -> Option<TypeRelation> {
         None
     }
 
@@ -184,7 +187,7 @@ impl ContextProvider for MyContextProvider {
 
 /// TableSource is the part of TableProvider needed for creating a LogicalPlan.
 struct MyTableSource {
-    schema: SchemaRef,
+    schema: LogicalSchemaRef,
 }
 
 impl TableSource for MyTableSource {
@@ -192,7 +195,7 @@ impl TableSource for MyTableSource {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
+    fn schema(&self) -> LogicalSchemaRef {
         self.schema.clone()
     }
 

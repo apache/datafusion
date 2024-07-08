@@ -38,6 +38,7 @@ use futures::stream::FuturesUnordered;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use log::{debug, trace};
 
+use datafusion_common::logical_type::field::LogicalField;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DataFusionError};
 use datafusion_expr::{Expr, Volatility};
@@ -264,7 +265,7 @@ async fn prune_partitions(
     let df_schema = DFSchema::from_unqualified_fields(
         partition_cols
             .iter()
-            .map(|(n, d)| Field::new(n, d.clone(), true))
+            .map(|(n, d)| LogicalField::new(n, d.clone(), true))
             .collect(),
         Default::default(),
     )?;

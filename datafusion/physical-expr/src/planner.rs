@@ -24,6 +24,8 @@ use crate::{
 };
 
 use arrow::datatypes::Schema;
+use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::ExtensionType;
 use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
@@ -259,12 +261,12 @@ pub fn create_physical_expr(
         Expr::Cast(Cast { expr, data_type }) => expressions::cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
-            data_type.clone(),
+            data_type.physical().clone(),
         ),
         Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
-            data_type.clone(),
+            data_type.physical().clone(),
         ),
         Expr::Not(expr) => {
             expressions::not(create_physical_expr(expr, input_dfschema, execution_props)?)
@@ -369,7 +371,7 @@ where
 
 /// Convert a logical expression to a physical expression (without any simplification, etc)
 pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-    let df_schema = schema.clone().to_dfschema().unwrap();
+    let df_schema = LogicalSchema::from(schema.clone()).to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     create_physical_expr(expr, &df_schema, &execution_props).unwrap()
 }
@@ -388,7 +390,8 @@ mod tests {
         let expr = col("letter").eq(lit("A"));
 
         let schema = Schema::new(vec![Field::new("letter", DataType::Utf8, false)]);
-        let df_schema = DFSchema::try_from_qualified_schema("data", &schema)?;
+        let df_schema =
+            DFSchema::try_from_qualified_schema("data", &schema.clone().into())?;
         let p = create_physical_expr(&expr, &df_schema, &ExecutionProps::new())?;
 
         let batch = RecordBatch::try_new(

@@ -25,6 +25,7 @@ use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionS
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::{as_float64_array, as_int32_array};
+use datafusion_common::logical_type::ExtensionType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
@@ -518,14 +519,14 @@ impl ScalarUDFImpl for CastToI64UDF {
         // SimplifyInfo so we have to replicate some of the casting logic here.
 
         let source_type = info.get_data_type(&arg)?;
-        let new_expr = if source_type == DataType::Int64 {
+        let new_expr = if source_type.physical() == &DataType::Int64 {
             // the argument's data type is already the correct type
             arg
         } else {
             // need to use an actual cast to get the correct type
             Expr::Cast(datafusion_expr::Cast {
                 expr: Box::new(arg),
-                data_type: DataType::Int64,
+                data_type: DataType::Int64.into(),
             })
         };
         // return the newly written argument to DataFusion
@@ -656,7 +657,11 @@ impl ScalarUDFImpl for TakeUDF {
             );
         };
 
-        arg_exprs.get(take_idx).unwrap().get_type(schema)
+        arg_exprs
+            .get(take_idx)
+            .unwrap()
+            .get_type(schema)
+            .map(|t| t.physical().clone())
     }
 
     // The actual implementation
@@ -698,8 +703,8 @@ async fn verify_udf_return_type() -> Result<()> {
     // The output schema should be
     // * type of column smallint_col (int32)
     // * type of column double_col (float64)
-    assert_eq!(schema.field(0).data_type(), &DataType::Int32);
-    assert_eq!(schema.field(1).data_type(), &DataType::Float64);
+    assert_eq!(schema.field(0).data_type().physical(), &DataType::Int32);
+    assert_eq!(schema.field(1).data_type().physical(), &DataType::Float64);
 
     let expected = [
         "+-------+-------+",
@@ -846,13 +851,17 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                 .expect("Expression has to be defined!"),
             return_type: definition
                 .return_type
-                .expect("Return type has to be defined!"),
+                .expect("Return type has to be defined!")
+                .physical()
+                .clone(),
+            // TODO(@notfilippo): avoid conversion to physical type
             signature: Signature::exact(
                 definition
                     .args
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|a| a.data_type)
+                    // TODO(@notfilippo): avoid conversion to physical type
+                    .map(|a| a.data_type.physical().clone())
                     .collect(),
                 definition
                     .params
@@ -1001,10 +1010,10 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
                 value: "name".into(),
                 quote_style: None,
             }),
-            data_type: DataType::Utf8,
+            data_type: DataType::Utf8.into(),
             default_expr: None,
         }]),
-        return_type: Some(DataType::Int32),
+        return_type: Some(DataType::Int32.into()),
         params: CreateFunctionBody {
             language: Some(Ident {
                 value: "plrust".into(),

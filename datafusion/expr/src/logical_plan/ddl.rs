@@ -24,7 +24,7 @@ use std::{
 
 use crate::{Expr, LogicalPlan, Volatility};
 
-use arrow::datatypes::DataType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReference};
 use sqlparser::ast::Ident;
 
@@ -322,7 +322,7 @@ pub struct CreateFunction {
     pub temporary: bool,
     pub name: String,
     pub args: Option<Vec<OperateFunctionArg>>,
-    pub return_type: Option<DataType>,
+    pub return_type: Option<TypeRelation>,
     pub params: CreateFunctionBody,
     /// Dummy schema
     pub schema: DFSchemaRef,
@@ -332,7 +332,7 @@ pub struct OperateFunctionArg {
     // TODO: figure out how to support mode
     // pub mode: Option<ArgMode>,
     pub name: Option<Ident>,
-    pub data_type: DataType,
+    pub data_type: TypeRelation,
     pub default_expr: Option<Expr>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]

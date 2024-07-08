@@ -25,7 +25,7 @@ use arrow::array::{
     ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
     StringArray, TimestampNanosecondArray,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volatility};
@@ -40,6 +40,7 @@ use datafusion_common::cast::as_float64_array;
 use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
 use log::info;
 use tempfile::TempDir;
 
@@ -215,7 +216,7 @@ pub async fn register_temp_table(ctx: &SessionContext) {
             self.0
         }
 
-        fn schema(&self) -> SchemaRef {
+        fn schema(&self) -> LogicalSchemaRef {
             unimplemented!()
         }
 

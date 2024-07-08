@@ -25,6 +25,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_schema::{Fields, SchemaBuilder};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{plan_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
@@ -55,8 +57,9 @@ fn init() {
 
 #[test]
 fn select_arrow_cast() {
+    // TODO(@notfilippo): scalars really need to be LogicalTypes
     let sql = "SELECT arrow_cast(1234, 'Float64') as f64, arrow_cast('foo', 'LargeUtf8') as large";
-    let expected = "Projection: Float64(1234) AS f64, LargeUtf8(\"foo\") AS large\
+    let expected = "Projection: Float64(1234) AS f64, Utf8(\"foo\") AS large\
         \n  EmptyRelation";
     quick_test(sql, expected);
 }
@@ -97,7 +100,7 @@ fn concat_literals() -> Result<()> {
         AS col
         FROM test";
     let expected =
-        "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
+        "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS TypeRelation(NativeType { logical: Utf8, physical: Utf8 })), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
         \n  TableScan: test projection=[col_int32, col_utf8]";
     quick_test(sql, expected);
     Ok(())
@@ -109,7 +112,7 @@ fn concat_ws_literals() -> Result<()> {
         AS col
         FROM test";
     let expected =
-        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
+        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS TypeRelation(NativeType { logical: Utf8, physical: Utf8 })), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
         \n  TableScan: test projection=[col_int32, col_utf8]";
     quick_test(sql, expected);
     Ok(())
@@ -203,7 +206,7 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
-    fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+    fn get_variable_type(&self, _variable_names: &[String]) -> Option<TypeRelation> {
         None
     }
 
@@ -237,8 +240,8 @@ impl TableSource for MyTableSource {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn schema(&self) -> LogicalSchemaRef {
+        LogicalSchemaRef::new(self.schema.clone().into())
     }
 }
 
@@ -259,7 +262,7 @@ fn test_nested_schema_nullability() {
 
     let dfschema = DFSchema::from_field_specific_qualified_schema(
         vec![Some("table_name".into()), None],
-        &Arc::new(schema),
+        &LogicalSchemaRef::new(schema.into()),
     )
     .unwrap();
 

@@ -30,6 +30,8 @@ use arrow::datatypes::{
 };
 use arrow::ipc::{reader::read_record_batch, root_as_message};
 
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{
     arrow_datafusion_err,
     config::{
@@ -158,19 +160,21 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
         df_schema: &protobuf::DfSchema,
     ) -> datafusion_common::Result<Self, Self::Error> {
         let df_fields = df_schema.columns.clone();
-        let qualifiers_and_fields: Vec<(Option<TableReference>, Arc<Field>)> = df_fields
-            .iter()
-            .map(|df_field| {
-                let field: Field = df_field.field.as_ref().required("field")?;
-                Ok((
-                    df_field
-                        .qualifier
-                        .as_ref()
-                        .map(|q| q.relation.clone().into()),
-                    Arc::new(field),
-                ))
-            })
-            .collect::<datafusion_common::Result<Vec<_>, Error>>()?;
+        let qualifiers_and_fields: Vec<(Option<TableReference>, Arc<LogicalField>)> =
+            df_fields
+                .iter()
+                .map(|df_field| {
+                    let field: LogicalField =
+                        df_field.field.as_ref().required("field")?;
+                    Ok((
+                        df_field
+                            .qualifier
+                            .as_ref()
+                            .map(|q| q.relation.clone().into()),
+                        Arc::new(field),
+                    ))
+                })
+                .collect::<datafusion_common::Result<Vec<_>, Error>>()?;
 
         Ok(DFSchema::new_with_metadata(
             qualifiers_and_fields,
@@ -187,6 +191,16 @@ impl TryFrom<protobuf::DfSchema> for DFSchemaRef {
     ) -> datafusion_common::Result<Self, Self::Error> {
         let dfschema: DFSchema = (&df_schema).try_into()?;
         Ok(Arc::new(dfschema))
+    }
+}
+
+impl TryFrom<&protobuf::ArrowType> for TypeRelation {
+    type Error = Error;
+
+    fn try_from(
+        arrow_type: &protobuf::ArrowType,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        DataType::try_from(arrow_type).map(|t| t.into())
     }
 }
 
@@ -329,6 +343,13 @@ impl TryFrom<&protobuf::Field> for Field {
                 .with_metadata(field.metadata.clone())
         };
         Ok(field)
+    }
+}
+
+impl TryFrom<&protobuf::Field> for LogicalField {
+    type Error = Error;
+    fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
+        Field::try_from(field).map(|t| t.into())
     }
 }
 

@@ -17,11 +17,6 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::fmt::{self, Debug};
-use std::sync::Arc;
-
 use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -34,6 +29,10 @@ use crate::physical_plan::{
     Partitioning, SendableRecordBatchStream,
 };
 use crate::physical_planner::create_physical_sort_exprs;
+use std::any::Any;
+use std::collections::HashMap;
+use std::fmt::{self, Debug};
+use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -42,6 +41,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
@@ -159,6 +159,7 @@ impl MemTable {
             }
         }
 
+        let schema = SchemaRef::new(schema.as_ref().clone().into());
         let exec = MemoryExec::try_new(&data, schema.clone(), None)?;
 
         if let Some(num_partitions) = output_partitions {
@@ -192,8 +193,8 @@ impl TableProvider for MemTable {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn schema(&self) -> LogicalSchemaRef {
+        LogicalSchemaRef::new(self.schema.clone().into())
     }
 
     fn constraints(&self) -> Option<&Constraints> {
@@ -217,8 +218,11 @@ impl TableProvider for MemTable {
             partitions.push(inner_vec.clone())
         }
 
-        let mut exec =
-            MemoryExec::try_new(&partitions, self.schema(), projection.cloned())?;
+        let mut exec = MemoryExec::try_new(
+            &partitions,
+            SchemaRef::new(self.schema().as_ref().clone().into()),
+            projection.cloned(),
+        )?;
 
         let show_sizes = state.config_options().explain.show_sizes;
         exec = exec.with_show_sizes(show_sizes);
@@ -267,10 +271,8 @@ impl TableProvider for MemTable {
 
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
-        if !self
-            .schema()
-            .logically_equivalent_names_and_types(&input.schema())
-        {
+        let schema = SchemaRef::new(self.schema.as_ref().clone());
+        if !schema.logically_equivalent_names_and_types(&input.schema()) {
             return plan_err!(
                 "Inserting query must have the same schema with the table."
             );
@@ -623,8 +625,13 @@ mod tests {
         // Create a table scan logical plan to read from the source table
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
-        let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
+        let insert_into_table = LogicalPlanBuilder::insert_into(
+            scan_plan,
+            "t",
+            &schema.as_ref().clone().into(),
+            false,
+        )?
+        .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

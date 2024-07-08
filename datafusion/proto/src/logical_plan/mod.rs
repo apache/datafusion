@@ -63,10 +63,11 @@ use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
 };
 
+use self::to_proto::serialize_expr;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_proto_common::ArrowType;
 use prost::bytes::BufMut;
 use prost::Message;
-
-use self::to_proto::serialize_expr;
 
 pub mod file_formats;
 pub mod from_proto;
@@ -836,10 +837,10 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Prepare(prepare) => {
                 let input: LogicalPlan =
                     into_logical_plan!(prepare.input, ctx, extension_codec)?;
-                let data_types: Vec<DataType> = prepare
+                let data_types: Vec<TypeRelation> = prepare
                     .data_types
                     .iter()
-                    .map(DataType::try_from)
+                    .map(|t| DataType::try_from(t).map(|t| t.into()))
                     .collect::<Result<_, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .prepare(prepare.name.clone(), data_types)?
@@ -934,7 +935,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 ..
             }) => {
                 let provider = source_as_provider(source)?;
-                let schema = provider.schema();
+                let schema = SchemaRef::new(provider.schema().as_ref().clone().into());
                 let source = provider.as_any();
 
                 let projection = match projection {
@@ -1560,8 +1561,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             name: name.clone(),
                             data_types: data_types
                                 .iter()
-                                .map(|t| t.try_into())
-                                .collect::<Result<Vec<_>, _>>()?,
+                                .map(|t| t.physical().try_into())
+                                .collect::<Result<Vec<ArrowType>, _>>()?,
                             input: Some(Box::new(input)),
                         },
                     ))),

@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
-use std::str::FromStr;
-use std::sync::Arc;
-
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
     LexOrdering, Statement as DFStatement,
@@ -28,8 +23,15 @@ use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
 };
 use crate::utils::normalize_ident;
+use arrow_schema::SchemaRef;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
+use std::str::FromStr;
+use std::sync::Arc;
 
-use arrow_schema::{DataType, Fields};
+use datafusion_common::logical_type::fields::LogicalFields;
+use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
@@ -453,7 +455,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 statement,
             } => {
                 // Convert parser data types to DataFusion data types
-                let data_types: Vec<DataType> = data_types
+                let data_types: Vec<TypeRelation> = data_types
                     .into_iter()
                     .map(|t| self.convert_data_type(&t))
                     .collect::<Result<_>>()?;
@@ -854,7 +856,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let output_schema = DFSchema::try_from(LogicalPlan::describe_schema()).unwrap();
 
         Ok(LogicalPlan::DescribeTable(DescribeTable {
-            schema,
+            schema: SchemaRef::new(schema.as_ref().clone().into()),
             output_schema: Arc::new(output_schema),
         }))
     }
@@ -1223,7 +1225,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
-        let schema = (*table_source.schema()).clone();
+        let schema: LogicalSchema = (*table_source.schema()).clone().into();
         let schema = DFSchema::try_from(schema)?;
         let scan = LogicalPlanBuilder::scan(
             object_name_to_string(&table_name),
@@ -1276,7 +1278,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_source = self.context_provider.get_table_source(table_name.clone())?;
         let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_name.clone(),
-            &table_source.schema(),
+            &table_source.schema().as_ref().clone().into(),
         )?);
 
         // Overwrite with assignment expressions
@@ -1381,7 +1383,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
         let table_source = self.context_provider.get_table_source(table_name.clone())?;
-        let arrow_schema = (*table_source.schema()).clone();
+        let arrow_schema: LogicalSchema = (*table_source.schema()).clone().into();
         let table_schema = DFSchema::try_from(arrow_schema)?;
 
         // Get insert fields and target table's value indices
@@ -1419,7 +1421,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(table_schema.field(column_index).clone())
                 })
                 .collect::<Result<Vec<_>>>()?;
-            (Fields::from(fields), value_indices)
+            (LogicalFields::from(fields), value_indices)
         };
 
         // infer types for Values clause... other types should be resolvable the regular way

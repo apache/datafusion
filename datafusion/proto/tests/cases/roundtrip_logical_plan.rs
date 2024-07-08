@@ -32,6 +32,7 @@ use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::format_as_file_type;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+use datafusion_common::logical_type::field::LogicalField;
 use datafusion_proto::logical_plan::file_formats::{
     ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, ParquetLogicalExtensionCodec,
 };
@@ -592,7 +593,10 @@ async fn roundtrip_expr_api() -> Result<()> {
 
     // list of expressions to round trip
     let expr_list = vec![
-        encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
+        encode(
+            col("a").cast_to(&DataType::Utf8.into(), &schema)?,
+            lit("hex"),
+        ),
         decode(lit("1234"), lit("hex")),
         array_to_string(make_array(vec![lit(1), lit(2), lit(3)]), lit(",")),
         array_dims(make_array(vec![lit(1), lit(2), lit(3)])),
@@ -701,7 +705,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         bit_and(lit(2)),
         bit_or(lit(2)),
         bit_xor(lit(2)),
-        string_agg(col("a").cast_to(&DataType::Utf8, &schema)?, lit("|")),
+        string_agg(col("a").cast_to(&DataType::Utf8.into(), &schema)?, lit("|")),
         bool_and(lit(true)),
         bool_or(lit(true)),
     ];
@@ -1606,13 +1610,18 @@ fn roundtrip_schema() {
 fn roundtrip_dfschema() {
     let dfschema = DFSchema::new_with_metadata(
         vec![
-            (None, Arc::new(Field::new("a", DataType::Int64, false))),
+            (
+                None,
+                Arc::new(LogicalField::new("a", DataType::Int64, false)),
+            ),
             (
                 Some("t".into()),
                 Arc::new(
-                    Field::new("b", DataType::Decimal128(15, 2), true).with_metadata(
-                        HashMap::from([(String::from("k1"), String::from("v1"))]),
-                    ),
+                    LogicalField::new("b", DataType::Decimal128(15, 2), true)
+                        .with_metadata(HashMap::from([(
+                            String::from("k1"),
+                            String::from("v1"),
+                        )])),
                 ),
             ),
         ],

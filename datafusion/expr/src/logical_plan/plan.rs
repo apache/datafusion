@@ -40,7 +40,8 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::logical_type::signature::LogicalType;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -54,6 +55,9 @@ use datafusion_common::{
 use crate::display::PgJsonVisitor;
 use crate::logical_plan::tree_node::unwrap_arc;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
 /// A `LogicalPlan` is a node in a tree of relational operators (such as
@@ -351,20 +355,24 @@ impl LogicalPlan {
     }
 
     /// Returns the (fixed) output schema for explain plans
-    pub fn explain_schema() -> SchemaRef {
-        SchemaRef::new(Schema::new(vec![
-            Field::new("plan_type", DataType::Utf8, false),
-            Field::new("plan", DataType::Utf8, false),
-        ]))
+    pub fn explain_schema() -> LogicalSchemaRef {
+        LogicalSchemaRef::new(
+            Schema::new(vec![
+                Field::new("plan_type", DataType::Utf8, false),
+                Field::new("plan", DataType::Utf8, false),
+            ])
+            .into(),
+        )
     }
 
     /// Returns the (fixed) output schema for `DESCRIBE` plans
-    pub fn describe_schema() -> Schema {
+    pub fn describe_schema() -> LogicalSchema {
         Schema::new(vec![
             Field::new("column_name", DataType::Utf8, false),
             Field::new("data_type", DataType::Utf8, false),
             Field::new("is_nullable", DataType::Utf8, false),
         ])
+        .into()
     }
 
     /// Returns all expressions (non-recursively) evaluated by the current
@@ -1387,8 +1395,8 @@ impl LogicalPlan {
     /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
     pub fn get_parameter_types(
         &self,
-    ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
-        let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
+    ) -> Result<HashMap<String, Option<TypeRelation>>, DataFusionError> {
+        let mut param_types: HashMap<String, Option<TypeRelation>> = HashMap::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
@@ -1650,7 +1658,7 @@ impl LogicalPlan {
                                 let schema = source.schema();
                                 let names: Vec<&str> = indices
                                     .iter()
-                                    .map(|i| schema.field(*i).name().as_str())
+                                    .map(|i| schema.field(*i).name())
                                     .collect();
                                 format!(" projection=[{}]", names.join(", "))
                             }
@@ -1906,7 +1914,7 @@ impl LogicalPlan {
                             .map(|i| &input_columns[*i])
                             .collect::<Vec<&Column>>();
                         // get items from input_columns indexed by list_col_indices
-                        write!(f, "Unnest: lists[{}] structs[{}]", 
+                        write!(f, "Unnest: lists[{}] structs[{}]",
                         expr_vec_fmt!(list_type_columns),
                         expr_vec_fmt!(struct_type_columns))
                     }
@@ -2084,7 +2092,7 @@ impl SubqueryAlias {
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
         let schema = DFSchemaRef::new(
-            DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
+            DFSchema::try_from_qualified_schema(alias.clone(), &schema.into())?
                 .with_functional_dependencies(func_dependencies)?,
         );
         Ok(SubqueryAlias {
@@ -2123,7 +2131,7 @@ impl Filter {
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            if predicate_type != DataType::Boolean {
+            if *predicate_type.logical() != LogicalType::Boolean {
                 return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 );
@@ -2224,7 +2232,7 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
+        let fields: Vec<(Option<TableReference>, Arc<LogicalField>)> = input
             .schema()
             .iter()
             .map(|(q, f)| (q.cloned(), Arc::clone(f)))
@@ -2378,9 +2386,7 @@ impl TableScan {
 
                 let df_schema = DFSchema::new_with_metadata(
                     p.iter()
-                        .map(|i| {
-                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
-                        })
+                        .map(|i| (Some(table_name.clone()), schema.field(*i).clone()))
                         .collect(),
                     schema.metadata.clone(),
                 )?;
@@ -2440,7 +2446,7 @@ pub struct Prepare {
     /// The name of the statement
     pub name: String,
     /// Data types of the parameters ([`Expr::Placeholder`])
-    pub data_types: Vec<DataType>,
+    pub data_types: Vec<TypeRelation>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,
 }
@@ -3461,7 +3467,7 @@ digraph {
         let schema = Arc::new(
             DFSchema::try_from_qualified_schema(
                 TableReference::bare("tab"),
-                &source.schema(),
+                &source.schema().as_ref().clone().into(),
             )
             .unwrap(),
         );

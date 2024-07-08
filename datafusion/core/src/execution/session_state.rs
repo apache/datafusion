@@ -42,13 +42,15 @@ use crate::physical_optimizer::optimizer::PhysicalOptimizer;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use crate::{functions, functions_aggregate};
-use arrow_schema::{DataType, SchemaRef};
+use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::logical_type::signature::LogicalType;
+use datafusion_common::logical_type::{ExtensionType, TypeRelation};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     config_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
@@ -1033,7 +1035,7 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         self.state.window_functions().get(name).cloned()
     }
 
-    fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
+    fn get_variable_type(&self, variable_names: &[String]) -> Option<TypeRelation> {
         if variable_names.is_empty() {
             return None;
         }
@@ -1263,7 +1265,7 @@ impl<'a> SessionSimplifyProvider<'a> {
 
 impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
     fn is_boolean_type(&self, expr: &Expr) -> datafusion_common::Result<bool> {
-        Ok(expr.get_type(self.df_schema)? == DataType::Boolean)
+        Ok(expr.get_type(self.df_schema)?.logical() == &LogicalType::Boolean)
     }
 
     fn nullable(&self, expr: &Expr) -> datafusion_common::Result<bool> {
@@ -1274,7 +1276,7 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
         self.state.execution_props()
     }
 
-    fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
+    fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<TypeRelation> {
         expr.get_type(self.df_schema)
     }
 }

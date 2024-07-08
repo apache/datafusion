@@ -37,6 +37,7 @@ use datafusion::parquet::arrow::{
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
+use datafusion_common::logical_type::schema::LogicalSchemaRef;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -212,8 +213,8 @@ impl TableProvider for IndexTableProvider {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.index.schema().clone()
+    fn schema(&self) -> LogicalSchemaRef {
+        LogicalSchemaRef::new(self.index.schema().into())
     }
 
     fn table_type(&self) -> TableType {
@@ -243,7 +244,8 @@ impl TableProvider for IndexTableProvider {
         let files = self.index.get_files(predicate.clone())?;
 
         let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let mut file_scan_config = FileScanConfig::new(object_store_url, self.schema())
+        let schema = SchemaRef::new(self.schema().as_ref().clone().into());
+        let mut file_scan_config = FileScanConfig::new(object_store_url, schema)
             .with_projection(projection.cloned())
             .with_limit(limit);
 

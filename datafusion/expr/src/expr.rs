@@ -33,7 +33,9 @@ use crate::{
 };
 use crate::{window_frame, Volatility};
 
-use arrow::datatypes::{DataType, FieldRef};
+use arrow::datatypes::DataType;
+use datafusion_common::logical_type::field::LogicalFieldRef;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -153,7 +155,7 @@ use sqlparser::ast::NullTreatment;
 ///    Field::new("c2", DataType::Float64, false),
 /// ]);
 /// // DFSchema is a an Arrow schema with optional relation name
-/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema)
+/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema.into())
 ///   .unwrap();
 ///
 /// // Form Vec<Expr> with an expression for each column in the schema
@@ -223,7 +225,7 @@ pub enum Expr {
     /// A named reference to a qualified filed in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
-    ScalarVariable(DataType, Vec<String>),
+    ScalarVariable(TypeRelation, Vec<String>),
     /// A constant value.
     Literal(ScalarValue),
     /// A binary expression such as "age > 21"
@@ -317,7 +319,7 @@ pub enum Expr {
     Placeholder(Placeholder),
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(DataType, Column),
+    OuterReferenceColumn(TypeRelation, Column),
     /// Unnest expression
     Unnest(Unnest),
 }
@@ -339,8 +341,8 @@ impl From<Column> for Expr {
 /// useful for creating [`Expr`] from a [`DFSchema`].
 ///
 /// See example on [`Expr`]
-impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
-    fn from(value: (Option<&'a TableReference>, &'a FieldRef)) -> Self {
+impl<'a> From<(Option<&'a TableReference>, &'a LogicalFieldRef)> for Expr {
+    fn from(value: (Option<&'a TableReference>, &'a LogicalFieldRef)) -> Self {
         Expr::from(Column::from(value))
     }
 }
@@ -563,14 +565,17 @@ pub enum GetFieldAccess {
 pub struct Cast {
     /// The expression being cast
     pub expr: Box<Expr>,
-    /// The `DataType` the expression will yield
-    pub data_type: DataType,
+    /// The `LogicalType` the expression will yield
+    pub data_type: TypeRelation,
 }
 
 impl Cast {
     /// Create a new Cast expression
-    pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
-        Self { expr, data_type }
+    pub fn new(expr: Box<Expr>, data_type: impl Into<TypeRelation>) -> Self {
+        Self {
+            expr,
+            data_type: data_type.into(),
+        }
     }
 }
 
@@ -579,14 +584,17 @@ impl Cast {
 pub struct TryCast {
     /// The expression being cast
     pub expr: Box<Expr>,
-    /// The `DataType` the expression will yield
-    pub data_type: DataType,
+    /// The `LogicalType` the expression will yield
+    pub data_type: TypeRelation,
 }
 
 impl TryCast {
     /// Create a new TryCast expression
-    pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
-        Self { expr, data_type }
+    pub fn new(expr: Box<Expr>, data_type: impl Into<TypeRelation>) -> Self {
+        Self {
+            expr,
+            data_type: data_type.into(),
+        }
     }
 }
 
@@ -931,12 +939,12 @@ pub struct Placeholder {
     /// The identifier of the parameter, including the leading `$` (e.g, `"$1"` or `"$foo"`)
     pub id: String,
     /// The type the parameter will be filled in with
-    pub data_type: Option<DataType>,
+    pub data_type: Option<TypeRelation>,
 }
 
 impl Placeholder {
     /// Create a new Placeholder expression
-    pub fn new(id: String, data_type: Option<DataType>) -> Self {
+    pub fn new(id: String, data_type: Option<TypeRelation>) -> Self {
         Self { id, data_type }
     }
 }
@@ -2093,7 +2101,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         Expr::InSubquery(InSubquery { negated: true, .. }) => w.write_str("NOT IN")?,
         Expr::InSubquery(InSubquery { negated: false, .. }) => w.write_str("IN")?,
         Expr::ScalarSubquery(subquery) => {
-            w.write_str(subquery.subquery.schema().field(0).name().as_str())?;
+            w.write_str(subquery.subquery.schema().field(0).name())?;
         }
         Expr::Unnest(Unnest { expr }) => {
             w.write_str("unnest(")?;
@@ -2255,7 +2263,7 @@ mod test {
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
-            data_type: DataType::Utf8,
+            data_type: DataType::Utf8.into(),
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, expr.canonical_name());

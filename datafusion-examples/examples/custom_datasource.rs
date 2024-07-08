@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::{provider_as_source, TableProvider, TableType};
 use datafusion::error::Result;
@@ -37,6 +37,8 @@ use datafusion_expr::LogicalPlanBuilder;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
+use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
 use tokio::time::timeout;
 
 /// This example demonstrates executing a simple query against a custom datasource
@@ -162,10 +164,10 @@ impl TableProvider for CustomDataSource {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        SchemaRef::new(Schema::new(vec![
-            Field::new("id", DataType::UInt8, false),
-            Field::new("bank_account", DataType::UInt64, true),
+    fn schema(&self) -> LogicalSchemaRef {
+        LogicalSchemaRef::new(LogicalSchema::new(vec![
+            LogicalField::new("id", DataType::UInt8, false),
+            LogicalField::new("bank_account", DataType::UInt64, true),
         ]))
     }
 
@@ -181,7 +183,8 @@ impl TableProvider for CustomDataSource {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        return self.create_physical_plan(projection, self.schema()).await;
+        let schema = SchemaRef::new(self.schema().as_ref().clone().into());
+        return self.create_physical_plan(projection, schema).await;
     }
 }
 

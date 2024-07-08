@@ -468,7 +468,10 @@ pub(crate) fn assert_schema_is_the_same(
     prev_schema: &DFSchema,
     new_plan: &LogicalPlan,
 ) -> Result<()> {
-    let equivalent = new_plan.schema().equivalent_names_and_types(prev_schema);
+    // TODO(@notfilippo): this was changed from equivalent_names_and_types because of arrow_cast. Is it ok?
+    let equivalent = new_plan
+        .schema()
+        .logically_equivalent_names_and_types(prev_schema);
 
     if !equivalent {
         let e = DataFusionError::Internal(format!(
@@ -540,17 +543,17 @@ mod tests {
             "Optimizer rule 'get table_scan rule' failed\n\
             caused by\nget table_scan rule\ncaused by\n\
             Internal error: Failed due to a difference in schemas, \
-            original schema: DFSchema { inner: Schema { \
+            original schema: DFSchema { inner: LogicalSchema { \
             fields: [], \
             metadata: {} }, \
             field_qualifiers: [], \
             functional_dependencies: FunctionalDependencies { deps: [] } \
             }, \
-            new schema: DFSchema { inner: Schema { \
+            new schema: DFSchema { inner: LogicalSchema { \
             fields: [\
-              Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-              Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-              Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }\
+              LogicalField { name: \"a\", data_type: UInt32, nullable: false, metadata: {} }, \
+              LogicalField { name: \"b\", data_type: UInt32, nullable: false, metadata: {} }, \
+              LogicalField { name: \"c\", data_type: UInt32, nullable: false, metadata: {} }\
             ], \
             metadata: {} }, \
             field_qualifiers: [Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" })], \
