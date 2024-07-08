@@ -41,4 +41,11 @@ impl UserDefinedSQLPlanner for UserDefinedFunctionPlanner {
             ScalarFunction::new_udf(crate::unicode::strpos(), args),
         )))
     }
+
+    #[cfg(feature = "unicode_expressions")]
+    fn plan_substring(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::unicode::substr(), args),
+        )))
+    }
 }
