@@ -25,6 +25,7 @@ use std::convert::Infallible;
 use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::io::{Read, Write};
 use std::iter::repeat;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -3487,6 +3488,619 @@ impl ScalarType<i64> for TimestampNanosecondType {
 impl ScalarType<i32> for Date32Type {
     fn scalar(r: Option<i32>) -> ScalarValue {
         ScalarValue::Date32(r)
+    }
+}
+
+pub fn serialize_scalar_value<W: Write>(
+    value: &ScalarValue,
+    writer: &mut W,
+) -> Result<()> {
+    if let ScalarValue::Null = value {
+        writer.write_all(&[0])?;
+    }
+
+    let serialize_result = match value {
+        ScalarValue::Boolean(v) => {
+            writer.write_all(&[1])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Float16(v) => {
+            writer.write_all(&[2])?;
+            bincode::serialize_into(writer, &v.map(|f| f.to_bits()))
+        }
+        ScalarValue::Float32(v) => {
+            writer.write_all(&[3])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Float64(v) => {
+            writer.write_all(&[4])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Decimal128(v, p, s) => {
+            writer.write_all(&[5])?;
+            bincode::serialize_into(writer, &(v, p, s))
+        }
+        ScalarValue::Decimal256(v, p, s) => {
+            writer.write_all(&[6])?;
+            match v {
+                Some(value) => {
+                    writer.write_all(&[1])?; // 1 indicates Some
+                    let bytes = value.to_le_bytes();
+                    writer.write_all(&bytes)?;
+                }
+                None => {
+                    writer.write_all(&[0])?; // 0 indicates None
+                }
+            }
+            writer.write_all(&[*p])?;
+            writer.write_all(&s.to_le_bytes())?;
+            Ok(())
+        }
+        ScalarValue::Int8(v) => {
+            writer.write_all(&[7])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Int16(v) => {
+            writer.write_all(&[8])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Int32(v) => {
+            writer.write_all(&[9])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Int64(v) => {
+            writer.write_all(&[10])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::UInt8(v) => {
+            writer.write_all(&[11])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::UInt16(v) => {
+            writer.write_all(&[12])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::UInt32(v) => {
+            writer.write_all(&[13])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::UInt64(v) => {
+            writer.write_all(&[14])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Utf8(v) | ScalarValue::LargeUtf8(v) => {
+            writer.write_all(&[15])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Binary(v) | ScalarValue::LargeBinary(v) => {
+            writer.write_all(&[16])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::FixedSizeBinary(size, v) => {
+            writer.write_all(&[17])?;
+            bincode::serialize_into(writer, &(size, v))
+        }
+        //TODO: Fix the recursive move here.
+        // ScalarValue::List(v) => {
+        //     writer.write_all(&[20])?;
+        //     bincode::serialize_into(writer, &v.len()).map_err(|e| {
+        //         DataFusionError::Internal(format!("Serialization error: {}", e))
+        //     })?;
+        //     for i in 0..v.len() {
+        //         serialize_scalar_value(&ScalarValue::try_from_array(&**v, i)?, writer)?;
+        //     }
+        //     Ok(())
+        // }
+        // ScalarValue::LargeList(v) => {
+        //     writer.write_all(&[21])?;
+        //     bincode::serialize_into(writer, &v.len()).map_err(|e| {
+        //         DataFusionError::Internal(format!("Serialization error: {}", e))
+        //     })?;
+        //     for i in 0..v.len() {
+        //         serialize_scalar_value(&ScalarValue::try_from_array(&**v, i)?, writer)?;
+        //     }
+        //     Ok(())
+        // }
+        // ScalarValue::FixedSizeList(v) => {
+        //     writer.write_all(&[22])?;
+        //     bincode::serialize_into(writer, &v.len()).map_err(|e| {
+        //         DataFusionError::Internal(format!("Serialization error: {}", e))
+        //     })?;
+        //     for i in 0..v.len() {
+        //         serialize_scalar_value(&ScalarValue::try_from_array(&**v, i)?, writer)?;
+        //     }
+        //     Ok(())
+        // }
+        // ScalarValue::Struct(v) => {
+        //     writer.write_all(&[23])?;
+        //     bincode::serialize_into(writer, &v.len()).map_err(|e| {
+        //         DataFusionError::Internal(format!("Serialization error: {}", e))
+        //     })?;
+        //     for i in 0..v.len() {
+        //         serialize_scalar_value(&ScalarValue::try_from_array(&**v, i)?, writer)?;
+        //     }
+        //     Ok(())
+        // }
+        ScalarValue::Date32(v) => {
+            writer.write_all(&[24])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Date64(v) => {
+            writer.write_all(&[25])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Time32Second(v) | ScalarValue::Time32Millisecond(v) => {
+            writer.write_all(&[26])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Time64Microsecond(v) | ScalarValue::Time64Nanosecond(v) => {
+            writer.write_all(&[27])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::TimestampSecond(v, tz)
+        | ScalarValue::TimestampMillisecond(v, tz)
+        | ScalarValue::TimestampMicrosecond(v, tz)
+        | ScalarValue::TimestampNanosecond(v, tz) => {
+            let type_byte = match value {
+                ScalarValue::TimestampSecond(_, _) => 28,
+                ScalarValue::TimestampMillisecond(_, _) => 29,
+                ScalarValue::TimestampMicrosecond(_, _) => 30,
+                ScalarValue::TimestampNanosecond(_, _) => 31,
+                _ => unreachable!(),
+            };
+            writer.write_all(&[type_byte])?;
+
+            // Serialize Option<i64>
+            match v {
+                Some(val) => {
+                    writer.write_all(&[1])?; // 1 indicates Some
+                    writer.write_all(&val.to_le_bytes())?;
+                }
+                None => writer.write_all(&[0])?, // 0 indicates None
+            }
+
+            // Serialize Option<Arc<str>>
+            match tz {
+                Some(timezone) => {
+                    writer.write_all(&[1])?; // 1 indicates Some
+                    let bytes = timezone.as_bytes();
+                    writer.write_all(&(bytes.len() as u32).to_le_bytes())?;
+                    writer.write_all(bytes)?;
+                }
+                None => writer.write_all(&[0])?, // 0 indicates None
+            }
+
+            Ok(())
+        }
+        ScalarValue::IntervalYearMonth(v) => {
+            writer.write_all(&[32])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::DurationSecond(v)
+        | ScalarValue::DurationMillisecond(v)
+        | ScalarValue::DurationMicrosecond(v)
+        | ScalarValue::DurationNanosecond(v) => {
+            writer.write_all(&[33])?;
+            bincode::serialize_into(writer, v)
+        }
+        ScalarValue::Union(v, fields, mode) => {
+            writer.write_all(&[37])?;
+
+            // Serialize Option<(i8, Box<ScalarValue>)>
+            match v {
+                Some((type_id, scalar)) => {
+                    writer.write_all(&[1])?; // 1 indicates Some
+                    writer.write_all(&type_id.to_le_bytes())?;
+                    serialize_scalar_value(scalar, writer)?;
+                }
+                None => writer.write_all(&[0])?, // 0 indicates None
+            }
+
+            // Serialize UnionFields
+            writer.write_all(&(fields.len() as u32).to_le_bytes())?;
+            for (field_id, field) in fields.iter() {
+                writer.write_all(&field_id.to_le_bytes())?;
+                writer.write_all(&(field.name().len() as u32).to_le_bytes())?;
+                writer.write_all(field.name().as_bytes())?;
+                let dt_string = format!("{:?}", &field.data_type());
+                writer.write_all(&(dt_string.len() as u32).to_le_bytes())?;
+                writer.write_all(dt_string.as_bytes())?;
+                writer.write_all(&[if field.is_nullable() { 1 } else { 0 }])?;
+            }
+
+            // Serialize UnionMode
+            writer.write_all(&[match mode {
+                UnionMode::Sparse => 0,
+                UnionMode::Dense => 1,
+            }])?;
+
+            Ok(())
+        }
+        ScalarValue::Dictionary(key_type, value) => {
+            writer.write_all(&[38])?;
+            let dt_string = format!("{:?}", key_type);
+            writer.write_all(&(dt_string.len() as u32).to_le_bytes())?;
+            writer.write_all(dt_string.as_bytes())?;
+            serialize_scalar_value(value, writer).map_err(|e| {
+                Box::new(bincode::ErrorKind::Custom(String::from(
+                    "Unsupported ScalarValue type",
+                )))
+            })
+        }
+        _ => Err(Box::new(bincode::ErrorKind::Custom(String::from(
+            "Unsupported ScalarValue type",
+        )))),
+    };
+
+    serialize_result
+        .map_err(|e| DataFusionError::Internal(format!("Serialization error: {}", e)))
+}
+
+fn serialize_timestamp<W: Write>(
+    v: &Option<i64>,
+    tz: &Option<Arc<str>>,
+    writer: &mut W,
+) -> Result<()> {
+    match v {
+        Some(val) => {
+            writer.write_all(&[1])?;
+            writer.write_all(&val.to_le_bytes())?;
+        }
+        None => writer.write_all(&[0])?,
+    }
+    match tz {
+        Some(timezone) => {
+            writer.write_all(&[1])?;
+            let bytes = timezone.as_bytes();
+            writer.write_all(&(bytes.len() as u32).to_le_bytes())?;
+            writer.write_all(bytes)?;
+        }
+        None => writer.write_all(&[0])?,
+    }
+    Ok(())
+}
+
+fn serialize_union<W: Write>(
+    v: &Option<(i8, Box<ScalarValue>)>,
+    fields: &UnionFields,
+    mode: &UnionMode,
+    writer: &mut W,
+) -> Result<()> {
+    match v {
+        Some((type_id, scalar)) => {
+            writer.write_all(&[1])?;
+            writer.write_all(&type_id.to_le_bytes())?;
+            serialize_scalar_value(scalar, writer)?;
+        }
+        None => writer.write_all(&[0])?,
+    }
+    writer.write_all(&(fields.len() as u32).to_le_bytes())?;
+    for (field_id, field) in fields.iter() {
+        writer.write_all(&field_id.to_le_bytes())?;
+        let name = field.name().as_bytes();
+        writer.write_all(&(name.len() as u32).to_le_bytes())?;
+        writer.write_all(name)?;
+        let dt_string = format!("{:?}", field.data_type());
+        writer.write_all(&(dt_string.len() as u32).to_le_bytes())?;
+        writer.write_all(dt_string.as_bytes())?;
+        writer.write_all(&[if field.is_nullable() { 1 } else { 0 }])?;
+    }
+    writer.write_all(&[match mode {
+        UnionMode::Sparse => 0,
+        UnionMode::Dense => 1,
+    }])?;
+    Ok(())
+}
+
+fn deserialize_datatype<R: Read>(reader: &mut R) -> Result<DataType> {
+    let dt_string = deserialize_string(reader)?;
+    parse_datatype(&dt_string)
+}
+
+fn deserialize_string<R: Read>(reader: &mut R) -> Result<String> {
+    let len = deserialize_usize(reader)?;
+    let mut bytes = vec![0u8; len];
+    reader.read_exact(&mut bytes)?;
+    String::from_utf8(bytes)
+        .map_err(|e| DataFusionError::Internal(format!("Invalid UTF-8: {}", e)))
+}
+
+fn deserialize_usize<R: Read>(reader: &mut R) -> Result<usize> {
+    let mut bytes = [0u8; 8];
+    reader.read_exact(&mut bytes)?;
+    Ok(usize::from_le_bytes(bytes))
+}
+
+fn parse_datatype(s: &str) -> Result<DataType> {
+    // Remove the outer quotes if present
+    let s = s.trim_matches('"');
+
+    // Parse the string representation of DataType
+    match s {
+        "Null" => Ok(DataType::Null),
+        "Boolean" => Ok(DataType::Boolean),
+        "Int8" => Ok(DataType::Int8),
+        "Int16" => Ok(DataType::Int16),
+        "Int32" => Ok(DataType::Int32),
+        "Int64" => Ok(DataType::Int64),
+        "UInt8" => Ok(DataType::UInt8),
+        "UInt16" => Ok(DataType::UInt16),
+        "UInt32" => Ok(DataType::UInt32),
+        "UInt64" => Ok(DataType::UInt64),
+        "Float16" => Ok(DataType::Float16),
+        "Float32" => Ok(DataType::Float32),
+        "Float64" => Ok(DataType::Float64),
+        s if s.starts_with("Timestamp(") => {
+            let parts: Vec<&str> = s[10..s.len() - 1].split(", ").collect();
+            let time_unit = parse_timeunit(parts[0])?;
+            let timezone = if parts.len() > 1 {
+                Some(parts[1].trim_matches('"').to_string())
+            } else {
+                None
+            };
+            Ok(DataType::Timestamp(time_unit, timezone.map(|s| s.into())))
+        }
+        "Date32" => Ok(DataType::Date32),
+        "Date64" => Ok(DataType::Date64),
+        s if s.starts_with("Time32(") => {
+            let time_unit = parse_timeunit(&s[7..s.len() - 1])?;
+            Ok(DataType::Time32(time_unit))
+        }
+        s if s.starts_with("Time64(") => {
+            let time_unit = parse_timeunit(&s[7..s.len() - 1])?;
+            Ok(DataType::Time64(time_unit))
+        }
+        s if s.starts_with("Duration(") => {
+            let time_unit = parse_timeunit(&s[9..s.len() - 1])?;
+            Ok(DataType::Duration(time_unit))
+        }
+        s if s.starts_with("Interval(") => {
+            let interval_unit = parse_intervalunit(&s[9..s.len() - 1])?;
+            Ok(DataType::Interval(interval_unit))
+        }
+        "Binary" => Ok(DataType::Binary),
+        s if s.starts_with("FixedSizeBinary(") => {
+            let size = s[16..s.len() - 1].parse::<i32>().map_err(|e| {
+                DataFusionError::Internal(format!("Invalid FixedSizeBinary size: {}", e))
+            })?;
+            Ok(DataType::FixedSizeBinary(size))
+        }
+        "LargeBinary" => Ok(DataType::LargeBinary),
+        "Utf8" => Ok(DataType::Utf8),
+        "LargeUtf8" => Ok(DataType::LargeUtf8),
+        // Add more cases for other DataTypes as needed
+        _ => Err(DataFusionError::Internal(format!(
+            "Unsupported DataType: {}",
+            s
+        ))),
+    }
+}
+
+fn parse_timeunit(s: &str) -> Result<TimeUnit> {
+    match s {
+        "Second" => Ok(TimeUnit::Second),
+        "Millisecond" => Ok(TimeUnit::Millisecond),
+        "Microsecond" => Ok(TimeUnit::Microsecond),
+        "Nanosecond" => Ok(TimeUnit::Nanosecond),
+        _ => Err(DataFusionError::Internal(format!(
+            "Unknown TimeUnit: {}",
+            s
+        ))),
+    }
+}
+
+fn parse_intervalunit(s: &str) -> Result<IntervalUnit> {
+    match s {
+        "YearMonth" => Ok(IntervalUnit::YearMonth),
+        "DayTime" => Ok(IntervalUnit::DayTime),
+        "MonthDayNano" => Ok(IntervalUnit::MonthDayNano),
+        _ => Err(DataFusionError::Internal(format!(
+            "Unknown IntervalUnit: {}",
+            s
+        ))),
+    }
+}
+
+impl From<Box<bincode::ErrorKind>> for DataFusionError {
+    fn from(error: Box<bincode::ErrorKind>) -> Self {
+        // Convert the bincode error to a DataFusionError
+        // You might want to create a specific variant for bincode errors
+        DataFusionError::Internal(format!("Bincode error: {:?}", error))
+    }
+}
+
+pub fn deserialize_scalar_value<R: Read>(reader: &mut R) -> Result<ScalarValue> {
+    let mut type_byte = [0u8];
+    reader.read_exact(&mut type_byte)?;
+
+    match type_byte[0] {
+        0 => Ok(ScalarValue::Null),
+        1 => Ok(ScalarValue::Boolean(bincode::deserialize_from(reader)?)),
+        2 => {
+            let bits: Option<u16> = bincode::deserialize_from(reader)?;
+            Ok(ScalarValue::Float16(bits.map(f16::from_bits)))
+        }
+        3 => Ok(ScalarValue::Float32(bincode::deserialize_from(reader)?)),
+        4 => Ok(ScalarValue::Float64(bincode::deserialize_from(reader)?)),
+        5 => {
+            let (v, p, s): (Option<i128>, u8, i8) = bincode::deserialize_from(reader)?;
+            Ok(ScalarValue::Decimal128(v, p, s))
+        }
+        6 => {
+            let mut has_value = [0u8; 1];
+            reader.read_exact(&mut has_value)?;
+            let v = if has_value[0] == 1 {
+                let mut bytes = [0u8; 32];
+                reader.read_exact(&mut bytes)?;
+                Some(i256::from_le_bytes(bytes))
+            } else {
+                None
+            };
+            let mut p = [0u8; 1];
+            reader.read_exact(&mut p)?;
+            let mut s = [0u8; 1];
+            reader.read_exact(&mut s)?;
+            Ok(ScalarValue::Decimal256(v, p[0], s[0] as i8))
+        }
+        7 => Ok(ScalarValue::Int8(bincode::deserialize_from(reader)?)),
+        8 => Ok(ScalarValue::Int16(bincode::deserialize_from(reader)?)),
+        9 => Ok(ScalarValue::Int32(bincode::deserialize_from(reader)?)),
+        10 => Ok(ScalarValue::Int64(bincode::deserialize_from(reader)?)),
+        11 => Ok(ScalarValue::UInt8(bincode::deserialize_from(reader)?)),
+        12 => Ok(ScalarValue::UInt16(bincode::deserialize_from(reader)?)),
+        13 => Ok(ScalarValue::UInt32(bincode::deserialize_from(reader)?)),
+        14 => Ok(ScalarValue::UInt64(bincode::deserialize_from(reader)?)),
+        15 => Ok(ScalarValue::Utf8(bincode::deserialize_from(reader)?)),
+        16 => Ok(ScalarValue::Binary(bincode::deserialize_from(reader)?)),
+        17 => {
+            let (size, v): (usize, Option<Vec<u8>>) = bincode::deserialize_from(reader)?;
+            Ok(ScalarValue::FixedSizeBinary(size as i32, v))
+        }
+        // TODO: Fix the recursive move of reader here.
+        // 20 | 21 | 22 => {
+        //     let len: usize = bincode::deserialize_from(reader)?;
+        //     let mut values = Vec::with_capacity(len);
+        //     for _ in 0..len {
+        //         values.push(deserialize_scalar_value(reader)?);
+        //     }
+
+        //     // Determine the child data type from the first non-null value
+        //     let child_data_type = values
+        //         .iter()
+        //         .find_map(|v| Some(v.data_type()))
+        //         .unwrap_or(DataType::Null);
+
+        //     // Convert ScalarValues to ArrayRef
+        //     let child_array: ArrayRef = ScalarValue::iter_to_array(values)?;
+
+        //     // Create offsets for the list array
+        //     let offsets: Vec<i32> = (0..=len).map(|i| i as i32).collect();
+        //     match type_byte[0] {
+        //         20 => {
+        //             let list_array = GenericListArray::<i32>::try_new(
+        //                 Arc::new(Field::new("item", child_data_type, true)),
+        //                 OffsetBuffer::new(ScalarBuffer::<i32>::from_iter(offsets)),
+        //                 child_array,
+        //                 None,
+        //             )?;
+        //             Ok(ScalarValue::List(Arc::new(list_array)))
+        //         }
+        //         21 => {
+        //             let list_array = GenericListArray::<i64>::try_new(
+        //                 Arc::new(Field::new("item", child_data_type, true)),
+        //                 OffsetBuffer::new(ScalarBuffer::<i64>::from_iter(
+        //                     offsets.into_iter().map(|x| x as i64).collect::<Vec<i64>>(),
+        //                 )),
+        //                 child_array,
+        //                 None,
+        //             )?;
+        //             Ok(ScalarValue::LargeList(Arc::new(list_array)))
+        //         }
+        //         22 => {
+        //             // For FixedSizeList, we need to determine the list size
+        //             let list_size = child_array.len() / len;
+        //             let fixed_size_list_array =
+        //                 arrow::array::FixedSizeListArray::try_new(
+        //                     Arc::new(Field::new("item", child_data_type, true)),
+        //                     list_size as i32,
+        //                     child_array,
+        //                     None, // HARD CODED. TODO: FIX ME
+        //                 )?;
+        //             Ok(ScalarValue::FixedSizeList(Arc::new(fixed_size_list_array)))
+        //         }
+        //         _ => unreachable!(),
+        //     }
+        // }
+        // 23 => {
+        //     let len: usize = bincode::deserialize_from(reader)?;
+        //     let mut values = Vec::with_capacity(len);
+        //     let mut builder = SchemaBuilder::new();
+        //     for _ in 0..len {
+        //         let scalar = deserialize_scalar_value(reader)?;
+        //         builder.push(Field::new(
+        //             "", // We don't have field names, so use empty string
+        //             scalar.data_type(),
+        //             true, // Assume nullable
+        //         ));
+        //         values.push(scalar);
+        //     }
+
+        //     // Convert ScalarValues to ArrayRefs
+        //     let arrays: Vec<ArrayRef> = values
+        //         .into_iter()
+        //         .map(|v| v.to_array_of_size(1))
+        //         .collect::<Result<Vec<ArrayRef>>>()?;
+
+        //     // Create StructArray
+        //     let struct_array = StructArray::new(builder.finish().fields, arrays, None);
+
+        //     Ok(ScalarValue::Struct(Arc::new(struct_array)))
+        // }
+        24 => Ok(ScalarValue::Date32(bincode::deserialize_from(reader)?)),
+        25 => Ok(ScalarValue::Date64(bincode::deserialize_from(reader)?)),
+        26 => Ok(ScalarValue::Time32Second(bincode::deserialize_from(
+            reader,
+        )?)),
+        27 => Ok(ScalarValue::Time64Microsecond(bincode::deserialize_from(
+            reader,
+        )?)),
+        28 | 29 | 30 | 31 => {
+            let mut has_value = [0u8; 1];
+            reader.read_exact(&mut has_value)?;
+            let v = if has_value[0] == 1 {
+                let mut bytes = [0u8; 8];
+                reader.read_exact(&mut bytes)?;
+                Some(i64::from_le_bytes(bytes))
+            } else {
+                None
+            };
+
+            let mut has_tz = [0u8; 1];
+            reader.read_exact(&mut has_tz)?;
+            let tz = if has_tz[0] == 1 {
+                let mut tz_len_bytes = [0u8; 4];
+                reader.read_exact(&mut tz_len_bytes)?;
+                let tz_len = u32::from_le_bytes(tz_len_bytes);
+                let mut tz_bytes = vec![0u8; tz_len as usize];
+                reader.read_exact(&mut tz_bytes)?;
+                Some(Arc::from(String::from_utf8(tz_bytes).map_err(|e| {
+                    DataFusionError::Internal(String::from("Tz Deserialization Error"))
+                })?))
+            } else {
+                None
+            };
+
+            match type_byte[0] {
+                28 => Ok(ScalarValue::TimestampSecond(v, tz)),
+                29 => Ok(ScalarValue::TimestampMillisecond(v, tz)),
+                30 => Ok(ScalarValue::TimestampMicrosecond(v, tz)),
+                31 => Ok(ScalarValue::TimestampNanosecond(v, tz)),
+                _ => unreachable!(),
+            }
+        }
+        32 => Ok(ScalarValue::IntervalYearMonth(bincode::deserialize_from(
+            reader,
+        )?)),
+        33 => Ok(ScalarValue::DurationSecond(bincode::deserialize_from(
+            reader,
+        )?)),
+        // 37 is UnionField which we do not support for now.
+        38 => {
+            let mut dt_len_bytes = [0u8; 4];
+            reader.read_exact(&mut dt_len_bytes)?;
+            let dt_len = u32::from_le_bytes(dt_len_bytes);
+            let mut dt_bytes = vec![0u8; dt_len as usize];
+            reader.read_exact(&mut dt_bytes)?;
+            let dt_string = String::from_utf8(dt_bytes).map_err(|e| {
+                DataFusionError::Internal(String::from("Deserialization Error"))
+            })?;
+            let key_type: DataType = parse_datatype(dt_string.as_str())?;
+            let value = deserialize_scalar_value(reader)?;
+            Ok(ScalarValue::Dictionary(Box::new(key_type), Box::new(value)))
+        }
+        _ => Err(DataFusionError::Internal(
+            "Unknown ScalarValue type during deserialization".to_string(),
+        )),
     }
 }
 

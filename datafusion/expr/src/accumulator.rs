@@ -210,4 +210,15 @@ pub trait Accumulator: Send + Sync + Debug {
     fn supports_retract_batch(&self) -> bool {
         false
     }
+
+    fn as_serializable(&self) -> Option<&dyn SerializableAccumulator> {
+        None
+    }
+}
+
+pub trait SerializableAccumulator: Accumulator {
+    fn serialize(&self) -> Result<Vec<u8>>;
+    fn deserialize(bytes: &[u8]) -> Result<Box<dyn Accumulator>>
+    where
+        Self: Sized;
 }
