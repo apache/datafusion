@@ -56,7 +56,7 @@ impl Default for ToLocalTimeFunc {
 impl ToLocalTimeFunc {
     pub fn new() -> Self {
         let base_sig = |array_type: TimeUnit| {
-            vec![
+            [
                 Exact(vec![Timestamp(array_type, None)]),
                 Exact(vec![Timestamp(array_type, Some(TIMEZONE_WILDCARD.into()))]),
             ]
@@ -64,9 +64,8 @@ impl ToLocalTimeFunc {
 
         let full_sig = [Nanosecond, Microsecond, Millisecond, Second]
             .into_iter()
-            .map(base_sig)
-            .collect::<Vec<_>>()
-            .concat();
+            .flat_map(base_sig)
+            .collect::<Vec<_>>();
 
         Self {
             signature: Signature::one_of(full_sig, Volatility::Immutable),
