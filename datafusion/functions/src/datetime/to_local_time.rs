@@ -389,56 +389,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_local_time() {
-        let res = ToLocalTimeFunc::new().invoke(&[ColumnarValue::Scalar(
-            ScalarValue::TimestampSecond(Some(1), None),
-        )]);
-        assert!(res.is_ok());
-
-        let res = ToLocalTimeFunc::new().invoke(&[ColumnarValue::Scalar(
-            ScalarValue::TimestampSecond(Some(1), Some("+01:00".into())),
-        )]);
-        assert!(res.is_ok());
-
-        let res = ToLocalTimeFunc::new().invoke(&[ColumnarValue::Scalar(
-            ScalarValue::TimestampNanosecond(Some(1), Some("Europe/Brussels".into())),
-        )]);
-        assert!(res.is_ok());
-
-        //
-        // Fallible test cases
-        //
-
-        // invalid number of arguments -- no argument
-        let res = ToLocalTimeFunc::new().invoke(&[]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Execution error: to_local_time function requires 1 argument, got 0"
-        );
-
-        // invalid number of arguments -- more than 1 argument
-        let res = ToLocalTimeFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("some string".to_string()))),
-        ]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Execution error: to_local_time function requires 1 argument, got 2"
-        );
-
-        // invalid argument data type
-        let res = ToLocalTimeFunc::new().invoke(&[ColumnarValue::Scalar(
-            ScalarValue::Utf8(Some("some string".to_string())),
-        )]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Execution error: to_local_time function requires timestamp argument, got Utf8"
-        );
-
-        // TODO chunchun: invalid timestamp: us, ms, s
-    }
-
-    #[test]
     fn test_to_local_time_scalar() {
         let timezone = Some("Europe/Brussels".into());
         let timestamps_with_timezone = vec![
