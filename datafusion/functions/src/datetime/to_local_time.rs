@@ -473,7 +473,7 @@ mod tests {
         ];
 
         for (input, expected) in timestamps_with_timezone {
-            test_to_local_time_helpfer(input, expected);
+            test_to_local_time_helper(input, expected);
         }
     }
 
@@ -516,11 +516,11 @@ mod tests {
             );
             let expected =
                 ScalarValue::TimestampNanosecond(Some(expected_timestamp), None);
-            test_to_local_time_helpfer(input, expected)
+            test_to_local_time_helper(input, expected)
         }
     }
 
-    fn test_to_local_time_helpfer(input: ScalarValue, expected: ScalarValue) {
+    fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
         let res = ToLocalTimeFunc::new()
             .invoke(&[ColumnarValue::Scalar(input)])
             .unwrap();
