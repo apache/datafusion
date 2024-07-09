@@ -270,6 +270,8 @@ impl EquivalenceProperties {
     }
 
     // Discover new valid orderings in light of a new equality.
+    // Accepts a single argument (`expr`) which is used to determine
+    // which orderings should be updated.
     // When constants or equivalence classes are changed, there may be new orderings
     // that can be discovered with the new equivalence properties.
     // For a discussion, see: https://github.com/apache/datafusion/issues/9812
@@ -287,39 +289,40 @@ impl EquivalenceProperties {
             .unwrap_or_else(|| vec![Arc::clone(&normalized_expr)]);
 
         let mut new_orderings: Vec<LexOrdering> = vec![];
-        for ordering in self.normalized_oeq_class().iter() {
+        for (ordering, next_expr) in self
+            .normalized_oeq_class()
+            .iter()
+            .filter(|ordering| ordering[0].expr.eq(&normalized_expr))
+            // First expression after leading ordering
+            .filter_map(|ordering| Some(ordering).zip(ordering.get(1)))
+        {
             let leading_ordering = ordering[0].options;
-            if ordering[0].expr.eq(&normalized_expr) {
-                // Currently, we only handle expressions with a single child.
-                // TODO: It should be possible to handle expressions orderings like
-                //       f(a, b, c), a, b, c if f is monotonic in all arguments.
-                // First expression after leading ordering
-                if let Some(next_expr) = ordering.get(1) {
-                    for equivalent_expr in &eq_class {
-                        let children = equivalent_expr.children();
-                        if children.len() == 1
-                            && children[0].eq(&next_expr.expr)
-                            && SortProperties::Ordered(leading_ordering)
-                                == equivalent_expr
-                                    .get_properties(&[ExprProperties {
-                                        sort_properties: SortProperties::Ordered(
-                                            leading_ordering,
-                                        ),
-                                        range: Interval::make_unbounded(
-                                            &equivalent_expr.data_type(&self.schema)?,
-                                        )?,
-                                    }])?
-                                    .sort_properties
-                        {
-                            // Assume existing ordering is [a ASC, b ASC]
-                            // When equality a = f(b) is given, If we know that given ordering `[b ASC]`, ordering `[f(b) ASC]` is valid,
-                            // then we can deduce that ordering `[b ASC]` is also valid.
-                            // Hence, ordering `[b ASC]` can be added to the state as valid ordering.
-                            // (e.g. existing ordering where leading ordering is removed)
-                            new_orderings.push(ordering[1..].to_vec());
-                            break;
-                        }
-                    }
+            // Currently, we only handle expressions with a single child.
+            // TODO: It should be possible to handle expressions orderings like
+            //       f(a, b, c), a, b, c if f is monotonic in all arguments.
+            for equivalent_expr in &eq_class {
+                let children = equivalent_expr.children();
+                if children.len() == 1
+                    && children[0].eq(&next_expr.expr)
+                    && SortProperties::Ordered(leading_ordering)
+                        == equivalent_expr
+                            .get_properties(&[ExprProperties {
+                                sort_properties: SortProperties::Ordered(
+                                    leading_ordering,
+                                ),
+                                range: Interval::make_unbounded(
+                                    &equivalent_expr.data_type(&self.schema)?,
+                                )?,
+                            }])?
+                            .sort_properties
+                {
+                    // Assume existing ordering is [a ASC, b ASC]
+                    // When equality a = f(b) is given, If we know that given ordering `[b ASC]`, ordering `[f(b) ASC]` is valid,
+                    // then we can deduce that ordering `[b ASC]` is also valid.
+                    // Hence, ordering `[b ASC]` can be added to the state as valid ordering.
+                    // (e.g. existing ordering where leading ordering is removed)
+                    new_orderings.push(ordering[1..].to_vec());
+                    break;
                 }
             }
         }
