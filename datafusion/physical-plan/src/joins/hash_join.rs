@@ -1238,7 +1238,7 @@ fn eq_dyn_null(
         } else {
             Operator::Eq
         };
-        return Ok(compare_op_for_nested(&op, &left, &right)?);
+        return Ok(compare_op_for_nested(op, &left, &right)?);
     }
     match (left.data_type(), right.data_type()) {
         _ if null_equals_null => not_distinct(&left, &right),
