@@ -485,7 +485,7 @@ jobs:
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
     
-  udep:
+  check-udep:
     name: machete
     runs-on: ubuntu-latest
     container:
