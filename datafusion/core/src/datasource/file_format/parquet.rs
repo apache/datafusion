@@ -881,8 +881,7 @@ struct ParallelParquetWriterOptions {
 
 /// This is the return type of calling [ArrowColumnWriter].close() on each column
 /// i.e. the Vec of encoded columns which can be appended to a row group
-type RBStreamSerializeResult =
-    Result<(Vec<(ArrowColumnChunk, MemoryReservation)>, usize)>;
+type RBStreamSerializeResult = Result<(Vec<ArrowColumnChunk>, MemoryReservation, usize)>;
 
 /// Sends the ArrowArrays in passed [RecordBatch] through the channels to their respective
 /// parallel column serializers.
@@ -913,19 +912,23 @@ async fn send_arrays_to_col_writers(
 fn spawn_rg_join_and_finalize_task(
     column_writer_tasks: Vec<ColumnWriterTask>,
     rg_rows: usize,
+    pool: &Arc<dyn MemoryPool>,
 ) -> SpawnedTask<RBStreamSerializeResult> {
+    let mut rg_reservation =
+        MemoryConsumer::new("ParquetSink(SerializedRowGroupWriter)").register(pool);
+
     SpawnedTask::spawn(async move {
         let num_cols = column_writer_tasks.len();
         let mut finalized_rg = Vec::with_capacity(num_cols);
         for task in column_writer_tasks.into_iter() {
-            let (writer, mut reservation) = task.join_unwind().await?;
+            let (writer, col_reservation) = task.join_unwind().await?;
             let encoded_size = writer.get_estimated_total_bytes();
-            let data = writer.close()?;
-            reservation.try_resize(encoded_size)?;
-            finalized_rg.push((data, reservation));
+            rg_reservation.grow(encoded_size);
+            drop(col_reservation);
+            finalized_rg.push(writer.close()?);
         }
 
-        Ok((finalized_rg, rg_rows))
+        Ok((finalized_rg, rg_reservation, rg_rows))
     })
 }
 
@@ -980,6 +983,7 @@ fn spawn_parquet_parallel_serialization_task(
                     let finalize_rg_task = spawn_rg_join_and_finalize_task(
                         column_writer_handles,
                         max_row_group_rows,
+                        &pool,
                     );
 
                     serialize_tx.send(finalize_rg_task).await.map_err(|_| {
@@ -1005,8 +1009,11 @@ fn spawn_parquet_parallel_serialization_task(
         drop(col_array_channels);
         // Handle leftover rows as final rowgroup, which may be smaller than max_row_group_rows
         if current_rg_rows > 0 {
-            let finalize_rg_task =
-                spawn_rg_join_and_finalize_task(column_writer_handles, current_rg_rows);
+            let finalize_rg_task = spawn_rg_join_and_finalize_task(
+                column_writer_handles,
+                current_rg_rows,
+                &pool,
+            );
 
             serialize_tx.send(finalize_rg_task).await.map_err(|_| {
                 DataFusionError::Internal(
@@ -1041,31 +1048,26 @@ async fn concatenate_parallel_row_groups(
     )?;
 
     while let Some(task) = serialize_rx.recv().await {
-        let mut rg_reservation =
-            MemoryConsumer::new("ParquetSink(SerializedRowGroupWriter)").register(&pool);
-
         let result = task.join_unwind().await;
         let mut rg_out = parquet_writer.next_row_group()?;
-        let (serialized_columns, _cnt) = result?;
-        for (chunk, col_reservation) in serialized_columns {
+        let (serialized_columns, mut rg_reservation, _cnt) = result?;
+        for chunk in serialized_columns {
             chunk.append_to_row_group(&mut rg_out)?;
-            rg_reservation.grow(col_reservation.size());
-            drop(col_reservation);
+            rg_reservation.free();
 
             let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
+            file_reservation.try_resize(buff_to_flush.len())?;
+
             if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
                 object_store_writer
                     .write_all(buff_to_flush.as_slice())
                     .await?;
                 rg_reservation.shrink(buff_to_flush.len());
                 buff_to_flush.clear();
+                file_reservation.try_resize(buff_to_flush.len())?; // will set to zero
             }
         }
         rg_out.close()?;
-
-        // bytes remaining. Could be unflushed data, or rg metadata passed to the file writer on rg_out.close()
-        let remaining_bytes = rg_reservation.free();
-        file_reservation.grow(remaining_bytes);
     }
 
     let file_metadata = parquet_writer.close()?;
