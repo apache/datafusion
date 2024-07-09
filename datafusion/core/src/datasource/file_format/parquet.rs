@@ -1049,6 +1049,9 @@ async fn concatenate_parallel_row_groups(
         let (serialized_columns, _cnt) = result?;
         for (chunk, col_reservation) in serialized_columns {
             chunk.append_to_row_group(&mut rg_out)?;
+            rg_reservation.grow(col_reservation.size());
+            drop(col_reservation);
+
             let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
             if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
                 object_store_writer
@@ -1057,8 +1060,6 @@ async fn concatenate_parallel_row_groups(
                 rg_reservation.shrink(buff_to_flush.len());
                 buff_to_flush.clear();
             }
-            rg_reservation.grow(col_reservation.size());
-            drop(col_reservation);
         }
         rg_out.close()?;
 
