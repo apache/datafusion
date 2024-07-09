@@ -195,7 +195,7 @@ pub fn create_physical_expr(
             //
             // There should be no coercion during physical
             // planning.
-            binary(lhs, op.clone(), rhs, input_schema)
+            binary(lhs, *op, rhs, input_schema)
         }
         Expr::Like(Like {
             negated,
