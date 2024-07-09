@@ -46,7 +46,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{DataFusionError, JoinSide};
+use datafusion_common::{internal_err, JoinSide};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
     utils::collect_columns, Partitioning, PhysicalExpr, PhysicalExprRef,
@@ -640,6 +640,7 @@ fn try_pushdown_through_hash_join(
         &projection_as_columns[0..=far_right_left_col_ind as _],
         &projection_as_columns[far_left_right_col_ind as _..],
         hash_join.on(),
+        hash_join.left().schema().fields().len(),
     ) else {
         return Ok(None);
     };
@@ -804,6 +805,7 @@ fn try_swapping_with_sort_merge_join(
         &projection_as_columns[0..=far_right_left_col_ind as _],
         &projection_as_columns[far_left_right_col_ind as _..],
         sm_join.on(),
+        sm_join.left().schema().fields().len(),
     ) else {
         return Ok(None);
     };
@@ -857,6 +859,7 @@ fn try_swapping_with_sym_hash_join(
         &projection_as_columns[0..=far_right_left_col_ind as _],
         &projection_as_columns[far_left_right_col_ind as _..],
         sym_join.on(),
+        sym_join.left().schema().fields().len(),
     ) else {
         return Ok(None);
     };
@@ -1087,6 +1090,7 @@ fn update_join_on(
     proj_left_exprs: &[(Column, String)],
     proj_right_exprs: &[(Column, String)],
     hash_join_on: &[(PhysicalExprRef, PhysicalExprRef)],
+    left_field_size: usize,
 ) -> Option<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
     // TODO: Clippy wants the "map" call removed, but doing so generates
     //       a compilation error. Remove the clippy directive once this
@@ -1097,8 +1101,9 @@ fn update_join_on(
         .map(|(left, right)| (left, right))
         .unzip();
 
-    let new_left_columns = new_columns_for_join_on(&left_idx, proj_left_exprs);
-    let new_right_columns = new_columns_for_join_on(&right_idx, proj_right_exprs);
+    let new_left_columns = new_columns_for_join_on(&left_idx, proj_left_exprs, 0);
+    let new_right_columns =
+        new_columns_for_join_on(&right_idx, proj_right_exprs, left_field_size);
 
     match (new_left_columns, new_right_columns) {
         (Some(left), Some(right)) => Some(left.into_iter().zip(right).collect()),
@@ -1109,9 +1114,14 @@ fn update_join_on(
 /// This function generates a new set of columns to be used in a hash join
 /// operation based on a set of equi-join conditions (`hash_join_on`) and a
 /// list of projection expressions (`projection_exprs`).
+///
+/// Notes: Column indices in the projection expressions are based on the join schema,
+/// whereas the join on expressions are based on the join child schema. `column_index_offset`
+/// represents the offset between them.
 fn new_columns_for_join_on(
     hash_join_on: &[&PhysicalExprRef],
     projection_exprs: &[(Column, String)],
+    column_index_offset: usize,
 ) -> Option<Vec<PhysicalExprRef>> {
     let new_columns = hash_join_on
         .iter()
@@ -1127,6 +1137,8 @@ fn new_columns_for_join_on(
                             .enumerate()
                             .find(|(_, (proj_column, _))| {
                                 column.name() == proj_column.name()
+                                    && column.index() + column_index_offset
+                                        == proj_column.index()
                             })
                             .map(|(index, (_, alias))| Column::new(alias, index));
                         if let Some(new_column) = new_column {
@@ -1135,10 +1147,10 @@ fn new_columns_for_join_on(
                             // If the column is not found in the projection expressions,
                             // it means that the column is not projected. In this case,
                             // we cannot push the projection down.
-                            Err(DataFusionError::Internal(format!(
+                            internal_err!(
                                 "Column {:?} not found in projection expressions",
                                 column
-                            )))
+                            )
                         }
                     } else {
                         Ok(Transformed::no(expr))
@@ -1201,14 +1213,14 @@ fn update_join_filter(
 /// positions of columns in `projection_exprs` that are involved in `join_filter`,
 /// and correspond to a particular side (`join_side`) of the join operation.
 ///
-/// Column indices in the projection expressions are based on the join schema,
-/// whereas the join filter is based on the join child schema. `column_index_diff`
-/// represents the difference between them.
+/// Notes: Column indices in the projection expressions are based on the join schema,
+/// whereas the join filter is based on the join child schema. `column_index_offset`
+/// represents the offset between them.
 fn new_indices_for_join_filter(
     join_filter: &JoinFilter,
     join_side: JoinSide,
     projection_exprs: &[(Column, String)],
-    column_index_diff: usize,
+    column_index_offset: usize,
 ) -> Vec<usize> {
     join_filter
         .column_indices()
@@ -1217,7 +1229,7 @@ fn new_indices_for_join_filter(
         .filter_map(|col_idx| {
             projection_exprs
                 .iter()
-                .position(|(col, _)| col_idx.index + column_index_diff == col.index())
+                .position(|(col, _)| col_idx.index + column_index_offset == col.index())
         })
         .collect()
 }
