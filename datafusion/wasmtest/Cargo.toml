@@ -34,8 +34,6 @@ workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# chrono must be compiled with wasmbind feature
-chrono = { version = "0.4", features = ["wasmbind"] }
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
@@ -48,16 +46,9 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-optimizer = { workspace = true, default-features = true }
-datafusion-physical-expr = { workspace = true, default-features = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
-
-# getrandom must be compiled with js feature
-getrandom = { version = "0.2.8", features = ["js"] }
-
-parquet = { workspace = true }
 wasm-bindgen = "0.2.87"
-wasm-bindgen-futures = "0.4.40"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

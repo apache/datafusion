@@ -39,7 +39,6 @@ arrow = { workspace = true }
 datafusion = { workspace = true, default-features = true }
 datafusion-common = { workspace = true, default-features = true }
 env_logger = { workspace = true }
-futures = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", optional = true, default-features = false }
 num_cpus = { workspace = true }

@@ -484,6 +484,22 @@ jobs:
         run: rustup component add clippy
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
+    
+  udep:
+    name: machete
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Run cargo machete
+        run: ci/scripts/rust_machete.sh
 
   # Check answers are correct when hash values collide
   hash-collisions:
