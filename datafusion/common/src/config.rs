@@ -21,6 +21,7 @@ use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display};
 use std::str::FromStr;
+use lazy_static::lazy_static;
 
 use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
@@ -1217,6 +1218,44 @@ impl ConfigField for TableOptions {
     }
 }
 
+lazy_static! {
+    static ref STATIC_MAP: std::sync::Mutex<HashMap<&'static str, &'static str>> = {
+        let mut m = HashMap::new();
+        m.insert("format.delimiter", "to_lowercase");
+        m.insert("format.compression", "to_uppercase");
+        m.insert("format.time_format", "trim");
+        m.insert("format.date_format", "to_lowercase");
+        std::sync::Mutex::new(m)
+    };
+}
+
+fn get_transformation_function(operation: &str) -> Option<fn(&str) -> String> {
+    match operation {
+        "to_lowercase" => Some(to_lowercase),
+        "to_uppercase" => Some(to_uppercase),
+        "trim" => Some(trim),
+        _ => None
+    }
+}
+
+fn standardization<F>(input: &str, func: F) -> String
+where 
+    F: Fn(&str) -> String
+{
+    func(input)
+}
+
+fn to_lowercase(s: &str) -> String {
+    s.to_lowercase()
+}
+
+fn to_uppercase(s: &str) -> String {
+    s.to_uppercase()
+}
+
+fn trim(s: &str) -> String {
+    s.trim().to_string()
+}
 impl TableOptions {
     /// Constructs a new instance of `TableOptions` with default settings.
     ///
@@ -1291,12 +1330,19 @@ impl TableOptions {
     ///
     /// A result indicating success or failure in setting the configuration option.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let mut standardized_value: String = value.to_owned();
+        let map = STATIC_MAP.lock().unwrap();
+        if map.contains_key(key) {
+            if let Some(func) = get_transformation_function(map.get(&key).unwrap()){
+                standardized_value = standardization(value, func)
+            }
+        }
         let Some((prefix, _)) = key.split_once('.') else {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
 
         if prefix == "format" {
-            return ConfigField::set(self, key, value);
+            return ConfigField::set(self, key, &standardized_value);
         }
 
         if prefix == "execution" {
@@ -1306,7 +1352,7 @@ impl TableOptions {
         let Some(e) = self.extensions.0.get_mut(prefix) else {
             return _config_err!("Could not find config namespace \"{prefix}\"");
         };
-        e.0.set(key, value)
+        e.0.set(key, &standardized_value)
     }
 
     /// Initializes a new `TableOptions` from a hash map of string settings.
@@ -1873,5 +1919,19 @@ mod tests {
         table_config.set("format.metadata::key_dupe", "B").unwrap();
         let parsed_metadata = table_config.parquet.key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
+    }
+    
+    #[test]
+    fn standardize_value() {
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::CSV);
+        table_config.set("format.delimiter", ";").unwrap();
+        assert_eq!(table_config.csv.delimiter as char, ';');
+        table_config.set("format.time_format", "  asd  \n").unwrap();
+        assert_eq!(table_config.csv.time_format.clone().unwrap(), "asd");
+        table_config.set("format.compression", "xz").unwrap();
+        assert_eq!(table_config.csv.compression , crate::parsers::CompressionTypeVariant::XZ);
+        table_config.set("format.date_format", "ASDFG").unwrap();
+        assert_eq!(table_config.csv.date_format.clone().unwrap(), "asdfg");
     }
 }

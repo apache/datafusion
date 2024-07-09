@@ -894,9 +894,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // a format option and apply the format prefix for backwards
                 // compatibility.
                 let renamed_key = format!("format.{}", key);
-                options.insert(renamed_key.to_lowercase(), value_string.to_lowercase());
+                options.insert(renamed_key.to_lowercase(), value_string);
             } else {
-                options.insert(key.to_lowercase(), value_string.to_lowercase());
+                options.insert(key.to_lowercase(), value_string);
             }
         }
 
@@ -1024,9 +1024,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // a format option and apply the format prefix for backwards
                 // compatibility.
                 let renamed_key = format!("format.{}", key.to_lowercase());
-                options_map.insert(renamed_key, value_string.to_lowercase());
+                options_map.insert(renamed_key, value_string);
             } else {
-                options_map.insert(key.to_lowercase(), value_string.to_lowercase());
+                options_map.insert(key.to_lowercase(), value_string);
             }
         }
 
