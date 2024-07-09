@@ -18,7 +18,7 @@
 use datafusion_common::DFSchema;
 use datafusion_common::Result;
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::planner::{PlannerResult, RawDictionaryExpr, UserDefinedSQLPlanner};
+use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawDictionaryExpr};
 use datafusion_expr::Expr;
 
 use super::named_struct;
@@ -26,7 +26,7 @@ use super::named_struct;
 #[derive(Default)]
 pub struct CoreFunctionPlanner {}
 
-impl UserDefinedSQLPlanner for CoreFunctionPlanner {
+impl ExprPlanner for CoreFunctionPlanner {
     fn plan_dictionary_literal(
         &self,
         expr: RawDictionaryExpr,

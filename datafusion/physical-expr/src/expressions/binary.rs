@@ -269,7 +269,7 @@ impl PhysicalExpr for BinaryExpr {
             if right_data_type != left_data_type {
                 return internal_err!("type mismatch");
             }
-            return apply_cmp_for_nested(&self.op, &lhs, &rhs);
+            return apply_cmp_for_nested(self.op, &lhs, &rhs);
         }
 
         match self.op {
@@ -329,7 +329,7 @@ impl PhysicalExpr for BinaryExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(BinaryExpr::new(
             Arc::clone(&children[0]),
-            self.op.clone(),
+            self.op,
             Arc::clone(&children[1]),
         )))
     }

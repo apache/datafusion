@@ -24,12 +24,14 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::Operator;
 use datafusion::prelude::*;
 use datafusion::sql::sqlparser::ast::BinaryOperator;
-use datafusion_expr::planner::{PlannerResult, RawBinaryExpr, UserDefinedSQLPlanner};
+use datafusion_common::ScalarValue;
+use datafusion_expr::expr::Alias;
+use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
 use datafusion_expr::BinaryExpr;
 
 struct MyCustomPlanner;
 
-impl UserDefinedSQLPlanner for MyCustomPlanner {
+impl ExprPlanner for MyCustomPlanner {
     fn plan_binary_op(
         &self,
         expr: RawBinaryExpr,
@@ -50,14 +52,23 @@ impl UserDefinedSQLPlanner for MyCustomPlanner {
                     op: Operator::Plus,
                 })))
             }
+            BinaryOperator::Question => {
+                Ok(PlannerResult::Planned(Expr::Alias(Alias::new(
+                    Expr::Literal(ScalarValue::Boolean(Some(true))),
+                    None::<&str>,
+                    format!("{} ? {}", expr.left, expr.right),
+                ))))
+            }
             _ => Ok(PlannerResult::Original(expr)),
         }
     }
 }
 
 async fn plan_and_collect(sql: &str) -> Result<Vec<RecordBatch>> {
-    let mut ctx = SessionContext::new();
-    ctx.register_user_defined_sql_planner(Arc::new(MyCustomPlanner))?;
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "postgres");
+    let mut ctx = SessionContext::new_with_config(config);
+    ctx.register_expr_planner(Arc::new(MyCustomPlanner))?;
     ctx.sql(sql).await?.collect().await
 }
 
@@ -84,5 +95,29 @@ async fn test_custom_operators_long_arrow() {
         "| 3                   |",
         "+---------------------+",
     ];
+    assert_batches_eq!(&expected, &actual);
+}
+
+#[tokio::test]
+async fn test_question_select() {
+    let actual = plan_and_collect("select a ? 2 from (select 1 as a);")
+        .await
+        .unwrap();
+    let expected = [
+        "+--------------+",
+        "| a ? Int64(2) |",
+        "+--------------+",
+        "| true         |",
+        "+--------------+",
+    ];
+    assert_batches_eq!(&expected, &actual);
+}
+
+#[tokio::test]
+async fn test_question_filter() {
+    let actual = plan_and_collect("select a from (select 1 as a) where a ? 2;")
+        .await
+        .unwrap();
+    let expected = ["+---+", "| a |", "+---+", "| 1 |", "+---+"];
     assert_batches_eq!(&expected, &actual);
 }

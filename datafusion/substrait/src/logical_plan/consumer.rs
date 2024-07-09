@@ -60,7 +60,7 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
@@ -404,22 +404,33 @@ pub async fn from_substrait_rel(
                 let mut input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
+                let mut names: HashSet<String> = HashSet::new();
                 let mut exprs: Vec<Expr> = vec![];
                 for e in &p.expressions {
                     let x =
                         from_substrait_rex(ctx, e, input.clone().schema(), extensions)
                             .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
-                    //   before returning and do not add to list of this Projection's expression list
-                    // otherwise, add expression to the Projection's expression list
-                    match &*x {
-                        Expr::WindowFunction(_) => {
-                            input = input.window(vec![x.as_ref().clone()])?;
-                            exprs.push(x.as_ref().clone());
-                        }
-                        _ => {
-                            exprs.push(x.as_ref().clone());
-                        }
+                    if let Expr::WindowFunction(_) = x.as_ref() {
+                        // Adding the same expression here and in the project below
+                        // works because the project's builder uses columnize_expr(..)
+                        // to transform it into a column reference
+                        input = input.window(vec![x.as_ref().clone()])?
+                    }
+                    // Ensure the expression has a unique display name, so that project's
+                    // validate_unique_names doesn't fail
+                    let name = x.display_name()?;
+                    let mut new_name = name.clone();
+                    let mut i = 0;
+                    while names.contains(&new_name) {
+                        new_name = format!("{}__temp__{}", name, i);
+                        i += 1;
+                    }
+                    names.insert(new_name.clone());
+                    if new_name != name {
+                        exprs.push(x.as_ref().clone().alias(new_name.clone()));
+                    } else {
+                        exprs.push(x.as_ref().clone());
                     }
                 }
                 input.project(exprs)?.build()
@@ -1143,7 +1154,7 @@ pub async fn from_substrait_rex(
                                     Arc::try_unwrap(expr)
                                         .unwrap_or_else(|arc: Arc<Expr>| (*arc).clone()),
                                 ), // Avoid cloning if possible
-                                op: op.clone(),
+                                op,
                                 right: Box::new(arg),
                             })),
                             None => Arc::new(arg),
