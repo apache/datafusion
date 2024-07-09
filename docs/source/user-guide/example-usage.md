@@ -56,7 +56,7 @@ datafusion = { git = "https://github.com/apache/datafusion", branch = "main", de
 
 More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
 
-## Run a SQL query against data stored in a CSV:
+## Run a SQL query against data stored in a CSV
 
 ```rust
 use datafusion::prelude::*;
@@ -76,7 +76,10 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
-## Use the DataFrame API to process data stored in a CSV:
+See [the SQL API](../library-user-guide/using-the-sql-api.md) section of the
+library guide for more information on the SQL API.
+
+## Use the DataFrame API to process data stored in a CSV
 
 ```rust
 use datafusion::prelude::*;
@@ -261,8 +264,8 @@ Set environment [variables](https://doc.rust-lang.org/std/backtrace/index.html#e
 ```bash
 RUST_BACKTRACE=1 ./target/debug/datafusion-cli
 DataFusion CLI v31.0.0
-> select row_numer() over (partition by a order by a) from (select 1 a);
-Error during planning: Invalid function 'row_numer'.
+> select row_number() over (partition by a order by a) from (select 1 a);
+Error during planning: Invalid function 'row_number'.
 Did you mean 'ROW_NUMBER'?
 
 backtrace:    0: std::backtrace_rs::backtrace::libunwind::trace
@@ -287,7 +290,7 @@ async fn test_get_backtrace_for_failed_code() -> Result<()> {
     let ctx = SessionContext::new();
 
     let sql = "
-    select row_numer() over (partition by a order by a) from (select 1 a);
+    select row_number() over (partition by a order by a) from (select 1 a);
     ";
 
     let _ = ctx.sql(sql).await?.collect().await?;

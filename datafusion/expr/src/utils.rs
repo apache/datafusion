@@ -864,6 +864,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::List(_) => true,
         DataType::LargeList(_) => true,
         DataType::FixedSizeList(_, _) => true,
+        DataType::Struct(fields) => fields.iter().all(|f| can_hash(f.data_type())),
         _ => false,
     }
 }
@@ -996,7 +997,7 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
 /// assert_eq!(split_conjunction_owned(expr), split);
 /// ```
 pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
-    split_binary_owned(expr, &Operator::And)
+    split_binary_owned(expr, Operator::And)
 }
 
 /// Splits an owned binary operator tree [`Expr`] such as `A <OP> B <OP> C` => `[A, B, C]`
@@ -1019,19 +1020,19 @@ pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
 /// ];
 ///
 /// // use split_binary_owned to split them
-/// assert_eq!(split_binary_owned(expr, &Operator::Plus), split);
+/// assert_eq!(split_binary_owned(expr, Operator::Plus), split);
 /// ```
-pub fn split_binary_owned(expr: Expr, op: &Operator) -> Vec<Expr> {
+pub fn split_binary_owned(expr: Expr, op: Operator) -> Vec<Expr> {
     split_binary_owned_impl(expr, op, vec![])
 }
 
 fn split_binary_owned_impl(
     expr: Expr,
-    operator: &Operator,
+    operator: Operator,
     mut exprs: Vec<Expr>,
 ) -> Vec<Expr> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { right, op, left }) if &op == operator => {
+        Expr::BinaryExpr(BinaryExpr { right, op, left }) if op == operator => {
             let exprs = split_binary_owned_impl(*left, operator, exprs);
             split_binary_owned_impl(*right, operator, exprs)
         }
@@ -1048,17 +1049,17 @@ fn split_binary_owned_impl(
 /// Splits an binary operator tree [`Expr`] such as `A <OP> B <OP> C` => `[A, B, C]`
 ///
 /// See [`split_binary_owned`] for more details and an example.
-pub fn split_binary<'a>(expr: &'a Expr, op: &Operator) -> Vec<&'a Expr> {
+pub fn split_binary(expr: &Expr, op: Operator) -> Vec<&Expr> {
     split_binary_impl(expr, op, vec![])
 }
 
 fn split_binary_impl<'a>(
     expr: &'a Expr,
-    operator: &Operator,
+    operator: Operator,
     mut exprs: Vec<&'a Expr>,
 ) -> Vec<&'a Expr> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { right, op, left }) if op == operator => {
+        Expr::BinaryExpr(BinaryExpr { right, op, left }) if *op == operator => {
             let exprs = split_binary_impl(left, operator, exprs);
             split_binary_impl(right, operator, exprs)
         }
@@ -1199,7 +1200,7 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 /// merge inputs schema into a single schema.
 pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     if inputs.len() == 1 {
-        inputs[0].schema().clone().as_ref().clone()
+        inputs[0].schema().as_ref().clone()
     } else {
         inputs.iter().map(|input| input.schema()).fold(
             DFSchema::empty(),
@@ -1612,13 +1613,13 @@ mod tests {
     #[test]
     fn test_split_binary_owned() {
         let expr = col("a");
-        assert_eq!(split_binary_owned(expr.clone(), &Operator::And), vec![expr]);
+        assert_eq!(split_binary_owned(expr.clone(), Operator::And), vec![expr]);
     }
 
     #[test]
     fn test_split_binary_owned_two() {
         assert_eq!(
-            split_binary_owned(col("a").eq(lit(5)).and(col("b")), &Operator::And),
+            split_binary_owned(col("a").eq(lit(5)).and(col("b")), Operator::And),
             vec![col("a").eq(lit(5)), col("b")]
         );
     }
@@ -1628,7 +1629,7 @@ mod tests {
         let expr = col("a").eq(lit(5)).or(col("b"));
         assert_eq!(
             // expr is connected by OR, but pass in AND
-            split_binary_owned(expr.clone(), &Operator::And),
+            split_binary_owned(expr.clone(), Operator::And),
             vec![expr]
         );
     }

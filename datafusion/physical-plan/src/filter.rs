@@ -44,7 +44,7 @@ use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AnalysisContext, ExprBoundaries, PhysicalExpr,
+    analyze, split_conjunction, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
 use futures::stream::{Stream, StreamExt};
@@ -78,7 +78,7 @@ impl FilterExec {
                     Self::compute_properties(&input, &predicate, default_selectivity)?;
                 Ok(Self {
                     predicate,
-                    input: input.clone(),
+                    input: Arc::clone(&input),
                     metrics: ExecutionPlanMetricsSet::new(),
                     default_selectivity,
                     cache,
@@ -162,7 +162,7 @@ impl FilterExec {
     fn extend_constants(
         input: &Arc<dyn ExecutionPlan>,
         predicate: &Arc<dyn PhysicalExpr>,
-    ) -> Vec<Arc<dyn PhysicalExpr>> {
+    ) -> Vec<ConstExpr> {
         let mut res_constants = Vec::new();
         let input_eqs = input.equivalence_properties();
 
@@ -170,10 +170,15 @@ impl FilterExec {
         for conjunction in conjunctions {
             if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>() {
                 if binary.op() == &Operator::Eq {
+                    // Filter evaluates to single value for all partitions
                     if input_eqs.is_expr_constant(binary.left()) {
-                        res_constants.push(binary.right().clone())
+                        res_constants.push(
+                            ConstExpr::from(binary.right()).with_across_partitions(true),
+                        )
                     } else if input_eqs.is_expr_constant(binary.right()) {
-                        res_constants.push(binary.left().clone())
+                        res_constants.push(
+                            ConstExpr::from(binary.left()).with_across_partitions(true),
+                        )
                     }
                 }
             }
@@ -199,7 +204,10 @@ impl FilterExec {
         let constants = collect_columns(predicate)
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
-            .map(|column| Arc::new(column) as _);
+            .map(|column| {
+                let expr = Arc::new(column) as _;
+                ConstExpr::new(expr).with_across_partitions(true)
+            });
         // this is for statistics
         eq_properties = eq_properties.add_constants(constants);
         // this is for logical constant (for example: a = '1', then a could be marked as a constant)
@@ -255,7 +263,7 @@ impl ExecutionPlan for FilterExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        FilterExec::try_new(self.predicate.clone(), children.swap_remove(0))
+        FilterExec::try_new(Arc::clone(&self.predicate), children.swap_remove(0))
             .and_then(|e| {
                 let selectivity = e.default_selectivity();
                 e.with_default_selectivity(selectivity)
@@ -272,7 +280,7 @@ impl ExecutionPlan for FilterExec {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.input.schema(),
-            predicate: self.predicate.clone(),
+            predicate: Arc::clone(&self.predicate),
             input: self.input.execute(partition, context)?,
             baseline_metrics,
         }))
@@ -397,7 +405,7 @@ impl Stream for FilterExecStream {
 
 impl RecordBatchStream for FilterExecStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -1116,7 +1124,7 @@ mod tests {
                 binary(col("c1", &schema)?, Operator::LtEq, lit(4i32), &schema)?,
                 &schema,
             )?,
-            Arc::new(EmptyExec::new(schema.clone())),
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
         )?;
 
         exec.statistics().unwrap();

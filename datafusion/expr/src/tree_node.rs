@@ -136,8 +136,9 @@ impl TreeNode for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Unnest(_)
             | Expr::Literal(_) => Transformed::no(self),
+            Expr::Unnest(Unnest { expr, .. }) => transform_box(expr, &mut f)?
+                .update_data(|be| Expr::Unnest(Unnest::new_boxed(be))),
             Expr::Alias(Alias {
                 expr,
                 relation,

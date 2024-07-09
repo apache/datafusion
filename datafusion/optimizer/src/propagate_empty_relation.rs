@@ -182,7 +182,9 @@ impl OptimizerRule for PropagateEmptyRelation {
                         },
                     )))
                 } else if new_inputs.len() == 1 {
-                    let child = unwrap_arc(Arc::clone(&new_inputs[0]));
+                    let mut new_inputs = new_inputs;
+                    let input_plan = new_inputs.pop().unwrap(); // length checked
+                    let child = unwrap_arc(input_plan);
                     if child.schema().eq(plan.schema()) {
                         Ok(Transformed::yes(child))
                     } else {
@@ -578,7 +580,7 @@ mod tests {
 
         let empty = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::from_unqualifed_fields(
+            schema: Arc::new(DFSchema::from_unqualified_fields(
                 fields.into(),
                 Default::default(),
             )?),

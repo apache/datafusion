@@ -29,6 +29,7 @@ pub mod named_struct;
 pub mod nullif;
 pub mod nvl;
 pub mod nvl2;
+pub mod planner;
 pub mod r#struct;
 
 // create UDFs
@@ -92,7 +93,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         nvl(),
         nvl2(),
         arrow_typeof(),
-        r#struct(),
         named_struct(),
         get_field(),
         coalesce(),

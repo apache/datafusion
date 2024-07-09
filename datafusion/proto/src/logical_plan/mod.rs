@@ -109,12 +109,14 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
     fn try_decode_table_provider(
         &self,
         buf: &[u8],
+        table_ref: &TableReference,
         schema: SchemaRef,
         ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>>;
 
     fn try_encode_table_provider(
         &self,
+        table_ref: &TableReference,
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<()>;
@@ -164,6 +166,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -172,6 +175,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -445,14 +449,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(|expr| from_proto::parse_expr(expr, ctx, extension_codec))
                     .collect::<Result<Vec<_>, _>>()?;
-                let provider = extension_codec.try_decode_table_provider(
-                    &scan.custom_table_data,
-                    schema,
-                    ctx,
-                )?;
 
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "CustomScan")?;
+
+                let provider = extension_codec.try_decode_table_provider(
+                    &scan.custom_table_data,
+                    &table_name,
+                    schema,
+                    ctx,
+                )?;
 
                 LogicalPlanBuilder::scan_with_filters(
                     table_name,
@@ -1048,7 +1054,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 } else {
                     let mut bytes = vec![];
                     extension_codec
-                        .try_encode_table_provider(provider, &mut bytes)
+                        .try_encode_table_provider(table_name, provider, &mut bytes)
                         .map_err(|e| context!("Error serializing custom table", e))?;
                     let scan = CustomScan(CustomTableScanNode {
                         table_name: Some(table_name.clone().into()),

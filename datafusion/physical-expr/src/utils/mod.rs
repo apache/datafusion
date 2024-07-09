@@ -44,7 +44,7 @@ use petgraph::stable_graph::StableGraph;
 pub fn split_conjunction(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<&Arc<dyn PhysicalExpr>> {
-    split_impl(&Operator::And, predicate, vec![])
+    split_impl(Operator::And, predicate, vec![])
 }
 
 /// Assume the predicate is in the form of DNF, split the predicate to a Vec of PhysicalExprs.
@@ -53,16 +53,16 @@ pub fn split_conjunction(
 pub fn split_disjunction(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<&Arc<dyn PhysicalExpr>> {
-    split_impl(&Operator::Or, predicate, vec![])
+    split_impl(Operator::Or, predicate, vec![])
 }
 
 fn split_impl<'a>(
-    operator: &Operator,
+    operator: Operator,
     predicate: &'a Arc<dyn PhysicalExpr>,
     mut exprs: Vec<&'a Arc<dyn PhysicalExpr>>,
 ) -> Vec<&'a Arc<dyn PhysicalExpr>> {
     match predicate.as_any().downcast_ref::<BinaryExpr>() {
-        Some(binary) if binary.op() == operator => {
+        Some(binary) if binary.op() == &operator => {
             let exprs = split_impl(operator, binary.left(), exprs);
             split_impl(operator, binary.right(), exprs)
         }
@@ -111,7 +111,7 @@ pub fn convert_to_expr<T: Borrow<PhysicalSortExpr>>(
 ) -> Vec<Arc<dyn PhysicalExpr>> {
     sequence
         .into_iter()
-        .map(|elem| elem.borrow().expr.clone())
+        .map(|elem| Arc::clone(&elem.borrow().expr))
         .collect()
 }
 
@@ -166,7 +166,7 @@ impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>>
                 for expr_node in node.children.iter() {
                     self.graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
                 }
-                self.visited_plans.push((expr.clone(), node_idx));
+                self.visited_plans.push((Arc::clone(expr), node_idx));
                 node_idx
             }
         };
@@ -379,7 +379,7 @@ pub(crate) mod tests {
     }
 
     fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> Result<PhysicalExprDummyNode> {
-        let expr = node.expr.clone();
+        let expr = Arc::clone(&node.expr);
         let dummy_property = if expr.as_any().is::<BinaryExpr>() {
             "Binary"
         } else if expr.as_any().is::<Column>() {

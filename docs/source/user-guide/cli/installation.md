@@ -57,6 +57,8 @@ this to work.
 ```bash
 git clone https://github.com/apache/datafusion
 cd datafusion
+# Note: the build can take a while
 docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
-docker run -it -v $(your_data_location):/data datafusion-cli
+# You can also bind persistent storage with `-v /path/to/data:/data`
+docker run --rm -it datafusion-cli
 ```
