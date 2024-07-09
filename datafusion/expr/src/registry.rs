@@ -18,7 +18,7 @@
 //! FunctionRegistry trait
 
 use crate::expr_rewriter::FunctionRewrite;
-use crate::planner::UserDefinedSQLPlanner;
+use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
 use std::collections::HashMap;
@@ -110,15 +110,15 @@ pub trait FunctionRegistry {
         not_impl_err!("Registering FunctionRewrite")
     }
 
-    /// Set of all registered [`UserDefinedSQLPlanner`]s
-    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>>;
+    /// Set of all registered [`ExprPlanner`]s
+    fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>>;
 
-    /// Registers a new [`UserDefinedSQLPlanner`] with the registry.
-    fn register_user_defined_sql_planner(
+    /// Registers a new [`ExprPlanner`] with the registry.
+    fn register_expr_planner(
         &mut self,
-        _user_defined_sql_planner: Arc<dyn UserDefinedSQLPlanner>,
+        _expr_planner: Arc<dyn ExprPlanner>,
     ) -> Result<()> {
-        not_impl_err!("Registering UserDefinedSQLPlanner")
+        not_impl_err!("Registering ExprPlanner")
     }
 }
 
@@ -196,7 +196,7 @@ impl FunctionRegistry for MemoryFunctionRegistry {
         Ok(self.udwfs.insert(udaf.name().into(), udaf))
     }
 
-    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+    fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
     }
 }

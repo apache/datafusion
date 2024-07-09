@@ -222,7 +222,7 @@ pub fn propagate_arithmetic(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<Option<(Interval, Interval)>> {
-    let inverse_op = get_inverse_op(op)?;
+    let inverse_op = get_inverse_op(*op)?;
     match (left_child.data_type(), right_child.data_type()) {
         // If we have a child whose type is a time interval (i.e. DataType::Interval),
         // we need special handling since timestamp differencing results in a

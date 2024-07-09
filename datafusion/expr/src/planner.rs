@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ContextProvider`] and [`UserDefinedSQLPlanner`] APIs to customize SQL query planning
+//! [`ContextProvider`] and [`ExprPlanner`] APIs to customize SQL query planning
 
 use std::sync::Arc;
 
@@ -83,7 +83,7 @@ pub trait ContextProvider {
 }
 
 /// This trait allows users to customize the behavior of the SQL planner
-pub trait UserDefinedSQLPlanner: Send + Sync {
+pub trait ExprPlanner: Send + Sync {
     /// Plan the binary operation between two expressions, returns original
     /// BinaryExpr if not possible
     fn plan_binary_op(
@@ -139,6 +139,28 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
+
+    /// Plan an substring expression, e.g., `SUBSTRING(<expr> [FROM <expr>] [FOR <expr>])`
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_substring(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
+
+    /// Plans a struct `struct(expression1[, ..., expression_n])`
+    /// literal based on the given input expressions.
+    /// This function takes a vector of expressions and a boolean flag indicating whether
+    /// the struct uses the optional name
+    ///
+    /// Returns a `PlannerResult` containing either the planned struct expressions or the original
+    /// input expressions if planning is not possible.
+    fn plan_struct_literal(
+        &self,
+        args: Vec<Expr>,
+        _is_named_struct: bool,
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
 }
 
 /// An operator with two arguments to plan
@@ -146,7 +168,7 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
 /// Note `left` and `right` are DataFusion [`Expr`]s but the `op` is the SQL AST
 /// operator.
 ///
-/// This structure is used by [`UserDefinedSQLPlanner`] to plan operators with
+/// This structure is used by [`ExprPlanner`] to plan operators with
 /// custom expressions.
 #[derive(Debug, Clone)]
 pub struct RawBinaryExpr {
@@ -157,7 +179,7 @@ pub struct RawBinaryExpr {
 
 /// An expression with GetFieldAccess to plan
 ///
-/// This structure is used by [`UserDefinedSQLPlanner`] to plan operators with
+/// This structure is used by [`ExprPlanner`] to plan operators with
 /// custom expressions.
 #[derive(Debug, Clone)]
 pub struct RawFieldAccessExpr {
@@ -167,7 +189,7 @@ pub struct RawFieldAccessExpr {
 
 /// A Dictionary literal expression `{ key: value, ...}`
 ///
-/// This structure is used by [`UserDefinedSQLPlanner`] to plan operators with
+/// This structure is used by [`ExprPlanner`] to plan operators with
 /// custom expressions.
 #[derive(Debug, Clone)]
 pub struct RawDictionaryExpr {
@@ -175,7 +197,7 @@ pub struct RawDictionaryExpr {
     pub values: Vec<Expr>,
 }
 
-/// Result of planning a raw expr with [`UserDefinedSQLPlanner`]
+/// Result of planning a raw expr with [`ExprPlanner`]
 #[derive(Debug, Clone)]
 pub enum PlannerResult<T> {
     /// The raw expression was successfully planned as a new [`Expr`]

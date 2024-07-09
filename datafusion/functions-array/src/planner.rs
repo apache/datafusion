@@ -19,10 +19,11 @@
 
 use datafusion_common::{utils::list_ndims, DFSchema, Result};
 use datafusion_expr::{
-    planner::{PlannerResult, RawBinaryExpr, RawFieldAccessExpr, UserDefinedSQLPlanner},
+    planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
     sqlparser, AggregateFunction, Expr, ExprSchemable, GetFieldAccess,
 };
 use datafusion_functions::expr_fn::get_field;
+use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 
 use crate::{
     array_has::array_has_all,
@@ -33,7 +34,7 @@ use crate::{
 
 pub struct ArrayFunctionPlanner;
 
-impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
+impl ExprPlanner for ArrayFunctionPlanner {
     fn plan_binary_op(
         &self,
         expr: RawBinaryExpr,
@@ -100,7 +101,7 @@ impl UserDefinedSQLPlanner for ArrayFunctionPlanner {
 
 pub struct FieldAccessPlanner;
 
-impl UserDefinedSQLPlanner for FieldAccessPlanner {
+impl ExprPlanner for FieldAccessPlanner {
     fn plan_field_access(
         &self,
         expr: RawFieldAccessExpr,
@@ -119,8 +120,8 @@ impl UserDefinedSQLPlanner for FieldAccessPlanner {
                     // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
                     Expr::AggregateFunction(agg_func) if is_array_agg(&agg_func) => {
                         Ok(PlannerResult::Planned(Expr::AggregateFunction(
-                            datafusion_expr::expr::AggregateFunction::new(
-                                AggregateFunction::NthValue,
+                            datafusion_expr::expr::AggregateFunction::new_udf(
+                                nth_value_udaf(),
                                 agg_func
                                     .args
                                     .into_iter()
