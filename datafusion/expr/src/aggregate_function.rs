@@ -118,7 +118,7 @@ impl AggregateFunction {
     pub fn nullable(&self) -> Result<bool> {
         match self {
             AggregateFunction::Max | AggregateFunction::Min => Ok(true),
-            AggregateFunction::ArrayAgg => Ok(false),
+            AggregateFunction::ArrayAgg => Ok(true),
         }
     }
 }
