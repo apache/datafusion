@@ -29,16 +29,15 @@ using the [`SessionContext::sql`] method. For lower level control such as
 preventing DDL, you can use [`SessionContext::sql_with_options`] or the
 [`SessionState`] APIs
 
-[`sessioncontext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
-[`sessioncontext::sql`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql
-[`sessioncontext::sql_with_options`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql_with_options
-[`sessionstate`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html
-
 ## Registering Data Sources using `SessionContext::register*`
 
 The `SessionContext::register*` methods tell DataFusion the name of
 the source and how to read data. Once registered, you can execute SQL queries
-using the `SessionContext::sql` method referring to your data source as a table.
+using the [`SessionContext::sql`] method referring to your data source as a table.
+
+The [`SessionContext::sql`] method returns a `DataFrame` for ease of
+use. See the ["Using the DataFrame API"] section for more information on how to
+work with DataFrames.
 
 ### Read a CSV File
 
@@ -215,3 +214,9 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+[`sessioncontext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
+[`sessioncontext::sql`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql
+[`sessioncontext::sql_with_options`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql_with_options
+[`sessionstate`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html
+["using the dataframe api"]: ../library-user-guide/using-the-dataframe-api.md
