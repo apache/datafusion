@@ -582,7 +582,10 @@ preventing DDL, you can use <a class="reference external" href="https://docs.rs/
 <h2>Registering Data Sources using <code class="docutils literal notranslate"><span class="pre">SessionContext::register*</span></code><a class="headerlink" href="#registering-data-sources-using-sessioncontext-register" title="Link to this heading">¶</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">SessionContext::register*</span></code> methods tell DataFusion the name of
 the source and how to read data. Once registered, you can execute SQL queries
-using the <code class="docutils literal notranslate"><span class="pre">SessionContext::sql</span></code> method referring to your data source as a table.</p>
+using the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql"><code class="docutils literal notranslate"><span class="pre">SessionContext::sql</span></code></a> method referring to your data source as a table.</p>
+<p>The <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql"><code class="docutils literal notranslate"><span class="pre">SessionContext::sql</span></code></a> method returns a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> for ease of
+use. See the <a class="reference internal" href="using-the-dataframe-api.html"><span class="std std-doc">“Using the DataFrame API”</span></a> section for more information on how to
+work with DataFrames.</p>
 <section id="read-a-csv-file">
 <h3>Read a CSV File<a class="headerlink" href="#read-a-csv-file" title="Link to this heading">¶</a></h3>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>

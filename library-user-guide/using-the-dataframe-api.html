@@ -480,7 +480,7 @@
   <ul class="visible nav section-nav flex-column">
    <li class="toc-h2 nav-item toc-entry">
     <a class="reference internal nav-link" href="#what-is-a-dataframe">
-     What is a DataFrame
+     What is a DataFrame?
     </a>
    </li>
    <li class="toc-h2 nav-item toc-entry">
@@ -501,8 +501,20 @@
   </a>
   <ul class="visible nav section-nav flex-column">
    <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#transform-between-logicalplan-and-dataframe">
-     Transform between LogicalPlan and DataFrame
+    <a class="reference internal nav-link" href="#relationship-between-logicalplans-and-dataframes">
+     Relationship between
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       LogicalPlan
+      </span>
+     </code>
+     s and
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       DataFrame
+      </span>
+     </code>
+     s
     </a>
    </li>
   </ul>
@@ -555,73 +567,140 @@
 -->
 <section id="using-the-dataframe-api">
 <h1>Using the DataFrame API<a class="headerlink" href="#using-the-dataframe-api" title="Link to this heading">¶</a></h1>
+<p>The <a class="reference internal" href="../user-guide/dataframe.html"><span class="std std-doc">Users Guide</span></a> introduces the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html"><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code></a> API and this section describes
+that API in more depth.</p>
 <section id="what-is-a-dataframe">
-<h2>What is a DataFrame<a class="headerlink" href="#what-is-a-dataframe" title="Link to this heading">¶</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> in <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> is modeled after the Pandas DataFrame interface, and is a thin wrapper over LogicalPlan that adds functionality for building and executing those plans.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DataFrame</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">session_state</span><span class="p">:</span><span class="w"> </span><span class="nc">SessionState</span><span class="p">,</span>
-<span class="w">    </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="nc">LogicalPlan</span><span class="p">,</span>
-<span class="p">}</span>
-</pre></div>
-</div>
-<p>You can build up <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>s using its methods, similarly to building <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code>s using <code class="docutils literal notranslate"><span class="pre">LogicalPlanBuilder</span></code>:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">table</span><span class="p">(</span><span class="s">&quot;users&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
-
-<span class="c1">// Create a new DataFrame sorted by  `id`, `bank_account`</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">new_df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">select</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;bank_account&quot;</span><span class="p">)])</span><span class="o">?</span>
-<span class="w">    </span><span class="p">.</span><span class="n">sort</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">)])</span><span class="o">?</span><span class="p">;</span>
-
-<span class="c1">// Build the same plan using the LogicalPlanBuilder</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlanBuilder</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="o">&amp;</span><span class="n">df</span><span class="p">.</span><span class="n">to_logical_plan</span><span class="p">())</span>
-<span class="w">    </span><span class="p">.</span><span class="n">project</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;bank_account&quot;</span><span class="p">)])</span><span class="o">?</span>
-<span class="w">    </span><span class="p">.</span><span class="n">sort</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">)])</span><span class="o">?</span>
-<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
-</pre></div>
-</div>
-<p>You can use <code class="docutils literal notranslate"><span class="pre">collect</span></code> or <code class="docutils literal notranslate"><span class="pre">execute_stream</span></code> to execute the query.</p>
+<h2>What is a DataFrame?<a class="headerlink" href="#what-is-a-dataframe" title="Link to this heading">¶</a></h2>
+<p>As described in the <a class="reference internal" href="../user-guide/dataframe.html"><span class="std std-doc">Users Guide</span></a>, DataFusion <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html"><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code></a>s are modeled after
+the <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html">Pandas DataFrame</a> interface, and are implemented as thin wrapper over a
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html"><code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code></a> that adds functionality for building and executing those plans.</p>
+<p>The simplest possible dataframe is one that scans a table and that table can be
+in a file or in memory.</p>
 </section>
 <section id="how-to-generate-a-dataframe">
 <h2>How to generate a DataFrame<a class="headerlink" href="#how-to-generate-a-dataframe" title="Link to this heading">¶</a></h2>
-<p>You can directly use the <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> API or generate a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> from a SQL query.</p>
-<p>For example, to use <code class="docutils literal notranslate"><span class="pre">sql</span></code> to construct <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
-<span class="c1">// Register the in-memory table containing the data</span>
-<span class="n">ctx</span><span class="p">.</span><span class="n">register_table</span><span class="p">(</span><span class="s">&quot;users&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">create_memtable</span><span class="p">()</span><span class="o">?</span><span class="p">))</span><span class="o">?</span><span class="p">;</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">dataframe</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT * FROM users;&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<p>You can construct <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html"><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code></a>s programmatically using the API, similarly to
+other DataFrame APIs. For example, you can read an in memory <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code> into
+a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">array</span><span class="p">::{</span><span class="n">ArrayRef</span><span class="p">,</span><span class="w"> </span><span class="n">Int32Array</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">record_batch</span><span class="p">::</span><span class="n">RecordBatch</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// Register an in-memory table containing the following data</span>
+<span class="w">    </span><span class="c1">// id | bank_account</span>
+<span class="w">    </span><span class="c1">// ---|-------------</span>
+<span class="w">    </span><span class="c1">// 1  | 9000</span>
+<span class="w">    </span><span class="c1">// 2  | 8000</span>
+<span class="w">    </span><span class="c1">// 3  | 7000</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RecordBatch</span><span class="p">::</span><span class="n">try_from_iter</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">        </span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Int32Array</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]))</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">ArrayRef</span><span class="p">),</span>
+<span class="w">        </span><span class="p">(</span><span class="s">&quot;bank_account&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Int32Array</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">9000</span><span class="p">,</span><span class="w"> </span><span class="mi">8000</span><span class="p">,</span><span class="w"> </span><span class="mi">7000</span><span class="p">]))),</span>
+<span class="w">    </span><span class="p">])</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// Create a DataFrame that scans the user table, and finds</span>
+<span class="w">    </span><span class="c1">// all users with a bank account at least 8000</span>
+<span class="w">    </span><span class="c1">// and sorts the results by bank account in descending order</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">dataframe</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span>
+<span class="w">        </span><span class="p">.</span><span class="n">read_batch</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">?</span>
+<span class="w">        </span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;bank_account&quot;</span><span class="p">).</span><span class="n">gt_eq</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">8000</span><span class="p">)))</span><span class="o">?</span><span class="w"> </span><span class="c1">// bank_account &gt;= 8000</span>
+<span class="w">        </span><span class="p">.</span><span class="n">sort</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;bank_account&quot;</span><span class="p">).</span><span class="n">sort</span><span class="p">(</span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">)])</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// ORDER BY bank_account DESC</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
 </pre></div>
 </div>
-<p>To construct <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> using the API:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
-<span class="c1">// Register the in-memory table containing the data</span>
-<span class="n">ctx</span><span class="p">.</span><span class="n">register_table</span><span class="p">(</span><span class="s">&quot;users&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">create_memtable</span><span class="p">()</span><span class="o">?</span><span class="p">))</span><span class="o">?</span><span class="p">;</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">dataframe</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span>
-<span class="w">  </span><span class="p">.</span><span class="n">table</span><span class="p">(</span><span class="s">&quot;users&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">).</span><span class="n">lt_eq</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">)))</span><span class="o">?</span>
-<span class="w">  </span><span class="p">.</span><span class="n">sort</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">).</span><span class="n">sort</span><span class="p">(</span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">).</span><span class="n">sort</span><span class="p">(</span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">)])</span><span class="o">?</span><span class="p">;</span>
+<p>You can <em>also</em> generate a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> from a SQL query and use the DataFrame’s APIs
+to manipulate the output of the query.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">assert_batches_eq</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">array</span><span class="p">::{</span><span class="n">ArrayRef</span><span class="p">,</span><span class="w"> </span><span class="n">Int32Array</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">record_batch</span><span class="p">::</span><span class="n">RecordBatch</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// Register the same in-memory table as the previous example</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RecordBatch</span><span class="p">::</span><span class="n">try_from_iter</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">        </span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Int32Array</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]))</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">ArrayRef</span><span class="p">),</span>
+<span class="w">        </span><span class="p">(</span><span class="s">&quot;bank_account&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Int32Array</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">9000</span><span class="p">,</span><span class="w"> </span><span class="mi">8000</span><span class="p">,</span><span class="w"> </span><span class="mi">7000</span><span class="p">]))),</span>
+<span class="w">    </span><span class="p">])</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">.</span><span class="n">register_batch</span><span class="p">(</span><span class="s">&quot;users&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// Create a DataFrame using SQL</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">dataframe</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT * FROM users;&quot;</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="k">await</span><span class="o">?</span>
+<span class="w">        </span><span class="c1">// Note we can filter the output of the query using the DataFrame API</span>
+<span class="w">        </span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;bank_account&quot;</span><span class="p">).</span><span class="n">gt_eq</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">8000</span><span class="p">)))</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// bank_account &gt;= 8000</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">dataframe</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// use the `assert_batches_eq` macro to show the output</span>
+<span class="w">    </span><span class="n">assert_batches_eq</span><span class="o">!</span><span class="p">(</span>
+<span class="w">        </span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">            </span><span class="s">&quot;+----+--------------+&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="s">&quot;| id | bank_account |&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="s">&quot;+----+--------------+&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="s">&quot;| 1  | 9000         |&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="s">&quot;| 2  | 8000         |&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="s">&quot;+----+--------------+&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="p">],</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="n">results</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 </section>
 <section id="collect-streaming-exec">
 <h2>Collect / Streaming Exec<a class="headerlink" href="#collect-streaming-exec" title="Link to this heading">¶</a></h2>
-<p>DataFusion <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>s are “lazy”, meaning they do not do any processing until they are executed, which allows for additional optimizations.</p>
-<p>When you have a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>, you can run it in one of three ways:</p>
+<p>DataFusion <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html"><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code></a>s are “lazy”, meaning they do no processing until
+they are executed, which allows for additional optimizations.</p>
+<p>You can run a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> in one of three ways:</p>
 <ol class="arabic simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">collect</span></code> which executes the query and buffers all the output into a <code class="docutils literal notranslate"><span class="pre">Vec&lt;RecordBatch&gt;</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">streaming_exec</span></code>, which begins executions and returns a <code class="docutils literal notranslate"><span class="pre">SendableRecordBatchStream</span></code> which incrementally computes output on each call to <code class="docutils literal notranslate"><span class="pre">next()</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">cache</span></code> which executes the query and buffers the output into a new in memory DataFrame.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">collect</span></code>: executes the query and buffers all the output into a <code class="docutils literal notranslate"><span class="pre">Vec&lt;RecordBatch&gt;</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">execute_stream</span></code>: begins executions and returns a <code class="docutils literal notranslate"><span class="pre">SendableRecordBatchStream</span></code> which incrementally computes output on each call to <code class="docutils literal notranslate"><span class="pre">next()</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cache</span></code>: executes the query and buffers the output into a new in memory <code class="docutils literal notranslate"><span class="pre">DataFrame.</span></code></p></li>
 </ol>
-<p>You can just collect all outputs once like:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">batches</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<p>To collect all outputs into a memory buffer, use the <code class="docutils literal notranslate"><span class="pre">collect</span></code> method:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// read the contents of a CSV file into a DataFrame</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// execute the query and collect the results as a Vec&lt;RecordBatch&gt;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">batches</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="n">record_batch</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">batches</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{record_batch:?}&quot;</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
 </pre></div>
 </div>
-<p>You can also use stream output to incrementally generate output one <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code> at a time</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
-<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">execute_stream</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
-<span class="k">while</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">rb</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">stream</span><span class="p">.</span><span class="n">next</span><span class="p">().</span><span class="k">await</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{rb:?}&quot;</span><span class="p">);</span>
+<p>Use <code class="docutils literal notranslate"><span class="pre">execute_stream</span></code> to incrementally generate output one <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code> at a time:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">futures</span><span class="p">::</span><span class="n">stream</span><span class="p">::</span><span class="n">StreamExt</span><span class="p">;</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// read example.csv file into a DataFrame</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// begin execution (returns quickly, does not compute results)</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">execute_stream</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// results are returned incrementally as they are computed</span>
+<span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">record_batch</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">stream</span><span class="p">.</span><span class="n">next</span><span class="p">().</span><span class="k">await</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{record_batch:?}&quot;</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -629,38 +708,100 @@
 </section>
 <section id="write-dataframe-to-files">
 <h1>Write DataFrame to Files<a class="headerlink" href="#write-dataframe-to-files" title="Link to this heading">¶</a></h1>
-<p>You can also serialize <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> to a file. For now, <code class="docutils literal notranslate"><span class="pre">Datafusion</span></code> supports write <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> to <code class="docutils literal notranslate"><span class="pre">csv</span></code>, <code class="docutils literal notranslate"><span class="pre">json</span></code> and <code class="docutils literal notranslate"><span class="pre">parquet</span></code>.</p>
-<p>When writing a file, DataFusion will execute the DataFrame and stream the results to a file.</p>
-<p>For example, to write a csv_file</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
-<span class="c1">// Register the in-memory table containing the data</span>
-<span class="n">ctx</span><span class="p">.</span><span class="n">register_table</span><span class="p">(</span><span class="s">&quot;users&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">mem_table</span><span class="p">))</span><span class="o">?</span><span class="p">;</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">dataframe</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT * FROM users;&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<p>You can also write the contents of a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> to a file. When writing a file,
+DataFusion executes the <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> and streams the results to the output.
+DataFusion comes with support for writing <code class="docutils literal notranslate"><span class="pre">csv</span></code>, <code class="docutils literal notranslate"><span class="pre">json</span></code> <code class="docutils literal notranslate"><span class="pre">arrow</span></code> <code class="docutils literal notranslate"><span class="pre">avro</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">parquet</span></code> files, and supports writing custom file formats via API (see
+<a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_file_format.rs"><code class="docutils literal notranslate"><span class="pre">custom_file_format.rs</span></code></a> for an example)</p>
+<p>For example, to read a CSV file and write it to a parquet file, use the
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.write_parquet"><code class="docutils literal notranslate"><span class="pre">DataFrame::write_parquet</span></code></a> method</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">dataframe</span><span class="p">::</span><span class="n">DataFrameWriteOptions</span><span class="p">;</span>
 
-<span class="n">dataframe</span>
-<span class="w">    </span><span class="p">.</span><span class="n">write_csv</span><span class="p">(</span><span class="s">&quot;user_dataframe.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataFrameWriteOptions</span><span class="p">::</span><span class="n">default</span><span class="p">(),</span><span class="w"> </span><span class="nb">None</span><span class="p">)</span>
-<span class="w">    </span><span class="p">.</span><span class="k">await</span><span class="p">;</span>
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// read example.csv file into a DataFrame</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// stream the contents of the DataFrame to the `example.parquet` file</span>
+<span class="w">    </span><span class="n">df</span><span class="p">.</span><span class="n">write_parquet</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;example.parquet&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">DataFrameWriteOptions</span><span class="p">::</span><span class="n">new</span><span class="p">(),</span>
+<span class="w">        </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="c1">// writer_options</span>
+<span class="w">    </span><span class="p">).</span><span class="k">await</span><span class="p">;</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
 </pre></div>
 </div>
-<p>and the file will look like (Example Output):</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">id</span><span class="p">,</span><span class="n">bank_account</span>
-<span class="mi">1</span><span class="p">,</span><span class="mi">9000</span>
+<p>The output file will look like (Example Output):</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="s1">&#39;../datafusion/core/example.parquet&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---+---+---+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---+---+---+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---+---+---+</span>
 </pre></div>
 </div>
-<section id="transform-between-logicalplan-and-dataframe">
-<h2>Transform between LogicalPlan and DataFrame<a class="headerlink" href="#transform-between-logicalplan-and-dataframe" title="Link to this heading">¶</a></h2>
-<p>As shown above, <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> is just a very thin wrapper of <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code>, so you can easily go back and forth between them.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Just combine LogicalPlan with SessionContext and you get a DataFrame</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
-<span class="c1">// Register the in-memory table containing the data</span>
-<span class="n">ctx</span><span class="p">.</span><span class="n">register_table</span><span class="p">(</span><span class="s">&quot;users&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">mem_table</span><span class="p">))</span><span class="o">?</span><span class="p">;</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">dataframe</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT * FROM users;&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<section id="relationship-between-logicalplans-and-dataframes">
+<h2>Relationship between <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code>s and <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>s<a class="headerlink" href="#relationship-between-logicalplans-and-dataframes" title="Link to this heading">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> struct is defined like this:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">execution</span><span class="p">::</span><span class="n">session_state</span><span class="p">::</span><span class="n">SessionState</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::</span><span class="n">LogicalPlan</span><span class="p">;</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">DataFrame</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// state required to execute a LogicalPlan</span>
+<span class="w">    </span><span class="n">session_state</span><span class="p">:</span><span class="w"> </span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">SessionState</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// LogicalPlan that describes the computation to perform</span>
+<span class="w">    </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="nc">LogicalPlan</span><span class="p">,</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>As shown above, <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> is a thin wrapper of <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code>, so you can
+easily go back and forth between them.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::</span><span class="n">LogicalPlanBuilder</span><span class="p">;</span>
 
-<span class="c1">// get LogicalPlan in dataframe</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dataframe</span><span class="p">.</span><span class="n">logical_plan</span><span class="p">().</span><span class="n">clone</span><span class="p">();</span>
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// read example.csv file into a DataFrame</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// You can easily get the LogicalPlan from the DataFrame</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="p">(</span><span class="n">_state</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">into_parts</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// Just combine LogicalPlan with SessionContext and you get a DataFrame</span>
+<span class="w">    </span><span class="c1">// get LogicalPlan in dataframe</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">new_df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataFrame</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">ctx</span><span class="p">.</span><span class="n">state</span><span class="p">(),</span><span class="w"> </span><span class="n">plan</span><span class="p">);</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>In fact, using the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html"><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code></a>s methods you can create the same
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html"><code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code></a>s as when using <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.LogicalPlanBuilder.html"><code class="docutils literal notranslate"><span class="pre">LogicalPlanBuilder</span></code></a>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::</span><span class="n">LogicalPlanBuilder</span><span class="p">;</span>
 
-<span class="c1">// construct a DataFrame with LogicalPlan</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">new_df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataFrame</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">ctx</span><span class="p">.</span><span class="n">state</span><span class="p">(),</span><span class="w"> </span><span class="n">plan</span><span class="p">);</span>
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// read example.csv file into a DataFrame</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// Create a new DataFrame sorted by  `id`, `bank_account`</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">new_df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">select</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">)])</span><span class="o">?</span>
+<span class="w">        </span><span class="p">.</span><span class="n">sort</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">)])</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// Build the same plan using the LogicalPlanBuilder</span>
+<span class="w">    </span><span class="c1">// Similar to `SELECT a, b FROM example.csv ORDER BY a`</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="p">(</span><span class="n">_state</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">into_parts</span><span class="p">();</span><span class="w"> </span><span class="c1">// get the DataFrame&#39;s LogicalPlan</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlanBuilder</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="n">plan</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">project</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">)])</span><span class="o">?</span>
+<span class="w">        </span><span class="p">.</span><span class="n">sort</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">)])</span><span class="o">?</span>
+<span class="w">        </span><span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// prove they are the same</span>
+<span class="w">    </span><span class="fm">assert_eq!</span><span class="p">(</span><span class="n">new_df</span><span class="p">.</span><span class="n">logical_plan</span><span class="p">(),</span><span class="w"> </span><span class="o">&amp;</span><span class="n">plan</span><span class="p">);</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 </section>
