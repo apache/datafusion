@@ -69,6 +69,7 @@ See the `developer’s guide`_ for contributing and `communication`_ for getting
    GitHub and Issue Tracker <https://github.com/apache/datafusion>
    crates.io <https://crates.io/crates/datafusion>
    API Docs <https://docs.rs/datafusion/latest/datafusion/>
+   Blog <https://datafusion.apache.org/blog/>
    Code of conduct <https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md>
    Download <download>
 
