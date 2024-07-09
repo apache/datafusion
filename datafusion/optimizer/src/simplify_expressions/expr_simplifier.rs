@@ -1808,7 +1808,7 @@ mod tests {
         let schema = test_schema();
         let props = ExecutionProps::new();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema.clone()));
+            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(Arc::clone(&schema)));
 
         // Note expr type is int32 (not int64)
         // (1i64 + 2i32) < i
@@ -3340,15 +3340,15 @@ mod tests {
         assert_eq!(
             simplify(in_list(
                 col("c1"),
-                vec![scalar_subquery(subquery.clone())],
+                vec![scalar_subquery(Arc::clone(&subquery))],
                 false
             )),
-            in_subquery(col("c1"), subquery.clone())
+            in_subquery(col("c1"), Arc::clone(&subquery))
         );
         assert_eq!(
             simplify(in_list(
                 col("c1"),
-                vec![scalar_subquery(subquery.clone())],
+                vec![scalar_subquery(Arc::clone(&subquery))],
                 true
             )),
             not_in_subquery(col("c1"), subquery)

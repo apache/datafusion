@@ -881,7 +881,7 @@ mod tests {
             Ok(Self {
                 exprs,
                 input: Arc::new(inputs.swap_remove(0)),
-                schema: self.schema.clone(),
+                schema: Arc::clone(&self.schema),
             })
         }
 
@@ -949,7 +949,7 @@ mod tests {
                 exprs,
                 left_child: Arc::new(inputs.remove(0)),
                 right_child: Arc::new(inputs.remove(0)),
-                schema: self.schema.clone(),
+                schema: Arc::clone(&self.schema),
             })
         }
 
@@ -1256,7 +1256,7 @@ mod tests {
         let table_scan = test_table_scan()?;
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoOpUserDefined::new(
-                table_scan.schema().clone(),
+                Arc::clone(table_scan.schema()),
                 Arc::new(table_scan.clone()),
             )),
         });
@@ -1281,7 +1281,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(
                 NoOpUserDefined::new(
-                    table_scan.schema().clone(),
+                    Arc::clone(table_scan.schema()),
                     Arc::new(table_scan.clone()),
                 )
                 .with_exprs(exprs),
@@ -1316,7 +1316,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(
                 NoOpUserDefined::new(
-                    table_scan.schema().clone(),
+                    Arc::clone(table_scan.schema()),
                     Arc::new(table_scan.clone()),
                 )
                 .with_exprs(exprs),

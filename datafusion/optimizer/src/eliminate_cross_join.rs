@@ -420,7 +420,7 @@ mod tests {
     };
 
     fn assert_optimized_plan_eq(plan: LogicalPlan, expected: Vec<&str>) {
-        let starting_schema = plan.schema().clone();
+        let starting_schema = Arc::clone(plan.schema());
         let rule = EliminateCrossJoin::new();
         let transformed_plan = rule.rewrite(plan, &OptimizerContext::new()).unwrap();
         assert!(transformed_plan.transformed, "failed to optimize plan");

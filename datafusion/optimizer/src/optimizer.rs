@@ -579,7 +579,7 @@ mod tests {
         let config = OptimizerContext::new().with_skip_failing_rules(false);
 
         let input = Arc::new(test_table_scan()?);
-        let input_schema = input.schema().clone();
+        let input_schema = Arc::clone(input.schema());
 
         let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
             vec![col("a"), col("b"), col("c")],
@@ -760,7 +760,7 @@ mod tests {
             }
 
             Ok(Transformed::yes(LogicalPlan::Projection(
-                Projection::try_new(exprs, projection.input.clone())?,
+                Projection::try_new(exprs, Arc::clone(&projection.input))?,
             )))
         }
     }

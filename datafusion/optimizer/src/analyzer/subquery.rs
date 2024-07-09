@@ -376,7 +376,7 @@ mod test {
             _inputs: Vec<LogicalPlan>,
         ) -> Result<Self> {
             Ok(Self {
-                empty_schema: self.empty_schema.clone(),
+                empty_schema: Arc::clone(&self.empty_schema),
             })
         }
     }

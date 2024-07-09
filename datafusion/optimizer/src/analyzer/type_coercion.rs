@@ -1266,7 +1266,7 @@ mod test {
             })
             .call(args.to_vec());
             let plan =
-                LogicalPlan::Projection(Projection::try_new(vec![expr], empty.clone())?);
+                LogicalPlan::Projection(Projection::try_new(vec![expr], Arc::clone(&empty))?);
             let expected =
                 "Projection: TestScalarUDF(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;

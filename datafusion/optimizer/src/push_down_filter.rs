@@ -1498,7 +1498,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
@@ -1514,7 +1514,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
@@ -1531,7 +1531,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
@@ -1548,7 +1548,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
