@@ -88,6 +88,7 @@ pub mod expr_fn {
     ),(
         map,
         "Returns a map created from a key list and a value list",
+        args,
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]

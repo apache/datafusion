@@ -141,3 +141,7 @@ required-features = ["string_expressions"]
 harness = false
 name = "upper"
 required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "map"
