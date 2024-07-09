@@ -2479,6 +2479,7 @@ mod tests {
             // to exercise different code paths
             // (The resulting properties _should_ be the same)
             for properties in [
+                // Equal conditions before constants
                 {
                     let mut properties = base_properties.clone();
                     for [left, right] in &case.equal_conditions {
@@ -2488,6 +2489,7 @@ mod tests {
                         case.constants.iter().cloned().map(ConstExpr::from),
                     )
                 },
+                // Constants before equal conditions
                 {
                     let mut properties = base_properties.clone().add_constants(
                         case.constants.iter().cloned().map(ConstExpr::from),
