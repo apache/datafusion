@@ -2739,6 +2739,7 @@ SELECT ARRAY_AGG([1])
 statement ok
 create table t(a int, b float, c bigint) as values (1, 1.2, 2);
 
+# Returns NULL, follows DuckDB's behaviour
 query ?
 select array_agg(a) from t where a > 2;
 ----
@@ -2759,7 +2760,7 @@ select array_agg(c), count(1) from t where c > 3;
 ----
 NULL 0
 
-# returns 0 rows if group by is applied
+# returns 0 rows if group by is applied, follows DuckDB's behaviour
 query ?
 select array_agg(a) from t where a > 3 group by a;
 ----
@@ -2768,6 +2769,7 @@ query ?I
 select array_agg(a), count(1) from t where a > 3 group by a;
 ----
 
+# returns NULL, follows DuckDB's behaviour
 query ?
 select array_agg(distinct a) from t where a > 3;
 ----
@@ -2778,7 +2780,7 @@ select array_agg(distinct a), count(1) from t where a > 3;
 ----
 NULL 0
 
-# returns 0 rows if group by is applied
+# returns 0 rows if group by is applied, follows DuckDB's behaviour
 query ?
 select array_agg(distinct a) from t where a > 3 group by a;
 ----
