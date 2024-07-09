@@ -88,7 +88,7 @@ impl FilterExec {
 
                 Ok(Self {
                     predicate,
-                    input: input.clone(),
+                    input: Arc::clone(&input),
                     metrics: ExecutionPlanMetricsSet::new(),
                     default_selectivity,
                     cache,
@@ -105,7 +105,9 @@ impl FilterExec {
         default_selectivity: u8,
     ) -> Result<Self, DataFusionError> {
         if default_selectivity > 100 {
-            return plan_err!("Default filter selectivity value needs to be less than or equal to 100");
+            return plan_err!(
+                "Default filter selectivity value needs to be less than or equal to 100"
+            );
         }
         self.default_selectivity = default_selectivity;
         Ok(self)
@@ -366,12 +368,12 @@ pub(crate) fn batch_filter(
         .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
             let filter_array = match as_boolean_array(&array) {
-                Ok(boolean_array) => {
-                    Ok(boolean_array.to_owned())
-                },
+                Ok(boolean_array) => Ok(boolean_array.to_owned()),
                 Err(_) => {
                     let Ok(null_array) = as_null_array(&array) else {
-                        return internal_err!("Cannot create filter_array from non-boolean predicates");
+                        return internal_err!(
+                            "Cannot create filter_array from non-boolean predicates"
+                        );
                     };
 
                     // if the predicate is null, then the result is also null
