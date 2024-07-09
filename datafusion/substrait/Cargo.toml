@@ -39,7 +39,7 @@ datafusion = { workspace = true, default-features = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
 pbjson-types = "0.6"
-prost = "0.12"
+prost = "0.13"
 substrait = { version = "0.36.0", features = ["serde"] }
 url = { workspace = true }
 
