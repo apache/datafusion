@@ -138,7 +138,7 @@ impl AggregateUDFImpl for Count {
             return Ok(Box::new(CountAccumulator::new()));
         }
 
-        if acc_args.input_exprs.len() != 1 {
+        if acc_args.input_exprs.len() > 1 {
             return not_impl_err!("COUNT DISTINCT with multiple arguments");
         }
 
