@@ -1030,6 +1030,9 @@ async fn concatenate_parallel_row_groups(
 ) -> Result<FileMetaData> {
     let merged_buff = SharedBuffer::new(INITIAL_BUFFER_BYTES);
 
+    let mut file_reservation =
+        MemoryConsumer::new("ParquetSink(SerializedFileWriter)").register(&pool);
+
     let schema_desc = arrow_to_parquet_schema(schema.as_ref())?;
     let mut parquet_writer = SerializedFileWriter::new(
         merged_buff.clone(),
@@ -1058,7 +1061,10 @@ async fn concatenate_parallel_row_groups(
             drop(col_reservation);
         }
         rg_out.close()?;
-        rg_reservation.free();
+
+        // bytes remaining. Could be unflushed data, or rg metadata passed to the file writer on rg_out.close()
+        let remaining_bytes = rg_reservation.free();
+        file_reservation.grow(remaining_bytes);
     }
 
     let file_metadata = parquet_writer.close()?;
@@ -1066,6 +1072,7 @@ async fn concatenate_parallel_row_groups(
 
     object_store_writer.write_all(final_buff.as_slice()).await?;
     object_store_writer.shutdown().await?;
+    file_reservation.free();
 
     Ok(file_metadata)
 }
