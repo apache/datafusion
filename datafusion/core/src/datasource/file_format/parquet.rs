@@ -48,6 +48,7 @@ use datafusion_common::{
     DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
@@ -749,14 +750,19 @@ impl DataSink for ParquetSink {
                         parquet_props.writer_options().clone(),
                     )
                     .await?;
+                let mut reservation =
+                    MemoryConsumer::new(format!("ParquetSink[{}]", path))
+                        .register(context.memory_pool());
                 file_write_tasks.spawn(async move {
                     while let Some(batch) = rx.recv().await {
                         writer.write(&batch).await?;
+                        reservation.try_resize(writer.memory_size())?;
                     }
                     let file_metadata = writer
                         .close()
                         .await
                         .map_err(DataFusionError::ParquetError)?;
+                    drop(reservation);
                     Ok((path, file_metadata))
                 });
             } else {
