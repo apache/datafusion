@@ -248,34 +248,7 @@ impl ToLocalTimeFunc {
 /// 2019-03-31T01:00:00
 /// ```
 ///
-/// # Example
-///
-/// ```
-/// # use chrono::NaiveDateTime;
-/// # use arrow::array::types::TimestampNanosecondType;
-///
-/// let timestamp_str = "2020-03-31T13:40:00";
-/// let tz: arrow::array::timezone::Tz =
-///     "America/New_York".parse().expect("Invalid timezone");
-///
-/// let timestamp = timestamp_str
-///     .parse::<NaiveDateTime>()
-///     .unwrap()
-///     .and_local_timezone(tz) // this is in a local timezone
-///     .unwrap()
-///     .timestamp_nanos_opt()
-///     .unwrap();
-///
-/// let expected_timestamp = timestamp_str
-///     .parse::<NaiveDateTime>()
-///     .unwrap()
-///     .and_utc() // this is in UTC
-///     .timestamp_nanos_opt()
-///     .unwrap();
-///
-/// let res = adjust_to_local_time::<TimestampNanosecondType>(timestamp, tz);
-/// assert_eq!(res, expected_timestamp);
-/// ```
+/// See `test_adjust_to_local_time()` for example
 fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> i64 {
     let date_time = match T::UNIT {
         Nanosecond => Utc.timestamp_nanos(ts),
@@ -472,38 +445,55 @@ mod tests {
     #[test]
     fn test_timezone_with_daylight_savings() {
         let timezone_str = "America/New_York";
+        let tz: arrow::array::timezone::Tz =
+            timezone_str.parse().expect("Invalid timezone");
 
+        // Test data:
+        // (
+        //    the string display of the input timestamp,
+        //    the i64 representation of the timestamp before adjustment in nanosecond,
+        //    the i64 representation of the timestamp after adjustment in nanosecond,
+        // )
         let test_cases = vec![
-            // DST time
-            "2019-03-31T04:00:00",
-            "2020-03-31T13:40:00",
-            // End of DST
-            "2019-11-04T04:06:40",
-            "2020-11-04T14:06:40",
+            (
+                // DST time
+                "2020-03-31T13:40:00",
+                1_585_676_400_000_000_000,
+                1_585_662_000_000_000_000,
+            ),
+            (
+                // End of DST
+                "2020-11-04T14:06:40",
+                1_604_516_800_000_000_000,
+                1_604_498_800_000_000_000,
+            ),
         ];
 
-        for timestamp_str in test_cases {
-            // timestamp in local timezone
-            let tz: arrow::array::timezone::Tz =
-                timezone_str.parse().expect("Invalid timezone");
-            let timestamp = timestamp_str
+        for (
+            input_timestamp_str,
+            expected_input_timestamp,
+            expected_adjusted_timestamp,
+        ) in test_cases
+        {
+            let input_timestamp = input_timestamp_str
                 .parse::<NaiveDateTime>()
                 .unwrap()
                 .and_local_timezone(tz) // this is in a local timezone
                 .unwrap()
                 .timestamp_nanos_opt()
                 .unwrap();
+            assert_eq!(input_timestamp, expected_input_timestamp);
 
-            // timestamp with no timezone
-            let expected_timestamp = timestamp_str
+            let expected_timestamp = input_timestamp_str
                 .parse::<NaiveDateTime>()
                 .unwrap()
                 .and_utc() // this is in UTC
                 .timestamp_nanos_opt()
                 .unwrap();
+            assert_eq!(expected_timestamp, expected_adjusted_timestamp);
 
             let input = ScalarValue::TimestampNanosecond(
-                Some(timestamp),
+                Some(input_timestamp),
                 Some(timezone_str.into()),
             );
             let expected =
