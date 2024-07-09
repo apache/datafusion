@@ -145,3 +145,4 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "map"
+required-features = ["core_expressions"]
