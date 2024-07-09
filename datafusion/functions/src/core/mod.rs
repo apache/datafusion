@@ -83,7 +83,7 @@ pub mod expr_fn {
         args,
     ),(
         make_map,
-        "Returns a map created from a list of key-value pairs",
+        "Returns a map created from the given keys and values pairs. This function isn't efficient for large maps. Use the `map` function instead.",
         args,
     ),(
         map,

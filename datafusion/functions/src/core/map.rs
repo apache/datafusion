@@ -19,9 +19,7 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::{
-    new_null_array, Array, ArrayData, ArrayRef, MapArray, StructArray,
-};
+use arrow::array::{new_null_array, Array, ArrayData, ArrayRef, MapArray, StructArray};
 use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, SchemaBuilder};
 use arrow_buffer::{Buffer, ToByteSlice};
