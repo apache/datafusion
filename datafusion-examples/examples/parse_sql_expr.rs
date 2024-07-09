@@ -135,9 +135,7 @@ async fn query_parquet_demo() -> Result<()> {
 
 /// DataFusion can parse a SQL text and convert it back to SQL using [`Unparser`].
 async fn round_trip_parse_sql_expr_demo() -> Result<()> {
-    // unparser can also remove extra parentheses,
-    // so `((int_col < 5) OR (double_col = 8))` will also produce the same SQL
-    let sql = "int_col < 5 OR double_col = 8";
+    let sql = "((int_col < 5) OR (double_col = 8))";
 
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
@@ -154,6 +152,15 @@ async fn round_trip_parse_sql_expr_demo() -> Result<()> {
     let round_trip_sql = unparser.expr_to_sql(&parsed_expr)?.to_string();
 
     assert_eq!(sql, round_trip_sql);
+
+    // enable pretty-unparsing. This make the output more human-readable
+    // but can be problematic when passed to other SQL engines due to
+    // difference in precedence rules between DataFusion and target engines.
+    let unparser = Unparser::default().with_pretty(true);
+
+    let pretty = "int_col < 5 OR double_col = 8";
+    let pretty_round_trip_sql = unparser.expr_to_sql(&parsed_expr)?.to_string();
+    assert_eq!(pretty, pretty_round_trip_sql);
 
     Ok(())
 }

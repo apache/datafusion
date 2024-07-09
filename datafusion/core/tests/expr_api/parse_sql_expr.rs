@@ -39,17 +39,17 @@ fn schema() -> DFSchemaRef {
 #[tokio::test]
 async fn round_trip_parse_sql_expr() -> Result<()> {
     let tests = vec![
-        "a = 10",
-        "(a = 10) AND (b <> 20)",
-        "(a = 10) OR (b <> 20)",
-        "((a = 10) AND (b <> 20)) OR (c = a)",
-        "(a = 10) AND b IN (20, 30)",
-        "(a = 10) AND b NOT IN (20, 30)",
+        "(a = 10)",
+        "((a = 10) AND (b <> 20))",
+        "((a = 10) OR (b <> 20))",
+        "(((a = 10) AND (b <> 20)) OR (c = a))",
+        "((a = 10) AND b IN (20, 30))",
+        "((a = 10) AND b NOT IN (20, 30))",
         "sum(a)",
-        "sum(a) + 1",
-        "MIN(a) + MAX(b)",
-        "MIN(a) + (MAX(b) * sum(c))",
-        "MIN(a) + ((MAX(b) * sum(c)) / 10)",
+        "(sum(a) + 1)",
+        "(MIN(a) + MAX(b))",
+        "(MIN(a) + (MAX(b) * sum(c)))",
+        "(MIN(a) + ((MAX(b) * sum(c)) / 10))",
     ];
 
     for test in tests {
@@ -65,8 +65,7 @@ fn round_trip_session_context(sql: &str) -> Result<()> {
     let df_schema = schema();
     let expr = ctx.parse_sql_expr(sql, &df_schema)?;
     let sql2 = unparse_sql_expr(&expr)?;
-    let expr2 = ctx.parse_sql_expr(&sql2, &df_schema)?;
-    assert_eq!(expr.to_string(), expr2.to_string());
+    assert_eq!(sql, sql2);
 
     Ok(())
 }
@@ -81,8 +80,7 @@ async fn round_trip_dataframe(sql: &str) -> Result<()> {
         .await?;
     let expr = df.parse_sql_expr(sql)?;
     let sql2 = unparse_sql_expr(&expr)?;
-    let roundtrip = df.parse_sql_expr(&sql2)?;
-    assert_eq!(expr, roundtrip);
+    assert_eq!(sql, sql2);
 
     Ok(())
 }

@@ -29,11 +29,23 @@ pub mod dialect;
 
 pub struct Unparser<'a> {
     dialect: &'a dyn Dialect,
+    pretty: bool,
 }
 
 impl<'a> Unparser<'a> {
     pub fn new(dialect: &'a dyn Dialect) -> Self {
-        Self { dialect }
+        Self {
+            dialect,
+            pretty: false,
+        }
+    }
+
+    /// Allow unparser to remove parenthesis according to the precedence rules of DataFusion.
+    /// This might make it invalid SQL for other SQL query engines with different precedence
+    /// rules, even if its valid for DataFusion.
+    pub fn with_pretty(mut self, pretty: bool) -> Self {
+        self.pretty = pretty;
+        self
     }
 }
 
@@ -41,6 +53,7 @@ impl<'a> Default for Unparser<'a> {
     fn default() -> Self {
         Self {
             dialect: &DefaultDialect {},
+            pretty: false,
         }
     }
 }

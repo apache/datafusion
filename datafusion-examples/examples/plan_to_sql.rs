@@ -31,9 +31,9 @@ use datafusion_sql::unparser::{plan_to_sql, Unparser};
 /// 1. [`simple_expr_to_sql_demo`]: Create a simple expression [`Exprs`] with
 /// fluent API and convert to sql suitable for passing to another database
 ///
-/// 2. [`simple_expr_to_sql_demo_no_escape`]  Create a simple expression
-/// [`Exprs`] with fluent API and convert to sql without escaping column names
-/// more suitable for displaying to humans.
+/// 2. [`simple_expr_to_pretty_sql_demo`] Create a simple expression
+/// [`Exprs`] with fluent API and convert to sql without extra parentheses,
+/// suitable for displaying to humans
 ///
 /// 3. [`simple_expr_to_sql_demo_escape_mysql_style`]" Create a simple
 /// expression [`Exprs`] with fluent API and convert to sql escaping column
@@ -49,6 +49,7 @@ use datafusion_sql::unparser::{plan_to_sql, Unparser};
 async fn main() -> Result<()> {
     // See how to evaluate expressions
     simple_expr_to_sql_demo()?;
+    simple_expr_to_pretty_sql_demo()?;
     simple_expr_to_sql_demo_escape_mysql_style()?;
     simple_plan_to_sql_demo().await?;
     round_trip_plan_to_sql_demo().await?;
@@ -60,6 +61,17 @@ async fn main() -> Result<()> {
 fn simple_expr_to_sql_demo() -> Result<()> {
     let expr = col("a").lt(lit(5)).or(col("a").eq(lit(8)));
     let sql = expr_to_sql(&expr)?.to_string();
+    assert_eq!(sql, r#"((a < 5) OR (a = 8))"#);
+    Ok(())
+}
+
+/// DataFusioon can remove parentheses when converting an expression to SQL.
+/// Note that output is intended for humans, not for other SQL engines,
+/// as difference in precedence rules can cause expressions to be parsed differently.
+fn simple_expr_to_pretty_sql_demo() -> Result<()> {
+    let expr = col("a").lt(lit(5)).or(col("a").eq(lit(8)));
+    let unparser = Unparser::default().with_pretty(true);
+    let sql = unparser.expr_to_sql(&expr)?.to_string();
     assert_eq!(sql, r#"a < 5 OR a = 8"#);
     Ok(())
 }
@@ -71,7 +83,7 @@ fn simple_expr_to_sql_demo_escape_mysql_style() -> Result<()> {
     let dialect = CustomDialect::new(Some('`'));
     let unparser = Unparser::new(&dialect);
     let sql = unparser.expr_to_sql(&expr)?.to_string();
-    assert_eq!(sql, r#"`a` < 5 OR `a` = 8"#);
+    assert_eq!(sql, r#"((`a` < 5) OR (`a` = 8))"#);
     Ok(())
 }
 
@@ -133,7 +145,7 @@ async fn round_trip_plan_to_sql_demo() -> Result<()> {
     let sql = plan_to_sql(df.logical_plan())?.to_string();
     assert_eq!(
         sql,
-        r#"SELECT alltypes_plain.int_col, alltypes_plain.double_col, CAST(alltypes_plain.date_string_col AS VARCHAR) FROM alltypes_plain WHERE alltypes_plain.id > 1 AND alltypes_plain.tinyint_col < alltypes_plain.double_col"#
+        r#"SELECT alltypes_plain.int_col, alltypes_plain.double_col, CAST(alltypes_plain.date_string_col AS VARCHAR) FROM alltypes_plain WHERE ((alltypes_plain.id > 1) AND (alltypes_plain.tinyint_col < alltypes_plain.double_col))"#
     );
 
     Ok(())

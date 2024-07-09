@@ -36,8 +36,12 @@ use crate::common::MockContextProvider;
 #[test]
 fn roundtrip_expr() {
     let tests: Vec<(TableReference, &str, &str)> = vec![
-        (TableReference::bare("person"), "age > 35", r#"age > 35"#),
-        (TableReference::bare("person"), "id = '10'", r#"id = '10'"#),
+        (TableReference::bare("person"), "age > 35", r#"(age > 35)"#),
+        (
+            TableReference::bare("person"),
+            "id = '10'",
+            r#"(id = '10')"#,
+        ),
         (
             TableReference::bare("person"),
             "CAST(id AS VARCHAR)",
@@ -46,7 +50,7 @@ fn roundtrip_expr() {
         (
             TableReference::bare("person"),
             "sum((age * 2))",
-            r#"sum(age * 2)"#,
+            r#"sum((age * 2))"#,
         ),
     ];
 
@@ -323,7 +327,7 @@ fn test_pretty_roundtrip() -> Result<()> {
     let context = MockContextProvider::default();
     let sql_to_rel = SqlToRel::new(&context);
 
-    let unparser = Unparser::default();
+    let unparser = Unparser::default().with_pretty(true);
 
     let sql_to_pretty_unparse = vec![
         ("((id < 5) OR (age = 8))", "id < 5 OR age = 8"),

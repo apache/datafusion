@@ -85,7 +85,7 @@ impl Display for Unparsed {
 /// let expr = col("a").gt(lit(4));
 /// let sql = expr_to_sql(&expr).unwrap();
 ///
-/// assert_eq!(format!("{}", sql), "a > 4")
+/// assert_eq!(format!("{}", sql), "(a > 4)")
 /// ```
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
@@ -108,8 +108,11 @@ const IS: &BinaryOperator = &BinaryOperator::BitwiseAnd;
 
 impl Unparser<'_> {
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
-        let root_expr = self.expr_to_sql_inner(expr)?;
-        Ok(self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST))
+        let mut root_expr = self.expr_to_sql_inner(expr)?;
+        if self.pretty {
+            root_expr = self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST);
+        }
+        Ok(root_expr)
     }
 
     fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
@@ -1260,14 +1263,14 @@ mod tests {
             .build()?;
 
         let tests: Vec<(Expr, &str)> = vec![
-            ((col("a") + col("b")).gt(lit(4)), r#"a + b > 4"#),
+            ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
             (
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
                 })
                 .gt(lit(4)),
-                r#"a.b.c > 4"#,
+                r#"(a.b.c > 4)"#,
             ),
             (
                 case(col("a"))
@@ -1483,41 +1486,41 @@ mod tests {
             (col("a").is_null(), r#"a IS NULL"#),
             (
                 (col("a") + col("b")).gt(lit(4)).is_true(),
-                r#"(a + b > 4) IS TRUE"#,
+                r#"((a + b) > 4) IS TRUE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_true(),
-                r#"(a + b > 4) IS NOT TRUE"#,
+                r#"((a + b) > 4) IS NOT TRUE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_false(),
-                r#"(a + b > 4) IS FALSE"#,
+                r#"((a + b) > 4) IS FALSE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_false(),
-                r#"(a + b > 4) IS NOT FALSE"#,
+                r#"((a + b) > 4) IS NOT FALSE"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_unknown(),
-                r#"(a + b > 4) IS UNKNOWN"#,
+                r#"((a + b) > 4) IS UNKNOWN"#,
             ),
             (
                 (col("a") + col("b")).gt(lit(4)).is_not_unknown(),
-                r#"(a + b > 4) IS NOT UNKNOWN"#,
+                r#"((a + b) > 4) IS NOT UNKNOWN"#,
             ),
             (not(col("a")), r#"NOT a"#),
             (
                 Expr::between(col("a"), lit(1), lit(7)),
-                r#"a BETWEEN 1 AND 7"#,
+                r#"(a BETWEEN 1 AND 7)"#,
             ),
             (Expr::Negative(Box::new(col("a"))), r#"-a"#),
             (
                 exists(Arc::new(dummy_logical_plan.clone())),
-                r#"EXISTS (SELECT t.a FROM t WHERE t.a = 1)"#,
+                r#"EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
             ),
             (
                 not_exists(Arc::new(dummy_logical_plan.clone())),
-                r#"NOT EXISTS (SELECT t.a FROM t WHERE t.a = 1)"#,
+                r#"NOT EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
             ),
             (
                 try_cast(col("a"), DataType::Date64),
@@ -1538,21 +1541,24 @@ mod tests {
                 ),
                 r#"@root.foo"#,
             ),
-            (col("x").eq(placeholder("$1")), r#"x = $1"#),
-            (out_ref_col(DataType::Int32, "t.a").gt(lit(1)), r#"t.a > 1"#),
+            (col("x").eq(placeholder("$1")), r#"(x = $1)"#),
+            (
+                out_ref_col(DataType::Int32, "t.a").gt(lit(1)),
+                r#"(t.a > 1)"#,
+            ),
             (
                 grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]),
                 r#"GROUPING SETS ((a, b), (a))"#,
             ),
             (cube(vec![col("a"), col("b")]), r#"CUBE (a, b)"#),
             (rollup(vec![col("a"), col("b")]), r#"ROLLUP (a, b)"#),
-            (col("table").eq(lit(1)), r#""table" = 1"#),
+            (col("table").eq(lit(1)), r#"("table" = 1)"#),
             (
                 col("123_need_quoted").eq(lit(1)),
-                r#""123_need_quoted" = 1"#,
+                r#"("123_need_quoted" = 1)"#,
             ),
-            (col("need-quoted").eq(lit(1)), r#""need-quoted" = 1"#),
-            (col("need quoted").eq(lit(1)), r#""need quoted" = 1"#),
+            (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
+            (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
             (
                 interval_month_day_nano_lit(
                     "1 YEAR 1 MONTH 1 DAY 3 HOUR 10 MINUTE 20 SECOND",
@@ -1570,12 +1576,12 @@ mod tests {
             (
                 interval_month_day_nano_lit("1 MONTH")
                     .add(interval_month_day_nano_lit("1 DAY")),
-                r#"INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' + INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
+                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' + INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
             ),
             (
                 interval_month_day_nano_lit("1 MONTH")
                     .sub(interval_month_day_nano_lit("1 DAY")),
-                r#"INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
+                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
             ),
             (
                 interval_datetime_lit("10 DAY 1 HOUR 10 MINUTE 20 SECOND"),
@@ -1599,7 +1605,7 @@ mod tests {
                     28,
                     3,
                 ))),
-                r#"a + b > 100.123"#,
+                r#"((a + b) > 100.123)"#,
             ),
             (
                 (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal256(
@@ -1607,7 +1613,7 @@ mod tests {
                     28,
                     3,
                 ))),
-                r#"a + b > 100.123"#,
+                r#"((a + b) > 100.123)"#,
             ),
             (
                 Expr::Cast(Cast {
@@ -1632,7 +1638,7 @@ mod tests {
     #[test]
     fn expr_to_unparsed_ok() -> Result<()> {
         let tests: Vec<(Expr, &str)> = vec![
-            ((col("a") + col("b")).gt(lit(4)), r#"a + b > 4"#),
+            ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
             (col("a").sort(true, true), r#"a ASC NULLS FIRST"#),
         ];
 
@@ -1657,7 +1663,7 @@ mod tests {
 
         let actual = format!("{}", ast);
 
-        let expected = r#"'a' > 4"#;
+        let expected = r#"('a' > 4)"#;
         assert_eq!(actual, expected);
 
         Ok(())
@@ -1673,7 +1679,7 @@ mod tests {
 
         let actual = format!("{}", ast);
 
-        let expected = r#"a > 4"#;
+        let expected = r#"(a > 4)"#;
         assert_eq!(actual, expected);
 
         Ok(())
