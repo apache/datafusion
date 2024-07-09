@@ -151,7 +151,7 @@ impl ToLocalTimeFunc {
             );
         }
 
-        let time_value = args[0].clone();
+        let time_value = &args[0];
         let arg_type = time_value.data_type();
         match arg_type {
             DataType::Timestamp(_, None) => {
@@ -170,7 +170,7 @@ impl ToLocalTimeFunc {
                     Some(tz),
                 )) => {
                     let adjusted_ts =
-                        adjust_to_local_time::<TimestampNanosecondType>(ts, &tz);
+                        adjust_to_local_time::<TimestampNanosecondType>(*ts, tz);
                     Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
                         Some(adjusted_ts),
                         None,
@@ -181,7 +181,7 @@ impl ToLocalTimeFunc {
                     Some(tz),
                 )) => {
                     let adjusted_ts =
-                        adjust_to_local_time::<TimestampMicrosecondType>(ts, &tz);
+                        adjust_to_local_time::<TimestampMicrosecondType>(*ts, tz);
                     Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
                         Some(adjusted_ts),
                         None,
@@ -192,7 +192,7 @@ impl ToLocalTimeFunc {
                     Some(tz),
                 )) => {
                     let adjusted_ts =
-                        adjust_to_local_time::<TimestampMillisecondType>(ts, &tz);
+                        adjust_to_local_time::<TimestampMillisecondType>(*ts, tz);
                     Ok(ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
                         Some(adjusted_ts),
                         None,
@@ -203,7 +203,7 @@ impl ToLocalTimeFunc {
                     Some(tz),
                 )) => {
                     let adjusted_ts =
-                        adjust_to_local_time::<TimestampSecondType>(ts, &tz);
+                        adjust_to_local_time::<TimestampSecondType>(*ts, tz);
                     Ok(ColumnarValue::Scalar(ScalarValue::TimestampSecond(
                         Some(adjusted_ts),
                         None,
@@ -227,19 +227,19 @@ impl ToLocalTimeFunc {
                     match array.data_type() {
                         Timestamp(_, None) => {
                             // if no timezone specificed, just return the input
-                            Ok(ColumnarValue::Array(Arc::new(array)))
+                            Ok(ColumnarValue::Array(Arc::clone(array)))
                         }
                         Timestamp(Nanosecond, Some(tz)) => {
-                            transform_array::<TimestampNanosecondType>(&array, tz)
+                            transform_array::<TimestampNanosecondType>(array, tz)
                         }
                         Timestamp(Microsecond, Some(tz)) => {
-                            transform_array::<TimestampMicrosecondType>(&array, tz)
+                            transform_array::<TimestampMicrosecondType>(array, tz)
                         }
                         Timestamp(Millisecond, Some(tz)) => {
-                            transform_array::<TimestampMillisecondType>(&array, tz)
+                            transform_array::<TimestampMillisecondType>(array, tz)
                         }
                         Timestamp(Second, Some(tz)) => {
-                            transform_array::<TimestampSecondType>(&array, tz)
+                            transform_array::<TimestampSecondType>(array, tz)
                         }
                         _ => {
                             exec_err!("to_local_time function requires timestamp argument in array, got {:?}", array.data_type())
