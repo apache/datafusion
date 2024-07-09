@@ -1154,7 +1154,7 @@ pub async fn from_substrait_rex(
                                     Arc::try_unwrap(expr)
                                         .unwrap_or_else(|arc: Arc<Expr>| (*arc).clone()),
                                 ), // Avoid cloning if possible
-                                op: op.clone(),
+                                op,
                                 right: Box::new(arg),
                             })),
                             None => Arc::new(arg),

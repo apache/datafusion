@@ -269,11 +269,7 @@ pub fn parse_expr(
             Ok(operands
                 .into_iter()
                 .reduce(|left, right| {
-                    Expr::BinaryExpr(BinaryExpr::new(
-                        Box::new(left),
-                        op.clone(),
-                        Box::new(right),
-                    ))
+                    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
         }

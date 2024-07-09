@@ -1152,8 +1152,8 @@ mod tests {
         ];
         for (i, input_type) in input_types.iter().enumerate() {
             let expect_type = &result_types[i];
-            for op in &comparison_op_types {
-                let (lhs, rhs) = get_input_types(&input_decimal, op, input_type)?;
+            for op in comparison_op_types {
+                let (lhs, rhs) = get_input_types(&input_decimal, &op, input_type)?;
                 assert_eq!(expect_type, &lhs);
                 assert_eq!(expect_type, &rhs);
             }
