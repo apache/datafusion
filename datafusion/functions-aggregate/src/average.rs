@@ -489,7 +489,7 @@ where
                 .into_iter()
                 .zip(counts.into_iter())
                 .map(|(sum, count)| (self.avg_fn)(sum, count))
-                .collect::<datafusion_common::Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
             PrimitiveArray::new(averages.into(), Some(nulls)) // no copy
                 .with_data_type(self.return_data_type.clone())
         };

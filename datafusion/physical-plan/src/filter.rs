@@ -31,13 +31,13 @@ use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
 };
-
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::cast::as_boolean_array;
+use arrow_array::{Array, BooleanArray};
+use datafusion_common::cast::{as_boolean_array, as_null_array};
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
@@ -76,6 +76,19 @@ impl FilterExec {
                 let default_selectivity = 20;
                 let cache =
                     Self::compute_properties(&input, &predicate, default_selectivity)?;
+                Ok(Self {
+                    predicate,
+                    input: Arc::clone(&input),
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    default_selectivity,
+                    cache,
+                })
+            }
+            DataType::Null => {
+                let default_selectivity = 0;
+                let cache =
+                    Self::compute_properties(&input, &predicate, default_selectivity)?;
+
                 Ok(Self {
                     predicate,
                     input: input.clone(),
@@ -173,13 +186,11 @@ impl FilterExec {
                     // Filter evaluates to single value for all partitions
                     if input_eqs.is_expr_constant(binary.left()) {
                         res_constants.push(
-                            ConstExpr::new(binary.right().clone())
-                                .with_across_partitions(true),
+                            ConstExpr::from(binary.right()).with_across_partitions(true),
                         )
                     } else if input_eqs.is_expr_constant(binary.right()) {
                         res_constants.push(
-                            ConstExpr::new(binary.left().clone())
-                                .with_across_partitions(true),
+                            ConstExpr::from(binary.left()).with_across_partitions(true),
                         )
                     }
                 }
@@ -265,7 +276,7 @@ impl ExecutionPlan for FilterExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        FilterExec::try_new(self.predicate.clone(), children.swap_remove(0))
+        FilterExec::try_new(Arc::clone(&self.predicate), children.swap_remove(0))
             .and_then(|e| {
                 let selectivity = e.default_selectivity();
                 e.with_default_selectivity(selectivity)
@@ -282,7 +293,7 @@ impl ExecutionPlan for FilterExec {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.input.schema(),
-            predicate: self.predicate.clone(),
+            predicate: Arc::clone(&self.predicate),
             input: self.input.execute(partition, context)?,
             baseline_metrics,
         }))
@@ -357,9 +368,23 @@ pub(crate) fn batch_filter(
         .evaluate(batch)
         .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
-            Ok(as_boolean_array(&array)?)
-                // apply filter array to record batch
-                .and_then(|filter_array| Ok(filter_record_batch(batch, filter_array)?))
+            let filter_array = match as_boolean_array(&array) {
+                Ok(boolean_array) => {
+                    Ok(boolean_array.to_owned())
+                },
+                Err(_) => {
+                    let Ok(null_array) = as_null_array(&array) else {
+                        return internal_err!("Cannot create filter_array from non-boolean predicates, unable to continute");
+                    };
+
+                    // if the predicate is null, then the result is also null
+                    Ok::<BooleanArray, DataFusionError>(BooleanArray::new_null(
+                        null_array.len(),
+                    ))
+                }
+            }?;
+
+            Ok(filter_record_batch(batch, &filter_array)?)
         })
 }
 
@@ -407,7 +432,7 @@ impl Stream for FilterExecStream {
 
 impl RecordBatchStream for FilterExecStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -1126,7 +1151,7 @@ mod tests {
                 binary(col("c1", &schema)?, Operator::LtEq, lit(4i32), &schema)?,
                 &schema,
             )?,
-            Arc::new(EmptyExec::new(schema.clone())),
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
         )?;
 
         exec.statistics().unwrap();

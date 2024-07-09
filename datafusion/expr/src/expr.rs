@@ -1413,12 +1413,19 @@ impl Expr {
             .unwrap()
     }
 
+    /// Returns true if the expression node is volatile, i.e. whether it can return
+    /// different results when evaluated multiple times with the same input.
+    /// Note: unlike [`Self::is_volatile`], this function does not consider inputs:
+    /// - `rand()` returns `true`,
+    /// - `a + rand()` returns `false`
+    pub fn is_volatile_node(&self) -> bool {
+        matches!(self, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile)
+    }
+
     /// Returns true if the expression is volatile, i.e. whether it can return different
     /// results when evaluated multiple times with the same input.
     pub fn is_volatile(&self) -> Result<bool> {
-        self.exists(|expr| {
-            Ok(matches!(expr, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile ))
-        })
+        self.exists(|expr| Ok(expr.is_volatile_node()))
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and
