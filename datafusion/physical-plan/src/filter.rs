@@ -91,7 +91,7 @@ impl FilterExec {
 
                 Ok(Self {
                     predicate,
-                    input: input.clone(),
+                    input: Arc::clone(&input),
                     metrics: ExecutionPlanMetricsSet::new(),
                     default_selectivity,
                     cache,
