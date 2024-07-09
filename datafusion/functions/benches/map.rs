@@ -54,9 +54,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             buffer.push(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 keys[i].clone(),
             ))));
-            buffer.push(ColumnarValue::Scalar(ScalarValue::Int32(Some(
-                values[i].clone(),
-            ))));
+            buffer.push(ColumnarValue::Scalar(ScalarValue::Int32(Some(values[i]))));
         }
 
         b.iter(|| {
