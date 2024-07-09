@@ -72,7 +72,7 @@ log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 num_cpus = { workspace = true }
 object_store = { workspace = true, features = ["aws", "http"] }
-prost = { version = "0.12", default-features = false }
+prost = { version = "0.13", default-features = false }
 prost-derive = { version = "0.13", default-features = false }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { workspace = true }
