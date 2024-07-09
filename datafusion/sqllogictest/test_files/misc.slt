@@ -24,3 +24,17 @@ query TT?
 select 'foo', '', NULL
 ----
 foo (empty) NULL
+
+# Where clause accept NULL literal
+query I
+select 1 where NULL
+----
+
+query I
+select 1 where NULL and 1 = 1
+----
+
+query I
+select 1 where NULL or 1 = 1
+----
+1
