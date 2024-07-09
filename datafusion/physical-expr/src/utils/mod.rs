@@ -44,7 +44,7 @@ use petgraph::stable_graph::StableGraph;
 pub fn split_conjunction(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<&Arc<dyn PhysicalExpr>> {
-    split_impl(&Operator::And, predicate, vec![])
+    split_impl(Operator::And, predicate, vec![])
 }
 
 /// Assume the predicate is in the form of DNF, split the predicate to a Vec of PhysicalExprs.
@@ -53,16 +53,16 @@ pub fn split_conjunction(
 pub fn split_disjunction(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<&Arc<dyn PhysicalExpr>> {
-    split_impl(&Operator::Or, predicate, vec![])
+    split_impl(Operator::Or, predicate, vec![])
 }
 
 fn split_impl<'a>(
-    operator: &Operator,
+    operator: Operator,
     predicate: &'a Arc<dyn PhysicalExpr>,
     mut exprs: Vec<&'a Arc<dyn PhysicalExpr>>,
 ) -> Vec<&'a Arc<dyn PhysicalExpr>> {
     match predicate.as_any().downcast_ref::<BinaryExpr>() {
-        Some(binary) if binary.op() == operator => {
+        Some(binary) if binary.op() == &operator => {
             let exprs = split_impl(operator, binary.left(), exprs);
             split_impl(operator, binary.right(), exprs)
         }
