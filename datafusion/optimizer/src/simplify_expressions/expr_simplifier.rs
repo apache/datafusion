@@ -1807,8 +1807,9 @@ mod tests {
     fn basic_coercion() {
         let schema = test_schema();
         let props = ExecutionProps::new();
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(Arc::clone(&schema)));
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&props).with_schema(Arc::clone(&schema)),
+        );
 
         // Note expr type is int32 (not int64)
         // (1i64 + 2i32) < i
