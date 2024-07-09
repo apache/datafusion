@@ -166,7 +166,7 @@ impl ToLocalTimeFunc {
                         match array.data_type() {
                             Timestamp(_, None) => {
                                 // if no timezone specificed, just return the input
-                                Ok(ColumnarValue::Array(Arc::clone(array)))
+                                Ok(time_value.clone())
                             }
                             Timestamp(Nanosecond, Some(_)) => {
                                 transform_array::<TimestampNanosecondType>(array, tz)

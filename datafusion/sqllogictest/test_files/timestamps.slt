@@ -2933,6 +2933,22 @@ select column1::timestamp AT TIME ZONE 'Europe/Brussels' as "column1"
 from t;
 
 query PPT
+select column1, to_local_time(column1::timestamp), arrow_typeof(to_local_time(column1::timestamp)) from t_utc;
+----
+2024-01-01T00:00:01Z 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
+2024-02-01T00:00:01Z 2024-02-01T00:00:01 Timestamp(Nanosecond, None)
+2024-03-01T00:00:01Z 2024-03-01T00:00:01 Timestamp(Nanosecond, None)
+2024-04-01T00:00:01Z 2024-04-01T00:00:01 Timestamp(Nanosecond, None)
+2024-05-01T00:00:01Z 2024-05-01T00:00:01 Timestamp(Nanosecond, None)
+2024-06-01T00:00:01Z 2024-06-01T00:00:01 Timestamp(Nanosecond, None)
+2024-07-01T00:00:01Z 2024-07-01T00:00:01 Timestamp(Nanosecond, None)
+2024-08-01T00:00:01Z 2024-08-01T00:00:01 Timestamp(Nanosecond, None)
+2024-09-01T00:00:01Z 2024-09-01T00:00:01 Timestamp(Nanosecond, None)
+2024-10-01T00:00:01Z 2024-10-01T00:00:01 Timestamp(Nanosecond, None)
+2024-11-01T00:00:01Z 2024-11-01T00:00:01 Timestamp(Nanosecond, None)
+2024-12-01T00:00:01Z 2024-12-01T00:00:01 Timestamp(Nanosecond, None)
+
+query PPT
 select column1, to_local_time(column1), arrow_typeof(to_local_time(column1)) from t_utc;
 ----
 2024-01-01T00:00:01Z 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
