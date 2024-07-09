@@ -44,6 +44,7 @@ make_udf_function!(named_struct::NamedStructFunc, NAMED_STRUCT, named_struct);
 make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
 make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
 make_udf_function!(map::MakeMap, MAKE_MAP, make_map);
+make_udf_function!(map::MapFunc, MAP, map);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -84,6 +85,9 @@ pub mod expr_fn {
         make_map,
         "Returns a map created from a list of key-value pairs",
         args,
+    ),(
+        map,
+        "Returns a map created from a key list and a value list",
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
@@ -104,5 +108,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         get_field(),
         coalesce(),
         make_map(),
+        map(),
     ]
 }

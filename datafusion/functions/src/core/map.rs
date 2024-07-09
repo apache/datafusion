@@ -15,16 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, ArrayData, ArrayRef, MapArray, StructArray};
+use arrow::array::{
+    new_null_array, Array, ArrayData, ArrayRef, MapArray, StructArray,
+};
 use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, SchemaBuilder};
 use arrow_buffer::{Buffer, ToByteSlice};
 
-use datafusion_common::Result;
 use datafusion_common::{exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -45,7 +48,7 @@ fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         .enumerate()
         .map(|(i, chunk)| {
             if chunk[0].data_type().is_null() {
-                return internal_err!("map key cannot be null");
+                return exec_err!("map key cannot be null");
             }
             if !chunk[1].data_type().is_null() {
                 if value_type.is_null() {
@@ -90,19 +93,38 @@ fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         Ok(value) => value,
         Err(e) => return internal_err!("Error concatenating values: {}", e),
     };
-    make_map_batch(key, value)
+    make_map_batch_internal(key, value)
 }
 
-fn make_map_batch(keys: ArrayRef, values: ArrayRef) -> Result<ColumnarValue> {
-    if keys.null_count() > 0 {
-        return internal_err!("map key cannot be null");
+fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 2 {
+        return exec_err!(
+            "make_map requires exactly 2 arguments, got {} instead",
+            args.len()
+        );
     }
+    if let ColumnarValue::Scalar(ScalarValue::List(keys)) = &args[0] {
+        if let ColumnarValue::Scalar(ScalarValue::List(values)) = &args[1] {
+            if keys.len() != 1 || values.len() != 1 {
+                return exec_err!("make_map requires exactly 1 list as argument");
+            }
+            return make_map_batch_internal(keys.value(0), values.value(0));
+        }
+    }
+    internal_err!("make_map requires two lists as arguments")
+}
+
+fn make_map_batch_internal(keys: ArrayRef, values: ArrayRef) -> Result<ColumnarValue> {
+    if keys.null_count() > 0 {
+        return exec_err!("map key cannot be null");
+    }
+
+    if keys.len() != values.len() {
+        return exec_err!("map requires key and value lists to have the same length");
+    }
+
     let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
-    let value_field = Arc::new(Field::new(
-        "value",
-        values.data_type().clone(),
-        values.null_count() > 0,
-    ));
+    let value_field = Arc::new(Field::new("value", values.data_type().clone(), true));
     let mut entry_struct_buffer: VecDeque<(Arc<Field>, ArrayRef)> = VecDeque::new();
     let mut entry_offsets_buffer = VecDeque::new();
     entry_offsets_buffer.push_back(0);
@@ -169,7 +191,7 @@ impl ScalarUDFImpl for MakeMap {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.is_empty() {
-            return internal_err!(
+            return exec_err!(
                 "make_map requires at least one pair of arguments, got 0 instead"
             );
         }
@@ -182,7 +204,6 @@ impl ScalarUDFImpl for MakeMap {
 
         let key_type = &arg_types[0];
         let mut value_type = &arg_types[1];
-        let mut value_nullable = arg_types[1].is_null();
 
         for (i, chunk) in arg_types.chunks_exact(2).enumerate() {
             if chunk[0].is_null() {
@@ -209,13 +230,11 @@ impl ScalarUDFImpl for MakeMap {
                     );
                 }
             }
-
-            value_nullable = value_nullable || chunk[1].is_null();
         }
 
         let mut builder = SchemaBuilder::new();
         builder.push(Field::new("key", key_type.clone(), false));
-        builder.push(Field::new("value", value_type.clone(), value_nullable));
+        builder.push(Field::new("value", value_type.clone(), true));
         let fields = builder.finish().fields;
         Ok(DataType::Map(
             Arc::new(Field::new("entries", DataType::Struct(fields), false)),
@@ -225,5 +244,64 @@ impl ScalarUDFImpl for MakeMap {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_map(args)
+    }
+}
+
+#[derive(Debug)]
+pub struct MapFunc {
+    signature: Signature,
+}
+
+impl Default for MapFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MapFunc {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for MapFunc {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "map"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() % 2 != 0 {
+            return exec_err!(
+                "map requires an even number of arguments, got {} instead",
+                arg_types.len()
+            );
+        }
+        if let DataType::List(key_type) = arg_types[0].clone() {
+            if let DataType::List(value_type) = arg_types[1].clone() {
+                let mut builder = SchemaBuilder::new();
+                builder.push(Field::new("key", key_type.data_type().clone(), false));
+                builder.push(Field::new("value", value_type.data_type().clone(), true));
+                let fields = builder.finish().fields;
+                return Ok(DataType::Map(
+                    Arc::new(Field::new("entries", DataType::Struct(fields), false)),
+                    false,
+                ));
+            }
+        }
+        internal_err!("map requires two lists as arguments")
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        make_map_batch(args)
     }
 }
