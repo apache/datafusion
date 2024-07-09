@@ -137,8 +137,11 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
         assert!(values.len() == 1, "array_agg can only take 1 param!");
+
         let val = Arc::clone(&values[0]);
-        self.values.push(val);
+        if val.len() > 0 {
+            self.values.push(val);
+        }
         Ok(())
     }
 
@@ -162,7 +165,6 @@ impl Accumulator for ArrayAggAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         // Transform Vec<ListArr> to ListArr
-
         let element_arrays: Vec<&dyn Array> =
             self.values.iter().map(|a| a.as_ref()).collect();
 

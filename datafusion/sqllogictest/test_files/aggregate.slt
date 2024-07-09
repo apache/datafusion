@@ -2768,11 +2768,10 @@ query ?I
 select array_agg(a), count(1) from t where a > 3 group by a;
 ----
 
-# TODO: Expect NULL, got empty list
 query ?
 select array_agg(distinct a) from t where a > 3;
 ----
-[]
+NULL
 
 query ?I
 select array_agg(distinct a), count(1) from t where a > 3;
