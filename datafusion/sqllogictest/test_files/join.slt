@@ -1024,17 +1024,17 @@ statement ok
 CREATE TABLE t2 (v1 BOOLEAN) AS VALUES (false), (true);
 
 query BB
-SELECT t2.v1, t1.v1 FROM t0, t1, t2 WHERE t2.v1 IS DISTINCT FROM t0.v1;
+SELECT t2.v1, t1.v1 FROM t0, t1, t2 WHERE t2.v1 IS DISTINCT FROM t0.v1 ORDER BY 1,2;
 ----
-true false
-true NULL
-true false
+false false
 false false
 false NULL
-false false
+true false
+true false
+true false
 true false
 true NULL
-true false
+true NULL
 
 statement ok
 DROP TABLE t0;
