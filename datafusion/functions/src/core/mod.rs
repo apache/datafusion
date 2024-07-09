@@ -31,7 +31,8 @@ pub mod nvl;
 pub mod nvl2;
 pub mod planner;
 pub mod r#struct;
-mod map;
+pub mod map;
+
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, ARROW_CAST, arrow_cast);
 make_udf_function!(nullif::NullIfFunc, NULLIF, nullif);
@@ -42,6 +43,7 @@ make_udf_function!(r#struct::StructFunc, STRUCT, r#struct);
 make_udf_function!(named_struct::NamedStructFunc, NAMED_STRUCT, named_struct);
 make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
 make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
+make_udf_function!(map::MakeMap, MAKE_MAP, make_map);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -78,6 +80,10 @@ pub mod expr_fn {
         coalesce,
         "Returns `coalesce(args...)`, which evaluates to the value of the first expr which is not NULL",
         args,
+    ),(
+        make_map,
+        "Returns a map created from a list of key-value pairs",
+        args,
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
@@ -97,5 +103,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         named_struct(),
         get_field(),
         coalesce(),
+        make_map(),
     ]
 }
