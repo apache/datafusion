@@ -323,6 +323,31 @@ async fn oom_recursive_cte() {
         .await
 }
 
+#[tokio::test]
+async fn oom_parquet_sink() {
+    let file = tempfile::Builder::new()
+        .suffix(".parquet")
+        .tempfile()
+        .unwrap();
+
+    TestCase::new()
+        .with_query(format!(
+            "
+            COPY (select * from t)
+            TO '{}'
+            STORED AS PARQUET OPTIONS (compression 'uncompressed');
+        ",
+            file.path().to_string_lossy()
+        ))
+        .with_expected_errors(vec![
+            // TODO: update error handling in ParquetSink
+            "Unable to send array to writer!",
+        ])
+        .with_memory_limit(200_000)
+        .run()
+        .await
+}
+
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
