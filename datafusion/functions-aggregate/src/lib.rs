@@ -62,6 +62,7 @@ pub mod covariance;
 pub mod first_last;
 pub mod hyperloglog;
 pub mod median;
+pub mod planner;
 pub mod regr;
 pub mod stddev;
 pub mod sum;

@@ -243,6 +243,7 @@ impl SessionState {
                 feature = "unicode_expressions"
             ))]
             Arc::new(functions::planner::UserDefinedFunctionPlanner),
+            Arc::new(functions_aggregate::planner::AggregateUDFPlanner),
         ];
 
         let mut new_self = SessionState {

@@ -24,6 +24,7 @@ use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
+use sqlparser::ast::NullTreatment;
 
 use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
 
@@ -161,6 +162,28 @@ pub trait ExprPlanner: Send + Sync {
     ) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
+
+    /// Plans a `RawAggregateUDF` based on the given input expressions.
+    ///
+    /// Returns a `PlannerResult` containing either the planned aggregate function or the original
+    /// input expressions if planning is not possible.
+    fn plan_aggregate_udf(
+        &self,
+        aggregate_function: RawAggregateUDF,
+    ) -> Result<PlannerResult<RawAggregateUDF>> {
+        Ok(PlannerResult::Original(aggregate_function))
+    }
+}
+
+// An `AggregateUDF` to be planned.
+#[derive(Debug, Clone)]
+pub struct RawAggregateUDF {
+    pub udf: Arc<crate::AggregateUDF>,
+    pub args: Vec<Expr>,
+    pub distinct: bool,
+    pub filter: Option<Box<Expr>>,
+    pub order_by: Option<Vec<Expr>>,
+    pub null_treatment: Option<NullTreatment>,
 }
 
 /// An operator with two arguments to plan

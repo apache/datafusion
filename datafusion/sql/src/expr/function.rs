@@ -21,6 +21,7 @@ use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     Dependency, Result,
 };
+use datafusion_expr::planner::{PlannerResult, RawAggregateUDF};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     expr, AggregateFunction, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition,
@@ -335,7 +336,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
-            if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
+            if let Some(udf) = self.context_provider.get_aggregate_meta(&name) {
                 let order_by = self.order_by_to_sort_expr(
                     &order_by,
                     schema,
@@ -349,13 +350,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
                     .transpose()?
                     .map(Box::new);
-                return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
-                    fm,
+
+                let raw_aggregate_function = RawAggregateUDF {
+                    udf,
                     args,
                     distinct,
                     filter,
                     order_by,
                     null_treatment,
+                };
+
+                for planner in self.planners.iter() {
+                    if let PlannerResult::Planned(aggregate_function) =
+                        planner.plan_aggregate_udf(raw_aggregate_function.clone())?
+                    {
+                        return Ok(aggregate_function);
+                    }
+                }
+
+                return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                    raw_aggregate_function.udf,
+                    raw_aggregate_function.args,
+                    raw_aggregate_function.distinct,
+                    raw_aggregate_function.filter,
+                    raw_aggregate_function.order_by,
+                    raw_aggregate_function.null_treatment,
                 )));
             }
 
