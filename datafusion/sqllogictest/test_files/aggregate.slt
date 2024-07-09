@@ -2739,7 +2739,7 @@ SELECT ARRAY_AGG([1])
 statement ok
 create table t(a int, b float, c bigint) as values (1, 1.2, 2);
 
-# Returns NULL, follows DuckDB's behaviour
+# returns NULL, follows DuckDB's behaviour
 query ?
 select array_agg(a) from t where a > 2;
 ----
