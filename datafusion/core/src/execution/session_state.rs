@@ -60,7 +60,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::planner::UserDefinedSQLPlanner;
+use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
@@ -101,7 +101,7 @@ pub struct SessionState {
     /// Responsible for analyzing and rewrite a logical plan before optimization
     analyzer: Analyzer,
     /// Provides support for customising the SQL planner, e.g. to add support for custom operators like `->>` or `?`
-    user_defined_sql_planners: Vec<Arc<dyn UserDefinedSQLPlanner>>,
+    expr_planners: Vec<Arc<dyn ExprPlanner>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
@@ -231,7 +231,7 @@ impl SessionState {
             );
         }
 
-        let user_defined_sql_planners: Vec<Arc<dyn UserDefinedSQLPlanner>> = vec![
+        let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![
             Arc::new(functions::core::planner::CoreFunctionPlanner::default()),
             // register crate of array expressions (if enabled)
             #[cfg(feature = "array_expressions")]
@@ -248,7 +248,7 @@ impl SessionState {
         let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
-            user_defined_sql_planners,
+            expr_planners,
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
@@ -968,7 +968,7 @@ impl SessionState {
         let mut query = SqlToRel::new_with_options(provider, self.get_parser_options());
 
         // custom planners are registered first, so they're run first and take precedence over built-in planners
-        for planner in self.user_defined_sql_planners.iter() {
+        for planner in self.expr_planners.iter() {
             query = query.with_user_defined_planner(planner.clone());
         }
 
@@ -1184,16 +1184,15 @@ impl FunctionRegistry for SessionState {
         Ok(())
     }
 
-    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
-        self.user_defined_sql_planners.clone()
+    fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
+        self.expr_planners.clone()
     }
 
-    fn register_user_defined_sql_planner(
+    fn register_expr_planner(
         &mut self,
-        user_defined_sql_planner: Arc<dyn UserDefinedSQLPlanner>,
+        expr_planner: Arc<dyn ExprPlanner>,
     ) -> datafusion_common::Result<()> {
-        self.user_defined_sql_planners
-            .push(user_defined_sql_planner);
+        self.expr_planners.push(expr_planner);
         Ok(())
     }
 }

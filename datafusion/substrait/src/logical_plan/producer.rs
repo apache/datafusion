@@ -664,12 +664,7 @@ fn to_substrait_join_expr(
             extension_info,
         )?;
         // AND with existing expression
-        exprs.push(make_binary_op_scalar_func(
-            &l,
-            &r,
-            eq_op.clone(),
-            extension_info,
-        ));
+        exprs.push(make_binary_op_scalar_func(&l, &r, eq_op, extension_info));
     }
     let join_expr: Option<Expression> =
         exprs.into_iter().reduce(|acc: Expression, e: Expression| {
@@ -1167,12 +1162,7 @@ pub fn to_substrait_rex(
             let l = to_substrait_rex(ctx, left, schema, col_ref_offset, extension_info)?;
             let r = to_substrait_rex(ctx, right, schema, col_ref_offset, extension_info)?;
 
-            Ok(make_binary_op_scalar_func(
-                &l,
-                &r,
-                op.clone(),
-                extension_info,
-            ))
+            Ok(make_binary_op_scalar_func(&l, &r, *op, extension_info))
         }
         Expr::Case(Case {
             expr,

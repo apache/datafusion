@@ -20,7 +20,7 @@ use std::{collections::HashSet, sync::Arc};
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::plan_err;
 use datafusion_common::Result;
-use datafusion_expr::planner::UserDefinedSQLPlanner;
+use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 /// A default [`FunctionRegistry`] registry that does not resolve any
@@ -56,7 +56,7 @@ impl FunctionRegistry for NoRegistry {
         plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Window Function '{}'", udwf.inner().name())
     }
 
-    fn expr_planners(&self) -> Vec<Arc<dyn UserDefinedSQLPlanner>> {
+    fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
     }
 }
