@@ -14,11 +14,16 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
@@ -28,15 +33,18 @@ use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 use arrow::datatypes::SchemaRef;
+use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
+use datafusion_common::{exec_datafusion_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use futures::stream::TryStreamExt;
+use log::debug;
+use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 
 mod ordering;
@@ -87,8 +95,13 @@ pub use datafusion_physical_expr::{
 };
 
 // Backwards compatibility
+use crate::common::IPCWriter;
 pub use crate::stream::EmptyRecordBatchStream;
+use crate::stream::RecordBatchReceiverStream;
+use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::memory_pool::human_readable_size;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+
 pub mod udaf {
     pub use datafusion_physical_expr_common::aggregate::{
         create_aggregate_expr, AggregateFunctionExpr,
@@ -144,7 +157,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
-        self.properties().schema().clone()
+        Arc::clone(self.properties().schema())
     }
 
     /// Return properties of the output of the `ExecutionPlan`, such as output
@@ -725,7 +738,7 @@ pub fn execute_stream(
         1 => plan.execute(0, context),
         _ => {
             // merge into a single partition
-            let plan = CoalescePartitionsExec::new(plan.clone());
+            let plan = CoalescePartitionsExec::new(Arc::clone(&plan));
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.properties().output_partitioning().partition_count());
             plan.execute(0, context)
@@ -787,7 +800,7 @@ pub fn execute_stream_partitioned(
     let num_partitions = plan.output_partitioning().partition_count();
     let mut streams = Vec::with_capacity(num_partitions);
     for i in 0..num_partitions {
-        streams.push(plan.execute(i, context.clone())?);
+        streams.push(plan.execute(i, Arc::clone(&context))?);
     }
     Ok(streams)
 }
@@ -797,6 +810,57 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     actual.iter().map(|elem| elem.to_string()).collect()
+}
+
+/// Read spilled batches from the disk
+///
+/// `path` - temp file
+/// `schema` - batches schema, should be the same across batches
+/// `buffer` - internal buffer of capacity batches
+pub fn read_spill_as_stream(
+    path: RefCountedTempFile,
+    schema: SchemaRef,
+    buffer: usize,
+) -> Result<SendableRecordBatchStream> {
+    let mut builder = RecordBatchReceiverStream::builder(schema, buffer);
+    let sender = builder.tx();
+
+    builder.spawn_blocking(move || read_spill(sender, path.path()));
+
+    Ok(builder.build())
+}
+
+/// Spills in-memory `batches` to disk.
+///
+/// Returns total number of the rows spilled to disk.
+pub fn spill_record_batches(
+    batches: Vec<RecordBatch>,
+    path: PathBuf,
+    schema: SchemaRef,
+) -> Result<usize> {
+    let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
+    for batch in batches {
+        writer.write(&batch)?;
+    }
+    writer.finish()?;
+    debug!(
+        "Spilled {} batches of total {} rows to disk, memory released {}",
+        writer.num_batches,
+        writer.num_rows,
+        human_readable_size(writer.num_bytes),
+    );
+    Ok(writer.num_rows)
+}
+
+fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
+    let file = BufReader::new(File::open(path)?);
+    let reader = FileReader::try_new(file, None)?;
+    for batch in reader {
+        sender
+            .blocking_send(batch.map_err(Into::into))
+            .map_err(|e| exec_datafusion_err!("{e}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

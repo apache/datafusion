@@ -43,6 +43,7 @@ pub use order_by::rewrite_sort_cols_by_aggs;
 /// For example, concatenating arrays `a || b` is represented as
 /// `Operator::ArrowAt`, but can be implemented by calling a function
 /// `array_concat` from the `functions-array` crate.
+// This is not used in datafusion internally, but it is still helpful for downstream project so don't remove it.
 pub trait FunctionRewrite {
     /// Return a human readable name for this rewrite
     fn name(&self) -> &str;
@@ -214,7 +215,7 @@ pub fn coerce_plan_expr_for_schema(
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
             let new_exprs =
                 coerce_exprs_for_schema(expr.clone(), input.schema(), schema)?;
-            let projection = Projection::try_new(new_exprs, input.clone())?;
+            let projection = Projection::try_new(new_exprs, Arc::clone(input))?;
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {

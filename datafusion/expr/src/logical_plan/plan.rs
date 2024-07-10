@@ -25,7 +25,7 @@ use std::sync::Arc;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Alias, Placeholder, Sort as SortExpr, WindowFunction};
+use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -41,9 +41,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
@@ -645,39 +643,6 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Values(Values { schema, values }))
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
-                // todo: should this logic be moved to Filter::try_new?
-
-                // filter predicates should not contain aliased expressions so we remove any aliases
-                // before this logic was added we would have aliases within filters such as for
-                // benchmark q6:
-                //
-                // lineitem.l_shipdate >= Date32(\"8766\")
-                // AND lineitem.l_shipdate < Date32(\"9131\")
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
-                // Decimal128(Some(49999999999999),30,15)
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
-                // Decimal128(Some(69999999999999),30,15)
-                // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
-
-                let predicate = predicate
-                    .transform_down(|expr| {
-                        match expr {
-                            Expr::Exists { .. }
-                            | Expr::ScalarSubquery(_)
-                            | Expr::InSubquery(_) => {
-                                // subqueries could contain aliases so we don't recurse into those
-                                Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
-                            }
-                            Expr::Alias(_) => Ok(Transformed::new(
-                                expr.unalias(),
-                                true,
-                                TreeNodeRecursion::Jump,
-                            )),
-                            _ => Ok(Transformed::no(expr)),
-                        }
-                    })
-                    .data()?;
-
                 Filter::try_new(predicate, input).map(LogicalPlan::Filter)
             }
             LogicalPlan::Repartition(_) => Ok(self),
@@ -762,9 +727,9 @@ impl LogicalPlan {
                 // If inputs are not pruned do not change schema
                 // TODO this seems wrong (shouldn't we always use the schema of the input?)
                 let schema = if schema.fields().len() == input_schema.fields().len() {
-                    schema.clone()
+                    Arc::clone(&schema)
                 } else {
-                    input_schema.clone()
+                    Arc::clone(input_schema)
                 };
                 Ok(LogicalPlan::Union(Union { inputs, schema }))
             }
@@ -850,7 +815,7 @@ impl LogicalPlan {
                 ..
             }) => Ok(LogicalPlan::Dml(DmlStatement::new(
                 table_name.clone(),
-                table_schema.clone(),
+                Arc::clone(table_schema),
                 op.clone(),
                 Arc::new(inputs.swap_remove(0)),
             ))),
@@ -863,13 +828,13 @@ impl LogicalPlan {
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
-                file_type: file_type.clone(),
+                file_type: Arc::clone(file_type),
                 options: options.clone(),
                 partition_by: partition_by.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
                 Ok(LogicalPlan::Values(Values {
-                    schema: schema.clone(),
+                    schema: Arc::clone(schema),
                     values: expr
                         .chunks_exact(schema.fields().len())
                         .map(|s| s.to_vec())
@@ -879,7 +844,6 @@ impl LogicalPlan {
             LogicalPlan::Filter { .. } => {
                 assert_eq!(1, expr.len());
                 let predicate = expr.pop().unwrap();
-                let predicate = Filter::remove_aliases(predicate)?.data;
 
                 Filter::try_new(predicate, Arc::new(inputs.swap_remove(0)))
                     .map(LogicalPlan::Filter)
@@ -1028,9 +992,9 @@ impl LogicalPlan {
                 let input_schema = inputs[0].schema();
                 // If inputs are not pruned do not change schema.
                 let schema = if schema.fields().len() == input_schema.fields().len() {
-                    schema.clone()
+                    Arc::clone(schema)
                 } else {
-                    input_schema.clone()
+                    Arc::clone(input_schema)
                 };
                 Ok(LogicalPlan::Union(Union {
                     inputs: inputs.into_iter().map(Arc::new).collect(),
@@ -1074,7 +1038,7 @@ impl LogicalPlan {
                 assert_eq!(inputs.len(), 1);
                 Ok(LogicalPlan::Analyze(Analyze {
                     verbose: a.verbose,
-                    schema: a.schema.clone(),
+                    schema: Arc::clone(&a.schema),
                     input: Arc::new(inputs.swap_remove(0)),
                 }))
             }
@@ -1088,7 +1052,7 @@ impl LogicalPlan {
                     verbose: e.verbose,
                     plan: Arc::new(inputs.swap_remove(0)),
                     stringified_plans: e.stringified_plans.clone(),
-                    schema: e.schema.clone(),
+                    schema: Arc::clone(&e.schema),
                     logical_optimization_succeeded: e.logical_optimization_succeeded,
                 }))
             }
@@ -1370,7 +1334,7 @@ impl LogicalPlan {
         param_values: &ParamValues,
     ) -> Result<LogicalPlan> {
         self.transform_up_with_subqueries(|plan| {
-            let schema = plan.schema().clone();
+            let schema = Arc::clone(plan.schema());
             plan.map_expressions(|e| {
                 e.infer_placeholder_types(&schema)?.transform_up(|e| {
                     if let Expr::Placeholder(Placeholder { id, .. }) = e {
@@ -2080,7 +2044,7 @@ impl SubqueryAlias {
         let fields = change_redundant_column(plan.schema().fields());
         let meta_data = plan.schema().as_ref().metadata().clone();
         let schema: Schema =
-            DFSchema::from_unqualifed_fields(fields.into(), meta_data)?.into();
+            DFSchema::from_unqualified_fields(fields.into(), meta_data)?.into();
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
@@ -2118,29 +2082,27 @@ pub struct Filter {
 
 impl Filter {
     /// Create a new filter operator.
+    ///
+    /// Notes: as Aliases have no effect on the output of a filter operator,
+    /// they are removed from the predicate expression.
     pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            if predicate_type != DataType::Boolean {
+            // Interpret NULL as a missing boolean value.
+            if predicate_type != DataType::Boolean && predicate_type != DataType::Null {
                 return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 );
             }
         }
 
-        // filter predicates should not be aliased
-        if let Expr::Alias(Alias { expr, name, .. }) = predicate {
-            return plan_err!(
-                "Attempted to create Filter predicate with \
-                expression `{expr}` aliased as '{name}'. Filter predicates should not be \
-                aliased."
-            );
-        }
-
-        Ok(Self { predicate, input })
+        Ok(Self {
+            predicate: predicate.unalias_nested().data,
+            input,
+        })
     }
 
     /// Is this filter guaranteed to return 0 or 1 row in a given instantiation?
@@ -2209,38 +2171,6 @@ impl Filter {
         }
         false
     }
-
-    /// Remove aliases from a predicate for use in a `Filter`
-    ///
-    /// filter predicates should not contain aliased expressions so we remove
-    /// any aliases.
-    ///
-    /// before this logic was added we would have aliases within filters such as
-    /// for benchmark q6:
-    ///
-    /// ```sql
-    /// lineitem.l_shipdate >= Date32(\"8766\")
-    /// AND lineitem.l_shipdate < Date32(\"9131\")
-    /// AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
-    /// Decimal128(Some(49999999999999),30,15)
-    /// AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
-    /// Decimal128(Some(69999999999999),30,15)
-    /// AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
-    /// ```
-    pub fn remove_aliases(predicate: Expr) -> Result<Transformed<Expr>> {
-        predicate.transform_down(|expr| {
-            match expr {
-                Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_) => {
-                    // subqueries could contain aliases so we don't recurse into those
-                    Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
-                }
-                Expr::Alias(Alias { expr, .. }) => {
-                    Ok(Transformed::new(*expr, true, TreeNodeRecursion::Jump))
-                }
-                _ => Ok(Transformed::no(expr)),
-            }
-        })
-    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
@@ -2260,7 +2190,7 @@ impl Window {
         let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
             .schema()
             .iter()
-            .map(|(q, f)| (q.cloned(), f.clone()))
+            .map(|(q, f)| (q.cloned(), Arc::clone(f)))
             .collect();
         let input_len = fields.len();
         let mut window_fields = fields;
@@ -2978,7 +2908,7 @@ mod tests {
     use crate::logical_plan::table_scan;
     use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
 
-    use datafusion_common::tree_node::TreeNodeVisitor;
+    use datafusion_common::tree_node::{TransformedResult, TreeNodeVisitor};
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
 
     use crate::test::function_stub::count;
@@ -3385,7 +3315,7 @@ digraph {
             vec![col("a")],
             Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
-                schema: empty_schema.clone(),
+                schema: Arc::clone(&empty_schema),
             })),
             empty_schema,
         );
@@ -3500,9 +3430,9 @@ digraph {
         );
         let scan = Arc::new(LogicalPlan::TableScan(TableScan {
             table_name: TableReference::bare("tab"),
-            source: source.clone(),
+            source: Arc::clone(&source) as Arc<dyn TableSource>,
             projection: None,
-            projected_schema: schema.clone(),
+            projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
         }));
@@ -3532,17 +3462,14 @@ digraph {
             table_name: TableReference::bare("tab"),
             source,
             projection: None,
-            projected_schema: unique_schema.clone(),
+            projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
         }));
         let col = schema.field_names()[0].clone();
 
-        let filter = Filter::try_new(
-            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
-            scan,
-        )
-        .unwrap();
+        let filter =
+            Filter::try_new(Expr::Column(col.into()).eq(lit(1i32)), scan).unwrap();
         assert!(filter.is_scalar());
     }
 
@@ -3560,8 +3487,7 @@ digraph {
             .build()
             .unwrap();
 
-        let external_filter =
-            col("foo").eq(Expr::Literal(ScalarValue::Boolean(Some(true))));
+        let external_filter = col("foo").eq(lit(true));
 
         // after transformation, because plan is not the same anymore,
         // the parent plan is built again with call to LogicalPlan::with_new_inputs -> with_new_exprs

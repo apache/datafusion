@@ -41,7 +41,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -118,41 +118,11 @@ impl UnionExec {
         schema: SchemaRef,
     ) -> PlanProperties {
         // Calculate equivalence properties:
-        // TODO: In some cases, we should be able to preserve some equivalence
-        //       classes and constants. Add support for such cases.
         let children_eqs = inputs
             .iter()
             .map(|child| child.equivalence_properties())
             .collect::<Vec<_>>();
-        let mut eq_properties = EquivalenceProperties::new(schema);
-        // Use the ordering equivalence class of the first child as the seed:
-        let mut meets = children_eqs[0]
-            .oeq_class()
-            .iter()
-            .map(|item| item.to_vec())
-            .collect::<Vec<_>>();
-        // Iterate over all the children:
-        for child_eqs in &children_eqs[1..] {
-            // Compute meet orderings of the current meets and the new ordering
-            // equivalence class.
-            let mut idx = 0;
-            while idx < meets.len() {
-                // Find all the meets of `current_meet` with this child's orderings:
-                let valid_meets = child_eqs.oeq_class().iter().filter_map(|ordering| {
-                    child_eqs.get_meet_ordering(ordering, &meets[idx])
-                });
-                // Use the longest of these meets as others are redundant:
-                if let Some(next_meet) = valid_meets.max_by_key(|m| m.len()) {
-                    meets[idx] = next_meet;
-                    idx += 1;
-                } else {
-                    meets.swap_remove(idx);
-                }
-            }
-        }
-        // We know have all the valid orderings after union, remove redundant
-        // entries (implicitly) and return:
-        eq_properties.add_new_orderings(meets);
+        let eq_properties = calculate_union_eq_properties(&children_eqs, schema);
 
         // Calculate output partitioning; i.e. sum output partitions of the inputs.
         let num_partitions = inputs
@@ -166,6 +136,68 @@ impl UnionExec {
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
     }
+}
+/// Calculate `EquivalenceProperties` for `UnionExec` from the `EquivalenceProperties`
+/// of its children.
+fn calculate_union_eq_properties(
+    children_eqs: &[&EquivalenceProperties],
+    schema: SchemaRef,
+) -> EquivalenceProperties {
+    // Calculate equivalence properties:
+    // TODO: In some cases, we should be able to preserve some equivalence
+    //       classes and constants. Add support for such cases.
+    let mut eq_properties = EquivalenceProperties::new(schema);
+    // Use the ordering equivalence class of the first child as the seed:
+    let mut meets = children_eqs[0]
+        .oeq_class()
+        .iter()
+        .map(|item| item.to_vec())
+        .collect::<Vec<_>>();
+    // Iterate over all the children:
+    for child_eqs in &children_eqs[1..] {
+        // Compute meet orderings of the current meets and the new ordering
+        // equivalence class.
+        let mut idx = 0;
+        while idx < meets.len() {
+            // Find all the meets of `current_meet` with this child's orderings:
+            let valid_meets = child_eqs.oeq_class().iter().filter_map(|ordering| {
+                child_eqs.get_meet_ordering(ordering, &meets[idx])
+            });
+            // Use the longest of these meets as others are redundant:
+            if let Some(next_meet) = valid_meets.max_by_key(|m| m.len()) {
+                meets[idx] = next_meet;
+                idx += 1;
+            } else {
+                meets.swap_remove(idx);
+            }
+        }
+    }
+    // We know have all the valid orderings after union, remove redundant
+    // entries (implicitly) and return:
+    eq_properties.add_new_orderings(meets);
+
+    let mut meet_constants = children_eqs[0].constants().to_vec();
+    // Iterate over all the children:
+    for child_eqs in &children_eqs[1..] {
+        let constants = child_eqs.constants();
+        meet_constants = meet_constants
+            .into_iter()
+            .filter_map(|meet_constant| {
+                for const_expr in constants {
+                    if const_expr.expr().eq(meet_constant.expr()) {
+                        // TODO: Check whether constant expressions evaluates the same value or not for each partition
+                        let across_partitions = false;
+                        return Some(
+                            ConstExpr::from(meet_constant.owned_expr())
+                                .with_across_partitions(across_partitions),
+                        );
+                    }
+                }
+                None
+            })
+            .collect::<Vec<_>>();
+    }
+    eq_properties.add_constants(meet_constants)
 }
 
 impl DisplayAs for UnionExec {
@@ -417,7 +449,7 @@ impl ExecutionPlan for InterleaveExec {
         let mut input_stream_vec = vec![];
         for input in self.inputs.iter() {
             if partition < input.output_partitioning().partition_count() {
-                input_stream_vec.push(input.execute(partition, context.clone())?);
+                input_stream_vec.push(input.execute(partition, Arc::clone(&context))?);
             } else {
                 // Do not find a partition to execute
                 break;
@@ -518,7 +550,7 @@ impl CombinedRecordBatchStream {
 
 impl RecordBatchStream for CombinedRecordBatchStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -625,7 +657,7 @@ mod tests {
         in_data
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
-                expr: (*expr).clone(),
+                expr: Arc::clone(*expr),
                 options: *options,
             })
             .collect::<Vec<_>>()
@@ -810,11 +842,11 @@ mod tests {
                 .map(|ordering| convert_to_sort_exprs(ordering))
                 .collect::<Vec<_>>();
             let child1 = Arc::new(
-                MemoryExec::try_new(&[], schema.clone(), None)?
+                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .with_sort_information(first_orderings),
             );
             let child2 = Arc::new(
-                MemoryExec::try_new(&[], schema.clone(), None)?
+                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .with_sort_information(second_orderings),
             );
 

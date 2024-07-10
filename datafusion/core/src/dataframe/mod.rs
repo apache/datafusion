@@ -1157,7 +1157,7 @@ impl DataFrame {
     /// Return the optimized [`LogicalPlan`] represented by this DataFrame.
     ///
     /// Note: This method should not be used outside testing -- see
-    /// [`Self::into_optimized_plan`] for more details.
+    /// [`Self::into_unoptimized_plan`] for more details.
     pub fn into_optimized_plan(self) -> Result<LogicalPlan> {
         // Optimize the plan first for better UX
         self.session_state.optimize(&self.plan)
