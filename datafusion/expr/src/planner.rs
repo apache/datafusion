@@ -161,6 +161,13 @@ pub trait ExprPlanner: Send + Sync {
     ) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
+
+    /// Plans an overlay expression eg `overlay(str PLACING substr FROM pos [FOR count])`
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_overlay(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
 }
 
 /// An operator with two arguments to plan
