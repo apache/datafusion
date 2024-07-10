@@ -340,8 +340,8 @@ async fn oom_parquet_sink() {
             path.to_string_lossy()
         ))
         .with_expected_errors(vec![
-            // TODO: update error handling in ParquetSink
-            "Unable to send array to writer!",
+            "Failed to allocate additional",
+            "for ParquetSink(ArrowColumnWriter)",
         ])
         .with_memory_limit(200_000)
         .run()
