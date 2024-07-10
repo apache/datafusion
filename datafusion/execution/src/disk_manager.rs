@@ -18,7 +18,7 @@
 //! Manages files generated during query execution, files are
 //! hashed among the directories listed in RuntimeConfig::local_dirs.
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
 use log::debug;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
@@ -119,9 +119,9 @@ impl DiskManager {
     ) -> Result<RefCountedTempFile> {
         let mut guard = self.local_dirs.lock();
         let local_dirs = guard.as_mut().ok_or_else(|| {
-            DataFusionError::ResourcesExhausted(format!(
+            resources_datafusion_err!(
                 "Memory Exhausted while {request_description} (DiskManager is disabled)"
-            ))
+            )
         })?;
 
         // Create a temporary directory if needed

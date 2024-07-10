@@ -553,6 +553,9 @@ make_error!(config_err, config_datafusion_err, Configuration);
 // Exposes a macro to create `DataFusionError::Substrait` with optional backtrace
 make_error!(substrait_err, substrait_datafusion_err, Substrait);
 
+// Exposes a macro to create `DataFusionError::ResourcesExhausted` with optional backtrace
+make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
+
 // Exposes a macro to create `DataFusionError::SQL` with optional backtrace
 #[macro_export]
 macro_rules! sql_datafusion_err {
