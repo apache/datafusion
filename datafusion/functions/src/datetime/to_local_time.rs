@@ -263,7 +263,7 @@ fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
     {
         match converter(ts) {
             MappedLocalTime::Ambiguous(earliest, latest) => exec_err!(
-                "Ambiguous timestamp in microseconds. Do you mean {:?} or {:?}",
+                "Ambiguous timestamp. Do you mean {:?} or {:?}",
                 earliest,
                 latest
             ),
@@ -293,7 +293,7 @@ fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
             .ok_or(DataFusionError::Internal("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000".to_string()))?,
     );
 
-    // convert the navie datetime back to i64
+    // convert the naive datetime back to i64
     match T::UNIT {
         Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or(
             DataFusionError::Internal(
