@@ -136,7 +136,11 @@ async fn multiple_statements_returns_error() {
     let state = ctx.state();
 
     // Give it a string that contains multiple statements
-    let plan_res = state.create_logical_plan("INSERT INTO test (x) VALUES (1); INSERT INTO test (x) VALUES (2)").await;
+    let plan_res = state
+        .create_logical_plan(
+            "INSERT INTO test (x) VALUES (1); INSERT INTO test (x) VALUES (2)",
+        )
+        .await;
     assert_eq!(
         plan_res.unwrap_err().strip_backtrace(),
         "This feature is not implemented: The context currently only supports a single SQL statement"
