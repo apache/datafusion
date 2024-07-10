@@ -2019,11 +2019,19 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         Ok(())
     }
 
-    fn try_decode_expr(&self, _buf: &[u8], _inputs: &[Arc<dyn PhysicalExpr>]) -> Result<Arc<dyn PhysicalExpr>> {
+    fn try_decode_expr(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
 
-    fn try_encode_expr(&self, _node: Arc<dyn PhysicalExpr>, _buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode_expr(
+        &self,
+        _node: Arc<dyn PhysicalExpr>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
 }
