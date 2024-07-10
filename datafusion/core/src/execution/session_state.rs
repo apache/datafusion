@@ -1137,11 +1137,16 @@ impl SessionStateBuilder {
             }
 
             if self.state.file_formats.is_empty() {
-                SessionStateDefaults::register_file_format_defaults(&mut self.state);
+                SessionStateDefaults::register_default_file_formats(&mut self.state);
             }
 
             if self.state.scalar_functions.is_empty() {
-                SessionStateDefaults::register_builtin_functions(&mut self.state);
+                SessionStateDefaults::register_scalar_functions(&mut self.state);
+                SessionStateDefaults::register_array_functions(&mut self.state);
+            }
+
+            if self.state.aggregate_functions.is_empty() {
+                SessionStateDefaults::register_aggregate_functions(&mut self.state);
             }
         }
 
@@ -1149,9 +1154,12 @@ impl SessionStateBuilder {
     }
 }
 
-struct SessionStateDefaults {}
+/// Defaults that are used as part of creating a SessionState such as table providers,
+/// file formats, registering of builtin functions, etc.
+pub struct SessionStateDefaults {}
 
 impl SessionStateDefaults {
+    /// returns a map of the default [`TableProviderFactory`]s
     pub fn default_table_factories() -> HashMap<String, Arc<dyn TableProviderFactory>> {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
@@ -1166,6 +1174,7 @@ impl SessionStateDefaults {
         table_factories
     }
 
+    /// returns the default MemoryCatalogProvider
     pub fn default_catalog(
         config: &SessionConfig,
         table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
@@ -1185,6 +1194,7 @@ impl SessionStateDefaults {
         default_catalog
     }
 
+    /// returns the list of default [`ExprPlanner`]s
     pub fn default_expr_planners() -> Vec<Arc<dyn ExprPlanner>> {
         let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![
             Arc::new(functions::core::planner::CoreFunctionPlanner::default()),
@@ -1203,6 +1213,32 @@ impl SessionStateDefaults {
         expr_planners
     }
 
+    /// registers all builtin functions - scalar, array and aggregate
+    pub fn register_builtin_functions(state: &mut SessionState) {
+        Self::register_scalar_functions(state);
+        Self::register_array_functions(state);
+        Self::register_aggregate_functions(state);
+    }
+
+    /// registers all the builtin scalar functions
+    pub fn register_scalar_functions(state: &mut SessionState) {
+        functions::register_all(state).expect("can not register built in functions");
+    }
+
+    /// registers all the builtin array functions
+    pub fn register_array_functions(state: &mut SessionState) {
+        // register crate of array expressions (if enabled)
+        #[cfg(feature = "array_expressions")]
+        functions_array::register_all(state).expect("can not register array expressions");
+    }
+
+    /// registers all the builtin aggregate functions
+    pub fn register_aggregate_functions(state: &mut SessionState) {
+        functions_aggregate::register_all(state)
+            .expect("can not register aggregate functions");
+    }
+
+    /// registers the default schema
     pub fn register_default_schema(
         config: &SessionConfig,
         table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
@@ -1242,7 +1278,8 @@ impl SessionStateDefaults {
             .expect("Failed to register default schema");
     }
 
-    pub fn register_file_format_defaults(state: &mut SessionState) {
+    /// registers the default [`FileFormatFactory`]s
+    pub fn register_default_file_formats(state: &mut SessionState) {
         #[cfg(feature = "parquet")]
         if let Err(e) =
             state.register_file_format(Arc::new(ParquetFormatFactory::new()), false)
@@ -1273,18 +1310,6 @@ impl SessionStateDefaults {
         {
             log::info!("Unable to register default AvroFormat: {e}")
         };
-    }
-
-    pub fn register_builtin_functions(state: &mut SessionState) {
-        // register built in functions
-        functions::register_all(state).expect("can not register built in functions");
-
-        // register crate of array expressions (if enabled)
-        #[cfg(feature = "array_expressions")]
-        functions_array::register_all(state).expect("can not register array expressions");
-
-        functions_aggregate::register_all(state)
-            .expect("can not register aggregate functions");
     }
 }
 
