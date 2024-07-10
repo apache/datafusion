@@ -856,7 +856,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        let options_map: HashMap<String, String> = self.parse_options_map(statement.options)?;
+        let options_map: HashMap<String, String> =
+            self.parse_options_map(statement.options, true)?;
 
         let maybe_file_type = if let Some(stored_as) = &statement.stored_as {
             if let Ok(ext_file_type) = self.context_provider.get_file_type(stored_as) {
@@ -964,7 +965,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let inline_constraints = calc_inline_constraints_from_columns(&columns);
         all_constraints.extend(inline_constraints);
 
-        let options_map = self.parse_options_map(options)?;
+        let options_map = self.parse_options_map(options, false)?;
 
         let compression = options_map
             .get("format.compression")
@@ -1018,10 +1019,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn parse_options_map(
         &self,
-        options: Vec<(String, Value)>) -> Result<HashMap<String, String>> {
+        options: Vec<(String, Value)>,
+        allow_duplicates: bool,
+    ) -> Result<HashMap<String, String>> {
         let mut options_map = HashMap::new();
         for (key, value) in options {
-            if options_map.contains_key(&key) {
+            if !allow_duplicates && options_map.contains_key(&key) {
                 return plan_err!("Option {key} is specified multiple times");
             }
 

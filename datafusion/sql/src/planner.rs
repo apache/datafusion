@@ -25,10 +25,10 @@ use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
 };
 use datafusion_expr::planner::UserDefinedSQLPlanner;
-use sqlparser::ast::{TimezoneInfo, Value};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
+use sqlparser::ast::{TimezoneInfo, Value};
 
 use datafusion_common::TableReference;
 use datafusion_common::{
@@ -296,8 +296,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let default_expr = self
                     .sql_to_expr(default_sql_expr.clone(), &empty_schema, planner_context)
                     .map_err(error_desc)?;
-                column_defaults
-                    .push((self.ident_normalizer.normalize(column.name.clone()), default_expr));
+                column_defaults.push((
+                    self.ident_normalizer.normalize(column.name.clone()),
+                    default_expr,
+                ));
             }
         }
         Ok(column_defaults)
@@ -312,7 +314,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.apply_expr_alias(plan, alias.columns)?;
 
         LogicalPlanBuilder::from(plan)
-            .alias(TableReference::bare(self.ident_normalizer.normalize(alias.name)))?
+            .alias(TableReference::bare(
+                self.ident_normalizer.normalize(alias.name),
+            ))?
             .build()
     }
 
