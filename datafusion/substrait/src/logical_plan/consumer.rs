@@ -1139,7 +1139,7 @@ pub async fn from_substrait_rex(
                         Some(match combined_expr {
                             Some(expr) => Expr::BinaryExpr(BinaryExpr {
                                 left: Box::new(expr),
-                                op: op.clone(),
+                                op,
                                 right: Box::new(arg),
                             }),
                             None => arg,

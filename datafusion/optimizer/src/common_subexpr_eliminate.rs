@@ -342,16 +342,9 @@ impl CommonSubexprEliminate {
         let input = unwrap_arc(input);
         let expr = vec![predicate];
         self.try_unary_plan(expr, input, config)?
-            .transform_data(|(mut new_expr, new_input)| {
+            .map_data(|(mut new_expr, new_input)| {
                 assert_eq!(new_expr.len(), 1); // passed in vec![predicate]
-                let new_predicate = new_expr
-                    .pop()
-                    .unwrap()
-                    .unalias_nested()
-                    .update_data(|new_predicate| (new_predicate, new_input));
-                Ok(new_predicate)
-            })?
-            .map_data(|(new_predicate, new_input)| {
+                let new_predicate = new_expr.pop().unwrap();
                 Filter::try_new(new_predicate, Arc::new(new_input))
                     .map(LogicalPlan::Filter)
             })
@@ -1392,7 +1385,7 @@ mod test {
                     "my_agg",
                     Signature::exact(vec![DataType::UInt32], Volatility::Stable),
                     return_type.clone(),
-                    accumulator.clone(),
+                    Arc::clone(&accumulator),
                     vec![Field::new("value", DataType::UInt32, true)],
                 ))),
                 vec![inner],

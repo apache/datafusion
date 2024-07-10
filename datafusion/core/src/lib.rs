@@ -628,6 +628,12 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/dataframe.md",
+    user_guide_dataframe
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/expressions.md",
     user_guide_expressions
 );
@@ -635,5 +641,11 @@ doc_comment::doctest!(
 #[cfg(doctest)]
 doc_comment::doctest!(
     "../../../docs/source/library-user-guide/using-the-sql-api.md",
-    library_user_guide_example_usage
+    library_user_guide_sql_api
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
+    library_user_guide_dataframe_api
 );

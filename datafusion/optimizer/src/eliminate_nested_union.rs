@@ -79,7 +79,7 @@ impl OptimizerRule for EliminateNestedUnion {
                         Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::All(
                             Arc::new(LogicalPlan::Union(Union {
                                 inputs: inputs.into_iter().map(Arc::new).collect_vec(),
-                                schema: schema.clone(),
+                                schema: Arc::clone(&schema),
                             })),
                         ))))
                     }
