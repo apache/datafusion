@@ -72,6 +72,7 @@ impl BinaryExpr {
         }
     }
 
+    /// Create new binary expression with explicit fail_on_overflow value
     pub fn new_with_fail_mode(
         left: Arc<dyn PhysicalExpr>,
         op: Operator,
