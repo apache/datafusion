@@ -893,8 +893,11 @@ async fn send_arrays_to_col_writers(
     let mut next_channel = 0;
     for (array, field) in rb.columns().iter().zip(schema.fields()) {
         for c in compute_leaves(field, array)? {
-            // Do not surface error from closed channel.
-            let _ = col_array_channels[next_channel].send(c).await;
+            // Do not surface error from closed channel (means something
+            // else hit an error, and the plan is shutting down).
+            if col_array_channels[next_channel].send(c).await.is_err() {
+                return Ok(());
+            }
 
             next_channel += 1;
         }
@@ -981,8 +984,11 @@ fn spawn_parquet_parallel_serialization_task(
                         &pool,
                     );
 
-                    // Do not surface error from closed channel.
-                    let _ = serialize_tx.send(finalize_rg_task).await;
+                    // Do not surface error from closed channel (means something
+                    // else hit an error, and the plan is shutting down).
+                    if serialize_tx.send(finalize_rg_task).await.is_err() {
+                        return Ok(());
+                    }
 
                     current_rg_rows = 0;
                     rb = rb.slice(rows_left, rb.num_rows() - rows_left);
@@ -1007,8 +1013,11 @@ fn spawn_parquet_parallel_serialization_task(
                 &pool,
             );
 
-            // Do not surface any error here due to closed channel.
-            let _ = serialize_tx.send(finalize_rg_task).await;
+            // Do not surface error from closed channel (means something
+            // else hit an error, and the plan is shutting down).
+            if serialize_tx.send(finalize_rg_task).await.is_err() {
+                return Ok(());
+            }
         }
 
         Ok(())
