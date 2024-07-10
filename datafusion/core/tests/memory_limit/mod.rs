@@ -31,6 +31,7 @@ use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use futures::StreamExt;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
+use tokio::fs::File;
 
 use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::{MemTable, TableProvider};
@@ -325,10 +326,9 @@ async fn oom_recursive_cte() {
 
 #[tokio::test]
 async fn oom_parquet_sink() {
-    let file = tempfile::Builder::new()
-        .suffix(".parquet")
-        .tempfile()
-        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.into_path().join("test.parquet");
+    let _ = File::create(path.clone()).await.unwrap();
 
     TestCase::new()
         .with_query(format!(
@@ -337,7 +337,7 @@ async fn oom_parquet_sink() {
             TO '{}'
             STORED AS PARQUET OPTIONS (compression 'uncompressed');
         ",
-            file.path().to_string_lossy()
+            path.to_string_lossy()
         ))
         .with_expected_errors(vec![
             // TODO: update error handling in ParquetSink
