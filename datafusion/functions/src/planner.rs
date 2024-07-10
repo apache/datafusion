@@ -20,14 +20,14 @@
 use datafusion_common::Result;
 use datafusion_expr::{
     expr::ScalarFunction,
-    planner::{PlannerResult, UserDefinedSQLPlanner},
+    planner::{ExprPlanner, PlannerResult},
     Expr,
 };
 
 #[derive(Default)]
 pub struct UserDefinedFunctionPlanner;
 
-impl UserDefinedSQLPlanner for UserDefinedFunctionPlanner {
+impl ExprPlanner for UserDefinedFunctionPlanner {
     #[cfg(feature = "datetime_expressions")]
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
@@ -39,6 +39,13 @@ impl UserDefinedSQLPlanner for UserDefinedFunctionPlanner {
     fn plan_position(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(crate::unicode::strpos(), args),
+        )))
+    }
+
+    #[cfg(feature = "unicode_expressions")]
+    fn plan_substring(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::unicode::substr(), args),
         )))
     }
 }

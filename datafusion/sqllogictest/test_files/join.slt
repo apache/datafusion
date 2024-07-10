@@ -986,3 +986,61 @@ DROP TABLE employees
 
 statement ok
 DROP TABLE department
+
+
+# Test issue: https://github.com/apache/datafusion/issues/11269
+statement ok
+CREATE TABLE t1 (v0 BIGINT) AS VALUES (-503661263);
+
+statement ok
+CREATE TABLE t2 (v0 DOUBLE) AS VALUES (-1.663563947387);
+
+statement ok
+CREATE TABLE t3 (v0 DOUBLE) AS VALUES (0.05112015193508901);
+
+query RR
+SELECT t3.v0, t2.v0 FROM t1,t2,t3 WHERE t3.v0 >= t1.v0;
+----
+0.051120151935 -1.663563947387
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;
+
+
+# Test issue: https://github.com/apache/datafusion/issues/11275
+statement ok
+CREATE TABLE t0 (v1 BOOLEAN) AS VALUES (false), (null);
+
+statement ok
+CREATE TABLE t1 (v1 BOOLEAN) AS VALUES (false), (null), (false);
+
+statement ok
+CREATE TABLE t2 (v1 BOOLEAN) AS VALUES (false), (true);
+
+query BB
+SELECT t2.v1, t1.v1 FROM t0, t1, t2 WHERE t2.v1 IS DISTINCT FROM t0.v1 ORDER BY 1,2;
+----
+false false
+false false
+false NULL
+true false
+true false
+true false
+true false
+true NULL
+true NULL
+
+statement ok
+DROP TABLE t0;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;

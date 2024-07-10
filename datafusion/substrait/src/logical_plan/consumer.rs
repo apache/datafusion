@@ -27,12 +27,13 @@ use datafusion::common::{
     substrait_err, DFSchema, DFSchemaRef,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::expr::{InSubquery, Sort};
+use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     aggregate_function, expr::find_df_window_func, Aggregate, BinaryExpr, Case,
     EmptyRelation, Expr, ExprSchemable, LogicalPlan, Operator, Projection, Values,
 };
+use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use url::Url;
 
 use crate::variation_const::{
@@ -54,12 +55,12 @@ use datafusion::logical_expr::{
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
-    error::{DataFusionError, Result},
+    error::Result,
     logical_expr::utils::split_conjunction,
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
@@ -403,22 +404,33 @@ pub async fn from_substrait_rel(
                 let mut input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
+                let mut names: HashSet<String> = HashSet::new();
                 let mut exprs: Vec<Expr> = vec![];
                 for e in &p.expressions {
                     let x =
                         from_substrait_rex(ctx, e, input.clone().schema(), extensions)
                             .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
-                    //   before returning and do not add to list of this Projection's expression list
-                    // otherwise, add expression to the Projection's expression list
-                    match &*x {
-                        Expr::WindowFunction(_) => {
-                            input = input.window(vec![x.as_ref().clone()])?;
-                            exprs.push(x.as_ref().clone());
-                        }
-                        _ => {
-                            exprs.push(x.as_ref().clone());
-                        }
+                    if let Expr::WindowFunction(_) = x.as_ref() {
+                        // Adding the same expression here and in the project below
+                        // works because the project's builder uses columnize_expr(..)
+                        // to transform it into a column reference
+                        input = input.window(vec![x.as_ref().clone()])?
+                    }
+                    // Ensure the expression has a unique display name, so that project's
+                    // validate_unique_names doesn't fail
+                    let name = x.display_name()?;
+                    let mut new_name = name.clone();
+                    let mut i = 0;
+                    while names.contains(&new_name) {
+                        new_name = format!("{}__temp__{}", name, i);
+                        i += 1;
+                    }
+                    names.insert(new_name.clone());
+                    if new_name != name {
+                        exprs.push(x.as_ref().clone().alias(new_name.clone()));
+                    } else {
+                        exprs.push(x.as_ref().clone());
                     }
                 }
                 input.project(exprs)?.build()
@@ -1142,7 +1154,7 @@ pub async fn from_substrait_rex(
                                     Arc::try_unwrap(expr)
                                         .unwrap_or_else(|arc: Arc<Expr>| (*arc).clone()),
                                 ), // Avoid cloning if possible
-                                op: op.clone(),
+                                op,
                                 right: Box::new(arg),
                             })),
                             None => Arc::new(arg),
@@ -1249,10 +1261,7 @@ pub async fn from_substrait_rex(
             Some(subquery_type) => match subquery_type {
                 SubqueryType::InPredicate(in_predicate) => {
                     if in_predicate.needles.len() != 1 {
-                        Err(DataFusionError::Substrait(
-                            "InPredicate Subquery type must have exactly one Needle expression"
-                                .to_string(),
-                        ))
+                        substrait_err!("InPredicate Subquery type must have exactly one Needle expression")
                     } else {
                         let needle_expr = &in_predicate.needles[0];
                         let haystack_expr = &in_predicate.haystack;
@@ -1296,6 +1305,32 @@ pub async fn from_substrait_rex(
                         subquery: Arc::new(plan),
                         outer_ref_columns,
                     })))
+                }
+                SubqueryType::SetPredicate(predicate) => {
+                    match predicate.predicate_op() {
+                        // exist
+                        PredicateOp::Exists => {
+                            let relation = &predicate.tuples;
+                            let plan = from_substrait_rel(
+                                ctx,
+                                &relation.clone().unwrap_or_default(),
+                                extensions,
+                            )
+                            .await?;
+                            let outer_ref_columns = plan.all_out_ref_exprs();
+                            Ok(Arc::new(Expr::Exists(Exists::new(
+                                Subquery {
+                                    subquery: Arc::new(plan),
+                                    outer_ref_columns,
+                                },
+                                false,
+                            ))))
+                        }
+                        other_type => substrait_err!(
+                            "unimplemented type {:?} for set predicate",
+                            other_type
+                        ),
+                    }
                 }
                 other_type => {
                     substrait_err!("Subquery type {:?} not implemented", other_type)
