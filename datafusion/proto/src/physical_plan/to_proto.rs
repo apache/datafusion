@@ -24,9 +24,9 @@ use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     ArrayAgg, BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, DistinctArrayAgg,
-    Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min, NegativeExpr,
-    NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank, RankType,
-    RowNumber, TryCastExpr, WindowShift,
+    InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr,
+    NthValue, Ntile, OrderSensitiveArrayAgg, Rank, RankType, RowNumber, TryCastExpr,
+    WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -244,9 +244,7 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     let aggr_expr = expr.as_any();
     let mut distinct = false;
 
-    let inner = if aggr_expr.downcast_ref::<Grouping>().is_some() {
-        protobuf::AggregateFunction::Grouping
-    } else if aggr_expr.downcast_ref::<ArrayAgg>().is_some() {
+    let inner = if aggr_expr.downcast_ref::<ArrayAgg>().is_some() {
         protobuf::AggregateFunction::ArrayAgg
     } else if aggr_expr.downcast_ref::<DistinctArrayAgg>().is_some() {
         distinct = true;
@@ -257,8 +255,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::Min
     } else if aggr_expr.downcast_ref::<Max>().is_some() {
         protobuf::AggregateFunction::Max
-    } else if aggr_expr.downcast_ref::<NthValueAgg>().is_some() {
-        protobuf::AggregateFunction::NthValueAgg
     } else {
         return not_impl_err!("Aggregate function not supported: {expr:?}");
     };
@@ -724,6 +720,7 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             output_schema: Some(conf.output_schema.as_ref().try_into()?),
             table_partition_cols,
             overwrite: conf.overwrite,
+            keep_partition_by_columns: conf.keep_partition_by_columns,
         })
     }
 }

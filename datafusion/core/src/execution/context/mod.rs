@@ -60,6 +60,7 @@ use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
+    planner::ExprPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
 
@@ -1390,6 +1391,17 @@ impl FunctionRegistry for SessionContext {
     ) -> Result<()> {
         self.state.write().register_function_rewrite(rewrite)
     }
+
+    fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
+        self.state.read().expr_planners()
+    }
+
+    fn register_expr_planner(
+        &mut self,
+        expr_planner: Arc<dyn ExprPlanner>,
+    ) -> Result<()> {
+        self.state.write().register_expr_planner(expr_planner)
+    }
 }
 
 /// Create a new task context instance from SessionContext
@@ -1490,13 +1502,13 @@ impl SQLOptions {
         Default::default()
     }
 
-    /// Should DML data modification commands  (e.g. `INSERT and COPY`) be run? Defaults to `true`.
+    /// Should DDL data definition commands  (e.g. `CREATE TABLE`) be run? Defaults to `true`.
     pub fn with_allow_ddl(mut self, allow: bool) -> Self {
         self.allow_ddl = allow;
         self
     }
 
-    /// Should DML data modification commands (e.g. `INSERT and COPY`) be run? Defaults to `true`
+    /// Should DML data modification commands (e.g. `INSERT` and `COPY`) be run? Defaults to `true`
     pub fn with_allow_dml(mut self, allow: bool) -> Self {
         self.allow_dml = allow;
         self

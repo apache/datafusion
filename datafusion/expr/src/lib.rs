@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 //! [DataFusion](https://github.com/apache/datafusion)
 //! is an extensible query execution framework that uses
@@ -48,6 +50,7 @@ pub mod function;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod logical_plan;
+pub mod planner;
 pub mod registry;
 pub mod simplify;
 pub mod sort_properties;
@@ -81,6 +84,7 @@ pub use partition_evaluator::PartitionEvaluator;
 pub use signature::{
     ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
 };
+pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{AggregateExt, AggregateUDF, AggregateUDFImpl, ReversedUDAF};
 pub use udf::{ScalarUDF, ScalarUDFImpl};

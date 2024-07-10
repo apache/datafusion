@@ -255,7 +255,7 @@ where
     /// the same output type
     pub fn take(&mut self) -> Self {
         let mut new_self = Self::new(self.output_type);
-        std::mem::swap(self, &mut new_self);
+        mem::swap(self, &mut new_self);
         new_self
     }
 
@@ -538,7 +538,7 @@ where
     /// this set, not including `self`
     pub fn size(&self) -> usize {
         self.map_size
-            + self.buffer.capacity() * std::mem::size_of::<u8>()
+            + self.buffer.capacity() * mem::size_of::<u8>()
             + self.offsets.allocated_size()
             + self.hashes_buffer.allocated_size()
     }

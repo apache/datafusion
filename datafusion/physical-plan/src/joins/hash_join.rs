@@ -367,7 +367,7 @@ impl HashJoinExec {
         let cache = Self::compute_properties(
             &left,
             &right,
-            join_schema.clone(),
+            Arc::clone(&join_schema),
             *join_type,
             &on,
             partition_mode,
@@ -433,7 +433,10 @@ impl HashJoinExec {
             false,
             matches!(
                 join_type,
-                JoinType::Inner | JoinType::RightAnti | JoinType::RightSemi
+                JoinType::Inner
+                    | JoinType::Right
+                    | JoinType::RightAnti
+                    | JoinType::RightSemi
             ),
         ]
     }
@@ -461,8 +464,8 @@ impl HashJoinExec {
             None => None,
         };
         Self::try_new(
-            self.left.clone(),
-            self.right.clone(),
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
             self.on.clone(),
             self.filter.clone(),
             &self.join_type,
@@ -487,7 +490,7 @@ impl HashJoinExec {
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
-            schema.clone(),
+            Arc::clone(&schema),
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
             on,
@@ -635,8 +638,11 @@ impl ExecutionPlan for HashJoinExec {
                 Distribution::UnspecifiedDistribution,
             ],
             PartitionMode::Partitioned => {
-                let (left_expr, right_expr) =
-                    self.on.iter().map(|(l, r)| (l.clone(), r.clone())).unzip();
+                let (left_expr, right_expr) = self
+                    .on
+                    .iter()
+                    .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
+                    .unzip();
                 vec![
                     Distribution::HashPartitioned(left_expr),
                     Distribution::HashPartitioned(right_expr),
@@ -678,8 +684,8 @@ impl ExecutionPlan for HashJoinExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(HashJoinExec::try_new(
-            children[0].clone(),
-            children[1].clone(),
+            Arc::clone(&children[0]),
+            Arc::clone(&children[1]),
             self.on.clone(),
             self.filter.clone(),
             &self.join_type,
@@ -694,8 +700,16 @@ impl ExecutionPlan for HashJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
-        let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
+        let on_left = self
+            .on
+            .iter()
+            .map(|on| Arc::clone(&on.0))
+            .collect::<Vec<_>>();
+        let on_right = self
+            .on
+            .iter()
+            .map(|on| Arc::clone(&on.1))
+            .collect::<Vec<_>>();
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
 
@@ -715,9 +729,9 @@ impl ExecutionPlan for HashJoinExec {
                 collect_left_input(
                     None,
                     self.random_state.clone(),
-                    self.left.clone(),
+                    Arc::clone(&self.left),
                     on_left.clone(),
-                    context.clone(),
+                    Arc::clone(&context),
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
@@ -732,9 +746,9 @@ impl ExecutionPlan for HashJoinExec {
                 OnceFut::new(collect_left_input(
                     Some(partition),
                     self.random_state.clone(),
-                    self.left.clone(),
+                    Arc::clone(&self.left),
                     on_left.clone(),
-                    context.clone(),
+                    Arc::clone(&context),
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
@@ -779,6 +793,7 @@ impl ExecutionPlan for HashJoinExec {
             build_side: BuildSide::Initial(BuildSideInitialState { left_fut }),
             batch_size,
             hashes_buffer: vec![],
+            right_side_ordered: self.right.output_ordering().is_some(),
         }))
     }
 
@@ -791,8 +806,8 @@ impl ExecutionPlan for HashJoinExec {
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         let mut stats = estimate_join_statistics(
-            self.left.clone(),
-            self.right.clone(),
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
             self.on.clone(),
             &self.join_type,
             &self.join_schema,
@@ -836,7 +851,7 @@ async fn collect_left_input(
     };
 
     // Depending on partition argument load single partition or whole left side in memory
-    let stream = left_input.execute(left_input_partition, context.clone())?;
+    let stream = left_input.execute(left_input_partition, Arc::clone(&context))?;
 
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
@@ -1107,11 +1122,13 @@ struct HashJoinStream {
     batch_size: usize,
     /// Scratch space for computing hashes
     hashes_buffer: Vec<u64>,
+    /// Specifies whether the right side has an ordering to potentially preserve
+    right_side_ordered: bool,
 }
 
 impl RecordBatchStream for HashJoinStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -1212,11 +1229,16 @@ fn eq_dyn_null(
     right: &dyn Array,
     null_equals_null: bool,
 ) -> Result<BooleanArray, ArrowError> {
-    // Nested datatypes cannot use the underlying not_distinct function and must use a special
+    // Nested datatypes cannot use the underlying not_distinct/eq function and must use a special
     // implementation
     // <https://github.com/apache/datafusion/issues/10749>
-    if left.data_type().is_nested() && null_equals_null {
-        return Ok(compare_op_for_nested(&Operator::Eq, &left, &right)?);
+    if left.data_type().is_nested() {
+        let op = if null_equals_null {
+            Operator::IsNotDistinctFrom
+        } else {
+            Operator::Eq
+        };
+        return Ok(compare_op_for_nested(op, &left, &right)?);
     }
     match (left.data_type(), right.data_type()) {
         _ if null_equals_null => not_distinct(&left, &right),
@@ -1444,6 +1466,7 @@ impl HashJoinStream {
             right_indices,
             index_alignment_range_start..index_alignment_range_end,
             self.join_type,
+            self.right_side_ordered,
         );
 
         let result = build_batch_from_indices(
@@ -1537,7 +1560,6 @@ impl Stream for HashJoinStream {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::{
         common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
@@ -1546,6 +1568,8 @@ mod tests {
 
     use arrow::array::{Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field};
+    use arrow_array::StructArray;
+    use arrow_buffer::NullBuffer;
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
         ScalarValue,
@@ -1669,8 +1693,10 @@ mod tests {
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let partition_count = 4;
 
-        let (left_expr, right_expr) =
-            on.iter().map(|(l, r)| (l.clone(), r.clone())).unzip();
+        let (left_expr, right_expr) = on
+            .iter()
+            .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
+            .unzip();
 
         let left_repartitioned: Arc<dyn ExecutionPlan> = match partition_mode {
             PartitionMode::CollectLeft => Arc::new(CoalescePartitionsExec::new(left)),
@@ -1719,7 +1745,7 @@ mod tests {
 
         let mut batches = vec![];
         for i in 0..partition_count {
-            let stream = join.execute(i, context.clone())?;
+            let stream = join.execute(i, Arc::clone(&context))?;
             let more_batches = common::collect(stream).await?;
             batches.extend(
                 more_batches
@@ -1753,8 +1779,8 @@ mod tests {
         )];
 
         let (columns, batches) = join_collect(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             &JoinType::Inner,
             false,
@@ -1800,8 +1826,8 @@ mod tests {
         )];
 
         let (columns, batches) = partitioned_join_collect(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             &JoinType::Inner,
             false,
@@ -2104,7 +2130,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         // first part
-        let stream = join.execute(0, task_ctx.clone())?;
+        let stream = join.execute(0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         // expected joined records = 1 (first right batch)
@@ -2127,7 +2153,7 @@ mod tests {
         assert_batches_eq!(expected, &batches);
 
         // second part
-        let stream = join.execute(1, task_ctx.clone())?;
+        let stream = join.execute(1, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         // expected joined records = 2 (second right batch)
@@ -2342,8 +2368,8 @@ mod tests {
         )];
 
         let (columns, batches) = join_collect(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             &JoinType::Left,
             false,
@@ -2386,8 +2412,8 @@ mod tests {
         )];
 
         let (columns, batches) = partitioned_join_collect(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             &JoinType::Left,
             false,
@@ -2498,8 +2524,8 @@ mod tests {
         );
 
         let join = join_with_filter(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             filter,
             &JoinType::LeftSemi,
@@ -2509,7 +2535,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header.clone(), vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx.clone())?;
+        let stream = join.execute(0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2622,8 +2648,8 @@ mod tests {
         );
 
         let join = join_with_filter(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             filter,
             &JoinType::RightSemi,
@@ -2633,7 +2659,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx.clone())?;
+        let stream = join.execute(0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2744,8 +2770,8 @@ mod tests {
         );
 
         let join = join_with_filter(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             filter,
             &JoinType::LeftAnti,
@@ -2755,7 +2781,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx.clone())?;
+        let stream = join.execute(0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -2873,8 +2899,8 @@ mod tests {
         );
 
         let join = join_with_filter(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             filter,
             &JoinType::RightAnti,
@@ -2884,7 +2910,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx.clone())?;
+        let stream = join.execute(0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -3074,8 +3100,11 @@ mod tests {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; left.num_rows()];
-        let hashes =
-            create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
+        let hashes = create_hashes(
+            &[Arc::clone(&left.columns()[0])],
+            &random_state,
+            hashes_buff,
+        )?;
 
         // Create hash collisions (same hashes)
         hashmap_left.insert(hashes[0], (hashes[0], 1), |(h, _)| *h);
@@ -3103,7 +3132,7 @@ mod tests {
             &join_hash_map,
             &left,
             &right,
-            &[key_column.clone()],
+            &[Arc::clone(&key_column)],
             &[key_column],
             false,
             &hashes_buffer,
@@ -3463,13 +3492,13 @@ mod tests {
 
         for (join_type, expected) in test_cases {
             let (_, batches) = join_collect_with_partition_mode(
-                left.clone(),
-                right.clone(),
+                Arc::clone(&left),
+                Arc::clone(&right),
                 on.clone(),
                 &join_type,
                 PartitionMode::CollectLeft,
                 false,
-                task_ctx.clone(),
+                Arc::clone(&task_ctx),
             )
             .await?;
             assert_batches_sorted_eq!(expected, &batches);
@@ -3487,13 +3516,14 @@ mod tests {
 
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19107, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let batch = RecordBatch::try_new(schema.clone(), vec![dates, n])?;
-        let left =
-            Arc::new(MemoryExec::try_new(&[vec![batch]], schema.clone(), None).unwrap());
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
+        let left = Arc::new(
+            MemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None).unwrap(),
+        );
 
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19108, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
-        let batch = RecordBatch::try_new(schema.clone(), vec![dates, n])?;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
         let right = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
 
         let on = vec![(
@@ -3555,8 +3585,8 @@ mod tests {
 
         for join_type in join_types {
             let join = join(
-                left.clone(),
-                right_input.clone(),
+                Arc::clone(&left),
+                Arc::clone(&right_input) as Arc<dyn ExecutionPlan>,
                 on.clone(),
                 &join_type,
                 false,
@@ -3671,9 +3701,14 @@ mod tests {
             for batch_size in (1..21).rev() {
                 let task_ctx = prepare_task_ctx(batch_size);
 
-                let join =
-                    join(left.clone(), right.clone(), on.clone(), &join_type, false)
-                        .unwrap();
+                let join = join(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    &join_type,
+                    false,
+                )
+                .unwrap();
 
                 let stream = join.execute(0, task_ctx).unwrap();
                 let batches = common::collect(stream).await.unwrap();
@@ -3746,7 +3781,13 @@ mod tests {
             let task_ctx = TaskContext::default().with_runtime(runtime);
             let task_ctx = Arc::new(task_ctx);
 
-            let join = join(left.clone(), right.clone(), on.clone(), &join_type, false)?;
+            let join = join(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                &join_type,
+                false,
+            )?;
 
             let stream = join.execute(0, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
@@ -3819,8 +3860,8 @@ mod tests {
             let task_ctx = Arc::new(task_ctx);
 
             let join = HashJoinExec::try_new(
-                left.clone(),
-                right.clone(),
+                Arc::clone(&left) as Arc<dyn ExecutionPlan>,
+                Arc::clone(&right) as Arc<dyn ExecutionPlan>,
                 on.clone(),
                 None,
                 &join_type,
@@ -3840,6 +3881,104 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(err.to_string(), "HashJoinInput[1]");
         }
+
+        Ok(())
+    }
+
+    fn build_table_struct(
+        struct_name: &str,
+        field_name_and_values: (&str, &Vec<Option<i32>>),
+        nulls: Option<NullBuffer>,
+    ) -> Arc<dyn ExecutionPlan> {
+        let (field_name, values) = field_name_and_values;
+        let inner_fields = vec![Field::new(field_name, DataType::Int32, true)];
+        let schema = Schema::new(vec![Field::new(
+            struct_name,
+            DataType::Struct(inner_fields.clone().into()),
+            nulls.is_some(),
+        )]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(StructArray::new(
+                inner_fields.into(),
+                vec![Arc::new(Int32Array::from(values.clone()))],
+                nulls,
+            ))],
+        )
+        .unwrap();
+        let schema_ref = batch.schema();
+        Arc::new(MemoryExec::try_new(&[vec![batch]], schema_ref, None).unwrap())
+    }
+
+    #[tokio::test]
+    async fn join_on_struct() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left =
+            build_table_struct("n1", ("a", &vec![None, Some(1), Some(2), Some(3)]), None);
+        let right =
+            build_table_struct("n2", ("a", &vec![None, Some(1), Some(2), Some(4)]), None);
+        let on = vec![(
+            Arc::new(Column::new_with_schema("n1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("n2", &right.schema())?) as _,
+        )];
+
+        let (columns, batches) =
+            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+
+        assert_eq!(columns, vec!["n1", "n2"]);
+
+        let expected = [
+            "+--------+--------+",
+            "| n1     | n2     |",
+            "+--------+--------+",
+            "| {a: }  | {a: }  |",
+            "| {a: 1} | {a: 1} |",
+            "| {a: 2} | {a: 2} |",
+            "+--------+--------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_on_struct_with_nulls() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left =
+            build_table_struct("n1", ("a", &vec![None]), Some(NullBuffer::new_null(1)));
+        let right =
+            build_table_struct("n2", ("a", &vec![None]), Some(NullBuffer::new_null(1)));
+        let on = vec![(
+            Arc::new(Column::new_with_schema("n1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("n2", &right.schema())?) as _,
+        )];
+
+        let (_, batches_null_eq) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::Inner,
+            true,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
+
+        let expected_null_eq = [
+            "+----+----+",
+            "| n1 | n2 |",
+            "+----+----+",
+            "|    |    |",
+            "+----+----+",
+        ];
+        assert_batches_eq!(expected_null_eq, &batches_null_eq);
+
+        let (_, batches_null_neq) =
+            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+
+        let expected_null_neq =
+            ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
+        assert_batches_eq!(expected_null_neq, &batches_null_neq);
 
         Ok(())
     }

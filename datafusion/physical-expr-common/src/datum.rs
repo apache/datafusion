@@ -63,7 +63,7 @@ pub fn apply_cmp(
 /// Applies a binary [`Datum`] comparison kernel `f` to `lhs` and `rhs` for nested type like
 /// List, FixedSizeList, LargeList, Struct, Union, Map, or a dictionary of a nested type
 pub fn apply_cmp_for_nested(
-    op: &Operator,
+    op: Operator,
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
 ) -> Result<ColumnarValue> {
@@ -88,7 +88,7 @@ pub fn apply_cmp_for_nested(
 
 /// Compare on nested type List, Struct, and so on
 pub fn compare_op_for_nested(
-    op: &Operator,
+    op: Operator,
     lhs: &dyn Datum,
     rhs: &dyn Datum,
 ) -> Result<BooleanArray> {
@@ -143,38 +143,5 @@ pub fn compare_op_for_nested(
         // i.e. NULL eq NULL -> NULL
         let nulls = NullBuffer::union(l.nulls(), r.nulls());
         Ok(BooleanArray::new(values, nulls))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use arrow::{
-        array::{make_comparator, Array, BooleanArray, ListArray},
-        buffer::NullBuffer,
-        compute::SortOptions,
-        datatypes::Int32Type,
-    };
-
-    #[test]
-    fn test123() {
-        let data = vec![
-            Some(vec![Some(0), Some(1), Some(2)]),
-            None,
-            Some(vec![Some(3), None, Some(5)]),
-            Some(vec![Some(6), Some(7)]),
-        ];
-        let a = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-        let data = vec![
-            Some(vec![Some(0), Some(1), Some(2)]),
-            None,
-            Some(vec![Some(3), None, Some(5)]),
-            Some(vec![Some(6), Some(7)]),
-        ];
-        let b = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-        let cmp = make_comparator(&a, &b, SortOptions::default()).unwrap();
-        let len = a.len().min(b.len());
-        let values = (0..len).map(|i| cmp(i, i).is_eq()).collect();
-        let nulls = NullBuffer::union(a.nulls(), b.nulls());
-        println!("res: {:?}", BooleanArray::new(values, nulls));
     }
 }

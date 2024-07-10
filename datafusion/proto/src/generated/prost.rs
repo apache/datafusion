@@ -947,7 +947,10 @@ pub struct OptimizedPhysicalPlanType {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlanType {
-    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 9, 5, 6, 10")]
+    #[prost(
+        oneof = "plan_type::PlanTypeEnum",
+        tags = "1, 7, 8, 2, 3, 4, 9, 11, 5, 6, 10, 12"
+    )]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
 /// Nested message and enum types in `PlanType`.
@@ -969,12 +972,16 @@ pub mod plan_type {
         InitialPhysicalPlan(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "9")]
         InitialPhysicalPlanWithStats(super::super::datafusion_common::EmptyMessage),
+        #[prost(message, tag = "11")]
+        InitialPhysicalPlanWithSchema(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "5")]
         OptimizedPhysicalPlan(super::OptimizedPhysicalPlanType),
         #[prost(message, tag = "6")]
         FinalPhysicalPlan(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "10")]
         FinalPhysicalPlanWithStats(super::super::datafusion_common::EmptyMessage),
+        #[prost(message, tag = "12")]
+        FinalPhysicalPlanWithSchema(super::super::datafusion_common::EmptyMessage),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1128,6 +1135,8 @@ pub struct FileSinkConfig {
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(bool, tag = "8")]
     pub overwrite: bool,
+    #[prost(bool, tag = "9")]
+    pub keep_partition_by_columns: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1915,7 +1924,7 @@ pub enum AggregateFunction {
     /// AVG = 3;
     /// COUNT = 4;
     /// APPROX_DISTINCT = 5;
-    ArrayAgg = 6,
+    ///
     /// VARIANCE = 7;
     /// VARIANCE_POP = 8;
     /// COVARIANCE = 9;
@@ -1926,7 +1935,7 @@ pub enum AggregateFunction {
     /// APPROX_PERCENTILE_CONT = 14;
     /// APPROX_MEDIAN = 15;
     /// APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
-    Grouping = 17,
+    /// GROUPING = 17;
     /// MEDIAN = 18;
     /// BIT_AND = 19;
     /// BIT_OR = 20;
@@ -1943,7 +1952,8 @@ pub enum AggregateFunction {
     /// REGR_SYY = 33;
     /// REGR_SXY = 34;
     /// STRING_AGG = 35;
-    NthValueAgg = 36,
+    /// NTH_VALUE_AGG = 36;
+    ArrayAgg = 6,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1955,8 +1965,6 @@ impl AggregateFunction {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
             AggregateFunction::ArrayAgg => "ARRAY_AGG",
-            AggregateFunction::Grouping => "GROUPING",
-            AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1965,8 +1973,6 @@ impl AggregateFunction {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
             "ARRAY_AGG" => Some(Self::ArrayAgg),
-            "GROUPING" => Some(Self::Grouping),
-            "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
         }
     }
