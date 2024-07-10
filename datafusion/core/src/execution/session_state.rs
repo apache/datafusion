@@ -886,8 +886,8 @@ impl SessionStateBuilder {
     }
 
     /// Returns a new [SessionStateBuilder] based on an existing [SessionState]
-    /// The session id for the new builder will be reset to a unique value, all
-    /// other fields will be set to what is set in the provided session state
+    /// The session id for the new builder will be set to a unique value; all
+    /// other fields will be cloned from what is set in the provided session state
     pub fn new_from_existing(existing: &SessionState) -> Self {
         let session_id = Uuid::new_v4().to_string();
 
