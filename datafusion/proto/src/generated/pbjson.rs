@@ -12,6 +12,7 @@ impl serde::Serialize for AggLimit {
         let mut struct_ser = serializer.serialize_struct("datafusion.AggLimit", len)?;
         if self.limit != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("limit", ToString::to_string(&self.limit).as_str())?;
         }
         struct_ser.end()
@@ -2545,6 +2546,7 @@ impl serde::Serialize for CopyToNode {
         }
         if !self.file_type.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fileType", pbjson::private::base64::encode(&self.file_type).as_str())?;
         }
         if !self.partition_by.is_empty() {
@@ -4132,6 +4134,7 @@ impl serde::Serialize for CustomTableScanNode {
         }
         if !self.custom_table_data.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("customTableData", pbjson::private::base64::encode(&self.custom_table_data).as_str())?;
         }
         struct_ser.end()
@@ -5216,10 +5219,12 @@ impl serde::Serialize for FileRange {
         let mut struct_ser = serializer.serialize_struct("datafusion.FileRange", len)?;
         if self.start != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("start", ToString::to_string(&self.start).as_str())?;
         }
         if self.end != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("end", ToString::to_string(&self.end).as_str())?;
         }
         struct_ser.end()
@@ -6101,6 +6106,7 @@ impl serde::Serialize for GlobalLimitExecNode {
         }
         if self.fetch != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         struct_ser.end()
@@ -6536,6 +6542,7 @@ impl serde::Serialize for HashRepartition {
         }
         if self.partition_count != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("partitionCount", ToString::to_string(&self.partition_count).as_str())?;
         }
         struct_ser.end()
@@ -8588,10 +8595,12 @@ impl serde::Serialize for LimitNode {
         }
         if self.skip != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("skip", ToString::to_string(&self.skip).as_str())?;
         }
         if self.fetch != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         struct_ser.end()
@@ -10053,6 +10062,7 @@ impl serde::Serialize for LogicalExtensionNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.LogicalExtensionNode", len)?;
         if !self.node.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("node", pbjson::private::base64::encode(&self.node).as_str())?;
         }
         if !self.inputs.is_empty() {
@@ -12175,14 +12185,17 @@ impl serde::Serialize for PartitionStats {
         let mut struct_ser = serializer.serialize_struct("datafusion.PartitionStats", len)?;
         if self.num_rows != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("numRows", ToString::to_string(&self.num_rows).as_str())?;
         }
         if self.num_batches != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("numBatches", ToString::to_string(&self.num_batches).as_str())?;
         }
         if self.num_bytes != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("numBytes", ToString::to_string(&self.num_bytes).as_str())?;
         }
         if !self.column_stats.is_empty() {
@@ -12339,10 +12352,12 @@ impl serde::Serialize for PartitionedFile {
         }
         if self.size != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("size", ToString::to_string(&self.size).as_str())?;
         }
         if self.last_modified_ns != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("lastModifiedNs", ToString::to_string(&self.last_modified_ns).as_str())?;
         }
         if !self.partition_values.is_empty() {
@@ -12507,6 +12522,7 @@ impl serde::Serialize for Partitioning {
             match v {
                 partitioning::PartitionMethod::RoundRobin(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("roundRobin", ToString::to_string(&v).as_str())?;
                 }
                 partitioning::PartitionMethod::Hash(v) => {
@@ -12514,6 +12530,7 @@ impl serde::Serialize for Partitioning {
                 }
                 partitioning::PartitionMethod::Unknown(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("unknown", ToString::to_string(&v).as_str())?;
                 }
             }
@@ -13800,6 +13817,7 @@ impl serde::Serialize for PhysicalExtensionNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalExtensionNode", len)?;
         if !self.node.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("node", pbjson::private::base64::encode(&self.node).as_str())?;
         }
         if !self.inputs.is_empty() {
@@ -13914,6 +13932,7 @@ impl serde::Serialize for PhysicalHashRepartition {
         }
         if self.partition_count != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("partitionCount", ToString::to_string(&self.partition_count).as_str())?;
         }
         struct_ser.end()
@@ -15130,6 +15149,7 @@ impl serde::Serialize for PhysicalScalarUdfNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         if let Some(v) = self.return_type.as_ref() {
@@ -16940,6 +16960,7 @@ impl serde::Serialize for RepartitionNode {
             match v {
                 repartition_node::PartitionMethod::RoundRobin(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("roundRobin", ToString::to_string(&v).as_str())?;
                 }
                 repartition_node::PartitionMethod::Hash(v) => {
@@ -17162,6 +17183,7 @@ impl serde::Serialize for ScalarUdfExprNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         struct_ser.end()
@@ -17730,6 +17752,7 @@ impl serde::Serialize for SortExecNode {
         }
         if self.fetch != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         if self.preserve_partitioning {
@@ -17999,6 +18022,7 @@ impl serde::Serialize for SortNode {
         }
         if self.fetch != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         struct_ser.end()
@@ -18127,6 +18151,7 @@ impl serde::Serialize for SortPreservingMergeExecNode {
         }
         if self.fetch != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         struct_ser.end()
@@ -19572,6 +19597,7 @@ impl serde::Serialize for ValuesNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.ValuesNode", len)?;
         if self.n_cols != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("nCols", ToString::to_string(&self.n_cols).as_str())?;
         }
         if !self.values_list.is_empty() {
