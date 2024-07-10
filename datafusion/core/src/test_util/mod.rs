@@ -366,3 +366,39 @@ pub fn register_unbounded_file_with_ordering(
     ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
     Ok(())
 }
+
+struct BoundedStream {
+    limit: usize,
+    count: usize,
+    batch: RecordBatch,
+}
+
+impl Stream for BoundedStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if self.count >= self.limit {
+            return Poll::Ready(None);
+        }
+        self.count += 1;
+        Poll::Ready(Some(Ok(self.batch.clone())))
+    }
+}
+
+impl RecordBatchStream for BoundedStream {
+    fn schema(&self) -> SchemaRef {
+        self.batch.schema()
+    }
+}
+
+/// Creates an bounded stream for testing purposes.
+pub fn bounded_stream(batch: RecordBatch, limit: usize) -> SendableRecordBatchStream {
+    Box::pin(BoundedStream {
+        count: 0,
+        limit,
+        batch,
+    })
+}
