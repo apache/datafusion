@@ -413,7 +413,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
                 lit(1)
-                    .lt(scalar_subquery(orders.clone()))
+                    .lt(scalar_subquery(Arc::clone(&orders)))
                     .and(lit(1).lt(scalar_subquery(orders))),
             )?
             .project(vec![col("customer.c_custkey")])?
