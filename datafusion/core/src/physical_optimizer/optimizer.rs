@@ -32,6 +32,7 @@ use crate::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggr
 use crate::physical_optimizer::output_requirements::OutputRequirements;
 use crate::physical_optimizer::sanity_checker::SanityCheckPlan;
 use crate::physical_optimizer::topk_aggregation::TopKAggregation;
+use crate::physical_optimizer::limit_pushdown::LimitPushdown;
 use crate::{error::Result, physical_plan::ExecutionPlan};
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
@@ -133,6 +134,7 @@ impl PhysicalOptimizer {
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
             Arc::new(SanityCheckPlan::new()),
+            Arc::new(LimitPushdown::new())
         ];
 
         Self::with_rules(rules)

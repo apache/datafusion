@@ -37,6 +37,7 @@ pub mod sanity_checker;
 mod sort_pushdown;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;
+pub mod limit_pushdown;
 mod utils;
 
 #[cfg(test)]
