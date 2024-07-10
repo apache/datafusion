@@ -656,7 +656,7 @@ fn coerce_arguments_for_fun(
             .map(|expr| {
                 let data_type = expr.get_type(schema).unwrap();
                 if let DataType::FixedSizeList(field, _) = data_type {
-                    let to_type = DataType::List(field.clone());
+                    let to_type = DataType::List(Arc::clone(&field));
                     expr.cast_to(&to_type, schema)
                 } else {
                     Ok(expr)
@@ -1265,8 +1265,10 @@ mod test {
                 signature: Signature::variadic(vec![Utf8], Volatility::Immutable),
             })
             .call(args.to_vec());
-            let plan =
-                LogicalPlan::Projection(Projection::try_new(vec![expr], empty.clone())?);
+            let plan = LogicalPlan::Projection(Projection::try_new(
+                vec![expr],
+                Arc::clone(&empty),
+            )?);
             let expected =
                 "Projection: TestScalarUDF(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
