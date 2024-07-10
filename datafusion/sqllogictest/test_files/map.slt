@@ -167,7 +167,7 @@ SELECT MAP()
 query error DataFusion error: Execution error: map requires an even number of arguments, got 1 instead
 SELECT MAP(['POST', 'HEAD'])
 
-query error DataFusion error: Internal error: map requires two lists as arguments
+query error DataFusion error: Execution error: Expected list, large_list or fixed_size_list, got Null
 SELECT MAP(null, [41, 33, 30]);
 
 query error DataFusion error: Execution error: map requires key and value lists to have the same length
@@ -175,3 +175,18 @@ SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33]);
 
 query error DataFusion error: Execution error: map key cannot be null
 SELECT MAP(['POST', 'HEAD', null], [41, 33, 30]);
+
+query ?
+SELECT MAP(make_array('POST', 'HEAD', 'PATCH'), make_array(41, 33, 30));
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+
+query ?
+SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'FixedSizeList(3, Utf8)'), arrow_cast(make_array(41, 33, 30), 'FixedSizeList(3, Int64)'));
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+
+query ?
+SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'LargeList(Utf8)'), arrow_cast(make_array(41, 33, 30), 'LargeList(Int64)'));
+----
+{POST: 41, HEAD: 33, PATCH: 30}

@@ -23,9 +23,8 @@ use arrow::array::{new_null_array, Array, ArrayData, ArrayRef, MapArray, StructA
 use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, SchemaBuilder};
 use arrow_buffer::{Buffer, ToByteSlice};
-
-use datafusion_common::{exec_err, internal_err};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
+use datafusion_common::{exec_err, internal_err, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -101,15 +100,21 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             args.len()
         );
     }
-    if let ColumnarValue::Scalar(ScalarValue::List(keys)) = &args[0] {
-        if let ColumnarValue::Scalar(ScalarValue::List(values)) = &args[1] {
-            if keys.len() != 1 || values.len() != 1 {
-                return exec_err!("make_map requires exactly 1 list as argument");
-            }
-            return make_map_batch_internal(keys.value(0), values.value(0));
-        }
+    let key = get_first_array_ref(&args[0])?;
+    let value = get_first_array_ref(&args[1])?;
+    make_map_batch_internal(key, value)
+}
+
+fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
+    match columnar_value {
+        ColumnarValue::Scalar(value) => match value {
+            ScalarValue::List(array) => Ok(array.value(0).clone()),
+            ScalarValue::LargeList(array) => Ok(array.value(0).clone()),
+            ScalarValue::FixedSizeList(array) => Ok(array.value(0).clone()),
+            _ => exec_err!("Expected array, got {:?}", value),
+        },
+        ColumnarValue::Array(array) => exec_err!("Expected scalar, got {:?}", array),
     }
-    internal_err!("make_map requires two lists as arguments")
 }
 
 fn make_map_batch_internal(keys: ArrayRef, values: ArrayRef) -> Result<ColumnarValue> {
@@ -284,22 +289,37 @@ impl ScalarUDFImpl for MapFunc {
                 arg_types.len()
             );
         }
-        if let DataType::List(key_type) = arg_types[0].clone() {
-            if let DataType::List(value_type) = arg_types[1].clone() {
-                let mut builder = SchemaBuilder::new();
-                builder.push(Field::new("key", key_type.data_type().clone(), false));
-                builder.push(Field::new("value", value_type.data_type().clone(), true));
-                let fields = builder.finish().fields;
-                return Ok(DataType::Map(
-                    Arc::new(Field::new("entries", DataType::Struct(fields), false)),
-                    false,
-                ));
-            }
-        }
-        internal_err!("map requires two lists as arguments")
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new(
+            "key",
+            get_element_type(&arg_types[0])?.clone(),
+            false,
+        ));
+        builder.push(Field::new(
+            "value",
+            get_element_type(&arg_types[1])?.clone(),
+            true,
+        ));
+        let fields = builder.finish().fields;
+        Ok(DataType::Map(
+            Arc::new(Field::new("entries", DataType::Struct(fields), false)),
+            false,
+        ))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_map_batch(args)
+    }
+}
+
+fn get_element_type(data_type: &DataType) -> Result<&DataType> {
+    match data_type {
+        DataType::List(element) => Ok(element.data_type()),
+        DataType::LargeList(element) => Ok(element.data_type()),
+        DataType::FixedSizeList(element, _) => Ok(element.data_type()),
+        _ => exec_err!(
+            "Expected list, large_list or fixed_size_list, got {:?}",
+            data_type
+        ),
     }
 }
