@@ -1385,7 +1385,7 @@ mod test {
                     "my_agg",
                     Signature::exact(vec![DataType::UInt32], Volatility::Stable),
                     return_type.clone(),
-                    accumulator.clone(),
+                    Arc::clone(&accumulator),
                     vec![Field::new("value", DataType::UInt32, true)],
                 ))),
                 vec![inner],
