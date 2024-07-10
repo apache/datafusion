@@ -41,9 +41,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
@@ -645,39 +643,6 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Values(Values { schema, values }))
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
-                // todo: should this logic be moved to Filter::try_new?
-
-                // filter predicates should not contain aliased expressions so we remove any aliases
-                // before this logic was added we would have aliases within filters such as for
-                // benchmark q6:
-                //
-                // lineitem.l_shipdate >= Date32(\"8766\")
-                // AND lineitem.l_shipdate < Date32(\"9131\")
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
-                // Decimal128(Some(49999999999999),30,15)
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
-                // Decimal128(Some(69999999999999),30,15)
-                // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
-
-                let predicate = predicate
-                    .transform_down(|expr| {
-                        match expr {
-                            Expr::Exists { .. }
-                            | Expr::ScalarSubquery(_)
-                            | Expr::InSubquery(_) => {
-                                // subqueries could contain aliases so we don't recurse into those
-                                Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
-                            }
-                            Expr::Alias(_) => Ok(Transformed::new(
-                                expr.unalias(),
-                                true,
-                                TreeNodeRecursion::Jump,
-                            )),
-                            _ => Ok(Transformed::no(expr)),
-                        }
-                    })
-                    .data()?;
-
                 Filter::try_new(predicate, input).map(LogicalPlan::Filter)
             }
             LogicalPlan::Repartition(_) => Ok(self),
@@ -878,7 +843,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Filter { .. } => {
                 assert_eq!(1, expr.len());
-                let predicate = expr.pop().unwrap().unalias_nested().data;
+                let predicate = expr.pop().unwrap();
 
                 Filter::try_new(predicate, Arc::new(inputs.swap_remove(0)))
                     .map(LogicalPlan::Filter)
@@ -2117,13 +2082,17 @@ pub struct Filter {
 
 impl Filter {
     /// Create a new filter operator.
+    ///
+    /// Notes: as Aliases have no effect on the output of a filter operator,
+    /// they are removed from the predicate expression.
     pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            if predicate_type != DataType::Boolean {
+            // Interpret NULL as a missing boolean value.
+            if predicate_type != DataType::Boolean && predicate_type != DataType::Null {
                 return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 );
@@ -2939,7 +2908,7 @@ mod tests {
     use crate::logical_plan::table_scan;
     use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
 
-    use datafusion_common::tree_node::TreeNodeVisitor;
+    use datafusion_common::tree_node::{TransformedResult, TreeNodeVisitor};
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
 
     use crate::test::function_stub::count;
@@ -3499,11 +3468,8 @@ digraph {
         }));
         let col = schema.field_names()[0].clone();
 
-        let filter = Filter::try_new(
-            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
-            scan,
-        )
-        .unwrap();
+        let filter =
+            Filter::try_new(Expr::Column(col.into()).eq(lit(1i32)), scan).unwrap();
         assert!(filter.is_scalar());
     }
 
@@ -3521,8 +3487,7 @@ digraph {
             .build()
             .unwrap();
 
-        let external_filter =
-            col("foo").eq(Expr::Literal(ScalarValue::Boolean(Some(true))));
+        let external_filter = col("foo").eq(lit(true));
 
         // after transformation, because plan is not the same anymore,
         // the parent plan is built again with call to LogicalPlan::with_new_inputs -> with_new_exprs
