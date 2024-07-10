@@ -163,7 +163,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
             .read()
             .clone();
-        let mut builder = SessionStateBuilder::new_from_existing(state.clone());
+        let mut builder = SessionStateBuilder::new_from_existing(&state);
         let optimized_name = substitute_tilde(name.to_owned());
         let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
         let scheme = table_url.scheme();
