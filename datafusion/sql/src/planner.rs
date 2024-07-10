@@ -24,8 +24,7 @@ use arrow_schema::*;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
 };
-use datafusion_expr::planner::{ExprPlanner, UserDefinedSQLPlanner};
-use sqlparser::ast::TimezoneInfo;
+use datafusion_expr::planner::ExprPlanner;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
