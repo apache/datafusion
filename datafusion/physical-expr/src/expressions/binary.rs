@@ -522,7 +522,12 @@ impl PartialEq<dyn Any> for BinaryExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
-            .map(|x| self.left.eq(&x.left) && self.op == x.op && self.right.eq(&x.right))
+            .map(|x| {
+                self.left.eq(&x.left)
+                    && self.op == x.op
+                    && self.right.eq(&x.right)
+                    && self.fail_on_overflow.eq(x.fail_on_overflow)
+            })
             .unwrap_or(false)
     }
 }
