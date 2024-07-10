@@ -929,7 +929,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
         for planner in self.planners.iter() {
             match planner.plan_overlay(overlay_args)? {
-                PlannerResult::Planned(args) => return Ok(args),
+                PlannerResult::Planned(expr) => return Ok(expr),
                 PlannerResult::Original(args) => overlay_args = args,
             }
         }
