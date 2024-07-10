@@ -832,7 +832,7 @@ mod tests {
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let mut expr_rewriter = UnwrapCastExprRewriter {
-            schema: schema.clone(),
+            schema: Arc::clone(schema),
         };
         expr.rewrite(&mut expr_rewriter).data().unwrap()
     }

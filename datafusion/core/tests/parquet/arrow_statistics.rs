@@ -29,15 +29,15 @@ use arrow::datatypes::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_array::{
-    make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
-    LargeStringArray, RecordBatch, StringArray, Time32MillisecondArray,
+    make_array, new_null_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    LargeBinaryArray, LargeStringArray, RecordBatch, StringArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
 use half::f16;
 use parquet::arrow::arrow_reader::{
@@ -91,51 +91,60 @@ impl Int64Case {
 
     // Create a parquet file with the specified settings
     pub fn build(&self) -> ParquetRecordBatchReaderBuilder<File> {
-        let mut output_file = tempfile::Builder::new()
-            .prefix("parquert_statistics_test")
-            .suffix(".parquet")
-            .tempfile()
-            .expect("tempfile creation");
-
-        let mut builder =
-            WriterProperties::builder().set_max_row_group_size(self.row_per_group);
-        if let Some(enable_stats) = self.enable_stats {
-            builder = builder.set_statistics_enabled(enable_stats);
-        }
-        if let Some(data_page_row_count_limit) = self.data_page_row_count_limit {
-            builder = builder.set_data_page_row_count_limit(data_page_row_count_limit);
-        }
-        let props = builder.build();
-
         let batches = vec![self.make_int64_batches_with_null()];
+        build_parquet_file(
+            self.row_per_group,
+            self.enable_stats,
+            self.data_page_row_count_limit,
+            batches,
+        )
+    }
+}
 
-        let schema = batches[0].schema();
+fn build_parquet_file(
+    row_per_group: usize,
+    enable_stats: Option<EnabledStatistics>,
+    data_page_row_count_limit: Option<usize>,
+    batches: Vec<RecordBatch>,
+) -> ParquetRecordBatchReaderBuilder<File> {
+    let mut output_file = tempfile::Builder::new()
+        .prefix("parquert_statistics_test")
+        .suffix(".parquet")
+        .tempfile()
+        .expect("tempfile creation");
 
-        let mut writer =
-            ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
+    let mut builder = WriterProperties::builder().set_max_row_group_size(row_per_group);
+    if let Some(enable_stats) = enable_stats {
+        builder = builder.set_statistics_enabled(enable_stats);
+    }
+    if let Some(data_page_row_count_limit) = data_page_row_count_limit {
+        builder = builder.set_data_page_row_count_limit(data_page_row_count_limit);
+    }
+    let props = builder.build();
 
-        // if we have a datapage limit send the batches in one at a time to give
-        // the writer a chance to be split into multiple pages
-        if self.data_page_row_count_limit.is_some() {
-            for batch in batches {
-                for i in 0..batch.num_rows() {
-                    writer.write(&batch.slice(i, 1)).expect("writing batch");
-                }
-            }
-        } else {
-            for batch in batches {
-                writer.write(&batch).expect("writing batch");
+    let schema = batches[0].schema();
+
+    let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
+
+    // if we have a datapage limit send the batches in one at a time to give
+    // the writer a chance to be split into multiple pages
+    if data_page_row_count_limit.is_some() {
+        for batch in &batches {
+            for i in 0..batch.num_rows() {
+                writer.write(&batch.slice(i, 1)).expect("writing batch");
             }
         }
-
-        // close file
-        let _file_meta = writer.close().unwrap();
-
-        // open the file & get the reader
-        let file = output_file.reopen().unwrap();
-        let options = ArrowReaderOptions::new().with_page_index(true);
-        ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
+    } else {
+        for batch in &batches {
+            writer.write(batch).expect("writing batch");
+        }
     }
+
+    let _file_meta = writer.close().unwrap();
+
+    let file = output_file.reopen().unwrap();
+    let options = ArrowReaderOptions::new().with_page_index(true);
+    ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
 }
 
 /// Defines what data to create in a parquet file
@@ -501,6 +510,71 @@ async fn test_multiple_data_pages_nulls_and_negatives() {
         check: Check::DataPage,
     }
     .run()
+}
+
+#[tokio::test]
+async fn test_data_page_stats_with_all_null_page() {
+    for data_type in &[
+        DataType::Boolean,
+        DataType::UInt64,
+        DataType::UInt32,
+        DataType::UInt16,
+        DataType::UInt8,
+        DataType::Int64,
+        DataType::Int32,
+        DataType::Int16,
+        DataType::Int8,
+        DataType::Float16,
+        DataType::Float32,
+        DataType::Float64,
+        DataType::Date32,
+        DataType::Date64,
+        DataType::Time32(TimeUnit::Millisecond),
+        DataType::Time32(TimeUnit::Second),
+        DataType::Time64(TimeUnit::Microsecond),
+        DataType::Time64(TimeUnit::Nanosecond),
+        DataType::Timestamp(TimeUnit::Second, None),
+        DataType::Timestamp(TimeUnit::Millisecond, None),
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        DataType::Binary,
+        DataType::LargeBinary,
+        DataType::FixedSizeBinary(3),
+        DataType::Utf8,
+        DataType::LargeUtf8,
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        DataType::Decimal128(8, 2),  // as INT32
+        DataType::Decimal128(10, 2), // as INT64
+        DataType::Decimal128(20, 2), // as FIXED_LEN_BYTE_ARRAY
+        DataType::Decimal256(8, 2),  // as INT32
+        DataType::Decimal256(10, 2), // as INT64
+        DataType::Decimal256(20, 2), // as FIXED_LEN_BYTE_ARRAY
+    ] {
+        let batch =
+            RecordBatch::try_from_iter(vec![("col", new_null_array(data_type, 4))])
+                .expect("record batch creation");
+
+        let reader =
+            build_parquet_file(4, Some(EnabledStatistics::Page), Some(4), vec![batch]);
+
+        let expected_data_type = match data_type {
+            DataType::Dictionary(_, value_type) => value_type.as_ref(),
+            _ => data_type,
+        };
+
+        // There is one data page with 4 nulls
+        // The statistics should be present but null
+        Test {
+            reader: &reader,
+            expected_min: new_null_array(expected_data_type, 1),
+            expected_max: new_null_array(expected_data_type, 1),
+            expected_null_counts: UInt64Array::from(vec![4]),
+            expected_row_counts: Some(UInt64Array::from(vec![4])),
+            column_name: "col",
+            check: Check::DataPage,
+        }
+        .run()
+    }
 }
 
 /////////////// MORE GENERAL TESTS //////////////////////

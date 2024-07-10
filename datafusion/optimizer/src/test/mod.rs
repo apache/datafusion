@@ -176,7 +176,7 @@ pub fn assert_optimized_plan_eq(
     // Apply the rule once
     let opt_context = OptimizerContext::new().with_max_passes(1);
 
-    let optimizer = Optimizer::with_rules(vec![rule.clone()]);
+    let optimizer = Optimizer::with_rules(vec![Arc::clone(&rule)]);
     let optimized_plan = optimizer.optimize(plan, &opt_context, observe)?;
     let formatted_plan = format!("{optimized_plan:?}");
     assert_eq!(formatted_plan, expected);

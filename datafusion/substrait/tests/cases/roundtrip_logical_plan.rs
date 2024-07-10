@@ -751,6 +751,22 @@ async fn roundtrip_values_duplicate_column_join() -> Result<()> {
     .await
 }
 
+#[tokio::test]
+async fn duplicate_column() -> Result<()> {
+    // Substrait does not keep column names (aliases) in the plan, rather it operates on column indices
+    // only. DataFusion however, is strict about not having duplicate column names appear in the plan.
+    // This test confirms that we generate aliases for columns in the plan which would otherwise have
+    // colliding names.
+    assert_expected_plan(
+        "SELECT a + 1 as sum_a, a + 1 as sum_a_2 FROM data",
+        "Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS data.a + Int64(1)__temp__0 AS sum_a_2\
+            \n  Projection: data.a + Int64(1)\
+            \n    TableScan: data projection=[a]",
+        true,
+    )
+    .await
+}
+
 /// Construct a plan that cast columns. Only those SQL types are supported for now.
 #[tokio::test]
 async fn new_test_grammar() -> Result<()> {

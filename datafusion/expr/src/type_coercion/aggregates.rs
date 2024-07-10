@@ -101,7 +101,6 @@ pub fn coerce_types(
             // unpack the dictionary to get the value
             get_min_max_result_type(input_types)
         }
-        AggregateFunction::NthValue => Ok(input_types.to_vec()),
     }
 }
 
