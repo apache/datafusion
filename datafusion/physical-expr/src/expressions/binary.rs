@@ -526,7 +526,7 @@ impl PartialEq<dyn Any> for BinaryExpr {
                 self.left.eq(&x.left)
                     && self.op == x.op
                     && self.right.eq(&x.right)
-                    && self.fail_on_overflow.eq(x.fail_on_overflow)
+                    && self.fail_on_overflow.eq(&x.fail_on_overflow)
             })
             .unwrap_or(false)
     }
