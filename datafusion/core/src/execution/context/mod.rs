@@ -315,7 +315,7 @@ impl SessionContext {
     }
 
     /// Creates a new `SessionContext` using the provided [`SessionState`]
-    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_state")]
+    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_state")]
     pub fn with_state(state: SessionState) -> Self {
         Self::new_with_state(state)
     }
@@ -1574,6 +1574,7 @@ mod tests {
     use datafusion_common_runtime::SpawnedTask;
 
     use crate::catalog::schema::SchemaProvider;
+    use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use tempfile::TempDir;
@@ -1734,8 +1735,10 @@ mod tests {
     async fn custom_query_planner() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let session_state =
-            SessionState::new_with_config_rt(SessionConfig::new(), runtime)
-                .with_query_planner(Arc::new(MyQueryPlanner {}));
+            SessionStateBuilder::new_with_config_rt(SessionConfig::new(), runtime)
+                .with_defaults(true)
+                .with_query_planner(Arc::new(MyQueryPlanner {}))
+                .build();
         let ctx = SessionContext::new_with_state(session_state);
 
         let df = ctx.sql("SELECT 1").await?;

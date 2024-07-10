@@ -91,7 +91,8 @@ use uuid::Uuid;
 ///
 /// Note that there is no `Default` or `new()` for SessionState,
 /// to avoid accidentally running queries or other operations without passing through
-/// the [`SessionConfig`] or [`RuntimeEnv`]. See [`SessionContext`].
+/// the [`SessionConfig`] or [`RuntimeEnv`]. See [`SessionStateBuilder`] and
+/// [`SessionContext`].
 ///
 /// [`SessionContext`]: crate::execution::context::SessionContext
 #[derive(Clone)]
@@ -140,7 +141,6 @@ pub struct SessionState {
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
-
     /// [FunctionFactory] to support pluggable user defined function handler.
     ///
     /// It will be invoked on `CREATE FUNCTION` statements.
@@ -153,6 +153,7 @@ impl Debug for SessionState {
         f.debug_struct("SessionState")
             .field("session_id", &self.session_id)
             .field("analyzer", &"...")
+            .field("expr_planners", &"...")
             .field("optimizer", &"...")
             .field("physical_optimizers", &"...")
             .field("query_planner", &"...")
@@ -195,122 +196,10 @@ impl SessionState {
         runtime: Arc<RuntimeEnv>,
         catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
-        let session_id = Uuid::new_v4().to_string();
-
-        // Create table_factories for all default formats
-        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-            HashMap::new();
-        #[cfg(feature = "parquet")]
-        table_factories.insert("PARQUET".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("CSV".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("JSON".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("NDJSON".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("AVRO".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("ARROW".into(), Arc::new(DefaultTableFactory::new()));
-
-        if config.create_default_catalog_and_schema() {
-            let default_catalog = MemoryCatalogProvider::new();
-
-            default_catalog
-                .register_schema(
-                    &config.options().catalog.default_schema,
-                    Arc::new(MemorySchemaProvider::new()),
-                )
-                .expect("memory catalog provider can register schema");
-
-            Self::register_default_schema(
-                &config,
-                &table_factories,
-                &runtime,
-                &default_catalog,
-            );
-
-            catalog_list.register_catalog(
-                config.options().catalog.default_catalog.clone(),
-                Arc::new(default_catalog),
-            );
-        }
-
-        let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![
-            Arc::new(functions::core::planner::CoreFunctionPlanner::default()),
-            // register crate of array expressions (if enabled)
-            #[cfg(feature = "array_expressions")]
-            Arc::new(functions_array::planner::ArrayFunctionPlanner),
-            #[cfg(feature = "array_expressions")]
-            Arc::new(functions_array::planner::FieldAccessPlanner),
-            #[cfg(any(
-                feature = "datetime_expressions",
-                feature = "unicode_expressions"
-            ))]
-            Arc::new(functions::planner::UserDefinedFunctionPlanner),
-        ];
-
-        let mut new_self = SessionState {
-            session_id,
-            analyzer: Analyzer::new(),
-            expr_planners,
-            optimizer: Optimizer::new(),
-            physical_optimizers: PhysicalOptimizer::new(),
-            query_planner: Arc::new(DefaultQueryPlanner {}),
-            catalog_list,
-            table_functions: HashMap::new(),
-            scalar_functions: HashMap::new(),
-            aggregate_functions: HashMap::new(),
-            window_functions: HashMap::new(),
-            serializer_registry: Arc::new(EmptySerializerRegistry),
-            file_formats: HashMap::new(),
-            table_options: TableOptions::default_from_session_config(config.options()),
-            config,
-            execution_props: ExecutionProps::new(),
-            runtime_env: runtime,
-            table_factories,
-            function_factory: None,
-        };
-
-        #[cfg(feature = "parquet")]
-        if let Err(e) =
-            new_self.register_file_format(Arc::new(ParquetFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default ParquetFormat: {e}")
-        };
-
-        if let Err(e) =
-            new_self.register_file_format(Arc::new(JsonFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default JsonFormat: {e}")
-        };
-
-        if let Err(e) =
-            new_self.register_file_format(Arc::new(CsvFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default CsvFormat: {e}")
-        };
-
-        if let Err(e) =
-            new_self.register_file_format(Arc::new(ArrowFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default ArrowFormat: {e}")
-        };
-
-        if let Err(e) =
-            new_self.register_file_format(Arc::new(AvroFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default AvroFormat: {e}")
-        };
-
-        // register built in functions
-        functions::register_all(&mut new_self)
-            .expect("can not register built in functions");
-
-        // register crate of array expressions (if enabled)
-        #[cfg(feature = "array_expressions")]
-        functions_array::register_all(&mut new_self)
-            .expect("can not register array expressions");
-
-        functions_aggregate::register_all(&mut new_self)
-            .expect("can not register aggregate functions");
-
-        new_self
+        SessionStateBuilder::new_with_config_rt(config, runtime)
+            .with_defaults(true)
+            .with_catalog_list(catalog_list)
+            .build()
     }
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
@@ -324,44 +213,6 @@ impl SessionState {
         catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
         Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
-    }
-    fn register_default_schema(
-        config: &SessionConfig,
-        table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
-        runtime: &Arc<RuntimeEnv>,
-        default_catalog: &MemoryCatalogProvider,
-    ) {
-        let url = config.options().catalog.location.as_ref();
-        let format = config.options().catalog.format.as_ref();
-        let (url, format) = match (url, format) {
-            (Some(url), Some(format)) => (url, format),
-            _ => return,
-        };
-        let url = url.to_string();
-        let format = format.to_string();
-
-        let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
-        let authority = match url.host_str() {
-            Some(host) => format!("{}://{}", url.scheme(), host),
-            None => format!("{}://", url.scheme()),
-        };
-        let path = &url.as_str()[authority.len()..];
-        let path = object_store::path::Path::parse(path).expect("Can't parse path");
-        let store = ObjectStoreUrl::parse(authority.as_str())
-            .expect("Invalid default catalog url");
-        let store = match runtime.object_store(store) {
-            Ok(store) => store,
-            _ => return,
-        };
-        let factory = match table_factories.get(format.as_str()) {
-            Some(factory) => factory,
-            _ => return,
-        };
-        let schema =
-            ListingSchemaProvider::new(authority, path, factory.clone(), store, format);
-        let _ = default_catalog
-            .register_schema("default", Arc::new(schema))
-            .expect("Failed to register default schema");
     }
 
     pub(crate) fn resolve_table_ref(
@@ -400,12 +251,14 @@ impl SessionState {
             })
     }
 
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     /// Replace the random session id.
     pub fn with_session_id(mut self, session_id: String) -> Self {
         self.session_id = session_id;
         self
     }
 
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     /// override default query planner with `query_planner`
     pub fn with_query_planner(
         mut self,
@@ -415,6 +268,7 @@ impl SessionState {
         self
     }
 
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     /// Override the [`AnalyzerRule`]s optimizer plan rules.
     pub fn with_analyzer_rules(
         mut self,
@@ -424,6 +278,7 @@ impl SessionState {
         self
     }
 
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     /// Replace the entire list of [`OptimizerRule`]s used to optimize plans
     pub fn with_optimizer_rules(
         mut self,
@@ -433,6 +288,7 @@ impl SessionState {
         self
     }
 
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     /// Replace the entire list of [`PhysicalOptimizerRule`]s used to optimize plans
     pub fn with_physical_optimizer_rules(
         mut self,
@@ -452,6 +308,7 @@ impl SessionState {
         self
     }
 
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     /// Add `optimizer_rule` to the end of the list of
     /// [`OptimizerRule`]s used to rewrite queries.
     pub fn add_optimizer_rule(
@@ -472,6 +329,7 @@ impl SessionState {
         self.optimizer.rules.push(optimizer_rule);
     }
 
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     /// Add `physical_optimizer_rule` to the end of the list of
     /// [`PhysicalOptimizerRule`]s used to rewrite queries.
     pub fn add_physical_optimizer_rule(
@@ -482,6 +340,7 @@ impl SessionState {
         self
     }
 
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     /// Adds a new [`ConfigExtension`] to TableOptions
     pub fn add_table_options_extension<T: ConfigExtension>(
         mut self,
@@ -491,6 +350,7 @@ impl SessionState {
         self
     }
 
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
     pub fn with_function_factory(
         mut self,
@@ -505,6 +365,7 @@ impl SessionState {
         self.function_factory = Some(function_factory);
     }
 
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     /// Replace the extension [`SerializerRegistry`]
     pub fn with_serializer_registry(
         mut self,
@@ -973,6 +834,457 @@ impl SessionState {
         }
 
         query
+    }
+}
+
+/// A builder to be used for building [`SessionState`]'s. Defaults will be used for all values
+/// unless explicitly provided. Note that there is no `Default` or `new()` for SessionState,
+/// to avoid accidentally running queries or other operations without passing through
+/// the [`SessionConfig`] or [`RuntimeEnv`].
+pub struct SessionStateBuilder {
+    state: SessionState,
+    use_defaults: bool,
+}
+
+impl SessionStateBuilder {
+    /// Returns new [`SessionStateBuilder`] using the provided
+    /// [`SessionConfig`] and [`RuntimeEnv`].
+    pub fn new_with_config_rt(
+        config: SessionConfig,
+        runtime_env: Arc<RuntimeEnv>,
+    ) -> Self {
+        let session_id = Uuid::new_v4().to_string();
+        let catalog_list =
+            Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>;
+
+        Self {
+            state: SessionState {
+                session_id,
+                analyzer: Analyzer::new(),
+                expr_planners: vec![],
+                optimizer: Optimizer::new(),
+                physical_optimizers: PhysicalOptimizer::new(),
+                query_planner: Arc::new(DefaultQueryPlanner {}),
+                catalog_list,
+                table_functions: HashMap::new(),
+                scalar_functions: HashMap::new(),
+                aggregate_functions: HashMap::new(),
+                window_functions: HashMap::new(),
+                serializer_registry: Arc::new(EmptySerializerRegistry),
+                file_formats: HashMap::new(),
+                table_options: TableOptions::default_from_session_config(
+                    config.options(),
+                ),
+                config,
+                execution_props: ExecutionProps::new(),
+                table_factories: HashMap::new(),
+                runtime_env,
+                function_factory: None,
+            },
+            use_defaults: true,
+        }
+    }
+
+    /// Returns a new [SessionStateBuilder] based on an existing [SessionState]
+    /// The session id for the new builder will be reset to a unique value, all
+    /// other fields will be set to what is set in the provided session state
+    pub fn new_from_existing(existing: SessionState) -> Self {
+        let session_id = Uuid::new_v4().to_string();
+
+        Self {
+            state: SessionState {
+                session_id,
+                ..existing
+            },
+            use_defaults: true,
+        }
+    }
+
+    /// Set to true (default = true) if defaults for table_factories, expr_planners, file formats
+    /// and builtin functions should be set.
+    /// Note that there is an explicit option for enabling catalog and schema default
+    /// via [SessionConfig::create_default_catalog_and_schema] which will only be used
+    /// if the use_defaults is enabled here.
+    /// Also note that if a field is explicitly set to a non-empty value -
+    /// for example by using the [SessionStateBuilder::with_file_formats] function,
+    /// then defaults for that field will not be set.
+    pub fn with_defaults(mut self, use_defaults: bool) -> Self {
+        self.use_defaults = use_defaults;
+        self
+    }
+
+    /// Replace the random session id.
+    pub fn with_session_id(mut self, session_id: String) -> Self {
+        self.state.session_id = session_id;
+        self
+    }
+
+    /// Override the [`AnalyzerRule`]s optimizer plan rules.
+    pub fn with_analyzer_rules(
+        mut self,
+        rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
+    ) -> Self {
+        self.state.analyzer = Analyzer::with_rules(rules);
+        self
+    }
+
+    /// Add `analyzer_rule` to the end of the list of
+    /// [`AnalyzerRule`]s used to rewrite queries.
+    pub fn add_analyzer_rule(
+        mut self,
+        analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
+    ) -> Self {
+        self.state.analyzer.rules.push(analyzer_rule);
+        self
+    }
+
+    /// Replace the entire list of [`OptimizerRule`]s used to optimize plans
+    pub fn with_optimizer_rules(
+        mut self,
+        rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+    ) -> Self {
+        self.state.optimizer = Optimizer::with_rules(rules);
+        self
+    }
+
+    /// Add `optimizer_rule` to the end of the list of
+    /// [`OptimizerRule`]s used to rewrite queries.
+    pub fn add_optimizer_rule(
+        mut self,
+        optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
+    ) -> Self {
+        self.state.optimizer.rules.push(optimizer_rule);
+        self
+    }
+
+    /// Replace the entire list of [`ExprPlanner`]s used to customize the behavior of the SQL planner
+    pub fn with_expr_planners(
+        mut self,
+        expr_planners: Vec<Arc<dyn ExprPlanner>>,
+    ) -> Self {
+        self.state.expr_planners = expr_planners;
+        self
+    }
+
+    /// Replace the entire list of [`PhysicalOptimizerRule`]s used to optimize plans
+    pub fn with_physical_optimizer_rules(
+        mut self,
+        physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    ) -> Self {
+        self.state.physical_optimizers =
+            PhysicalOptimizer::with_rules(physical_optimizers);
+        self
+    }
+
+    /// Add `physical_optimizer_rule` to the end of the list of
+    /// [`PhysicalOptimizerRule`]s used to rewrite queries.
+    pub fn add_physical_optimizer_rule(
+        mut self,
+        physical_optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+    ) -> Self {
+        self.state
+            .physical_optimizers
+            .rules
+            .push(physical_optimizer_rule);
+        self
+    }
+
+    /// override default query planner with `query_planner`
+    pub fn with_query_planner(
+        mut self,
+        query_planner: Arc<dyn QueryPlanner + Send + Sync>,
+    ) -> Self {
+        self.state.query_planner = query_planner;
+        self
+    }
+
+    /// override default catalog list with `catalog_list`
+    pub fn with_catalog_list(
+        mut self,
+        catalog_list: Arc<dyn CatalogProviderList>,
+    ) -> Self {
+        self.state.catalog_list = catalog_list;
+        self
+    }
+
+    /// override default table functions with `table_functions`
+    pub fn with_table_functions(
+        mut self,
+        table_functions: HashMap<String, Arc<TableFunction>>,
+    ) -> Self {
+        self.state.table_functions = table_functions;
+        self
+    }
+
+    /// override default scalar functions with `scalar_functions`
+    pub fn with_scalar_functions(
+        mut self,
+        scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    ) -> Self {
+        self.state.scalar_functions = scalar_functions;
+        self
+    }
+
+    /// override default aggregate functions with `aggregate_functions`
+    pub fn with_aggregate_functions(
+        mut self,
+        aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    ) -> Self {
+        self.state.aggregate_functions = aggregate_functions;
+        self
+    }
+
+    /// override default window functions with `window_functions`
+    pub fn with_window_functions(
+        mut self,
+        window_functions: HashMap<String, Arc<WindowUDF>>,
+    ) -> Self {
+        self.state.window_functions = window_functions;
+        self
+    }
+
+    /// Registers a [`SerializerRegistry`]
+    pub fn with_serializer_registry(
+        mut self,
+        serializer_registry: Arc<dyn SerializerRegistry>,
+    ) -> Self {
+        self.state.serializer_registry = serializer_registry;
+        self
+    }
+
+    /// override default list of file formats with `file_formats`
+    pub fn with_file_formats(
+        mut self,
+        file_formats: HashMap<String, Arc<dyn FileFormatFactory>>,
+    ) -> Self {
+        self.state.file_formats = file_formats;
+        self
+    }
+
+    /// override the session config with `config`
+    pub fn with_config(mut self, config: SessionConfig) -> Self {
+        self.state.config = config;
+        self
+    }
+
+    /// override default table options with `table_options`
+    pub fn with_table_options(mut self, table_options: TableOptions) -> Self {
+        self.state.table_options = table_options;
+        self
+    }
+
+    /// Adds a new [`ConfigExtension`] to TableOptions
+    pub fn with_table_options_extension<T: ConfigExtension>(
+        mut self,
+        extension: T,
+    ) -> Self {
+        self.state.table_options.extensions.insert(extension);
+        self
+    }
+
+    /// override default execution props with `execution_props`
+    pub fn with_execution_props(mut self, execution_props: ExecutionProps) -> Self {
+        self.state.execution_props = execution_props;
+        self
+    }
+
+    /// override default table factories with `table_factories`
+    pub fn with_table_factories(
+        mut self,
+        table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
+    ) -> Self {
+        self.state.table_factories = table_factories;
+        self
+    }
+
+    /// override the runtime env with `runtime_env`
+    pub fn with_runtime_env(mut self, runtime_env: Arc<RuntimeEnv>) -> Self {
+        self.state.runtime_env = runtime_env;
+        self
+    }
+
+    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
+    pub fn with_function_factory(
+        mut self,
+        function_factory: Option<Arc<dyn FunctionFactory>>,
+    ) -> Self {
+        self.state.function_factory = function_factory;
+        self
+    }
+
+    /// build a [`SessionState`] with the current configuration
+    pub fn build(mut self) -> SessionState {
+        if self.use_defaults {
+            if self.state.table_factories.is_empty() {
+                self.state.table_factories =
+                    SessionStateDefaults::default_table_factories();
+            }
+            if self.state.expr_planners.is_empty() {
+                self.state.expr_planners = SessionStateDefaults::default_expr_planners();
+            }
+
+            if self.state.config.create_default_catalog_and_schema() {
+                let default_catalog = SessionStateDefaults::default_catalog(
+                    &self.state.config,
+                    &self.state.table_factories,
+                    &self.state.runtime_env,
+                );
+
+                self.state.catalog_list.register_catalog(
+                    self.state.config.options().catalog.default_catalog.clone(),
+                    Arc::new(default_catalog),
+                );
+            }
+
+            if self.state.file_formats.is_empty() {
+                SessionStateDefaults::register_file_format_defaults(&mut self.state);
+            }
+
+            if self.state.scalar_functions.is_empty() {
+                SessionStateDefaults::register_builtin_functions(&mut self.state);
+            }
+        }
+
+        self.state.clone()
+    }
+}
+
+struct SessionStateDefaults {}
+
+impl SessionStateDefaults {
+    pub fn default_table_factories() -> HashMap<String, Arc<dyn TableProviderFactory>> {
+        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+            HashMap::new();
+        #[cfg(feature = "parquet")]
+        table_factories.insert("PARQUET".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("CSV".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("JSON".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("NDJSON".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("AVRO".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("ARROW".into(), Arc::new(DefaultTableFactory::new()));
+
+        table_factories
+    }
+
+    pub fn default_catalog(
+        config: &SessionConfig,
+        table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
+        runtime: &Arc<RuntimeEnv>,
+    ) -> MemoryCatalogProvider {
+        let default_catalog = MemoryCatalogProvider::new();
+
+        default_catalog
+            .register_schema(
+                &config.options().catalog.default_schema,
+                Arc::new(MemorySchemaProvider::new()),
+            )
+            .expect("memory catalog provider can register schema");
+
+        Self::register_default_schema(config, table_factories, runtime, &default_catalog);
+
+        default_catalog
+    }
+
+    pub fn default_expr_planners() -> Vec<Arc<dyn ExprPlanner>> {
+        let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![
+            Arc::new(functions::core::planner::CoreFunctionPlanner::default()),
+            // register crate of array expressions (if enabled)
+            #[cfg(feature = "array_expressions")]
+            Arc::new(functions_array::planner::ArrayFunctionPlanner),
+            #[cfg(feature = "array_expressions")]
+            Arc::new(functions_array::planner::FieldAccessPlanner),
+            #[cfg(any(
+                feature = "datetime_expressions",
+                feature = "unicode_expressions"
+            ))]
+            Arc::new(functions::planner::UserDefinedFunctionPlanner),
+        ];
+
+        expr_planners
+    }
+
+    pub fn register_default_schema(
+        config: &SessionConfig,
+        table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
+        runtime: &Arc<RuntimeEnv>,
+        default_catalog: &MemoryCatalogProvider,
+    ) {
+        let url = config.options().catalog.location.as_ref();
+        let format = config.options().catalog.format.as_ref();
+        let (url, format) = match (url, format) {
+            (Some(url), Some(format)) => (url, format),
+            _ => return,
+        };
+        let url = url.to_string();
+        let format = format.to_string();
+
+        let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
+        let authority = match url.host_str() {
+            Some(host) => format!("{}://{}", url.scheme(), host),
+            None => format!("{}://", url.scheme()),
+        };
+        let path = &url.as_str()[authority.len()..];
+        let path = object_store::path::Path::parse(path).expect("Can't parse path");
+        let store = ObjectStoreUrl::parse(authority.as_str())
+            .expect("Invalid default catalog url");
+        let store = match runtime.object_store(store) {
+            Ok(store) => store,
+            _ => return,
+        };
+        let factory = match table_factories.get(format.as_str()) {
+            Some(factory) => factory,
+            _ => return,
+        };
+        let schema =
+            ListingSchemaProvider::new(authority, path, factory.clone(), store, format);
+        let _ = default_catalog
+            .register_schema("default", Arc::new(schema))
+            .expect("Failed to register default schema");
+    }
+
+    pub fn register_file_format_defaults(state: &mut SessionState) {
+        #[cfg(feature = "parquet")]
+        if let Err(e) =
+            state.register_file_format(Arc::new(ParquetFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default ParquetFormat: {e}")
+        };
+
+        if let Err(e) =
+            state.register_file_format(Arc::new(JsonFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default JsonFormat: {e}")
+        };
+
+        if let Err(e) =
+            state.register_file_format(Arc::new(CsvFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default CsvFormat: {e}")
+        };
+
+        if let Err(e) =
+            state.register_file_format(Arc::new(ArrowFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default ArrowFormat: {e}")
+        };
+
+        if let Err(e) =
+            state.register_file_format(Arc::new(AvroFormatFactory::new()), false)
+        {
+            log::info!("Unable to register default AvroFormat: {e}")
+        };
+    }
+
+    pub fn register_builtin_functions(state: &mut SessionState) {
+        // register built in functions
+        functions::register_all(state).expect("can not register built in functions");
+
+        // register crate of array expressions (if enabled)
+        #[cfg(feature = "array_expressions")]
+        functions_array::register_all(state).expect("can not register array expressions");
+
+        functions_aggregate::register_all(state)
+            .expect("can not register aggregate functions");
     }
 }
 

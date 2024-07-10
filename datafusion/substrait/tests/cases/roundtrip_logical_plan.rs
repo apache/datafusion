@@ -28,7 +28,6 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
-use datafusion::execution::context::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{
@@ -37,6 +36,7 @@ use datafusion::logical_expr::{
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
 
+use datafusion::execution::session_state::SessionStateBuilder;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
@@ -1121,11 +1121,13 @@ async fn function_extension_info(sql: &str) -> Result<(Vec<String>, Vec<u32>)> {
 }
 
 async fn create_context() -> Result<SessionContext> {
-    let mut state = SessionState::new_with_config_rt(
+    let mut state = SessionStateBuilder::new_with_config_rt(
         SessionConfig::default(),
         Arc::new(RuntimeEnv::default()),
     )
-    .with_serializer_registry(Arc::new(MockSerializerRegistry));
+    .with_defaults(true)
+    .with_serializer_registry(Arc::new(MockSerializerRegistry))
+    .build();
 
     // register udaf for test, e.g. `sum()`
     datafusion_functions_aggregate::register_all(&mut state)
