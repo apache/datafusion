@@ -19,7 +19,8 @@
 
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
+use std::mem;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -33,7 +34,9 @@ use crate::{
 use crate::{window_frame, Volatility};
 
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
@@ -305,7 +308,7 @@ pub enum Expr {
     ///
     /// This expr has to be resolved to a list of columns before translating logical
     /// plan into physical plan.
-    Wildcard { qualifier: Option<String> },
+    Wildcard { qualifier: Option<TableReference> },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
@@ -354,6 +357,11 @@ impl Unnest {
         Self {
             expr: Box::new(expr),
         }
+    }
+
+    /// Create a new Unnest expression.
+    pub fn new_boxed(boxed: Box<Expr>) -> Self {
+        Self { expr: boxed }
     }
 }
 
@@ -706,10 +714,14 @@ pub enum WindowFunctionDefinition {
 
 impl WindowFunctionDefinition {
     /// Returns the datatype of the window function
-    pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
+    pub fn return_type(
+        &self,
+        input_expr_types: &[DataType],
+        input_expr_nullable: &[bool],
+    ) -> Result<DataType> {
         match self {
             WindowFunctionDefinition::AggregateFunction(fun) => {
-                fun.return_type(input_expr_types)
+                fun.return_type(input_expr_types, input_expr_nullable)
             }
             WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
                 fun.return_type(input_expr_types)
@@ -1191,32 +1203,53 @@ impl Expr {
         }
     }
 
-    /// Recursively potentially multiple aliases from an expression.
+    /// Recursively removed potentially multiple aliases from an expression.
     ///
-    /// If the expression is not an alias, the expression is returned unchanged.
-    /// This method removes directly nested aliases, but not other nested
-    /// aliases.
+    /// This method removes nested aliases and returns [`Transformed`]
+    /// to signal if the expression was changed.
     ///
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
     /// // `foo as "bar"` is unaliased to `foo`
     /// let expr = col("foo").alias("bar");
-    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    /// assert_eq!(expr.unalias_nested().data, col("foo"));
     ///
-    /// // `foo as "bar" + baz` is not unaliased
+    /// // `foo as "bar" + baz` is  unaliased
     /// let expr = col("foo").alias("bar") + col("baz");
-    /// assert_eq!(expr.clone().unalias_nested(), expr);
+    /// assert_eq!(expr.clone().unalias_nested().data, col("foo") + col("baz"));
     ///
     /// // `foo as "bar" as "baz" is unalaised to foo
     /// let expr = col("foo").alias("bar").alias("baz");
-    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    /// assert_eq!(expr.unalias_nested().data, col("foo"));
     /// ```
-    pub fn unalias_nested(self) -> Expr {
-        match self {
-            Expr::Alias(alias) => alias.expr.unalias_nested(),
-            _ => self,
-        }
+    pub fn unalias_nested(self) -> Transformed<Expr> {
+        self.transform_down_up(
+            |expr| {
+                // f_down: skip subqueries.  Check in f_down to avoid recursing into them
+                let recursion = if matches!(
+                    expr,
+                    Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_)
+                ) {
+                    // subqueries could contain aliases so don't recurse into those
+                    TreeNodeRecursion::Jump
+                } else {
+                    TreeNodeRecursion::Continue
+                };
+                Ok(Transformed::new(expr, false, recursion))
+            },
+            |expr| {
+                // f_up: unalias on up so we can remove nested aliases like
+                // `(x as foo) as bar`
+                if let Expr::Alias(Alias { expr, .. }) = expr {
+                    Ok(Transformed::yes(*expr))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            },
+        )
+        // unreachable code: internal closure doesn't return err
+        .unwrap()
     }
 
     /// Return `self IN <list>` if `negated` is false, otherwise
@@ -1326,11 +1359,52 @@ impl Expr {
     }
 
     /// Return all referenced columns of this expression.
+    #[deprecated(since = "40.0.0", note = "use Expr::column_refs instead")]
     pub fn to_columns(&self) -> Result<HashSet<Column>> {
         let mut using_columns = HashSet::new();
         expr_to_columns(self, &mut using_columns)?;
 
         Ok(using_columns)
+    }
+
+    /// Return all references to columns in this expression.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::collections::HashSet;
+    /// # use datafusion_common::Column;
+    /// # use datafusion_expr::col;
+    /// // For an expression `a + (b * a)`
+    /// let expr = col("a") + (col("b") * col("a"));
+    /// let refs = expr.column_refs();
+    /// // refs contains "a" and "b"
+    /// assert_eq!(refs.len(), 2);
+    /// assert!(refs.contains(&Column::new_unqualified("a")));
+    ///  assert!(refs.contains(&Column::new_unqualified("b")));
+    /// ```
+    pub fn column_refs(&self) -> HashSet<&Column> {
+        let mut using_columns = HashSet::new();
+        self.add_column_refs(&mut using_columns);
+        using_columns
+    }
+
+    /// Adds references to all columns in this expression to the set
+    ///
+    /// See [`Self::column_refs`] for details
+    pub fn add_column_refs<'a>(&'a self, set: &mut HashSet<&'a Column>) {
+        self.apply(|expr| {
+            if let Expr::Column(col) = expr {
+                set.insert(col);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("traversal is infallable");
+    }
+
+    /// Returns true if there are any column references in this Expr
+    pub fn any_column_refs(&self) -> bool {
+        self.exists(|expr| Ok(matches!(expr, Expr::Column(_))))
+            .unwrap()
     }
 
     /// Return true when the expression contains out reference(correlated) expressions.
@@ -1339,12 +1413,19 @@ impl Expr {
             .unwrap()
     }
 
+    /// Returns true if the expression node is volatile, i.e. whether it can return
+    /// different results when evaluated multiple times with the same input.
+    /// Note: unlike [`Self::is_volatile`], this function does not consider inputs:
+    /// - `rand()` returns `true`,
+    /// - `a + rand()` returns `false`
+    pub fn is_volatile_node(&self) -> bool {
+        matches!(self, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile)
+    }
+
     /// Returns true if the expression is volatile, i.e. whether it can return different
     /// results when evaluated multiple times with the same input.
     pub fn is_volatile(&self) -> Result<bool> {
-        self.exists(|expr| {
-            Ok(matches!(expr, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile ))
-        })
+        self.exists(|expr| Ok(expr.is_volatile_node()))
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and
@@ -1418,6 +1499,176 @@ impl Expr {
             | Expr::Sort(..)
             | Expr::Placeholder(..) => false,
         }
+    }
+
+    /// Hashes the direct content of an `Expr` without recursing into its children.
+    ///
+    /// This method is useful to incrementally compute hashes, such as  in
+    /// `CommonSubexprEliminate` which builds a deep hash of a node and its descendants
+    /// during the bottom-up phase of the first traversal and so avoid computing the hash
+    /// of the node and then the hash of its descendants separately.
+    ///
+    /// If a node doesn't have any children then this method is similar to `.hash()`, but
+    /// not necessarily returns the same value.
+    ///
+    /// As it is pretty easy to forget changing this method when `Expr` changes the
+    /// implementation doesn't use wildcard patterns (`..`, `_`) to catch changes
+    /// compile time.
+    pub fn hash_node<H: Hasher>(&self, hasher: &mut H) {
+        mem::discriminant(self).hash(hasher);
+        match self {
+            Expr::Alias(Alias {
+                expr: _expr,
+                relation,
+                name,
+            }) => {
+                relation.hash(hasher);
+                name.hash(hasher);
+            }
+            Expr::Column(column) => {
+                column.hash(hasher);
+            }
+            Expr::ScalarVariable(data_type, name) => {
+                data_type.hash(hasher);
+                name.hash(hasher);
+            }
+            Expr::Literal(scalar_value) => {
+                scalar_value.hash(hasher);
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left: _left,
+                op,
+                right: _right,
+            }) => {
+                op.hash(hasher);
+            }
+            Expr::Like(Like {
+                negated,
+                expr: _expr,
+                pattern: _pattern,
+                escape_char,
+                case_insensitive,
+            })
+            | Expr::SimilarTo(Like {
+                negated,
+                expr: _expr,
+                pattern: _pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
+                negated.hash(hasher);
+                escape_char.hash(hasher);
+                case_insensitive.hash(hasher);
+            }
+            Expr::Not(_expr)
+            | Expr::IsNotNull(_expr)
+            | Expr::IsNull(_expr)
+            | Expr::IsTrue(_expr)
+            | Expr::IsFalse(_expr)
+            | Expr::IsUnknown(_expr)
+            | Expr::IsNotTrue(_expr)
+            | Expr::IsNotFalse(_expr)
+            | Expr::IsNotUnknown(_expr)
+            | Expr::Negative(_expr) => {}
+            Expr::Between(Between {
+                expr: _expr,
+                negated,
+                low: _low,
+                high: _high,
+            }) => {
+                negated.hash(hasher);
+            }
+            Expr::Case(Case {
+                expr: _expr,
+                when_then_expr: _when_then_expr,
+                else_expr: _else_expr,
+            }) => {}
+            Expr::Cast(Cast {
+                expr: _expr,
+                data_type,
+            })
+            | Expr::TryCast(TryCast {
+                expr: _expr,
+                data_type,
+            }) => {
+                data_type.hash(hasher);
+            }
+            Expr::Sort(Sort {
+                expr: _expr,
+                asc,
+                nulls_first,
+            }) => {
+                asc.hash(hasher);
+                nulls_first.hash(hasher);
+            }
+            Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
+                func.hash(hasher);
+            }
+            Expr::AggregateFunction(AggregateFunction {
+                func_def,
+                args: _args,
+                distinct,
+                filter: _filter,
+                order_by: _order_by,
+                null_treatment,
+            }) => {
+                func_def.hash(hasher);
+                distinct.hash(hasher);
+                null_treatment.hash(hasher);
+            }
+            Expr::WindowFunction(WindowFunction {
+                fun,
+                args: _args,
+                partition_by: _partition_by,
+                order_by: _order_by,
+                window_frame,
+                null_treatment,
+            }) => {
+                fun.hash(hasher);
+                window_frame.hash(hasher);
+                null_treatment.hash(hasher);
+            }
+            Expr::InList(InList {
+                expr: _expr,
+                list: _list,
+                negated,
+            }) => {
+                negated.hash(hasher);
+            }
+            Expr::Exists(Exists { subquery, negated }) => {
+                subquery.hash(hasher);
+                negated.hash(hasher);
+            }
+            Expr::InSubquery(InSubquery {
+                expr: _expr,
+                subquery,
+                negated,
+            }) => {
+                subquery.hash(hasher);
+                negated.hash(hasher);
+            }
+            Expr::ScalarSubquery(subquery) => {
+                subquery.hash(hasher);
+            }
+            Expr::Wildcard { qualifier } => {
+                qualifier.hash(hasher);
+            }
+            Expr::GroupingSet(grouping_set) => {
+                mem::discriminant(grouping_set).hash(hasher);
+                match grouping_set {
+                    GroupingSet::Rollup(_exprs) | GroupingSet::Cube(_exprs) => {}
+                    GroupingSet::GroupingSets(_exprs) => {}
+                }
+            }
+            Expr::Placeholder(place_holder) => {
+                place_holder.hash(hasher);
+            }
+            Expr::OuterReferenceColumn(data_type, column) => {
+                data_type.hash(hasher);
+                column.hash(hasher);
+            }
+            Expr::Unnest(Unnest { expr: _expr }) => {}
+        };
     }
 }
 
@@ -2038,7 +2289,7 @@ mod test {
         // single column
         {
             let expr = &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64));
-            let columns = expr.to_columns()?;
+            let columns = expr.column_refs();
             assert_eq!(1, columns.len());
             assert!(columns.contains(&Column::from_name("a")));
         }
@@ -2046,7 +2297,7 @@ mod test {
         // multiple columns
         {
             let expr = col("a") + col("b") + lit(1);
-            let columns = expr.to_columns()?;
+            let columns = expr.column_refs();
             assert_eq!(2, columns.len());
             assert!(columns.contains(&Column::from_name("a")));
             assert!(columns.contains(&Column::from_name("b")));
@@ -2138,10 +2389,10 @@ mod test {
     #[test]
     fn test_first_value_return_type() -> Result<()> {
         let fun = find_df_window_func("first_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::UInt64])?;
+        let observed = fun.return_type(&[DataType::UInt64], &[true])?;
         assert_eq!(DataType::UInt64, observed);
 
         Ok(())
@@ -2150,10 +2401,10 @@ mod test {
     #[test]
     fn test_last_value_return_type() -> Result<()> {
         let fun = find_df_window_func("last_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2162,10 +2413,10 @@ mod test {
     #[test]
     fn test_lead_return_type() -> Result<()> {
         let fun = find_df_window_func("lead").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2174,10 +2425,10 @@ mod test {
     #[test]
     fn test_lag_return_type() -> Result<()> {
         let fun = find_df_window_func("lag").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2186,10 +2437,12 @@ mod test {
     #[test]
     fn test_nth_value_return_type() -> Result<()> {
         let fun = find_df_window_func("nth_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8, DataType::UInt64])?;
+        let observed =
+            fun.return_type(&[DataType::Utf8, DataType::UInt64], &[true, true])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64, DataType::UInt64])?;
+        let observed =
+            fun.return_type(&[DataType::Float64, DataType::UInt64], &[true, true])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2198,7 +2451,7 @@ mod test {
     #[test]
     fn test_percent_rank_return_type() -> Result<()> {
         let fun = find_df_window_func("percent_rank").unwrap();
-        let observed = fun.return_type(&[])?;
+        let observed = fun.return_type(&[], &[])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2207,7 +2460,7 @@ mod test {
     #[test]
     fn test_cume_dist_return_type() -> Result<()> {
         let fun = find_df_window_func("cume_dist").unwrap();
-        let observed = fun.return_type(&[])?;
+        let observed = fun.return_type(&[], &[])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2216,7 +2469,7 @@ mod test {
     #[test]
     fn test_ntile_return_type() -> Result<()> {
         let fun = find_df_window_func("ntile").unwrap();
-        let observed = fun.return_type(&[DataType::Int16])?;
+        let observed = fun.return_type(&[DataType::Int16], &[true])?;
         assert_eq!(DataType::UInt64, observed);
 
         Ok(())
@@ -2238,7 +2491,6 @@ mod test {
             "nth_value",
             "min",
             "max",
-            "avg",
         ];
         for name in names {
             let fun = find_df_window_func(name).unwrap();
@@ -2265,12 +2517,6 @@ mod test {
             find_df_window_func("min"),
             Some(WindowFunctionDefinition::AggregateFunction(
                 aggregate_function::AggregateFunction::Min
-            ))
-        );
-        assert_eq!(
-            find_df_window_func("avg"),
-            Some(WindowFunctionDefinition::AggregateFunction(
-                aggregate_function::AggregateFunction::Avg
             ))
         );
         assert_eq!(

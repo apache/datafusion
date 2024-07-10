@@ -419,15 +419,16 @@ impl<'a> ColOpLit<'a> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::OnceLock;
+
     use super::*;
-    use crate::create_physical_expr;
+    use crate::planner::logical2physical;
+
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::ToDFSchema;
-    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr_fn::*;
     use datafusion_expr::{lit, Expr};
+
     use itertools::Itertools;
-    use std::sync::OnceLock;
 
     #[test]
     fn test_literal() {
@@ -867,23 +868,14 @@ mod test {
         LiteralGuarantee::try_new(column, Guarantee::NotIn, literals.iter()).unwrap()
     }
 
-    /// Convert a logical expression to a physical expression (without any simplification, etc)
-    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-        let df_schema = schema.clone().to_dfschema().unwrap();
-        let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
-    }
-
     // Schema for testing
     fn schema() -> SchemaRef {
-        SCHEMA
-            .get_or_init(|| {
-                Arc::new(Schema::new(vec![
-                    Field::new("a", DataType::Utf8, false),
-                    Field::new("b", DataType::Int32, false),
-                ]))
-            })
-            .clone()
+        Arc::clone(SCHEMA.get_or_init(|| {
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Int32, false),
+            ]))
+        }))
     }
 
     static SCHEMA: OnceLock<SchemaRef> = OnceLock::new();

@@ -186,9 +186,9 @@ pub use writer::plan_to_parquet;
 /// let exec = ParquetExec::builder(file_scan_config).build();
 /// ```
 ///
-/// For a complete example, see the [`parquet_index_advanced` example]).
+/// For a complete example, see the [`advanced_parquet_index` example]).
 ///
-/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/parquet_index_advanced.rs
+/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_parquet_index.rs
 ///
 /// # Execution Overview
 ///
@@ -796,17 +796,15 @@ mod tests {
         ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
         StructArray,
     };
-
     use arrow::datatypes::{Field, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
     use arrow_schema::Fields;
-    use datafusion_common::{assert_contains, FileType, GetExt, ScalarValue, ToDFSchema};
-    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};
-    use datafusion_physical_expr::create_physical_expr;
+    use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::ExecutionPlanProperties;
 
     use chrono::{TimeZone, Utc};
-    use datafusion_physical_plan::ExecutionPlanProperties;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -1996,7 +1994,7 @@ mod tests {
         // Configure listing options
         let file_format = ParquetFormat::default().with_enable_pruning(true);
         let listing_options = ListingOptions::new(Arc::new(file_format))
-            .with_file_extension(FileType::PARQUET.get_ext());
+            .with_file_extension(ParquetFormat::default().get_ext());
 
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
@@ -2059,12 +2057,6 @@ mod tests {
         assert_eq!(allparts_count, 40);
 
         Ok(())
-    }
-
-    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-        let df_schema = schema.clone().to_dfschema().unwrap();
-        let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 
     #[tokio::test]

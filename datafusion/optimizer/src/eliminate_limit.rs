@@ -19,8 +19,9 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::Result;
 use datafusion_expr::logical_plan::{tree_node::unwrap_arc, EmptyRelation, LogicalPlan};
+use std::sync::Arc;
 
 /// Optimizer rule to replace `LIMIT 0` or `LIMIT` whose ancestor LIMIT's skip is
 /// greater than or equal to current's fetch
@@ -40,14 +41,6 @@ impl EliminateLimit {
 }
 
 impl OptimizerRule for EliminateLimit {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called EliminateLimit::rewrite")
-    }
-
     fn name(&self) -> &str {
         "eliminate_limit"
     }
@@ -75,7 +68,7 @@ impl OptimizerRule for EliminateLimit {
                         return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
                             EmptyRelation {
                                 produce_one_row: false,
-                                schema: limit.input.schema().clone(),
+                                schema: Arc::clone(limit.input.schema()),
                             },
                         )));
                     }

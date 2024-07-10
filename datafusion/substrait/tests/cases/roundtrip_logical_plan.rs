@@ -239,7 +239,7 @@ async fn aggregate_grouping_sets() -> Result<()> {
 async fn aggregate_grouping_rollup() -> Result<()> {
     assert_expected_plan(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",
-        "Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[AVG(data.b)]]\
+        "Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
         \n  TableScan: data projection=[a, b, c, e]",
         true
     ).await
@@ -327,7 +327,7 @@ async fn simple_scalar_function_pow() -> Result<()> {
 
 #[tokio::test]
 async fn simple_scalar_function_substr() -> Result<()> {
-    roundtrip("SELECT * FROM data WHERE a = SUBSTR('datafusion', 0, 3)").await
+    roundtrip("SELECT SUBSTR(f, 1, 3) FROM data").await
 }
 
 #[tokio::test]
@@ -492,6 +492,23 @@ async fn roundtrip_outer_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_self_join() -> Result<()> {
+    // Substrait does currently NOT maintain the alias of the tables.
+    // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
+    // This roundtrip works because we set aliases to what the Substrait consumer will generate.
+    roundtrip("SELECT left.a as left_a, left.b, right.a as right_a, right.c FROM data AS left JOIN data AS right ON left.a = right.a").await?;
+    roundtrip("SELECT left.a as left_a, left.b, right.a as right_a, right.c FROM data AS left JOIN data AS right ON left.b = right.b").await
+}
+
+#[tokio::test]
+async fn roundtrip_self_implicit_cross_join() -> Result<()> {
+    // Substrait does currently NOT maintain the alias of the tables.
+    // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
+    // This roundtrip works because we set aliases to what the Substrait consumer will generate.
+    roundtrip("SELECT left.a left_a, left.b, right.a right_a, right.c FROM data AS left, data AS right").await
+}
+
+#[tokio::test]
 async fn roundtrip_arithmetic_ops() -> Result<()> {
     roundtrip("SELECT a - a FROM data").await?;
     roundtrip("SELECT a + a FROM data").await?;
@@ -503,24 +520,6 @@ async fn roundtrip_arithmetic_ops() -> Result<()> {
     roundtrip("SELECT a >= a FROM data").await?;
     roundtrip("SELECT a < a FROM data").await?;
     roundtrip("SELECT a <= a FROM data").await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn roundtrip_interval_literal() -> Result<()> {
-    roundtrip(
-        "SELECT g from data where g = arrow_cast(INTERVAL '1 YEAR', 'Interval(YearMonth)')",
-    )
-    .await?;
-    roundtrip(
-        "SELECT g from data where g = arrow_cast(INTERVAL '1 YEAR', 'Interval(DayTime)')",
-    )
-    .await?;
-    roundtrip(
-    "SELECT g from data where g = arrow_cast(INTERVAL '1 YEAR', 'Interval(MonthDayNano)')",
-    )
-    .await?;
-
     Ok(())
 }
 
@@ -594,10 +593,10 @@ async fn roundtrip_union_all() -> Result<()> {
 
 #[tokio::test]
 async fn simple_intersect() -> Result<()> {
-    // Substrait treats both COUNT(*) and COUNT(1) the same
+    // Substrait treats both count(*) and count(1) the same
     assert_expected_plan(
-        "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
-        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1)) AS COUNT(*)]]\
+        "SELECT count(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
          \n  Projection: \
          \n    LeftSemi Join: data.a = data2.a\
          \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
@@ -610,12 +609,38 @@ async fn simple_intersect() -> Result<()> {
 
 #[tokio::test]
 async fn simple_intersect_table_reuse() -> Result<()> {
-    roundtrip("SELECT COUNT(1) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);").await
+    // Substrait does currently NOT maintain the alias of the tables.
+    // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
+    // In this case the aliasing happens at a different point in the plan, so we cannot use roundtrip.
+    // Schema check works because we set aliases to what the Substrait consumer will generate.
+    assert_expected_plan(
+        "SELECT count(1) FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);",
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        \n  Projection: \
+        \n    LeftSemi Join: left.a = right.a\
+        \n      SubqueryAlias: left\
+        \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n          TableScan: data projection=[a]\
+        \n      SubqueryAlias: right\
+        \n        TableScan: data projection=[a]",
+        true
+    ).await
 }
 
 #[tokio::test]
 async fn simple_window_function() -> Result<()> {
     roundtrip("SELECT RANK() OVER (PARTITION BY a ORDER BY b), d, sum(b) OVER (PARTITION BY a) FROM data;").await
+}
+
+#[tokio::test]
+async fn window_with_rows() -> Result<()> {
+    roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM data;").await?;
+    roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING) FROM data;").await?;
+    roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING) FROM data;").await?;
+    roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING) FROM data;").await?;
+    roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN 2 PRECEDING AND UNBOUNDED FOLLOWING) FROM data;").await?;
+    roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN 2 FOLLOWING AND 4 FOLLOWING) FROM data;").await?;
+    roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN 4 PRECEDING AND 2 PRECEDING) FROM data;").await
 }
 
 #[tokio::test]
@@ -626,32 +651,6 @@ async fn qualified_schema_table_reference() -> Result<()> {
 #[tokio::test]
 async fn qualified_catalog_schema_table_reference() -> Result<()> {
     roundtrip("SELECT a,b,c,d,e FROM datafusion.public.data;").await
-}
-
-#[tokio::test]
-async fn roundtrip_inner_join_table_reuse_zero_index() -> Result<()> {
-    assert_expected_plan(
-        "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.a = d2.a",
-        "Projection: data.b, data.c\
-         \n  Inner Join: data.a = data.a\
-         \n    TableScan: data projection=[a, b]\
-         \n    TableScan: data projection=[a, c]",
-        false, // "d1" vs "data" field qualifier
-    )
-    .await
-}
-
-#[tokio::test]
-async fn roundtrip_inner_join_table_reuse_non_zero_index() -> Result<()> {
-    assert_expected_plan(
-        "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.b = d2.b",
-        "Projection: data.b, data.c\
-         \n  Inner Join: data.b = data.b\
-         \n    TableScan: data projection=[b]\
-         \n    TableScan: data projection=[b, c]",
-        false, // "d1" vs "data" field qualifier
-    )
-    .await
 }
 
 /// Construct a plan that contains several literals of types that are currently supported.
@@ -707,20 +706,17 @@ async fn roundtrip_literal_struct() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_values() -> Result<()> {
     // TODO: would be nice to have a struct inside the LargeList, but arrow_cast doesn't support that currently
-    let values = "(\
+    assert_expected_plan(
+        "VALUES \
+            (\
                 1, \
                 'a', \
                 [[-213.1, NULL, 5.5, 2.0, 1.0], []], \
                 arrow_cast([1,2,3], 'LargeList(Int64)'), \
                 STRUCT(true, 1 AS int_field, CAST(NULL AS STRING)), \
                 [STRUCT(STRUCT('a' AS string_field) AS struct_field)]\
-            )";
-
-    // Test LogicalPlan::Values
-    assert_expected_plan(
-        format!("VALUES \
-            {values}, \
-            (NULL, NULL, NULL, NULL, NULL, NULL)").as_str(),
+            ), \
+            (NULL, NULL, NULL, NULL, NULL, NULL)",
         "Values: \
             (\
                 Int64(1), \
@@ -731,11 +727,44 @@ async fn roundtrip_values() -> Result<()> {
                 List([{struct_field: {string_field: a}}])\
             ), \
             (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())",
-    true)
-        .await?;
+    true).await
+}
 
-    // Test LogicalPlan::EmptyRelation
-    roundtrip(format!("SELECT * FROM (VALUES {values}) LIMIT 0").as_str()).await
+#[tokio::test]
+async fn roundtrip_values_empty_relation() -> Result<()> {
+    roundtrip("SELECT * FROM (VALUES ('a')) LIMIT 0").await
+}
+
+#[tokio::test]
+async fn roundtrip_values_duplicate_column_join() -> Result<()> {
+    // Substrait does currently NOT maintain the alias of the tables.
+    // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
+    // This roundtrip works because we set aliases to what the Substrait consumer will generate.
+    roundtrip(
+        "SELECT left.column1 as c1, right.column1 as c2 \
+    FROM \
+        (VALUES (1)) AS left \
+    JOIN \
+        (VALUES (2)) AS right \
+    ON left.column1 == right.column1",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn duplicate_column() -> Result<()> {
+    // Substrait does not keep column names (aliases) in the plan, rather it operates on column indices
+    // only. DataFusion however, is strict about not having duplicate column names appear in the plan.
+    // This test confirms that we generate aliases for columns in the plan which would otherwise have
+    // colliding names.
+    assert_expected_plan(
+        "SELECT a + 1 as sum_a, a + 1 as sum_a_2 FROM data",
+        "Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS data.a + Int64(1)__temp__0 AS sum_a_2\
+            \n  Projection: data.a + Int64(1)\
+            \n    TableScan: data projection=[a]",
+        true,
+    )
+    .await
 }
 
 /// Construct a plan that cast columns. Only those SQL types are supported for now.
@@ -790,23 +819,20 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
     struct Dummy {}
 
     impl Accumulator for Dummy {
-        fn state(&mut self) -> datafusion::error::Result<Vec<ScalarValue>> {
-            Ok(vec![])
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Float64(None), ScalarValue::UInt32(None)])
         }
 
-        fn update_batch(
-            &mut self,
-            _values: &[ArrayRef],
-        ) -> datafusion::error::Result<()> {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
 
-        fn merge_batch(&mut self, _states: &[ArrayRef]) -> datafusion::error::Result<()> {
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
 
-        fn evaluate(&mut self) -> datafusion::error::Result<ScalarValue> {
-            Ok(ScalarValue::Float64(None))
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(None))
         }
 
         fn size(&self) -> usize {
@@ -1040,6 +1066,8 @@ async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<()> {
     assert_eq!(plan1str, plan2str);
 
     assert_eq!(plan.schema(), plan2.schema());
+
+    DataFrame::new(ctx.state(), plan2).show().await?;
     Ok(())
 }
 
@@ -1112,7 +1140,6 @@ async fn create_context() -> Result<SessionContext> {
         Field::new("d", DataType::Boolean, true),
         Field::new("e", DataType::UInt32, true),
         Field::new("f", DataType::Utf8, true),
-        Field::new("g", DataType::Interval(IntervalUnit::DayTime), true),
     ];
     let schema = Schema::new(fields);
     explicit_options.schema = Some(&schema);
@@ -1175,6 +1202,11 @@ async fn create_all_type_context() -> Result<SessionContext> {
         ),
         Field::new("decimal_128_col", DataType::Decimal128(10, 2), true),
         Field::new("decimal_256_col", DataType::Decimal256(10, 2), true),
+        Field::new(
+            "interval_day_time_col",
+            DataType::Interval(IntervalUnit::DayTime),
+            true,
+        ),
     ]);
     explicit_options.schema = Some(&schema);
     explicit_options.has_header = false;

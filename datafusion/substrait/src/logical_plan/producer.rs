@@ -813,7 +813,7 @@ pub fn to_substrait_agg_measure(
                     for arg in args {
                         arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(ctx, arg, schema, 0, extension_info)?)) });
                     }
-                    let function_anchor = _register_function(fun.to_string(), extension_info);
+                    let function_anchor = register_function(fun.to_string(), extension_info);
                     Ok(Measure {
                         measure: Some(AggregateFunction {
                             function_reference: function_anchor,
@@ -844,7 +844,7 @@ pub fn to_substrait_agg_measure(
                     for arg in args {
                         arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(ctx, arg, schema, 0, extension_info)?)) });
                     }
-                    let function_anchor = _register_function(fun.name().to_string(), extension_info);
+                    let function_anchor = register_function(fun.name().to_string(), extension_info);
                     Ok(Measure {
                         measure: Some(AggregateFunction {
                             function_reference: function_anchor,
@@ -912,7 +912,7 @@ fn to_substrait_sort_field(
     }
 }
 
-fn _register_function(
+fn register_function(
     function_name: String,
     extension_info: &mut (
         Vec<extensions::SimpleExtensionDeclaration>,
@@ -921,6 +921,14 @@ fn _register_function(
 ) -> u32 {
     let (function_extensions, function_set) = extension_info;
     let function_name = function_name.to_lowercase();
+
+    // Some functions are named differently in Substrait default extensions than in DF
+    // Rename those to match the Substrait extensions for interoperability
+    let function_name = match function_name.as_str() {
+        "substr" => "substring".to_string(),
+        _ => function_name,
+    };
+
     // To prevent ambiguous references between ScalarFunctions and AggregateFunctions,
     // a plan-relative identifier starting from 0 is used as the function_anchor.
     // The consumer is responsible for correctly registering <function_anchor,function_name>
@@ -964,7 +972,7 @@ pub fn make_binary_op_scalar_func(
     ),
 ) -> Expression {
     let function_anchor =
-        _register_function(operator_to_name(op).to_string(), extension_info);
+        register_function(operator_to_name(op).to_string(), extension_info);
     Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
@@ -1039,7 +1047,7 @@ pub fn to_substrait_rex(
 
             if *negated {
                 let function_anchor =
-                    _register_function("not".to_string(), extension_info);
+                    register_function("not".to_string(), extension_info);
 
                 Ok(Expression {
                     rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -1071,7 +1079,7 @@ pub fn to_substrait_rex(
             }
 
             let function_anchor =
-                _register_function(fun.name().to_string(), extension_info);
+                register_function(fun.name().to_string(), extension_info);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference: function_anchor,
@@ -1242,7 +1250,7 @@ pub fn to_substrait_rex(
             null_treatment: _,
         }) => {
             // function reference
-            let function_anchor = _register_function(fun.to_string(), extension_info);
+            let function_anchor = register_function(fun.to_string(), extension_info);
             // arguments
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in args {
@@ -1320,7 +1328,7 @@ pub fn to_substrait_rex(
             };
             if *negated {
                 let function_anchor =
-                    _register_function("not".to_string(), extension_info);
+                    register_function("not".to_string(), extension_info);
 
                 Ok(Expression {
                     rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -1619,6 +1627,27 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 }))),
             })
         }
+        DataType::Map(inner, _) => match inner.data_type() {
+            DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
+                let key_type = to_substrait_type(
+                    key_and_value[0].data_type(),
+                    key_and_value[0].is_nullable(),
+                )?;
+                let value_type = to_substrait_type(
+                    key_and_value[1].data_type(),
+                    key_and_value[1].is_nullable(),
+                )?;
+                Ok(substrait::proto::Type {
+                    kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
+                        key: Some(Box::new(key_type)),
+                        value: Some(Box::new(value_type)),
+                        type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+                        nullability,
+                    }))),
+                })
+            }
+            _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
+        },
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
@@ -1696,9 +1725,9 @@ fn make_substrait_like_expr(
     ),
 ) -> Result<Expression> {
     let function_anchor = if ignore_case {
-        _register_function("ilike".to_string(), extension_info)
+        register_function("ilike".to_string(), extension_info)
     } else {
-        _register_function("like".to_string(), extension_info)
+        register_function("like".to_string(), extension_info)
     };
     let expr = to_substrait_rex(ctx, expr, schema, col_ref_offset, extension_info)?;
     let pattern = to_substrait_rex(ctx, pattern, schema, col_ref_offset, extension_info)?;
@@ -1728,7 +1757,7 @@ fn make_substrait_like_expr(
     };
 
     if negated {
-        let function_anchor = _register_function("not".to_string(), extension_info);
+        let function_anchor = register_function("not".to_string(), extension_info);
 
         Ok(Expression {
             rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -2097,7 +2126,7 @@ fn to_substrait_unary_scalar_fn(
         HashMap<String, u32>,
     ),
 ) -> Result<Expression> {
-    let function_anchor = _register_function(fn_name.to_string(), extension_info);
+    let function_anchor = register_function(fn_name.to_string(), extension_info);
     let substrait_expr =
         to_substrait_rex(ctx, arg, schema, col_ref_offset, extension_info)?;
 
@@ -2191,6 +2220,7 @@ mod test {
     use crate::logical_plan::consumer::{
         from_substrait_literal_without_names, from_substrait_type_without_names,
     };
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow::array::GenericListArray;
     use datafusion::arrow::datatypes::Field;
     use datafusion::common::scalar::ScalarStructBuilder;
@@ -2231,11 +2261,11 @@ mod test {
         round_trip_literal(ScalarValue::UInt64(Some(u64::MIN)))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MAX)))?;
 
-        round_trip_literal(ScalarValue::List(ScalarValue::new_list(
+        round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[ScalarValue::Float32(Some(1.0))],
             &DataType::Float32,
         )))?;
-        round_trip_literal(ScalarValue::List(ScalarValue::new_list(
+        round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[],
             &DataType::Float32,
         )))?;
@@ -2258,8 +2288,8 @@ mod test {
             ),
         )))?;
 
-        let c0 = Field::new("c0", DataType::Boolean, false);
-        let c1 = Field::new("c1", DataType::Int32, false);
+        let c0 = Field::new("c0", DataType::Boolean, true);
+        let c1 = Field::new("c1", DataType::Int32, true);
         let c2 = Field::new("c2", DataType::Utf8, true);
         round_trip_literal(
             ScalarStructBuilder::new()
@@ -2269,6 +2299,14 @@ mod test {
                 .build()?,
         )?;
         round_trip_literal(ScalarStructBuilder::new_null(vec![c0, c1, c2]))?;
+
+        round_trip_literal(ScalarValue::IntervalYearMonth(Some(17)))?;
+        round_trip_literal(ScalarValue::IntervalMonthDayNano(Some(
+            IntervalMonthDayNano::new(17, 25, 1234567890),
+        )))?;
+        round_trip_literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime::new(
+            57, 123456,
+        ))))?;
 
         Ok(())
     }
@@ -2316,13 +2354,30 @@ mod test {
             Field::new_list_field(DataType::Int32, true).into(),
         ))?;
 
+        round_trip_type(DataType::Map(
+            Field::new_struct(
+                "entries",
+                [
+                    Field::new("key", DataType::Utf8, false).into(),
+                    Field::new("value", DataType::Int32, true).into(),
+                ],
+                false,
+            )
+            .into(),
+            false,
+        ))?;
+
         round_trip_type(DataType::Struct(
             vec![
                 Field::new("c0", DataType::Int32, true),
-                Field::new("c1", DataType::Utf8, false),
+                Field::new("c1", DataType::Utf8, true),
             ]
             .into(),
         ))?;
+
+        round_trip_type(DataType::Interval(IntervalUnit::YearMonth))?;
+        round_trip_type(DataType::Interval(IntervalUnit::MonthDayNano))?;
+        round_trip_type(DataType::Interval(IntervalUnit::DayTime))?;
 
         Ok(())
     }

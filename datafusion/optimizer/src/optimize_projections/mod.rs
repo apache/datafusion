@@ -70,14 +70,6 @@ impl OptimizeProjections {
 }
 
 impl OptimizerRule for OptimizeProjections {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called OptimizeProjections::rewrite")
-    }
-
     fn name(&self) -> &str {
         "optimize_projections"
     }
@@ -171,7 +163,7 @@ fn optimize_projections(
             // still need to create a correct aggregate, which may be optimized
             // out later. As an example, consider the following query:
             //
-            // SELECT COUNT(*) FROM (SELECT COUNT(*) FROM [...])
+            // SELECT count(*) FROM (SELECT count(*) FROM [...])
             //
             // which always returns 1.
             if new_aggr_expr.is_empty()
@@ -213,7 +205,7 @@ fn optimize_projections(
             });
         }
         LogicalPlan::Window(window) => {
-            let input_schema = window.input.schema().clone();
+            let input_schema = Arc::clone(window.input.schema());
             // Split parent requirements to child and window expression sections:
             let n_input_fields = input_schema.fields().len();
             // Offset window expression indices so that they point to valid
@@ -479,10 +471,10 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     };
 
     // Count usages (referrals) of each projection expression in its input fields:
-    let mut column_referral_map = HashMap::<Column, usize>::new();
-    for columns in expr.iter().flat_map(|expr| expr.to_columns()) {
+    let mut column_referral_map = HashMap::<&Column, usize>::new();
+    for columns in expr.iter().map(|expr| expr.column_refs()) {
         for col in columns.into_iter() {
-            *column_referral_map.entry(col.clone()).or_default() += 1;
+            *column_referral_map.entry(col).or_default() += 1;
         }
     }
 
@@ -493,7 +485,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         usage > 1
             && !is_expr_trivial(
                 &prev_projection.expr
-                    [prev_projection.schema.index_of_column(&col).unwrap()],
+                    [prev_projection.schema.index_of_column(col).unwrap()],
             )
     }) {
         // no change
@@ -608,7 +600,7 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 // * the current column is an expression "f"
                 //
                 // return the expression `d + e` (not `d + e` as f)
-                let input_expr = input.expr[idx].clone().unalias_nested();
+                let input_expr = input.expr[idx].clone().unalias_nested().data;
                 Ok(Transformed::yes(input_expr))
             }
             // Unsupported type for consecutive projection merge analysis.
@@ -625,12 +617,12 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
 /// * `expr` - The expression to analyze for outer-referenced columns.
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
-fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
+fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashSet<&'a Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
     expr.apply(|expr| {
         match expr {
             Expr::OuterReferenceColumn(_, col) => {
-                columns.insert(col.clone());
+                columns.insert(col);
             }
             Expr::ScalarSubquery(subquery) => {
                 outer_columns_helper_multi(&subquery.outer_ref_columns, columns);
@@ -660,9 +652,9 @@ fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
 /// * `exprs` - The expressions to analyze for outer-referenced columns.
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
-fn outer_columns_helper_multi<'a>(
+fn outer_columns_helper_multi<'a, 'b>(
     exprs: impl IntoIterator<Item = &'a Expr>,
-    columns: &mut HashSet<Column>,
+    columns: &'b mut HashSet<&'a Column>,
 ) {
     exprs.into_iter().for_each(|e| outer_columns(e, columns));
 }
@@ -889,7 +881,7 @@ mod tests {
             Ok(Self {
                 exprs,
                 input: Arc::new(inputs.swap_remove(0)),
-                schema: self.schema.clone(),
+                schema: Arc::clone(&self.schema),
             })
         }
 
@@ -957,7 +949,7 @@ mod tests {
                 exprs,
                 left_child: Arc::new(inputs.remove(0)),
                 right_child: Arc::new(inputs.remove(0)),
-                schema: self.schema.clone(),
+                schema: Arc::clone(&self.schema),
             })
         }
 
@@ -1049,9 +1041,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]\
         \n  Projection: \
-        \n    Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
+        \n    Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]\
         \n      TableScan: ?table? projection=[]";
         assert_optimized_plan_equal(plan, expected)
     }
@@ -1264,7 +1256,7 @@ mod tests {
         let table_scan = test_table_scan()?;
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoOpUserDefined::new(
-                table_scan.schema().clone(),
+                Arc::clone(table_scan.schema()),
                 Arc::new(table_scan.clone()),
             )),
         });
@@ -1289,7 +1281,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(
                 NoOpUserDefined::new(
-                    table_scan.schema().clone(),
+                    Arc::clone(table_scan.schema()),
                     Arc::new(table_scan.clone()),
                 )
                 .with_exprs(exprs),
@@ -1324,7 +1316,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(
                 NoOpUserDefined::new(
-                    table_scan.schema().clone(),
+                    Arc::clone(table_scan.schema()),
                     Arc::new(table_scan.clone()),
                 )
                 .with_exprs(exprs),
@@ -1901,7 +1893,7 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.b), COUNT(test.b) FILTER (WHERE test.c > Int32(42)) AS count2]]\
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[count(test.b), count(test.b) FILTER (WHERE test.c > Int32(42)) AS count2]]\
         \n  TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_equal(plan, expected)

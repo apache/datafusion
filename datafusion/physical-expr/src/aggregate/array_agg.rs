@@ -70,27 +70,28 @@ impl AggregateExpr for ArrayAgg {
         Ok(Field::new_list(
             &self.name,
             // This should be the same as return type of AggregateFunction::ArrayAgg
-            Field::new("item", self.input_data_type.clone(), true),
-            self.nullable,
+            Field::new("item", self.input_data_type.clone(), self.nullable),
+            false,
         ))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(ArrayAggAccumulator::try_new(
             &self.input_data_type,
+            self.nullable,
         )?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
-            Field::new("item", self.input_data_type.clone(), true),
-            self.nullable,
+            Field::new("item", self.input_data_type.clone(), self.nullable),
+            false,
         )])
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        vec![Arc::clone(&self.expr)]
     }
 
     fn name(&self) -> &str {
@@ -115,14 +116,16 @@ impl PartialEq<dyn Any> for ArrayAgg {
 pub(crate) struct ArrayAggAccumulator {
     values: Vec<ArrayRef>,
     datatype: DataType,
+    nullable: bool,
 }
 
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
+    pub fn try_new(datatype: &DataType, nullable: bool) -> Result<Self> {
         Ok(Self {
             values: vec![],
             datatype: datatype.clone(),
+            nullable,
         })
     }
 }
@@ -134,7 +137,7 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
         assert!(values.len() == 1, "array_agg can only take 1 param!");
-        let val = values[0].clone();
+        let val = Arc::clone(&values[0]);
         self.values.push(val);
         Ok(())
     }
@@ -164,12 +167,12 @@ impl Accumulator for ArrayAggAccumulator {
             self.values.iter().map(|a| a.as_ref()).collect();
 
         if element_arrays.is_empty() {
-            let arr = ScalarValue::new_list(&[], &self.datatype);
+            let arr = ScalarValue::new_list(&[], &self.datatype, self.nullable);
             return Ok(ScalarValue::List(arr));
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
-        let list_array = array_into_list_array(concated_array);
+        let list_array = array_into_list_array(concated_array, self.nullable);
 
         Ok(ScalarValue::List(Arc::new(list_array)))
     }

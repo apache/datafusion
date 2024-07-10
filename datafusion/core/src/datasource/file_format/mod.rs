@@ -32,7 +32,8 @@ pub mod parquet;
 pub mod write;
 
 use std::any::Any;
-use std::fmt;
+use std::collections::HashMap;
+use std::fmt::{self, Display};
 use std::sync::Arc;
 
 use crate::arrow::datatypes::SchemaRef;
@@ -41,11 +42,28 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use datafusion_common::not_impl_err;
+use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use async_trait::async_trait;
+use file_compression_type::FileCompressionType;
 use object_store::{ObjectMeta, ObjectStore};
+
+/// Factory for creating [`FileFormat`] instances based on session and command level options
+///
+/// Users can provide their own `FileFormatFactory` to support arbitrary file formats
+pub trait FileFormatFactory: Sync + Send + GetExt {
+    /// Initialize a [FileFormat] and configure based on session and command level options
+    fn create(
+        &self,
+        state: &SessionState,
+        format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>>;
+
+    /// Initialize a [FileFormat] with all options set to default values
+    fn default(&self) -> Arc<dyn FileFormat>;
+}
 
 /// This trait abstracts all the file format specific implementations
 /// from the [`TableProvider`]. This helps code re-utilization across
@@ -57,6 +75,15 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
+
+    /// Returns the extension for this FileFormat, e.g. "file.csv" -> csv
+    fn get_ext(&self) -> String;
+
+    /// Returns the extension for this FileFormat when compressed, e.g. "file.csv.gz" -> csv
+    fn get_ext_with_compression(
+        &self,
+        _file_compression_type: &FileCompressionType,
+    ) -> Result<String>;
 
     /// Infer the common schema of the provided objects. The objects will usually
     /// be analysed up to a given number of records or files (as specified in the
@@ -103,6 +130,67 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         _order_requirements: Option<Vec<PhysicalSortRequirement>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
+    }
+}
+
+/// A container of [FileFormatFactory] which also implements [FileType].
+/// This enables converting a dyn FileFormat to a dyn FileType.
+/// The former trait is a superset of the latter trait, which includes execution time
+/// relevant methods. [FileType] is only used in logical planning and only implements
+/// the subset of methods required during logical planning.
+pub struct DefaultFileType {
+    file_format_factory: Arc<dyn FileFormatFactory>,
+}
+
+impl DefaultFileType {
+    /// Constructs a [DefaultFileType] wrapper from a [FileFormatFactory]
+    pub fn new(file_format_factory: Arc<dyn FileFormatFactory>) -> Self {
+        Self {
+            file_format_factory,
+        }
+    }
+}
+
+impl FileType for DefaultFileType {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl Display for DefaultFileType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.file_format_factory.default().fmt(f)
+    }
+}
+
+impl GetExt for DefaultFileType {
+    fn get_ext(&self) -> String {
+        self.file_format_factory.get_ext()
+    }
+}
+
+/// Converts a [FileFormatFactory] to a [FileType]
+pub fn format_as_file_type(
+    file_format_factory: Arc<dyn FileFormatFactory>,
+) -> Arc<dyn FileType> {
+    Arc::new(DefaultFileType {
+        file_format_factory,
+    })
+}
+
+/// Converts a [FileType] to a [FileFormatFactory].
+/// Returns an error if the [FileType] cannot be
+/// downcasted to a [DefaultFileType].
+pub fn file_type_to_format(
+    file_type: &Arc<dyn FileType>,
+) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
+    match file_type
+        .as_ref()
+        .as_any()
+        .downcast_ref::<DefaultFileType>()
+    {
+        Some(source) => Ok(source.file_format_factory.clone()),
+        _ => internal_err!("FileType was not DefaultFileType"),
     }
 }
 

@@ -39,7 +39,8 @@ use crate::logical_plan::{
 use crate::type_coercion::binary::{comparison_coercion, values_coercion};
 use crate::utils::{
     can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
-    expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
+    group_window_expr_by_sort_keys,
 };
 use crate::{
     and, binary_expr, logical_plan::tree_node::unwrap_arc, DmlStatement, Expr,
@@ -48,8 +49,8 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -222,7 +223,7 @@ impl LogicalPlanBuilder {
                 Field::new(name, data_type.clone(), true)
             })
             .collect::<Vec<_>>();
-        let dfschema = DFSchema::from_unqualifed_fields(fields.into(), HashMap::new())?;
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
@@ -271,16 +272,16 @@ impl LogicalPlanBuilder {
     pub fn copy_to(
         input: LogicalPlan,
         output_url: String,
-        format_options: FormatOptions,
+        file_type: Arc<dyn FileType>,
         options: HashMap<String, String>,
         partition_by: Vec<String>,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
-            format_options,
-            options,
             partition_by,
+            file_type,
+            options,
         })))
     }
 
@@ -534,11 +535,11 @@ impl LogicalPlanBuilder {
             .clone()
             .into_iter()
             .try_for_each::<_, Result<()>>(|expr| {
-                let columns = expr.to_columns()?;
+                let columns = expr.column_refs();
 
                 columns.into_iter().for_each(|c| {
-                    if schema.field_from_column(&c).is_err() {
-                        missing_cols.push(c);
+                    if !schema.has_column(c) {
+                        missing_cols.push(c.clone());
                     }
                 });
 
@@ -1070,14 +1071,16 @@ impl LogicalPlanBuilder {
                 let left_key = l.into();
                 let right_key = r.into();
 
-                let left_using_columns = left_key.to_columns()?;
+                let mut left_using_columns = HashSet::new();
+                expr_to_columns(&left_key, &mut left_using_columns)?;
                 let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
                     &[&[self.plan.schema(), right.schema()]],
                     &[left_using_columns],
                 )?;
 
-                let right_using_columns = right_key.to_columns()?;
+                let mut right_using_columns = HashSet::new();
+                expr_to_columns(&right_key, &mut right_using_columns)?;
                 let normalized_right_key = normalize_col_with_schemas_and_ambiguity_check(
                     right_key,
                     &[&[self.plan.schema(), right.schema()]],
@@ -1220,17 +1223,17 @@ pub fn build_join_schema(
         JoinType::Inner => {
             // left then right
             let left_fields = left_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect::<Vec<_>>();
             let right_fields = right_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect::<Vec<_>>();
             left_fields.into_iter().chain(right_fields).collect()
         }
         JoinType::Left => {
             // left then right, right set to nullable in case of not matched scenario
             let left_fields = left_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect::<Vec<_>>();
             left_fields
                 .into_iter()
@@ -1240,7 +1243,7 @@ pub fn build_join_schema(
         JoinType::Right => {
             // left then right, left set to nullable in case of not matched scenario
             let right_fields = right_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect::<Vec<_>>();
             nullify_fields(left_fields)
                 .into_iter()
@@ -1256,11 +1259,15 @@ pub fn build_join_schema(
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
-            left_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
+            left_fields
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                .collect()
         }
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
-            right_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
+            right_fields
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                .collect()
         }
     };
     let func_dependencies = left.functional_dependencies().join(
@@ -1452,7 +1459,6 @@ pub fn project(
             _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
         }
     }
-
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
@@ -1575,7 +1581,7 @@ impl TableSource for LogicalTableSource {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.table_schema.clone()
+        Arc::clone(&self.table_schema)
     }
 
     fn supports_filters_pushdown(
@@ -1689,7 +1695,10 @@ pub fn unnest_with_options(
                 }
                 None => {
                     dependency_indices.push(index);
-                    Ok(vec![(original_qualifier.cloned(), original_field.clone())])
+                    Ok(vec![(
+                        original_qualifier.cloned(),
+                        Arc::clone(original_field),
+                    )])
                 }
             }
         })

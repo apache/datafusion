@@ -18,9 +18,10 @@
 //! [`EliminateFilter`] replaces `where false` or `where null` with an empty relation.
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::{EmptyRelation, Expr, Filter, LogicalPlan};
+use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -41,14 +42,6 @@ impl EliminateFilter {
 }
 
 impl OptimizerRule for EliminateFilter {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called EliminateFilter::rewrite")
-    }
-
     fn name(&self) -> &str {
         "eliminate_filter"
     }
@@ -76,7 +69,7 @@ impl OptimizerRule for EliminateFilter {
                 Some(false) | None => Ok(Transformed::yes(LogicalPlan::EmptyRelation(
                     EmptyRelation {
                         produce_one_row: false,
-                        schema: input.schema().clone(),
+                        schema: Arc::clone(input.schema()),
                     },
                 ))),
             },

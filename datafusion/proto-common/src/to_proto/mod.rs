@@ -364,6 +364,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             ScalarValue::Struct(arr) => {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
+            ScalarValue::Map(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
             ScalarValue::Date32(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date32Value(*s))
             }
@@ -896,6 +899,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             delimiter: vec![opts.delimiter],
             quote: vec![opts.quote],
             escape: opts.escape.map_or_else(Vec::new, |e| vec![e]),
+            double_quote: opts.double_quote.map_or_else(Vec::new, |h| vec![h as u8]),
             compression: compression.into(),
             schema_infer_max_rec: opts.schema_infer_max_rec as u64,
             date_format: opts.date_format.clone().unwrap_or_default(),
@@ -937,7 +941,7 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
 
-// ScalarValue::List / FixedSizeList / LargeList / Struct are serialized using
+// ScalarValue::List / FixedSizeList / LargeList / Struct / Map are serialized using
 // Arrow IPC messages as a single column RecordBatch
 fn encode_scalar_nested_value(
     arr: ArrayRef,
@@ -991,6 +995,9 @@ fn encode_scalar_nested_value(
                 scalar_list_value,
             )),
         }),
+        ScalarValue::Map(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::MapValue(scalar_list_value)),
+        }),
         _ => unreachable!(),
     }
 }
@@ -1022,5 +1029,8 @@ pub(crate) fn csv_writer_options_to_proto(
         timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
         time_format: csv_options.time_format().unwrap_or("").to_owned(),
         null_value: csv_options.null().to_owned(),
+        quote: (csv_options.quote() as char).to_string(),
+        escape: (csv_options.escape() as char).to_string(),
+        double_quote: csv_options.double_quote(),
     }
 }

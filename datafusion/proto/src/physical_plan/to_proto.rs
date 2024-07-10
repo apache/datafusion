@@ -23,10 +23,9 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    ArrayAgg, Avg, BinaryExpr, BoolAnd, BoolOr, CaseExpr, CastExpr, Column, Correlation,
-    CumeDist, DistinctArrayAgg, Grouping, InListExpr, IsNotNullExpr, IsNullExpr, Literal,
-    Max, Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile,
-    OrderSensitiveArrayAgg, Rank, RankType, RowNumber, StringAgg, TryCastExpr,
+    ArrayAgg, BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, DistinctArrayAgg,
+    InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr,
+    NthValue, Ntile, OrderSensitiveArrayAgg, Rank, RankType, RowNumber, TryCastExpr,
     WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
@@ -40,12 +39,11 @@ use datafusion::{
     },
     physical_plan::expressions::LikeExpr,
 };
-use datafusion_common::config::FormatOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 
 use crate::protobuf::{
-    self, copy_to_node, physical_aggregate_expr_node, physical_window_expr_node,
-    PhysicalSortExprNode, PhysicalSortExprNodeCollection,
+    self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
+    PhysicalSortExprNodeCollection,
 };
 
 use super::PhysicalExtensionCodec;
@@ -166,21 +164,28 @@ pub fn serialize_physical_window_expr(
     } else if let Some(plain_aggr_window_expr) =
         expr.downcast_ref::<PlainAggregateWindowExpr>()
     {
-        let AggrFn { inner, distinct } =
-            aggr_expr_to_aggr_fn(plain_aggr_window_expr.get_aggregate_expr().as_ref())?;
+        let aggr_expr = plain_aggr_window_expr.get_aggregate_expr();
+        if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                a.fun().name().to_string(),
+            )
+        } else {
+            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
+                plain_aggr_window_expr.get_aggregate_expr().as_ref(),
+            )?;
 
-        if distinct {
-            // TODO
-            return not_impl_err!(
-                "Distinct aggregate functions not supported in window expressions"
-            );
+            if distinct {
+                return not_impl_err!(
+                    "Distinct aggregate functions not supported in window expressions"
+                );
+            }
+
+            if !window_frame.start_bound.is_unbounded() {
+                return Err(DataFusionError::Internal(format!("Invalid PlainAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
+            }
+
+            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
         }
-
-        if !window_frame.start_bound.is_unbounded() {
-            return Err(DataFusionError::Internal(format!("Invalid PlainAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
-        }
-
-        physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
     } else if let Some(sliding_aggr_window_expr) =
         expr.downcast_ref::<SlidingAggregateWindowExpr>()
     {
@@ -239,13 +244,7 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     let aggr_expr = expr.as_any();
     let mut distinct = false;
 
-    let inner = if aggr_expr.downcast_ref::<Grouping>().is_some() {
-        protobuf::AggregateFunction::Grouping
-    } else if aggr_expr.downcast_ref::<BoolAnd>().is_some() {
-        protobuf::AggregateFunction::BoolAnd
-    } else if aggr_expr.downcast_ref::<BoolOr>().is_some() {
-        protobuf::AggregateFunction::BoolOr
-    } else if aggr_expr.downcast_ref::<ArrayAgg>().is_some() {
+    let inner = if aggr_expr.downcast_ref::<ArrayAgg>().is_some() {
         protobuf::AggregateFunction::ArrayAgg
     } else if aggr_expr.downcast_ref::<DistinctArrayAgg>().is_some() {
         distinct = true;
@@ -256,14 +255,6 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::Min
     } else if aggr_expr.downcast_ref::<Max>().is_some() {
         protobuf::AggregateFunction::Max
-    } else if aggr_expr.downcast_ref::<Avg>().is_some() {
-        protobuf::AggregateFunction::Avg
-    } else if aggr_expr.downcast_ref::<Correlation>().is_some() {
-        protobuf::AggregateFunction::Correlation
-    } else if aggr_expr.downcast_ref::<StringAgg>().is_some() {
-        protobuf::AggregateFunction::StringAgg
-    } else if aggr_expr.downcast_ref::<NthValueAgg>().is_some() {
-        protobuf::AggregateFunction::NthValueAgg
     } else {
         return not_impl_err!("Aggregate function not supported: {expr:?}");
     };
@@ -729,29 +720,7 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             output_schema: Some(conf.output_schema.as_ref().try_into()?),
             table_partition_cols,
             overwrite: conf.overwrite,
-        })
-    }
-}
-
-impl TryFrom<&FormatOptions> for copy_to_node::FormatOptions {
-    type Error = DataFusionError;
-    fn try_from(value: &FormatOptions) -> std::result::Result<Self, Self::Error> {
-        Ok(match value {
-            FormatOptions::CSV(options) => {
-                copy_to_node::FormatOptions::Csv(options.try_into()?)
-            }
-            FormatOptions::JSON(options) => {
-                copy_to_node::FormatOptions::Json(options.try_into()?)
-            }
-            FormatOptions::PARQUET(options) => {
-                copy_to_node::FormatOptions::Parquet(options.try_into()?)
-            }
-            FormatOptions::AVRO => {
-                copy_to_node::FormatOptions::Avro(protobuf::AvroOptions {})
-            }
-            FormatOptions::ARROW => {
-                copy_to_node::FormatOptions::Arrow(protobuf::ArrowOptions {})
-            }
+            keep_partition_by_columns: conf.keep_partition_by_columns,
         })
     }
 }

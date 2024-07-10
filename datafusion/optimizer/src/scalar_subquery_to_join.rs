@@ -69,14 +69,6 @@ impl ScalarSubqueryToJoin {
 }
 
 impl OptimizerRule for ScalarSubqueryToJoin {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called ScalarSubqueryToJoin::rewrite")
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -421,7 +413,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
                 lit(1)
-                    .lt(scalar_subquery(orders.clone()))
+                    .lt(scalar_subquery(Arc::clone(&orders)))
                     .and(lit(1).lt(scalar_subquery(orders))),
             )?
             .project(vec![col("customer.c_custkey")])?

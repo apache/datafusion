@@ -17,7 +17,8 @@
 
 //! [`EliminateOuterJoin`] converts `LEFT/RIGHT/FULL` joins to `INNER` joins
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{internal_err, Column, DFSchema, Result};
+use datafusion_common::{Column, DFSchema, Result};
+use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
 use datafusion_expr::{Expr, Filter, Operator};
 
@@ -60,14 +61,6 @@ impl EliminateOuterJoin {
 
 /// Attempt to eliminate outer joins.
 impl OptimizerRule for EliminateOuterJoin {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called EliminateOuterJoin::rewrite")
-    }
-
     fn name(&self) -> &str {
         "eliminate_outer_join"
     }
@@ -86,7 +79,7 @@ impl OptimizerRule for EliminateOuterJoin {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Filter(filter) => match filter.input.as_ref() {
+            LogicalPlan::Filter(mut filter) => match unwrap_arc(filter.input) {
                 LogicalPlan::Join(join) => {
                     let mut non_nullable_cols: Vec<Column> = vec![];
 
@@ -117,20 +110,24 @@ impl OptimizerRule for EliminateOuterJoin {
                     } else {
                         join.join_type
                     };
+
                     let new_join = Arc::new(LogicalPlan::Join(Join {
-                        left: Arc::new((*join.left).clone()),
-                        right: Arc::new((*join.right).clone()),
+                        left: join.left,
+                        right: join.right,
                         join_type: new_join_type,
                         join_constraint: join.join_constraint,
                         on: join.on.clone(),
                         filter: join.filter.clone(),
-                        schema: join.schema.clone(),
+                        schema: Arc::clone(&join.schema),
                         null_equals_null: join.null_equals_null,
                     }));
                     Filter::try_new(filter.predicate, new_join)
                         .map(|f| Transformed::yes(LogicalPlan::Filter(f)))
                 }
-                _ => Ok(Transformed::no(LogicalPlan::Filter(filter))),
+                filter_input => {
+                    filter.input = Arc::new(filter_input);
+                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                }
             },
             _ => Ok(Transformed::no(plan)),
         }

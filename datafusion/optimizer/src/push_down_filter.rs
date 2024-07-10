@@ -32,13 +32,16 @@ use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
 };
-use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
+use datafusion_expr::utils::{
+    conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
+};
 use datafusion_expr::{
     and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    TableProviderFilterPushDown,
+    Projection, TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::has_all_column_refs;
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
@@ -131,7 +134,15 @@ use crate::{OptimizerConfig, OptimizerRule};
 #[derive(Default)]
 pub struct PushDownFilter {}
 
-/// For a given JOIN type, determine whether each side of the join is preserved.
+/// For a given JOIN type, determine whether each input of the join is preserved
+/// for post-join (`WHERE` clause) filters.
+///
+/// It is only correct to push filters below a join for preserved inputs.
+///
+/// # Return Value
+/// A tuple of booleans - (left_preserved, right_preserved).
+///
+/// # "Preserved" input definition
 ///
 /// We say a join side is preserved if the join returns all or a subset of the rows from
 /// the relevant side, such that each row of the output table directly maps to a row of
@@ -142,15 +153,11 @@ pub struct PushDownFilter {}
 /// For example:
 ///   - In an inner join, both sides are preserved, because each row of the output
 ///     maps directly to a row from each side.
-///   - In a left join, the left side is preserved and the right is not, because
-///     there may be rows in the output that don't directly map to a row in the
-///     right input (due to nulls filling where there is no match on the right).
 ///
-/// This is important because we can always push down post-join filters to a preserved
-/// side of the join, assuming the filter only references columns from that side. For the
-/// non-preserved side it can be more tricky.
-///
-/// Returns a tuple of booleans - (left_preserved, right_preserved).
+///   - In a left join, the left side is preserved (we can push predicates) but
+///     the right is not, because there may be rows in the output that don't
+///     directly map to a row in the right input (due to nulls filling where there
+///     is no match on the right).
 fn lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
     match join_type {
         JoinType::Inner => Ok((true, true)),
@@ -166,9 +173,15 @@ fn lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
     }
 }
 
-/// For a given JOIN logical plan, determine whether each side of the join is preserved
-/// in terms on join filtering.
-/// Predicates from join filter can only be pushed to preserved join side.
+/// For a given JOIN type, determine whether each input of the join is preserved
+/// for the join condition (`ON` clause filters).
+///
+/// It is only correct to push filters below a join for preserved inputs.
+///
+/// # Return Value
+/// A tuple of booleans - (left_preserved, right_preserved).
+///
+/// See [`lr_is_preserved`] for a definition of "preserved".
 fn on_lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
     match join_type {
         JoinType::Inner => Ok((true, true)),
@@ -181,13 +194,50 @@ fn on_lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
     }
 }
 
-/// Determine which predicates in state can be pushed down to a given side of a join.
-/// To determine this, we need to know the schema of the relevant join side and whether
-/// or not the side's rows are preserved when joining. If the side is not preserved, we
-/// do not push down anything. Otherwise we can push down predicates where all of the
-/// relevant columns are contained on the relevant join side's schema.
-fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bool> {
-    let schema_columns = schema
+/// Evaluates the columns referenced in the given expression to see if they refer
+/// only to the left or right columns
+#[derive(Debug)]
+struct ColumnChecker<'a> {
+    /// schema of left join input
+    left_schema: &'a DFSchema,
+    /// columns in left_schema, computed on demand
+    left_columns: Option<HashSet<Column>>,
+    /// schema of right join input
+    right_schema: &'a DFSchema,
+    /// columns in left_schema, computed on demand
+    right_columns: Option<HashSet<Column>>,
+}
+
+impl<'a> ColumnChecker<'a> {
+    fn new(left_schema: &'a DFSchema, right_schema: &'a DFSchema) -> Self {
+        Self {
+            left_schema,
+            left_columns: None,
+            right_schema,
+            right_columns: None,
+        }
+    }
+
+    /// Return true if the expression references only columns from the left side of the join
+    fn is_left_only(&mut self, predicate: &Expr) -> bool {
+        if self.left_columns.is_none() {
+            self.left_columns = Some(schema_columns(self.left_schema));
+        }
+        has_all_column_refs(predicate, self.left_columns.as_ref().unwrap())
+    }
+
+    /// Return true if the expression references only columns from the right side of the join
+    fn is_right_only(&mut self, predicate: &Expr) -> bool {
+        if self.right_columns.is_none() {
+            self.right_columns = Some(schema_columns(self.right_schema));
+        }
+        has_all_column_refs(predicate, self.right_columns.as_ref().unwrap())
+    }
+}
+
+/// Returns all columns in the schema
+fn schema_columns(schema: &DFSchema) -> HashSet<Column> {
+    schema
         .iter()
         .flat_map(|(qualifier, field)| {
             [
@@ -196,14 +246,7 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
                 Column::new_unqualified(field.name()),
             ]
         })
-        .collect::<HashSet<_>>();
-    let columns = predicate.to_columns()?;
-
-    Ok(schema_columns
-        .intersection(&columns)
         .collect::<HashSet<_>>()
-        .len()
-        == columns.len())
 }
 
 /// Determine whether the predicate can evaluate as the join conditions
@@ -288,16 +331,7 @@ fn extract_or_clauses_for_join<'a>(
     filters: &'a [Expr],
     schema: &'a DFSchema,
 ) -> impl Iterator<Item = Expr> + 'a {
-    let schema_columns = schema
-        .iter()
-        .flat_map(|(qualifier, field)| {
-            [
-                Column::new(qualifier.cloned(), field.name()),
-                // we need to push down filter using unqualified column as well
-                Column::new_unqualified(field.name()),
-            ]
-        })
-        .collect::<HashSet<_>>();
+    let schema_columns = schema_columns(schema);
 
     // new formed OR clauses and their column references
     filters.iter().filter_map(move |expr| {
@@ -370,14 +404,7 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
             }
         }
         _ => {
-            let columns = expr.to_columns().ok().unwrap();
-
-            if schema_columns
-                .intersection(&columns)
-                .collect::<HashSet<_>>()
-                .len()
-                == columns.len()
-            {
+            if has_all_column_refs(expr, schema_columns) {
                 predicate = Some(expr.clone());
             }
         }
@@ -407,12 +434,11 @@ fn push_down_all_join(
     let mut right_push = vec![];
     let mut keep_predicates = vec![];
     let mut join_conditions = vec![];
+    let mut checker = ColumnChecker::new(left_schema, right_schema);
     for predicate in predicates {
-        if left_preserved && can_pushdown_join_predicate(&predicate, left_schema)? {
+        if left_preserved && checker.is_left_only(&predicate) {
             left_push.push(predicate);
-        } else if right_preserved
-            && can_pushdown_join_predicate(&predicate, right_schema)?
-        {
+        } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
         } else if is_inner_join && can_evaluate_as_join_condition(&predicate)? {
             // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
@@ -425,26 +451,24 @@ fn push_down_all_join(
 
     // For infer predicates, if they can not push through join, just drop them
     for predicate in inferred_join_predicates {
-        if left_preserved && can_pushdown_join_predicate(&predicate, left_schema)? {
+        if left_preserved && checker.is_left_only(&predicate) {
             left_push.push(predicate);
-        } else if right_preserved
-            && can_pushdown_join_predicate(&predicate, right_schema)?
-        {
+        } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
         }
     }
 
+    let mut on_filter_join_conditions = vec![];
+    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type)?;
+
     if !on_filter.is_empty() {
-        let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type)?;
         for on in on_filter {
-            if on_left_preserved && can_pushdown_join_predicate(&on, left_schema)? {
+            if on_left_preserved && checker.is_left_only(&on) {
                 left_push.push(on)
-            } else if on_right_preserved
-                && can_pushdown_join_predicate(&on, right_schema)?
-            {
+            } else if on_right_preserved && checker.is_right_only(&on) {
                 right_push.push(on)
             } else {
-                join_conditions.push(on)
+                on_filter_join_conditions.push(on)
             }
         }
     }
@@ -460,6 +484,21 @@ fn push_down_all_join(
         right_push.extend(extract_or_clauses_for_join(&join_conditions, right_schema));
     }
 
+    // For predicates from join filter, we should check with if a join side is preserved
+    // in term of join filtering.
+    if on_left_preserved {
+        left_push.extend(extract_or_clauses_for_join(
+            &on_filter_join_conditions,
+            left_schema,
+        ));
+    }
+    if on_right_preserved {
+        right_push.extend(extract_or_clauses_for_join(
+            &on_filter_join_conditions,
+            right_schema,
+        ));
+    }
+
     if let Some(predicate) = conjunction(left_push) {
         join.left = Arc::new(LogicalPlan::Filter(Filter::try_new(predicate, join.left)?));
     }
@@ -469,6 +508,7 @@ fn push_down_all_join(
     }
 
     // Add any new join conditions as the non join predicates
+    join_conditions.extend(on_filter_join_conditions);
     join.filter = conjunction(join_conditions);
 
     // wrap the join on the filter whose predicates must be kept, if any
@@ -559,12 +599,9 @@ fn infer_join_predicates(
         .filter_map(|predicate| {
             let mut join_cols_to_replace = HashMap::new();
 
-            let columns = match predicate.to_columns() {
-                Ok(columns) => columns,
-                Err(e) => return Some(Err(e)),
-            };
+            let columns = predicate.column_refs();
 
-            for col in columns.iter() {
+            for &col in columns.iter() {
                 for (l, r) in join_col_keys.iter() {
                     if col == *l {
                         join_cols_to_replace.insert(col, *r);
@@ -594,14 +631,6 @@ fn infer_join_predicates(
 }
 
 impl OptimizerRule for PushDownFilter {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called PushDownFilter::rewrite")
-    }
-
     fn name(&self) -> &str {
         "push_down_filter"
     }
@@ -623,7 +652,7 @@ impl OptimizerRule for PushDownFilter {
             return push_down_join(join, None);
         };
 
-        let plan_schema = plan.schema().clone();
+        let plan_schema = Arc::clone(plan.schema());
 
         let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));
@@ -691,60 +720,71 @@ impl OptimizerRule for PushDownFilter {
                 insert_below(LogicalPlan::SubqueryAlias(subquery_alias), new_filter)
             }
             LogicalPlan::Projection(projection) => {
-                // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
-                // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
-                // collect projection.
-                let (volatile_map, non_volatile_map): (HashMap<_, _>, HashMap<_, _>) =
-                    projection
-                        .schema
-                        .iter()
-                        .zip(projection.expr.iter())
-                        .map(|((qualifier, field), expr)| {
-                            // strip alias, as they should not be part of filters
-                            let expr = expr.clone().unalias();
+                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let (new_projection, keep_predicate) =
+                    rewrite_projection(predicates, projection)?;
+                if new_projection.transformed {
+                    match keep_predicate {
+                        None => Ok(new_projection),
+                        Some(keep_predicate) => new_projection.map_data(|child_plan| {
+                            Filter::try_new(keep_predicate, Arc::new(child_plan))
+                                .map(LogicalPlan::Filter)
+                        }),
+                    }
+                } else {
+                    filter.input = Arc::new(new_projection.data);
+                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                }
+            }
+            LogicalPlan::Unnest(mut unnest) => {
+                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let mut non_unnest_predicates = vec![];
+                let mut unnest_predicates = vec![];
+                for predicate in predicates {
+                    // collect all the Expr::Column in predicate recursively
+                    let mut accum: HashSet<Column> = HashSet::new();
+                    expr_to_columns(&predicate, &mut accum)?;
 
-                            (qualified_name(qualifier, field.name()), expr)
-                        })
-                        .partition(|(_, value)| value.is_volatile().unwrap_or(true));
-
-                let mut push_predicates = vec![];
-                let mut keep_predicates = vec![];
-                for expr in split_conjunction_owned(filter.predicate.clone()) {
-                    if contain(&expr, &volatile_map) {
-                        keep_predicates.push(expr);
+                    if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                        unnest_predicates.push(predicate);
                     } else {
-                        push_predicates.push(expr);
+                        non_unnest_predicates.push(predicate);
                     }
                 }
 
-                match conjunction(push_predicates) {
-                    Some(expr) => {
-                        // re-write all filters based on this projection
-                        // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
-                        let new_filter = LogicalPlan::Filter(Filter::try_new(
-                            replace_cols_by_name(expr, &non_volatile_map)?,
-                            Arc::clone(&projection.input),
-                        )?);
+                // Unnest predicates should not be pushed down.
+                // If no non-unnest predicates exist, early return
+                if non_unnest_predicates.is_empty() {
+                    filter.input = Arc::new(LogicalPlan::Unnest(unnest));
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                }
 
-                        match conjunction(keep_predicates) {
-                            None => insert_below(
-                                LogicalPlan::Projection(projection),
-                                new_filter,
-                            ),
-                            Some(keep_predicate) => insert_below(
-                                LogicalPlan::Projection(projection),
-                                new_filter,
-                            )?
-                            .map_data(|child_plan| {
-                                Filter::try_new(keep_predicate, Arc::new(child_plan))
-                                    .map(LogicalPlan::Filter)
-                            }),
-                        }
-                    }
-                    None => {
-                        filter.input = Arc::new(LogicalPlan::Projection(projection));
-                        Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                    }
+                // Push down non-unnest filter predicate
+                // Unnest
+                //   Unnest Input (Projection)
+                // -> rewritten to
+                // Unnest
+                //   Filter
+                //     Unnest Input (Projection)
+
+                let unnest_input = std::mem::take(&mut unnest.input);
+
+                let filter_with_unnest_input = LogicalPlan::Filter(Filter::try_new(
+                    conjunction(non_unnest_predicates).unwrap(), // Safe to unwrap since non_unnest_predicates is not empty.
+                    unnest_input,
+                )?);
+
+                // Directly assign new filter plan as the new unnest's input.
+                // The new filter plan will go through another rewrite pass since the rule itself
+                // is applied recursively to all the child from top to down
+                let unnest_plan =
+                    insert_below(LogicalPlan::Unnest(unnest), filter_with_unnest_input)?;
+
+                match conjunction(unnest_predicates) {
+                    None => Ok(unnest_plan),
+                    Some(predicate) => Ok(Transformed::yes(LogicalPlan::Filter(
+                        Filter::try_new(predicate, Arc::new(unnest_plan.data))?,
+                    ))),
                 }
             }
             LogicalPlan::Union(ref union) => {
@@ -785,7 +825,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
                 for expr in predicates {
-                    let cols = expr.to_columns()?;
+                    let cols = expr.column_refs();
                     if cols.iter().all(|c| group_expr_columns.contains(c)) {
                         push_predicates.push(expr);
                     } else {
@@ -886,7 +926,7 @@ impl OptimizerRule for PushDownFilter {
                 let predicate_push_or_keep = split_conjunction(&filter.predicate)
                     .iter()
                     .map(|expr| {
-                        let cols = expr.to_columns()?;
+                        let cols = expr.column_refs();
                         if cols.iter().any(|c| prevent_cols.contains(&c.name)) {
                             Ok(false) // No push (keep)
                         } else {
@@ -948,6 +988,80 @@ impl OptimizerRule for PushDownFilter {
                 Ok(Transformed::no(LogicalPlan::Filter(filter)))
             }
         }
+    }
+}
+
+/// Attempts to push `predicate` into a `FilterExec` below `projection
+///
+/// # Returns
+/// (plan, remaining_predicate)
+///
+/// `plan` is a LogicalPlan for `projection` with possibly a new FilterExec below it.
+/// `remaining_predicate` is any part of the predicate that could not be pushed down
+///
+/// # Args
+/// - predicates: Split predicates like `[foo=5, bar=6]`
+/// - projection: The target projection plan to push down the predicates
+///
+/// # Example
+///
+/// Pushing a predicate like `foo=5 AND bar=6` with an input plan like this:
+///
+/// ```text
+/// Projection(foo, c+d as bar)
+/// ```
+///
+/// Might result in returning `remaining_predicate` of `bar=6` and a plan like
+///
+/// ```text
+/// Projection(foo, c+d as bar)
+///  Filter(foo=5)
+///   ...
+/// ```
+fn rewrite_projection(
+    predicates: Vec<Expr>,
+    projection: Projection,
+) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
+    // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
+    // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
+    // collect projection.
+    let (volatile_map, non_volatile_map): (HashMap<_, _>, HashMap<_, _>) = projection
+        .schema
+        .iter()
+        .zip(projection.expr.iter())
+        .map(|((qualifier, field), expr)| {
+            // strip alias, as they should not be part of filters
+            let expr = expr.clone().unalias();
+
+            (qualified_name(qualifier, field.name()), expr)
+        })
+        .partition(|(_, value)| value.is_volatile().unwrap_or(true));
+
+    let mut push_predicates = vec![];
+    let mut keep_predicates = vec![];
+    for expr in predicates {
+        if contain(&expr, &volatile_map) {
+            keep_predicates.push(expr);
+        } else {
+            push_predicates.push(expr);
+        }
+    }
+
+    match conjunction(push_predicates) {
+        Some(expr) => {
+            // re-write all filters based on this projection
+            // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
+            let new_filter = LogicalPlan::Filter(Filter::try_new(
+                replace_cols_by_name(expr, &non_volatile_map)?,
+                Arc::clone(&projection.input),
+            )?);
+
+            Ok((
+                insert_below(LogicalPlan::Projection(projection), new_filter)?,
+                conjunction(keep_predicates),
+            ))
+        }
+        None => Ok((Transformed::no(LogicalPlan::Projection(projection)), None)),
     }
 }
 
@@ -1384,7 +1498,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
@@ -1400,7 +1514,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
@@ -1417,7 +1531,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
@@ -1434,7 +1548,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)

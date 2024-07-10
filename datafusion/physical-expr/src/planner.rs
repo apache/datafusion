@@ -17,22 +17,21 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
+use crate::scalar_function;
+use crate::{
+    expressions::{self, binary, like, Column, Literal},
+    PhysicalExpr,
+};
 
+use arrow::datatypes::Schema;
 use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
+    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{binary_expr, Between, BinaryExpr, Expr, Like, Operator, TryCast};
-
-use crate::scalar_function;
-use crate::{
-    expressions::{self, binary, like, Column, Literal},
-    PhysicalExpr,
-};
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
 /// AS int)`.
@@ -243,7 +242,7 @@ pub fn create_physical_expr(
                 when_expr
                     .iter()
                     .zip(then_expr.iter())
-                    .map(|(w, t)| (w.clone(), t.clone()))
+                    .map(|(w, t)| (Arc::clone(w), Arc::clone(t)))
                     .collect();
             let else_expr: Option<Arc<dyn PhysicalExpr>> =
                 if let Some(e) = &case.else_expr {
@@ -289,7 +288,7 @@ pub fn create_physical_expr(
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
             scalar_function::create_physical_expr(
-                func.clone().as_ref(),
+                Arc::clone(func).as_ref(),
                 &physical_args,
                 input_schema,
                 args,
@@ -308,9 +307,19 @@ pub fn create_physical_expr(
 
             // rewrite the between into the two binary operators
             let binary_expr = binary(
-                binary(value_expr.clone(), Operator::GtEq, low_expr, input_schema)?,
+                binary(
+                    Arc::clone(&value_expr),
+                    Operator::GtEq,
+                    low_expr,
+                    input_schema,
+                )?,
                 Operator::And,
-                binary(value_expr.clone(), Operator::LtEq, high_expr, input_schema)?,
+                binary(
+                    Arc::clone(&value_expr),
+                    Operator::LtEq,
+                    high_expr,
+                    input_schema,
+                )?,
                 input_schema,
             );
 
@@ -356,6 +365,13 @@ where
         .into_iter()
         .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
         .collect::<Result<Vec<_>>>()
+}
+
+/// Convert a logical expression to a physical expression (without any simplification, etc)
+pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
+    let df_schema = schema.clone().to_dfschema().unwrap();
+    let execution_props = ExecutionProps::new();
+    create_physical_expr(expr, &df_schema, &execution_props).unwrap()
 }
 
 #[cfg(test)]

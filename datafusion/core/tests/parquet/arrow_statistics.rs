@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This file contains an end to end test of extracting statitics from parquet files.
+//! This file contains an end to end test of extracting statistics from parquet files.
 //! It writes data into a parquet file, reads statistics and verifies they are correct
 
 use std::default::Default;
@@ -29,15 +29,15 @@ use arrow::datatypes::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_array::{
-    make_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
-    LargeStringArray, RecordBatch, StringArray, Time32MillisecondArray,
+    make_array, new_null_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    LargeBinaryArray, LargeStringArray, RecordBatch, StringArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
 use half::f16;
 use parquet::arrow::arrow_reader::{
@@ -91,51 +91,60 @@ impl Int64Case {
 
     // Create a parquet file with the specified settings
     pub fn build(&self) -> ParquetRecordBatchReaderBuilder<File> {
-        let mut output_file = tempfile::Builder::new()
-            .prefix("parquert_statistics_test")
-            .suffix(".parquet")
-            .tempfile()
-            .expect("tempfile creation");
-
-        let mut builder =
-            WriterProperties::builder().set_max_row_group_size(self.row_per_group);
-        if let Some(enable_stats) = self.enable_stats {
-            builder = builder.set_statistics_enabled(enable_stats);
-        }
-        if let Some(data_page_row_count_limit) = self.data_page_row_count_limit {
-            builder = builder.set_data_page_row_count_limit(data_page_row_count_limit);
-        }
-        let props = builder.build();
-
         let batches = vec![self.make_int64_batches_with_null()];
+        build_parquet_file(
+            self.row_per_group,
+            self.enable_stats,
+            self.data_page_row_count_limit,
+            batches,
+        )
+    }
+}
 
-        let schema = batches[0].schema();
+fn build_parquet_file(
+    row_per_group: usize,
+    enable_stats: Option<EnabledStatistics>,
+    data_page_row_count_limit: Option<usize>,
+    batches: Vec<RecordBatch>,
+) -> ParquetRecordBatchReaderBuilder<File> {
+    let mut output_file = tempfile::Builder::new()
+        .prefix("parquert_statistics_test")
+        .suffix(".parquet")
+        .tempfile()
+        .expect("tempfile creation");
 
-        let mut writer =
-            ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
+    let mut builder = WriterProperties::builder().set_max_row_group_size(row_per_group);
+    if let Some(enable_stats) = enable_stats {
+        builder = builder.set_statistics_enabled(enable_stats);
+    }
+    if let Some(data_page_row_count_limit) = data_page_row_count_limit {
+        builder = builder.set_data_page_row_count_limit(data_page_row_count_limit);
+    }
+    let props = builder.build();
 
-        // if we have a datapage limit send the batches in one at a time to give
-        // the writer a chance to be split into multiple pages
-        if self.data_page_row_count_limit.is_some() {
-            for batch in batches {
-                for i in 0..batch.num_rows() {
-                    writer.write(&batch.slice(i, 1)).expect("writing batch");
-                }
-            }
-        } else {
-            for batch in batches {
-                writer.write(&batch).expect("writing batch");
+    let schema = batches[0].schema();
+
+    let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
+
+    // if we have a datapage limit send the batches in one at a time to give
+    // the writer a chance to be split into multiple pages
+    if data_page_row_count_limit.is_some() {
+        for batch in &batches {
+            for i in 0..batch.num_rows() {
+                writer.write(&batch.slice(i, 1)).expect("writing batch");
             }
         }
-
-        // close file
-        let _file_meta = writer.close().unwrap();
-
-        // open the file & get the reader
-        let file = output_file.reopen().unwrap();
-        let options = ArrowReaderOptions::new().with_page_index(true);
-        ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
+    } else {
+        for batch in &batches {
+            writer.write(batch).expect("writing batch");
+        }
     }
+
+    let _file_meta = writer.close().unwrap();
+
+    let file = output_file.reopen().unwrap();
+    let options = ArrowReaderOptions::new().with_page_index(true);
+    ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
 }
 
 /// Defines what data to create in a parquet file
@@ -325,11 +334,9 @@ impl<'a> Test<'a> {
                 Actual: {null_counts:?}. Expected: {expected_null_counts:?}"
             );
 
-            let row_counts = StatisticsConverter::row_group_row_counts(
-                reader.metadata().row_groups().iter(),
-            )
-            .unwrap();
-            let row_counts = Some(row_counts);
+            let row_counts = converter
+                .row_group_row_counts(reader.metadata().row_groups().iter())
+                .unwrap();
             assert_eq!(
                 row_counts, expected_row_counts,
                 "{column_name}: Mismatch with expected row counts. \
@@ -388,7 +395,7 @@ async fn test_one_row_group_without_null() {
         // 3 rows
         expected_row_counts: Some(UInt64Array::from(vec![3])),
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run()
 }
@@ -415,7 +422,7 @@ async fn test_one_row_group_with_null_and_negative() {
         // 8 rows
         expected_row_counts: Some(UInt64Array::from(vec![8])),
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run()
 }
@@ -442,7 +449,7 @@ async fn test_two_row_group_with_null() {
         // row counts are [10, 5]
         expected_row_counts: Some(UInt64Array::from(vec![10, 5])),
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run()
 }
@@ -469,7 +476,7 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
         // row counts are [5, 3]
         expected_row_counts: Some(UInt64Array::from(vec![5, 3])),
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run()
 }
@@ -503,6 +510,71 @@ async fn test_multiple_data_pages_nulls_and_negatives() {
         check: Check::DataPage,
     }
     .run()
+}
+
+#[tokio::test]
+async fn test_data_page_stats_with_all_null_page() {
+    for data_type in &[
+        DataType::Boolean,
+        DataType::UInt64,
+        DataType::UInt32,
+        DataType::UInt16,
+        DataType::UInt8,
+        DataType::Int64,
+        DataType::Int32,
+        DataType::Int16,
+        DataType::Int8,
+        DataType::Float16,
+        DataType::Float32,
+        DataType::Float64,
+        DataType::Date32,
+        DataType::Date64,
+        DataType::Time32(TimeUnit::Millisecond),
+        DataType::Time32(TimeUnit::Second),
+        DataType::Time64(TimeUnit::Microsecond),
+        DataType::Time64(TimeUnit::Nanosecond),
+        DataType::Timestamp(TimeUnit::Second, None),
+        DataType::Timestamp(TimeUnit::Millisecond, None),
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        DataType::Binary,
+        DataType::LargeBinary,
+        DataType::FixedSizeBinary(3),
+        DataType::Utf8,
+        DataType::LargeUtf8,
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        DataType::Decimal128(8, 2),  // as INT32
+        DataType::Decimal128(10, 2), // as INT64
+        DataType::Decimal128(20, 2), // as FIXED_LEN_BYTE_ARRAY
+        DataType::Decimal256(8, 2),  // as INT32
+        DataType::Decimal256(10, 2), // as INT64
+        DataType::Decimal256(20, 2), // as FIXED_LEN_BYTE_ARRAY
+    ] {
+        let batch =
+            RecordBatch::try_from_iter(vec![("col", new_null_array(data_type, 4))])
+                .expect("record batch creation");
+
+        let reader =
+            build_parquet_file(4, Some(EnabledStatistics::Page), Some(4), vec![batch]);
+
+        let expected_data_type = match data_type {
+            DataType::Dictionary(_, value_type) => value_type.as_ref(),
+            _ => data_type,
+        };
+
+        // There is one data page with 4 nulls
+        // The statistics should be present but null
+        Test {
+            reader: &reader,
+            expected_min: new_null_array(expected_data_type, 1),
+            expected_max: new_null_array(expected_data_type, 1),
+            expected_null_counts: UInt64Array::from(vec![4]),
+            expected_row_counts: Some(UInt64Array::from(vec![4])),
+            column_name: "col",
+            check: Check::DataPage,
+        }
+        .run()
+    }
 }
 
 /////////////// MORE GENERAL TESTS //////////////////////
@@ -616,6 +688,94 @@ async fn test_int_8() {
     .run();
 }
 
+#[tokio::test]
+async fn test_float_16() {
+    // This creates a parquet files of 1 column named f
+    let reader = TestReader {
+        scenario: Scenario::Float16,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Float16Array::from(vec![
+            f16::from_f32(-5.),
+            f16::from_f32(-4.),
+            f16::from_f32(-0.),
+            f16::from_f32(5.),
+        ])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Float16Array::from(vec![
+            f16::from_f32(-1.),
+            f16::from_f32(0.),
+            f16::from_f32(4.),
+            f16::from_f32(9.),
+        ])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        column_name: "f",
+        check: Check::Both,
+    }
+    .run();
+}
+
+#[tokio::test]
+async fn test_float_32() {
+    // This creates a parquet files of 1 column named f
+    let reader = TestReader {
+        scenario: Scenario::Float32,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Float32Array::from(vec![-5., -4., -0., 5.0])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Float32Array::from(vec![-1., 0., 4., 9.])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        column_name: "f",
+        check: Check::Both,
+    }
+    .run();
+}
+
+#[tokio::test]
+async fn test_float_64() {
+    // This creates a parquet files of 1 column named f
+    let reader = TestReader {
+        scenario: Scenario::Float64,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Float64Array::from(vec![-5., -4., -0., 5.0])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Float64Array::from(vec![-1., 0., 4., 9.])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        column_name: "f",
+        check: Check::Both,
+    }
+    .run();
+}
+
 // timestamp
 #[tokio::test]
 async fn test_timestamp() {
@@ -630,8 +790,8 @@ async fn test_timestamp() {
     // "seconds_timezoned" --> TimestampSecondArray
     // "names" --> StringArray
     //
-    // The file is created by 4 record batches, each has 5 rowws.
-    // Since the row group isze is set to 5, those 4 batches will go into 4 row groups
+    // The file is created by 4 record batches, each has 5 rows.
+    // Since the row group size is set to 5, those 4 batches will go into 4 row groups
     // This creates a parquet files of 4 columns named "nanos", "nanos_timezoned", "micros", "micros_timezoned", "millis", "millis_timezoned", "seconds", "seconds_timezoned"
     let reader = TestReader {
         scenario: Scenario::Timestamps,
@@ -661,7 +821,7 @@ async fn test_timestamp() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "nanos",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -690,7 +850,7 @@ async fn test_timestamp() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "nanos_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -712,7 +872,7 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "micros",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -741,7 +901,7 @@ async fn test_timestamp() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "micros_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -763,7 +923,7 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "millis",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -792,7 +952,7 @@ async fn test_timestamp() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "millis_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -814,7 +974,7 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "seconds",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -843,7 +1003,7 @@ async fn test_timestamp() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "seconds_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -889,7 +1049,7 @@ async fn test_timestamp_diff_rg_sizes() {
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "nanos",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -916,7 +1076,7 @@ async fn test_timestamp_diff_rg_sizes() {
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "nanos_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -936,7 +1096,7 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "micros",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -963,7 +1123,7 @@ async fn test_timestamp_diff_rg_sizes() {
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "micros_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -983,7 +1143,7 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "millis",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1010,7 +1170,7 @@ async fn test_timestamp_diff_rg_sizes() {
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "millis_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1030,7 +1190,7 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "seconds",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1057,7 +1217,7 @@ async fn test_timestamp_diff_rg_sizes() {
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
         column_name: "seconds_timezoned",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1095,7 +1255,7 @@ async fn test_dates_32_diff_rg_sizes() {
         // row counts are [13, 7]
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
         column_name: "date32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1118,7 +1278,7 @@ async fn test_time32_second_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
         column_name: "second",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1145,7 +1305,7 @@ async fn test_time32_millisecond_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
         column_name: "millisecond",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1178,7 +1338,7 @@ async fn test_time64_microsecond_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
         column_name: "microsecond",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1211,7 +1371,7 @@ async fn test_time64_nanosecond_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
         column_name: "nanosecond",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1238,7 +1398,7 @@ async fn test_dates_64_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
         column_name: "date64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1266,7 +1426,7 @@ async fn test_uint() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
         column_name: "u8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1277,7 +1437,7 @@ async fn test_uint() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
         column_name: "u16",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1288,7 +1448,7 @@ async fn test_uint() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
         column_name: "u32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1299,7 +1459,7 @@ async fn test_uint() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
         column_name: "u64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1322,7 +1482,7 @@ async fn test_int32_range() {
         expected_null_counts: UInt64Array::from(vec![0]),
         expected_row_counts: Some(UInt64Array::from(vec![4])),
         column_name: "i",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1345,7 +1505,7 @@ async fn test_uint32_range() {
         expected_null_counts: UInt64Array::from(vec![0]),
         expected_row_counts: Some(UInt64Array::from(vec![4])),
         column_name: "u",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1367,7 +1527,7 @@ async fn test_numeric_limits_unsigned() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "u8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1378,7 +1538,7 @@ async fn test_numeric_limits_unsigned() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "u16",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1389,7 +1549,7 @@ async fn test_numeric_limits_unsigned() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "u32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1400,7 +1560,7 @@ async fn test_numeric_limits_unsigned() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "u64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1422,7 +1582,7 @@ async fn test_numeric_limits_signed() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "i8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1433,7 +1593,7 @@ async fn test_numeric_limits_signed() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "i16",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1444,7 +1604,7 @@ async fn test_numeric_limits_signed() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "i32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1455,7 +1615,7 @@ async fn test_numeric_limits_signed() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1477,7 +1637,7 @@ async fn test_numeric_limits_float() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "f32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1488,7 +1648,7 @@ async fn test_numeric_limits_float() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "f64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1499,7 +1659,7 @@ async fn test_numeric_limits_float() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "f32_nan",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1510,7 +1670,7 @@ async fn test_numeric_limits_float() {
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "f64_nan",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1533,7 +1693,7 @@ async fn test_float64() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "f",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1566,7 +1726,7 @@ async fn test_float16() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         column_name: "f",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1597,7 +1757,7 @@ async fn test_decimal() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "decimal_col",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1635,7 +1795,7 @@ async fn test_decimal_256() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "decimal256_col",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1655,7 +1815,7 @@ async fn test_dictionary() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "string_dict_i8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1666,7 +1826,7 @@ async fn test_dictionary() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "string_dict_i32",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1677,7 +1837,7 @@ async fn test_dictionary() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
         column_name: "int_dict_i8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1715,7 +1875,7 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "name",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1735,7 +1895,7 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "service_string",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1754,7 +1914,7 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "service_binary",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1775,7 +1935,7 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "service_fixedsize",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1796,7 +1956,7 @@ async fn test_byte() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "service_large_binary",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1829,7 +1989,7 @@ async fn test_period_in_column_names() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "name",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1843,7 +2003,7 @@ async fn test_period_in_column_names() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
         column_name: "service.name",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1867,7 +2027,7 @@ async fn test_boolean() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5])),
         column_name: "bool",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1917,7 +2077,7 @@ async fn test_utf8() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5])),
         column_name: "utf8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 
@@ -1929,7 +2089,7 @@ async fn test_utf8() {
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5])),
         column_name: "large_utf8",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1953,9 +2113,9 @@ async fn test_missing_statistics() {
         expected_min: Arc::new(Int64Array::from(vec![None])),
         expected_max: Arc::new(Int64Array::from(vec![None])),
         expected_null_counts: UInt64Array::from(vec![None]),
-        expected_row_counts: Some(UInt64Array::from(vec![3])), // stil has row count statistics
+        expected_row_counts: Some(UInt64Array::from(vec![3])), // still has row count statistics
         column_name: "i64",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run();
 }
@@ -1977,7 +2137,7 @@ async fn test_column_not_found() {
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
         column_name: "not_a_column",
-        check: Check::RowGroup,
+        check: Check::Both,
     }
     .run_col_not_found();
 }
@@ -2010,24 +2170,9 @@ async fn test_column_non_existent() {
         // nulls are [0, 0, 0, 0]
         expected_null_counts: UInt64Array::from(vec![None, None, None, None]),
         // row counts are [5, 5, 5, 5]
-        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
-        column_name: "i_do_not_exist",
-        check: Check::RowGroup,
-    }
-    .run_with_schema(&schema);
-
-    Test {
-        reader: &reader,
-        // mins are [-5, -4, 0, 5]
-        expected_min: Arc::new(Int64Array::from(vec![None, None, None, None])),
-        // maxes are [-1, 0, 4, 9]
-        expected_max: Arc::new(Int64Array::from(vec![None, None, None, None])),
-        // nulls are [0, 0, 0, 0]
-        expected_null_counts: UInt64Array::from(vec![None, None, None, None]),
-        // row counts are [5, 5, 5, 5]
         expected_row_counts: None,
         column_name: "i_do_not_exist",
-        check: Check::DataPage,
+        check: Check::Both,
     }
     .run_with_schema(&schema);
 }

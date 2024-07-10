@@ -90,8 +90,8 @@ impl WindowUDF {
         Self::new_from_impl(WindowUDFLegacyWrapper {
             name: name.to_owned(),
             signature: signature.clone(),
-            return_type: return_type.clone(),
-            partition_evaluator_factory: partition_evaluator_factory.clone(),
+            return_type: Arc::clone(return_type),
+            partition_evaluator_factory: Arc::clone(partition_evaluator_factory),
         })
     }
 
@@ -108,8 +108,8 @@ impl WindowUDF {
     }
 
     /// Return the underlying [`WindowUDFImpl`] trait object for this function
-    pub fn inner(&self) -> Arc<dyn WindowUDFImpl> {
-        self.inner.clone()
+    pub fn inner(&self) -> &Arc<dyn WindowUDFImpl> {
+        &self.inner
     }
 
     /// Adds additional names that can be used to invoke this function, in
@@ -117,7 +117,7 @@ impl WindowUDF {
     ///
     /// If you implement [`WindowUDFImpl`] directly you should return aliases directly.
     pub fn with_aliases(self, aliases: impl IntoIterator<Item = &'static str>) -> Self {
-        Self::new_from_impl(AliasedWindowUDFImpl::new(self.inner.clone(), aliases))
+        Self::new_from_impl(AliasedWindowUDFImpl::new(Arc::clone(&self.inner), aliases))
     }
 
     /// creates a [`Expr`] that calls the window function given

@@ -17,6 +17,7 @@
 
 pub mod count_distinct;
 pub mod groups_accumulator;
+pub mod merge_arrays;
 pub mod stats;
 pub mod tdigest;
 pub mod utils;
@@ -211,11 +212,25 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// Rewrites [`AggregateExpr`], with new expressions given. The argument should be consistent
     /// with the return value of the [`AggregateExpr::all_expressions`] method.
     /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
+    /// TODO: This method only rewrites the [`PhysicalExpr`]s and does not handle [`Expr`]s.
+    /// This can cause silent bugs and should be fixed in the future (possibly with physical-to-logical
+    /// conversions).
     fn with_new_expressions(
         &self,
         _args: Vec<Arc<dyn PhysicalExpr>>,
         _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Option<Arc<dyn AggregateExpr>> {
+        None
+    }
+
+    /// If this function is max, return (output_field, true)
+    /// if the function is min, return (output_field, false)
+    /// otherwise return None (the default)
+    ///
+    /// output_field is the name of the column produced by this aggregate
+    ///
+    /// Note: this is used to use special aggregate implementations in certain conditions
+    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
         None
     }
 }

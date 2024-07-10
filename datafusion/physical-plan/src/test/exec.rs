@@ -133,7 +133,7 @@ impl MockExec {
     /// ensure any poll loops are correct. This behavior can be
     /// changed with `with_use_task`
     pub fn new(data: Vec<Result<RecordBatch>>, schema: SchemaRef) -> Self {
-        let cache = Self::compute_properties(schema.clone());
+        let cache = Self::compute_properties(Arc::clone(&schema));
         Self {
             data,
             schema,
@@ -177,6 +177,10 @@ impl DisplayAs for MockExec {
 }
 
 impl ExecutionPlan for MockExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -290,7 +294,7 @@ impl BarrierExec {
     pub fn new(data: Vec<Vec<RecordBatch>>, schema: SchemaRef) -> Self {
         // wait for all streams and the input
         let barrier = Arc::new(Barrier::new(data.len() + 1));
-        let cache = Self::compute_properties(schema.clone(), &data);
+        let cache = Self::compute_properties(Arc::clone(&schema), &data);
         Self {
             data,
             schema,
@@ -335,6 +339,10 @@ impl DisplayAs for BarrierExec {
 }
 
 impl ExecutionPlan for BarrierExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -366,7 +374,7 @@ impl ExecutionPlan for BarrierExec {
 
         // task simply sends data in order after barrier is reached
         let data = self.data[partition].clone();
-        let b = self.barrier.clone();
+        let b = Arc::clone(&self.barrier);
         let tx = builder.tx();
         builder.spawn(async move {
             println!("Partition {partition} waiting on barrier");
@@ -413,7 +421,7 @@ impl ErrorExec {
             DataType::Int64,
             true,
         )]));
-        let cache = Self::compute_properties(schema.clone());
+        let cache = Self::compute_properties(schema);
         Self { cache }
     }
 
@@ -444,6 +452,10 @@ impl DisplayAs for ErrorExec {
 }
 
 impl ExecutionPlan for ErrorExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -527,6 +539,10 @@ impl DisplayAs for StatisticsExec {
 }
 
 impl ExecutionPlan for StatisticsExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -575,7 +591,7 @@ pub struct BlockingExec {
 impl BlockingExec {
     /// Create new [`BlockingExec`] with a give schema and number of partitions.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
-        let cache = Self::compute_properties(schema.clone(), n_partitions);
+        let cache = Self::compute_properties(Arc::clone(&schema), n_partitions);
         Self {
             schema,
             refs: Default::default(),
@@ -619,6 +635,10 @@ impl DisplayAs for BlockingExec {
 }
 
 impl ExecutionPlan for BlockingExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -715,7 +735,7 @@ impl PanicExec {
     /// partitions, which will each panic immediately.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
         let batches_until_panics = vec![0; n_partitions];
-        let cache = Self::compute_properties(schema.clone(), &batches_until_panics);
+        let cache = Self::compute_properties(Arc::clone(&schema), &batches_until_panics);
         Self {
             schema,
             batches_until_panics,
@@ -760,6 +780,10 @@ impl DisplayAs for PanicExec {
 }
 
 impl ExecutionPlan for PanicExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -821,7 +845,7 @@ impl Stream for PanicStream {
             if self.ready {
                 self.batches_until_panic -= 1;
                 self.ready = false;
-                let batch = RecordBatch::new_empty(self.schema.clone());
+                let batch = RecordBatch::new_empty(Arc::clone(&self.schema));
                 return Poll::Ready(Some(Ok(batch)));
             } else {
                 self.ready = true;

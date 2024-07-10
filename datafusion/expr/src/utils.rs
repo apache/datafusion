@@ -46,6 +46,7 @@ pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::Int64(Some(1));
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression
+#[deprecated(since = "40.0.0", note = "Expr::add_column_refs instead")]
 pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result<()> {
     for e in expr {
         expr_to_columns(e, accum)?;
@@ -317,7 +318,7 @@ fn get_excluded_columns(
     opt_exclude: Option<&ExcludeSelectItem>,
     opt_except: Option<&ExceptSelectItem>,
     schema: &DFSchema,
-    qualifier: &Option<TableReference>,
+    qualifier: Option<&TableReference>,
 ) -> Result<Vec<Column>> {
     let mut idents = vec![];
     if let Some(excepts) = opt_except {
@@ -342,8 +343,7 @@ fn get_excluded_columns(
     let mut result = vec![];
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
-        let (qualifier, field) =
-            schema.qualified_field_with_name(qualifier.as_ref(), col_name)?;
+        let (qualifier, field) = schema.qualified_field_with_name(qualifier, col_name)?;
         result.push(Column::from((qualifier, field)));
     }
     Ok(result)
@@ -405,7 +405,7 @@ pub fn expand_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude.as_ref(), opt_except.as_ref(), schema, &None)?
+        get_excluded_columns(opt_exclude.as_ref(), opt_except.as_ref(), schema, None)?
     } else {
         vec![]
     };
@@ -416,12 +416,11 @@ pub fn expand_wildcard(
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
 pub fn expand_qualified_wildcard(
-    qualifier: &str,
+    qualifier: &TableReference,
     schema: &DFSchema,
     wildcard_options: Option<&WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
-    let qualifier = TableReference::from(qualifier);
-    let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
+    let qualified_indices = schema.fields_indices_with_qualified(qualifier);
     let projected_func_dependencies = schema
         .functional_dependencies()
         .project_functional_dependencies(&qualified_indices, qualified_indices.len());
@@ -444,7 +443,7 @@ pub fn expand_qualified_wildcard(
             opt_exclude.as_ref(),
             opt_except.as_ref(),
             schema,
-            &Some(qualifier),
+            Some(qualifier),
         )?
     } else {
         vec![]
@@ -865,13 +864,14 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::List(_) => true,
         DataType::LargeList(_) => true,
         DataType::FixedSizeList(_, _) => true,
+        DataType::Struct(fields) => fields.iter().all(|f| can_hash(f.data_type())),
         _ => false,
     }
 }
 
 /// Check whether all columns are from the schema.
 pub fn check_all_columns_from_schema(
-    columns: &HashSet<Column>,
+    columns: &HashSet<&Column>,
     schema: &DFSchema,
 ) -> Result<bool> {
     for col in columns.iter() {
@@ -899,8 +899,8 @@ pub fn find_valid_equijoin_key_pair(
     left_schema: &DFSchema,
     right_schema: &DFSchema,
 ) -> Result<Option<(Expr, Expr)>> {
-    let left_using_columns = left_key.to_columns()?;
-    let right_using_columns = right_key.to_columns()?;
+    let left_using_columns = left_key.column_refs();
+    let right_using_columns = right_key.column_refs();
 
     // Conditions like a = 10, will be added to non-equijoin.
     if left_using_columns.is_empty() || right_using_columns.is_empty() {
@@ -1200,7 +1200,7 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 /// merge inputs schema into a single schema.
 pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     if inputs.len() == 1 {
-        inputs[0].schema().clone().as_ref().clone()
+        inputs[0].schema().as_ref().clone()
     } else {
         inputs.iter().map(|input| input.schema()).fold(
             DFSchema::empty(),

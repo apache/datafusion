@@ -1807,8 +1807,9 @@ mod tests {
     fn basic_coercion() {
         let schema = test_schema();
         let props = ExecutionProps::new();
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema.clone()));
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&props).with_schema(Arc::clone(&schema)),
+        );
 
         // Note expr type is int32 (not int64)
         // (1i64 + 2i32) < i
@@ -2730,11 +2731,10 @@ mod tests {
         // unsupported cases
         assert_no_change(regex_match(col("c1"), lit("foo.*")));
         assert_no_change(regex_match(col("c1"), lit("(foo)")));
-        assert_no_change(regex_match(col("c1"), lit("^foo")));
-        assert_no_change(regex_match(col("c1"), lit("foo$")));
         assert_no_change(regex_match(col("c1"), lit("%")));
         assert_no_change(regex_match(col("c1"), lit("_")));
         assert_no_change(regex_match(col("c1"), lit("f%o")));
+        assert_no_change(regex_match(col("c1"), lit("^f%o")));
         assert_no_change(regex_match(col("c1"), lit("f_o")));
 
         // empty cases
@@ -2827,12 +2827,19 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("(foo|ba_r)*")));
         assert_no_change(regex_match(col("c1"), lit("(fo_o|ba_r)*")));
         assert_no_change(regex_match(col("c1"), lit("^(foo|bar)*")));
-        assert_no_change(regex_match(col("c1"), lit("^foo|bar$")));
         assert_no_change(regex_match(col("c1"), lit("^(foo)(bar)$")));
         assert_no_change(regex_match(col("c1"), lit("^")));
         assert_no_change(regex_match(col("c1"), lit("$")));
         assert_no_change(regex_match(col("c1"), lit("$^")));
         assert_no_change(regex_match(col("c1"), lit("$foo^")));
+
+        // regular expressions that match a partial literal
+        assert_change(regex_match(col("c1"), lit("^foo")), like(col("c1"), "foo%"));
+        assert_change(regex_match(col("c1"), lit("foo$")), like(col("c1"), "%foo"));
+        assert_change(
+            regex_match(col("c1"), lit("^foo|bar$")),
+            like(col("c1"), "foo%").or(like(col("c1"), "%bar")),
+        );
 
         // OR-chain
         assert_change(
@@ -2999,7 +3006,7 @@ mod tests {
 
     fn expr_test_schema() -> DFSchemaRef {
         Arc::new(
-            DFSchema::from_unqualifed_fields(
+            DFSchema::from_unqualified_fields(
                 vec![
                     Field::new("c1", DataType::Utf8, true),
                     Field::new("c2", DataType::Boolean, true),
@@ -3334,15 +3341,15 @@ mod tests {
         assert_eq!(
             simplify(in_list(
                 col("c1"),
-                vec![scalar_subquery(subquery.clone())],
+                vec![scalar_subquery(Arc::clone(&subquery))],
                 false
             )),
-            in_subquery(col("c1"), subquery.clone())
+            in_subquery(col("c1"), Arc::clone(&subquery))
         );
         assert_eq!(
             simplify(in_list(
                 col("c1"),
-                vec![scalar_subquery(subquery.clone())],
+                vec![scalar_subquery(Arc::clone(&subquery))],
                 true
             )),
             not_in_subquery(col("c1"), subquery)

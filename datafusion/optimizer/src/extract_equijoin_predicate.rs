@@ -19,8 +19,8 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
+use datafusion_common::DFSchema;
 use datafusion_common::Result;
-use datafusion_common::{internal_err, DFSchema};
 use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
@@ -49,13 +49,6 @@ impl ExtractEquijoinPredicate {
 }
 
 impl OptimizerRule for ExtractEquijoinPredicate {
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called ExtractEquijoinPredicate::rewrite")
-    }
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -364,8 +357,8 @@ mod tests {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        let t1_schema = t1.schema().clone();
-        let t2_schema = t2.schema().clone();
+        let t1_schema = Arc::clone(t1.schema());
+        let t2_schema = Arc::clone(t2.schema());
 
         // filter: t1.a + CAST(Int64(1), UInt32) = t2.a + CAST(Int64(2), UInt32) as t1.a + 1 = t2.a + 2
         let filter = Expr::eq(

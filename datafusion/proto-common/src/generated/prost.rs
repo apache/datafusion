@@ -184,7 +184,7 @@ pub struct Union {
     #[prost(int32, repeated, tag = "3")]
     pub type_ids: ::prost::alloc::vec::Vec<i32>,
 }
-/// Used for List/FixedSizeList/LargeList/Struct
+/// Used for List/FixedSizeList/LargeList/Struct/Map
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarNestedValue {
@@ -326,7 +326,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 23, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 35, 36, 37, 38, 26, 27, 28, 29, 22, 30, 25, 31, 34, 42"
+        tags = "33, 1, 2, 3, 23, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 41, 20, 39, 21, 24, 35, 36, 37, 38, 26, 27, 28, 29, 22, 30, 25, 31, 34, 42"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -380,6 +380,8 @@ pub mod scalar_value {
         FixedSizeListValue(super::ScalarNestedValue),
         #[prost(message, tag = "32")]
         StructValue(super::ScalarNestedValue),
+        #[prost(message, tag = "41")]
+        MapValue(super::ScalarNestedValue),
         #[prost(message, tag = "20")]
         Decimal128Value(super::Decimal128),
         #[prost(message, tag = "39")]
@@ -575,6 +577,15 @@ pub struct CsvWriterOptions {
     /// Optional value to represent null
     #[prost(string, tag = "8")]
     pub null_value: ::prost::alloc::string::String,
+    /// Optional quote. Defaults to `b'"'`
+    #[prost(string, tag = "9")]
+    pub quote: ::prost::alloc::string::String,
+    /// Optional escape. Defaults to `'\\'`
+    #[prost(string, tag = "10")]
+    pub escape: ::prost::alloc::string::String,
+    /// Optional flag whether to double quotes, instead of escaping. Defaults to `true`
+    #[prost(bool, tag = "11")]
+    pub double_quote: bool,
 }
 /// Options controlling CSV format
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -619,6 +630,9 @@ pub struct CsvOptions {
     /// Optional comment character as a byte
     #[prost(bytes = "vec", tag = "13")]
     pub comment: ::prost::alloc::vec::Vec<u8>,
+    /// Indicates if quotes are doubled
+    #[prost(bytes = "vec", tag = "14")]
+    pub double_quote: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[allow(clippy::derive_partial_eq_without_eq)]
