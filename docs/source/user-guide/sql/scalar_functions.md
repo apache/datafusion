@@ -1796,7 +1796,6 @@ to_local_time(expression)
 +---------------------------------------------+
 
 > SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels');
-SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels');
 +---------------------------------------------+
 | to_local_time(Utf8("2024-04-01T00:00:20Z")) |
 +---------------------------------------------+
@@ -1817,7 +1816,8 @@ FROM (
 | 2024-04-01T00:00:20+02:00 | Timestamp(Nanosecond, Some("Europe/Brussels")) | 2024-04-01T00:00:20 | Timestamp(Nanosecond, None) |
 +---------------------------+------------------------------------------------+---------------------+-----------------------------+
 
-# combine `to_local_time()` with `date_bin()`
+# combine `to_local_time()` with `date_bin()` to bin on boundaries in the timezone rather
+# than UTC boundaries
 
 > SELECT date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels')) AS date_bin;
 +---------------------+
