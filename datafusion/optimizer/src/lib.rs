@@ -28,6 +28,7 @@
 //!
 //! [`LogicalPlan`]: datafusion_expr::LogicalPlan
 //! [`TypeCoercion`]: analyzer::type_coercion::TypeCoercion
+pub mod analyzer2;
 pub mod analyzer;
 pub mod common_subexpr_eliminate;
 pub mod decorrelate;
