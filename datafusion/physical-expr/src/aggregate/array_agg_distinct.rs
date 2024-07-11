@@ -75,7 +75,7 @@ impl AggregateExpr for DistinctArrayAgg {
             &self.name,
             // This should be the same as return type of AggregateFunction::ArrayAgg
             Field::new("item", self.input_data_type.clone(), self.nullable),
-            false,
+            true,
         ))
     }
 
@@ -90,7 +90,7 @@ impl AggregateExpr for DistinctArrayAgg {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "distinct_array_agg"),
             Field::new("item", self.input_data_type.clone(), self.nullable),
-            false,
+            true,
         )])
     }
 
@@ -165,6 +165,13 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let values: Vec<ScalarValue> = self.values.iter().cloned().collect();
+        if values.is_empty() {
+            return Ok(ScalarValue::new_null_list(
+                self.datatype.clone(),
+                self.nullable,
+                1,
+            ));
+        }
         let arr = ScalarValue::new_list(&values, &self.datatype, self.nullable);
         Ok(ScalarValue::List(arr))
     }

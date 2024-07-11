@@ -1758,8 +1758,11 @@ impl ScalarValue {
                 if let Some(DataType::FixedSizeList(f, l)) = first_non_null_data_type {
                     for array in arrays.iter_mut() {
                         if array.is_null(0) {
-                            *array =
-                                Arc::new(FixedSizeListArray::new_null(f.clone(), l, 1));
+                            *array = Arc::new(FixedSizeListArray::new_null(
+                                Arc::clone(&f),
+                                l,
+                                1,
+                            ));
                         }
                     }
                 }
@@ -1979,6 +1982,16 @@ impl ScalarValue {
         data_type: &DataType,
     ) -> Arc<ListArray> {
         Self::new_list(values, data_type, true)
+    }
+
+    /// Create ListArray with Null with specific data type
+    ///
+    /// - new_null_list(i32, nullable, 1): `ListArray[NULL]`
+    pub fn new_null_list(data_type: DataType, nullable: bool, null_len: usize) -> Self {
+        let data_type = DataType::List(Field::new_list_field(data_type, nullable).into());
+        Self::List(Arc::new(ListArray::from(ArrayData::new_null(
+            &data_type, null_len,
+        ))))
     }
 
     /// Converts `IntoIterator<Item = ScalarValue>` where each element has type corresponding to
@@ -3298,16 +3311,16 @@ impl TryFrom<&DataType> for ScalarValue {
             ),
             // `ScalaValue::List` contains single element `ListArray`.
             DataType::List(field_ref) => ScalarValue::List(Arc::new(
-                GenericListArray::new_null(field_ref.clone(), 1),
+                GenericListArray::new_null(Arc::clone(field_ref), 1),
             )),
             // `ScalarValue::LargeList` contains single element `LargeListArray`.
             DataType::LargeList(field_ref) => ScalarValue::LargeList(Arc::new(
-                GenericListArray::new_null(field_ref.clone(), 1),
+                GenericListArray::new_null(Arc::clone(field_ref), 1),
             )),
             // `ScalaValue::FixedSizeList` contains single element `FixedSizeList`.
             DataType::FixedSizeList(field_ref, fixed_length) => {
                 ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::new_null(
-                    field_ref.clone(),
+                    Arc::clone(field_ref),
                     *fixed_length,
                     1,
                 )))
@@ -3746,11 +3759,11 @@ mod tests {
         let expected = StructArray::from(vec![
             (
                 Arc::new(Field::new("b", DataType::Boolean, false)),
-                boolean.clone() as ArrayRef,
+                Arc::clone(&boolean) as ArrayRef,
             ),
             (
                 Arc::new(Field::new("c", DataType::Int32, false)),
-                int.clone() as ArrayRef,
+                Arc::clone(&int) as ArrayRef,
             ),
         ]);
 
@@ -3792,11 +3805,11 @@ mod tests {
         let struct_array = StructArray::from(vec![
             (
                 Arc::new(Field::new("b", DataType::Boolean, false)),
-                boolean.clone() as ArrayRef,
+                Arc::clone(&boolean) as ArrayRef,
             ),
             (
                 Arc::new(Field::new("c", DataType::Int32, false)),
-                int.clone() as ArrayRef,
+                Arc::clone(&int) as ArrayRef,
             ),
         ]);
         let sv = ScalarValue::Struct(Arc::new(struct_array));
@@ -3810,11 +3823,11 @@ mod tests {
         let struct_array = StructArray::from(vec![
             (
                 Arc::new(Field::new("b", DataType::Boolean, false)),
-                boolean.clone() as ArrayRef,
+                Arc::clone(&boolean) as ArrayRef,
             ),
             (
                 Arc::new(Field::new("c", DataType::Int32, false)),
-                int.clone() as ArrayRef,
+                Arc::clone(&int) as ArrayRef,
             ),
         ]);
 
@@ -3846,7 +3859,7 @@ mod tests {
     fn test_to_array_of_size_for_fsl() {
         let values = Int32Array::from_iter([Some(1), None, Some(2)]);
         let field = Arc::new(Field::new("item", DataType::Int32, true));
-        let arr = FixedSizeListArray::new(field.clone(), 3, Arc::new(values), None);
+        let arr = FixedSizeListArray::new(Arc::clone(&field), 3, Arc::new(values), None);
         let sv = ScalarValue::FixedSizeList(Arc::new(arr));
         let actual_arr = sv
             .to_array_of_size(2)
@@ -3932,13 +3945,13 @@ mod tests {
     fn test_iter_to_array_fixed_size_list() {
         let field = Arc::new(Field::new("item", DataType::Int32, true));
         let f1 = Arc::new(FixedSizeListArray::new(
-            field.clone(),
+            Arc::clone(&field),
             3,
             Arc::new(Int32Array::from(vec![1, 2, 3])),
             None,
         ));
         let f2 = Arc::new(FixedSizeListArray::new(
-            field.clone(),
+            Arc::clone(&field),
             3,
             Arc::new(Int32Array::from(vec![4, 5, 6])),
             None,
@@ -3946,7 +3959,7 @@ mod tests {
         let f_nulls = Arc::new(FixedSizeListArray::new_null(field, 1, 1));
 
         let scalars = vec![
-            ScalarValue::FixedSizeList(f_nulls.clone()),
+            ScalarValue::FixedSizeList(Arc::clone(&f_nulls)),
             ScalarValue::FixedSizeList(f1),
             ScalarValue::FixedSizeList(f2),
             ScalarValue::FixedSizeList(f_nulls),
@@ -4780,7 +4793,7 @@ mod tests {
         let inner_field = Arc::new(Field::new("item", DataType::Int32, true));
 
         // Test for List
-        let data_type = &DataType::List(inner_field.clone());
+        let data_type = &DataType::List(Arc::clone(&inner_field));
         let scalar: ScalarValue = data_type.try_into().unwrap();
         let expected = ScalarValue::List(
             new_null_array(data_type, 1)
@@ -4792,7 +4805,7 @@ mod tests {
         assert!(expected.is_null());
 
         // Test for LargeList
-        let data_type = &DataType::LargeList(inner_field.clone());
+        let data_type = &DataType::LargeList(Arc::clone(&inner_field));
         let scalar: ScalarValue = data_type.try_into().unwrap();
         let expected = ScalarValue::LargeList(
             new_null_array(data_type, 1)
@@ -4804,7 +4817,7 @@ mod tests {
         assert!(expected.is_null());
 
         // Test for FixedSizeList(5)
-        let data_type = &DataType::FixedSizeList(inner_field.clone(), 5);
+        let data_type = &DataType::FixedSizeList(Arc::clone(&inner_field), 5);
         let scalar: ScalarValue = data_type.try_into().unwrap();
         let expected = ScalarValue::FixedSizeList(
             new_null_array(data_type, 1)
@@ -5212,35 +5225,35 @@ mod tests {
         let field_f = Arc::new(Field::new("f", DataType::Int64, false));
         let field_d = Arc::new(Field::new(
             "D",
-            DataType::Struct(vec![field_e.clone(), field_f.clone()].into()),
+            DataType::Struct(vec![Arc::clone(&field_e), Arc::clone(&field_f)].into()),
             false,
         ));
 
         let struct_array = StructArray::from(vec![
             (
-                field_e.clone(),
+                Arc::clone(&field_e),
                 Arc::new(Int16Array::from(vec![2])) as ArrayRef,
             ),
             (
-                field_f.clone(),
+                Arc::clone(&field_f),
                 Arc::new(Int64Array::from(vec![3])) as ArrayRef,
             ),
         ]);
 
         let struct_array = StructArray::from(vec![
             (
-                field_a.clone(),
+                Arc::clone(&field_a),
                 Arc::new(Int32Array::from(vec![23])) as ArrayRef,
             ),
             (
-                field_b.clone(),
+                Arc::clone(&field_b),
                 Arc::new(BooleanArray::from(vec![false])) as ArrayRef,
             ),
             (
-                field_c.clone(),
+                Arc::clone(&field_c),
                 Arc::new(StringArray::from(vec!["Hello"])) as ArrayRef,
             ),
-            (field_d.clone(), Arc::new(struct_array) as ArrayRef),
+            (Arc::clone(&field_d), Arc::new(struct_array) as ArrayRef),
         ]);
         let scalar = ScalarValue::Struct(Arc::new(struct_array));
 
@@ -5250,26 +5263,26 @@ mod tests {
 
         let expected = Arc::new(StructArray::from(vec![
             (
-                field_a.clone(),
+                Arc::clone(&field_a),
                 Arc::new(Int32Array::from(vec![23, 23])) as ArrayRef,
             ),
             (
-                field_b.clone(),
+                Arc::clone(&field_b),
                 Arc::new(BooleanArray::from(vec![false, false])) as ArrayRef,
             ),
             (
-                field_c.clone(),
+                Arc::clone(&field_c),
                 Arc::new(StringArray::from(vec!["Hello", "Hello"])) as ArrayRef,
             ),
             (
-                field_d.clone(),
+                Arc::clone(&field_d),
                 Arc::new(StructArray::from(vec![
                     (
-                        field_e.clone(),
+                        Arc::clone(&field_e),
                         Arc::new(Int16Array::from(vec![2, 2])) as ArrayRef,
                     ),
                     (
-                        field_f.clone(),
+                        Arc::clone(&field_f),
                         Arc::new(Int64Array::from(vec![3, 3])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
@@ -5348,26 +5361,26 @@ mod tests {
 
         let expected = Arc::new(StructArray::from(vec![
             (
-                field_a.clone(),
+                Arc::clone(&field_a),
                 Arc::new(Int32Array::from(vec![23, 7, -1000])) as ArrayRef,
             ),
             (
-                field_b.clone(),
+                Arc::clone(&field_b),
                 Arc::new(BooleanArray::from(vec![false, true, true])) as ArrayRef,
             ),
             (
-                field_c.clone(),
+                Arc::clone(&field_c),
                 Arc::new(StringArray::from(vec!["Hello", "World", "!!!!!"])) as ArrayRef,
             ),
             (
-                field_d.clone(),
+                Arc::clone(&field_d),
                 Arc::new(StructArray::from(vec![
                     (
-                        field_e.clone(),
+                        Arc::clone(&field_e),
                         Arc::new(Int16Array::from(vec![2, 4, 6])) as ArrayRef,
                     ),
                     (
-                        field_f.clone(),
+                        Arc::clone(&field_f),
                         Arc::new(Int64Array::from(vec![3, 5, 7])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
@@ -5431,11 +5444,11 @@ mod tests {
         let array = as_struct_array(&array).unwrap();
         let expected = StructArray::from(vec![
             (
-                field_a.clone(),
+                Arc::clone(&field_a),
                 Arc::new(StringArray::from(vec!["First", "Second", "Third"])) as ArrayRef,
             ),
             (
-                field_primitive_list.clone(),
+                Arc::clone(&field_primitive_list),
                 Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
                     Some(vec![Some(1), Some(2), Some(3)]),
                     Some(vec![Some(4), Some(5)]),
@@ -6195,18 +6208,18 @@ mod tests {
 
         let struct_value = vec![
             (
-                fields[0].clone(),
+                Arc::clone(&fields[0]),
                 Arc::new(UInt64Array::from(vec![Some(1)])) as ArrayRef,
             ),
             (
-                fields[1].clone(),
+                Arc::clone(&fields[1]),
                 Arc::new(StructArray::from(vec![
                     (
-                        fields_b[0].clone(),
+                        Arc::clone(&fields_b[0]),
                         Arc::new(UInt64Array::from(vec![Some(2)])) as ArrayRef,
                     ),
                     (
-                        fields_b[1].clone(),
+                        Arc::clone(&fields_b[1]),
                         Arc::new(UInt64Array::from(vec![Some(3)])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
@@ -6215,19 +6228,19 @@ mod tests {
 
         let struct_value_with_nulls = vec![
             (
-                fields[0].clone(),
+                Arc::clone(&fields[0]),
                 Arc::new(UInt64Array::from(vec![Some(1)])) as ArrayRef,
             ),
             (
-                fields[1].clone(),
+                Arc::clone(&fields[1]),
                 Arc::new(StructArray::from((
                     vec![
                         (
-                            fields_b[0].clone(),
+                            Arc::clone(&fields_b[0]),
                             Arc::new(UInt64Array::from(vec![Some(2)])) as ArrayRef,
                         ),
                         (
-                            fields_b[1].clone(),
+                            Arc::clone(&fields_b[1]),
                             Arc::new(UInt64Array::from(vec![Some(3)])) as ArrayRef,
                         ),
                     ],

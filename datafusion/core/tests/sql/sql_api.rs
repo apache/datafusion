@@ -114,6 +114,40 @@ async fn unsupported_statement_returns_error() {
 }
 
 #[tokio::test]
+async fn empty_statement_returns_error() {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE test (x int)").await.unwrap();
+
+    let state = ctx.state();
+
+    // Give it an empty string which contains no statements
+    let plan_res = state.create_logical_plan("").await;
+    assert_eq!(
+        plan_res.unwrap_err().strip_backtrace(),
+        "This feature is not implemented: No SQL statements were provided in the query string"
+    );
+}
+
+#[tokio::test]
+async fn multiple_statements_returns_error() {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE test (x int)").await.unwrap();
+
+    let state = ctx.state();
+
+    // Give it a string that contains multiple statements
+    let plan_res = state
+        .create_logical_plan(
+            "INSERT INTO test (x) VALUES (1); INSERT INTO test (x) VALUES (2)",
+        )
+        .await;
+    assert_eq!(
+        plan_res.unwrap_err().strip_backtrace(),
+        "This feature is not implemented: The context currently only supports a single SQL statement"
+    );
+}
+
+#[tokio::test]
 async fn ddl_can_not_be_planned_by_session_state() {
     let ctx = SessionContext::new();
 

@@ -555,7 +555,7 @@ impl SessionState {
         }
         let statement = statements.pop_front().ok_or_else(|| {
             DataFusionError::NotImplemented(
-                "The context requires a statement!".to_string(),
+                "No SQL statements were provided in the query string".to_string(),
             )
         })?;
         Ok(statement)
