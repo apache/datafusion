@@ -18,7 +18,11 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-pub mod abs;
+mod abs;
+mod if_expr;
+
+pub use abs::Abs;
+pub use if_expr::IfExpr;
 
 /// Spark supports three evaluation modes when evaluating expressions, which affect
 /// the behavior when processing input values that are invalid or would result in an

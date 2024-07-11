@@ -32,6 +32,8 @@ arrow-schema = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-functions = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-comet-utils = { workspace = true }
 
 [lib]
 name = "datafusion_comet_spark_expr"
