@@ -73,16 +73,11 @@ impl BinaryExpr {
     }
 
     /// Create new binary expression with explicit fail_on_overflow value
-    pub fn new_with_fail_mode(
-        left: Arc<dyn PhysicalExpr>,
-        op: Operator,
-        right: Arc<dyn PhysicalExpr>,
-        fail_on_overflow: bool,
-    ) -> Self {
+    pub fn with_fail_on_overflow(self, fail_on_overflow: bool) -> Self {
         Self {
-            left,
-            op,
-            right,
+            left: self.left,
+            op: self.op,
+            right: self.right,
             fail_on_overflow,
         }
     }
@@ -352,12 +347,10 @@ impl PhysicalExpr for BinaryExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(BinaryExpr::new_with_fail_mode(
-            Arc::clone(&children[0]),
-            self.op,
-            Arc::clone(&children[1]),
-            self.fail_on_overflow,
-        )))
+        Ok(Arc::new(
+            BinaryExpr::new(Arc::clone(&children[0]), self.op, Arc::clone(&children[1]))
+                .with_fail_on_overflow(self.fail_on_overflow),
+        ))
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
@@ -4053,12 +4046,12 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![l, r])?;
 
         // create expression
-        let expr = BinaryExpr::new_with_fail_mode(
+        let expr = BinaryExpr::new(
             Arc::new(Column::new("l", 0)),
             Operator::Plus,
             Arc::new(Column::new("r", 1)),
-            true,
-        );
+        )
+        .with_fail_on_overflow(true);
 
         // evaluate expression
         let result = expr.evaluate(&batch);
@@ -4082,12 +4075,12 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![l, r])?;
 
         // create expression
-        let expr = BinaryExpr::new_with_fail_mode(
+        let expr = BinaryExpr::new(
             Arc::new(Column::new("l", 0)),
             Operator::Minus,
             Arc::new(Column::new("r", 1)),
-            true,
-        );
+        )
+        .with_fail_on_overflow(true);
 
         // evaluate expression
         let result = expr.evaluate(&batch);
@@ -4111,12 +4104,12 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![l, r])?;
 
         // create expression
-        let expr = BinaryExpr::new_with_fail_mode(
+        let expr = BinaryExpr::new(
             Arc::new(Column::new("l", 0)),
             Operator::Multiply,
             Arc::new(Column::new("r", 1)),
-            true,
-        );
+        )
+        .with_fail_on_overflow(true);
 
         // evaluate expression
         let result = expr.evaluate(&batch);
