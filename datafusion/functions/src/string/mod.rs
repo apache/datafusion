@@ -182,7 +182,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         lower(),
         ltrim(),
         octet_length(),
-        overlay(),
         repeat(),
         replace(),
         rtrim(),
