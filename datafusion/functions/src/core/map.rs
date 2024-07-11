@@ -24,26 +24,32 @@ use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, SchemaBuilder};
 use arrow_buffer::{Buffer, ToByteSlice};
 
-use datafusion_common::Result;
 use datafusion_common::{exec_err, internal_err, ScalarValue};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let (key, value): (Vec<_>, Vec<_>) = args
         .chunks_exact(2)
-        .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
+        .map(|chunk| {
+            if let ColumnarValue::Array(_) = chunk[0] {
+                return not_impl_err!("make_map does not support array keys");
+            }
+            if let ColumnarValue::Array(_) = chunk[1] {
+                return not_impl_err!("make_map does not support array values");
+            }
+            Ok((chunk[0].clone(), chunk[1].clone()))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
         .unzip();
 
-    let key = ColumnarValue::values_to_arrays(&key)?;
-    let value = ColumnarValue::values_to_arrays(&value)?;
+    let keys = ColumnarValue::values_to_arrays(&key)?;
+    let values = ColumnarValue::values_to_arrays(&value)?;
 
-    let mut keys = Vec::new();
-    let mut values = Vec::new();
+    let keys: Vec<_> = keys.iter().map(|k| k.as_ref()).collect();
+    let values: Vec<_> = values.iter().map(|v| v.as_ref()).collect();
 
-    for (key, value) in key.iter().zip(value.iter()) {
-        keys.push(key.as_ref());
-        values.push(value.as_ref());
-    }
     let key = match concat(&keys) {
         Ok(key) => key,
         Err(e) => return internal_err!("Error concatenating keys: {}", e),
@@ -142,7 +148,7 @@ impl MakeMap {
 }
 
 impl ScalarUDFImpl for MakeMap {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

@@ -190,3 +190,25 @@ query ?
 SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'LargeList(Utf8)'), arrow_cast(make_array(41, 33, 30), 'LargeList(Int64)'));
 ----
 {POST: 41, HEAD: 33, PATCH: 30}
+
+statement ok
+create table t as values
+('a', 1, 'k1', 10, ['k1', 'k2'], [1, 2]),
+('b', 2, 'k3', 30, ['k3'], [3]),
+('d', 4, 'k5', 50, ['k5'], [5]);
+
+query error
+SELECT make_map(column1, column2, column3, column4) FROM t;
+# TODO: support array value
+# ----
+# {a: 1, k1: 10}
+# {b: 2, k3: 30}
+# {d: 4, k5: 50}
+
+query error
+SELECT map(column5, column6) FROM t;
+# TODO: support array value
+# ----
+# {k1:1, k2:2}
+# {k3: 3}
+# {k5: 5}
