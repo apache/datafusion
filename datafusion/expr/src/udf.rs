@@ -542,14 +542,26 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
-    /// Dynamic equality. Allows customizing the equality of scalar UDFs.
-    /// By default, compares the UDF name and signature.
+    /// Return true if this scalar UDF is equal to the other.
+    ///
+    /// Allows customizing the equality of scalar UDFs.
+    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
+    ///
+    /// - reflexive: `a.equals(a)`;
+    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
+    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
+    ///
+    /// By default, compares [`Self::name`] and [`Self::signature`].
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
         self.name() == other.name() && self.signature() == other.signature()
     }
 
-    /// Dynamic hashing. Allows customizing the hash code of scalar UDFs.
-    /// By default, hashes the UDF name and signature.
+    /// Returns a hash value for this scalar UDF.
+    ///
+    /// Allows customizing the hash code of scalar UDFs. Similarly to [`Hash`] and [`Eq`],
+    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
+    ///
+    /// By default, hashes [`Self::name`] and [`Self::signature`].
     fn hash_value(&self) -> u64 {
         let hasher = &mut DefaultHasher::new();
         self.name().hash(hasher);
