@@ -19,6 +19,8 @@
 
 use std::sync::Arc;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_plan::limit::GlobalLimitExec;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::ExecutionPlan;
@@ -41,8 +43,7 @@ impl PhysicalOptimizerRule for LimitPushdown {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // TODO: NOOP until implemented so it doesn't break the tests
-        Ok(plan)
+        plan.transform_down(push_down_limits).data()
     }
 
     fn name(&self) -> &str {
@@ -51,5 +52,86 @@ impl PhysicalOptimizerRule for LimitPushdown {
 
     fn schema_check(&self) -> bool {
         true
+    }
+}
+
+pub fn push_down_limits(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
+        let child = global_limit.input();
+        let fetch = global_limit.fetch();
+
+        if let Some(child_with_fetch) = child.with_fetch(fetch) {
+            Ok(Transformed::yes(child_with_fetch))
+        } else {
+            Ok(Transformed::no(plan))
+        }
+    } else {
+        Ok(Transformed::no(plan))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    use datafusion_physical_plan::get_plan_string;
+    use datafusion_physical_plan::limit::GlobalLimitExec;
+    use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+    use super::*;
+    struct DummyStreamPartition {
+        schema: SchemaRef,
+    }
+    impl PartitionStream for DummyStreamPartition {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+            unreachable!()
+        }
+    }
+    #[test]
+    fn transforms_streaming_table_exec_into_fetching_version() -> Result<()> {
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Utf8, true),
+            Field::new("c3", DataType::Float64, true),
+        ]));
+
+        let streaming_table = StreamingTableExec::try_new(
+            schema.clone(),
+            vec![Arc::new(DummyStreamPartition {
+                schema: schema.clone(),
+            }) as _],
+            None,
+            None,
+            true,
+            None,
+        )?;
+
+        let global_limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
+            Arc::new(streaming_table),
+            0,
+            Some(5)
+        ));
+
+        let initial = get_plan_string(&global_limit);
+        let expected_initial = [
+            "GlobalLimitExec: skip=0, fetch=5",
+            "  StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+        ];
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+        let expected = [
+            "StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true, fetch=5"
+        ];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+
+        Ok(())
     }
 }

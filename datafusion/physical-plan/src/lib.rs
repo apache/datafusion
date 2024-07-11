@@ -440,6 +440,18 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }
+
+    /// Returns `true` if a limit can be safely pushed down through this
+    /// `ExecutionPlan` node.
+    fn supports_limit_pushdown(&self) -> bool {
+        false
+    }
+
+    /// Returns a fetching version of this `ExecutionPlan` node, if it supports
+    /// fetch limits. Returns `None` otherwise.
+    fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
 }
 
 /// Extension trait provides an easy API to fetch various properties of
