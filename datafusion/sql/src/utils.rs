@@ -264,7 +264,7 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
 }
 
 pub(crate) fn normalize_value(value: &Value) -> Result<String> {
-    value_to_string(value).and_then(|v| Ok(v.to_ascii_lowercase()))
+    value_to_string(value).map(|v| v.to_ascii_lowercase())
 }
 
 pub(crate) fn value_to_string(value: &Value) -> Result<String> {
