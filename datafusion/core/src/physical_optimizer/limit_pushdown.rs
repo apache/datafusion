@@ -63,7 +63,9 @@ pub fn push_down_limits(
         let fetch = global_limit.fetch();
         let skip = global_limit.skip();
 
-        if let Some(child_with_fetch) = child.with_fetch(fetch) {
+        let child_fetch = fetch.map_or(None, |f| Some(f + skip));
+
+        if let Some(child_with_fetch) = child.with_fetch(child_fetch) {
             if skip > 0 {
                 Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
                     child_with_fetch,
@@ -102,7 +104,6 @@ mod tests {
     }
     #[test]
     fn transforms_streaming_table_exec_into_fetching_version() -> Result<()> {
-
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, true),
             Field::new("c2", DataType::Utf8, true),
@@ -123,7 +124,7 @@ mod tests {
         let global_limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
             Arc::new(streaming_table),
             0,
-            Some(5)
+            Some(5),
         ));
 
         let initial = get_plan_string(&global_limit);
@@ -146,14 +147,13 @@ mod tests {
 
     #[test]
     fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_nonzero() -> Result<()> {
-
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, true),
             Field::new("c2", DataType::Utf8, true),
             Field::new("c3", DataType::Float64, true),
         ]));
 
-        let streaming_table = StreamingTableExec::try_new(
+        let streaming_table = Arc::new(StreamingTableExec::try_new(
             schema.clone(),
             vec![Arc::new(DummyStreamPartition {
                 schema: schema.clone(),
@@ -162,17 +162,17 @@ mod tests {
             None,
             true,
             None,
-        )?;
+        )?);
 
         let global_limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
-            Arc::new(streaming_table),
+            streaming_table,
             2,
-            Some(7)
+            Some(5),
         ));
 
         let initial = get_plan_string(&global_limit);
         let expected_initial = [
-            "GlobalLimitExec: skip=2, fetch=7",
+            "GlobalLimitExec: skip=2, fetch=5",
             "  StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
         ];
         assert_eq!(initial, expected_initial);
@@ -181,7 +181,7 @@ mod tests {
             LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
         let expected = [
-            "GlobalLimitExec: skip=2, fetch=7",
+            "GlobalLimitExec: skip=2, fetch=5",
             "  StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true, fetch=7"
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
