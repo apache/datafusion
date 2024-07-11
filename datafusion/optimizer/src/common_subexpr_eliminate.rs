@@ -56,13 +56,9 @@ struct Identifier<'n> {
 }
 
 impl<'n> Identifier<'n> {
-    fn new(expr: &'n Expr, is_tree: bool, random_state: &RandomState) -> Self {
+    fn new(expr: &'n Expr, random_state: &RandomState) -> Self {
         let mut hasher = random_state.build_hasher();
-        if is_tree {
-            expr.hash(&mut hasher);
-        } else {
-            expr.hash_node(&mut hasher);
-        }
+        expr.hash_node(&mut hasher);
         let hash = hasher.finish();
         Self { hash, expr }
     }
@@ -1044,8 +1040,7 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_, 'n> {
     fn f_up(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
         let (down_index, sub_expr_id, sub_expr_is_valid) = self.pop_enter_mark();
 
-        let expr_id =
-            Identifier::new(expr, false, self.random_state).combine(sub_expr_id);
+        let expr_id = Identifier::new(expr, self.random_state).combine(sub_expr_id);
         let is_valid = !expr.is_volatile_node() && sub_expr_is_valid;
 
         self.id_array[down_index].0 = self.up_index;
