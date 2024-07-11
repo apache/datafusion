@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Frequently Asked Questions &#8212; Apache DataFusion  documentation</title>
+    <title>Crate Configuration &#8212; Apache DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,8 +34,8 @@
     <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Introduction" href="../library-user-guide/index.html" />
-    <link rel="prev" title="Configuration Settings" href="configs.html" />
+    <link rel="next" title="DataFusion CLI" href="cli/index.html" />
+    <link rel="prev" title="Example Usage" href="example-usage.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -151,8 +151,8 @@
    Example Usage
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="crate-configuration.html">
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
    Crate Configuration
   </a>
  </li>
@@ -280,8 +280,8 @@
    Configuration Settings
   </a>
  </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
+ <li class="toctree-l1">
+  <a class="reference internal" href="faq.html">
    Frequently Asked Questions
   </a>
  </li>
@@ -478,27 +478,19 @@
 
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
- <li class="toc-h1 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#">
-   Frequently Asked Questions
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#add-latest-non-published-datafusion-dependency">
+   Add latest non published DataFusion dependency
   </a>
-  <ul class="visible nav section-nav flex-column">
-   <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#what-is-the-relationship-between-apache-arrow-datafusion-and-ballista">
-     What is the relationship between Apache Arrow, DataFusion, and Ballista?
-    </a>
-   </li>
-  </ul>
  </li>
- <li class="toc-h1 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#how-does-datafusion-compare-with-xyz">
-   How does DataFusion Compare with
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     XYZ
-    </span>
-   </code>
-   ?
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#optimized-configuration">
+   Optimized Configuration
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#enable-backtraces">
+   Enable backtraces
   </a>
  </li>
 </ul>
@@ -510,7 +502,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/faq.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/crate-configuration.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -547,49 +539,111 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="frequently-asked-questions">
-<h1>Frequently Asked Questions<a class="headerlink" href="#frequently-asked-questions" title="Link to this heading">¶</a></h1>
-<section id="what-is-the-relationship-between-apache-arrow-datafusion-and-ballista">
-<h2>What is the relationship between Apache Arrow, DataFusion, and Ballista?<a class="headerlink" href="#what-is-the-relationship-between-apache-arrow-datafusion-and-ballista" title="Link to this heading">¶</a></h2>
-<p>Apache Arrow is a library which provides a standardized memory representation for columnar data. It also provides
-“kernels” for performing common operations on this data.</p>
-<p>DataFusion is a library for executing queries in-process using the Apache Arrow memory
-model and computational kernels. It is designed to run within a single process, using threads
-for parallel query execution.</p>
-<p><a class="reference external" href="https://github.com/apache/datafusion-ballista">Ballista</a> is a distributed compute platform built on DataFusion.</p>
+<section id="crate-configuration">
+<h1>Crate Configuration<a class="headerlink" href="#crate-configuration" title="Link to this heading">¶</a></h1>
+<p>This section contains information on how to configure DataFusion in your Rust
+project. See the <a class="reference internal" href="configs.html"><span class="std std-doc">Configuration Settings</span></a> section for a list of options that
+control DataFusion’s behavior.</p>
+<section id="add-latest-non-published-datafusion-dependency">
+<h2>Add latest non published DataFusion dependency<a class="headerlink" href="#add-latest-non-published-datafusion-dependency" title="Link to this heading">¶</a></h2>
+<p>DataFusion changes are published to <code class="docutils literal notranslate"><span class="pre">crates.io</span></code> according to the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/dev/release/README.md#release-process">release schedule</a></p>
+<p>If you would like to test out DataFusion changes which are merged but not yet
+published, Cargo supports adding dependency directly to GitHub branch:</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">git</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;https://github.com/apache/datafusion&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">branch</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;main&quot;</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>Also it works on the package level</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion-common</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">git</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;https://github.com/apache/datafusion&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">branch</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;main&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">package</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;datafusion-common&quot;</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>And with features</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">git</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;https://github.com/apache/datafusion&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">branch</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;main&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">default-features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;unicode_expressions&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+</pre></div>
+</div>
+<p>More on <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies">Cargo dependencies</a></p>
 </section>
+<section id="optimized-configuration">
+<h2>Optimized Configuration<a class="headerlink" href="#optimized-configuration" title="Link to this heading">¶</a></h2>
+<p>For an optimized build several steps are required. First, use the below in your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code>. It is
+worth noting that using the settings in the <code class="docutils literal notranslate"><span class="pre">[profile.release]</span></code> section will significantly increase the build time.</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="k">[dependencies]</span>
+<span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;22.0&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;^1.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;rt-multi-thread&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<span class="n">snmalloc-rs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.3&quot;</span>
+
+<span class="k">[profile.release]</span>
+<span class="n">lto</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<span class="n">codegen-units</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span>
+</pre></div>
+</div>
+<p>Then, in <code class="docutils literal notranslate"><span class="pre">main.rs.</span></code> update the memory allocator with the below after your imports:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+
+<span class="cp">#[global_allocator]</span>
+<span class="k">static</span><span class="w"> </span><span class="n">ALLOC</span><span class="p">:</span><span class="w"> </span><span class="nc">snmalloc_rs</span><span class="p">::</span><span class="n">SnMalloc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">snmalloc_rs</span><span class="p">::</span><span class="n">SnMalloc</span><span class="p">;</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Based on the instruction set architecture you are building on you will want to configure the <code class="docutils literal notranslate"><span class="pre">target-cpu</span></code> as well, ideally
+with <code class="docutils literal notranslate"><span class="pre">native</span></code> or at least <code class="docutils literal notranslate"><span class="pre">avx2</span></code>.</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">RUSTFLAGS</span><span class="o">=</span><span class="s1">&#39;-C target-cpu=native&#39;</span><span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--release
+</pre></div>
+</div>
 </section>
-<section id="how-does-datafusion-compare-with-xyz">
-<h1>How does DataFusion Compare with <code class="docutils literal notranslate"><span class="pre">XYZ</span></code>?<a class="headerlink" href="#how-does-datafusion-compare-with-xyz" title="Link to this heading">¶</a></h1>
-<p>When compared to similar systems, DataFusion typically is:</p>
-<ol class="arabic simple">
-<li><p>Targeted at developers, rather than end users / data scientists.</p></li>
-<li><p>Designed to be embedded, rather than a complete file based SQL system.</p></li>
-<li><p>Governed by the <a class="reference external" href="https://www.apache.org/">Apache Software Foundation</a> process, rather than a single company or individual.</p></li>
-<li><p>Implemented in <code class="docutils literal notranslate"><span class="pre">Rust</span></code>, rather than <code class="docutils literal notranslate"><span class="pre">C/C++</span></code></p></li>
-</ol>
-<p>Here is a comparison with similar projects that may help understand
-when DataFusion might be suitable or unsuitable for your needs:</p>
-<ul class="simple">
-<li><p><a class="reference external" href="https://www.duckdb.org">DuckDB</a> is an open source, in process analytic database.
-Like DataFusion, it supports very fast execution, both from its custom file format
-and directly from parquet files. Unlike DataFusion, it is written in C/C++ and it
-is primarily used directly by users as a serverless database and query system rather
-than as a library for building such database systems.</p></li>
-<li><p><a class="reference external" href="http://pola.rs">Polars</a>: Polars is one of the fastest DataFrame
-libraries at the time of writing. Like DataFusion, it is also
-written in Rust and uses the Apache Arrow memory model, but unlike
-DataFusion it is not designed with as many extension points.</p></li>
-<li><p><a class="reference external" href="https://github.com/facebookincubator/velox">Facebook Velox</a>
-is an execution engine. Like DataFusion, Velox aims to
-provide a reusable foundation for building database-like systems. Unlike DataFusion,
-it is written in C/C++ and does not include a SQL frontend or planning / optimization
-framework.</p></li>
-<li><p><a class="reference external" href="https://github.com/datafuselabs/databend">Databend</a> is a complete
-database system. Like DataFusion it is also written in Rust and
-utilizes the Apache Arrow memory model, but unlike DataFusion it
-targets end-users rather than developers of other database systems.</p></li>
-</ul>
+<section id="enable-backtraces">
+<h2>Enable backtraces<a class="headerlink" href="#enable-backtraces" title="Link to this heading">¶</a></h2>
+<p>By default Datafusion returns errors as a plain message. There is option to enable more verbose details about the error,
+like error backtrace. To enable a backtrace you need to add Datafusion <code class="docutils literal notranslate"><span class="pre">backtrace</span></code> feature to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file:</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;31.0.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;backtrace&quot;</span><span class="p">]}</span>
+</pre></div>
+</div>
+<p>Set environment <a class="reference external" href="https://doc.rust-lang.org/std/backtrace/index.html#environment-variables">variables</a></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">RUST_BACKTRACE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./target/debug/datafusion-cli
+DataFusion<span class="w"> </span>CLI<span class="w"> </span>v31.0.0
+&gt;<span class="w"> </span><span class="k">select</span><span class="w"> </span>row_numer<span class="o">()</span><span class="w"> </span>over<span class="w"> </span><span class="o">(</span>partition<span class="w"> </span>by<span class="w"> </span>a<span class="w"> </span>order<span class="w"> </span>by<span class="w"> </span>a<span class="o">)</span><span class="w"> </span>from<span class="w"> </span><span class="o">(</span><span class="k">select</span><span class="w"> </span><span class="m">1</span><span class="w"> </span>a<span class="o">)</span><span class="p">;</span>
+Error<span class="w"> </span>during<span class="w"> </span>planning:<span class="w"> </span>Invalid<span class="w"> </span><span class="k">function</span><span class="w"> </span><span class="s1">&#39;row_numer&#39;</span>.
+Did<span class="w"> </span>you<span class="w"> </span>mean<span class="w"> </span><span class="s1">&#39;ROW_NUMBER&#39;</span>?
+
+backtrace:<span class="w">    </span><span class="m">0</span>:<span class="w"> </span>std::backtrace_rs::backtrace::libunwind::trace
+<span class="w">             </span>at<span class="w"> </span>/rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/../../backtrace/src/backtrace/libunwind.rs:93:5
+<span class="w">   </span><span class="m">1</span>:<span class="w"> </span>std::backtrace_rs::backtrace::trace_unsynchronized
+<span class="w">             </span>at<span class="w"> </span>/rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/../../backtrace/src/backtrace/mod.rs:66:5
+<span class="w">   </span><span class="m">2</span>:<span class="w"> </span>std::backtrace::Backtrace::create
+<span class="w">             </span>at<span class="w"> </span>/rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/backtrace.rs:332:13
+<span class="w">   </span><span class="m">3</span>:<span class="w"> </span>std::backtrace::Backtrace::capture
+<span class="w">             </span>at<span class="w"> </span>/rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/backtrace.rs:298:9
+<span class="w">   </span><span class="m">4</span>:<span class="w"> </span>datafusion_common::error::DataFusionError::get_back_trace
+<span class="w">             </span>at<span class="w"> </span>/datafusion/datafusion/common/src/error.rs:436:30
+<span class="w">   </span><span class="m">5</span>:<span class="w"> </span>datafusion_sql::expr::function::&lt;impl<span class="w"> </span>datafusion_sql::planner::SqlToRel&lt;S&gt;&gt;::sql_function_to_expr
+<span class="w">   </span>............
+</pre></div>
+</div>
+<p>The backtraces are useful when debugging code. If there is a test in <code class="docutils literal notranslate"><span class="pre">datafusion/core/src/physical_planner.rs</span></code></p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>#[tokio::test]
+async fn test_get_backtrace_for_failed_code() -&gt; Result&lt;()&gt; {
+    let ctx = SessionContext::new();
+
+    let sql = &quot;
+    select row_numer() over (partition by a order by a) from (select 1 a);
+    &quot;;
+
+    let _ = ctx.sql(sql).await?.collect().await?;
+
+    Ok(())
+}
+</pre></div>
+</div>
+<p>To obtain a backtrace:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>build<span class="w"> </span>--features<span class="o">=</span>backtrace
+<span class="nv">RUST_BACKTRACE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--features<span class="o">=</span>backtrace<span class="w"> </span>--package<span class="w"> </span>datafusion<span class="w"> </span>--lib<span class="w"> </span>--<span class="w"> </span>physical_planner::tests::test_get_backtrace_for_failed_code<span class="w"> </span>--exact<span class="w"> </span>--nocapture
+</pre></div>
+</div>
+<p>Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored</p>
+</section>
 </section>
 
 
@@ -598,17 +652,17 @@ targets end-users rather than developers of other database systems.</p></li>
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="configs.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="example-usage.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Configuration Settings</p>
+            <p class="prev-next-title">Example Usage</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="../library-user-guide/index.html" title="next page">
+    <a class='right-next' id="next-link" href="cli/index.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Introduction</p>
+        <p class="prev-next-title">DataFusion CLI</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
