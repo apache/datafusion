@@ -400,9 +400,7 @@ pub fn parse_physical_expr(
                 .iter()
                 .map(|e| parse_physical_expr(e, registry, input_schema, codec))
                 .collect::<Result<_>>()?;
-            let extension_expr =
-                codec.try_decode_expr(extension.expr.as_slice(), &inputs)?;
-            extension_expr
+            (codec.try_decode_expr(extension.expr.as_slice(), &inputs)?) as _
         }
     };
 
