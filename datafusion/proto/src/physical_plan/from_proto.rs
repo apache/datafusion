@@ -164,8 +164,10 @@ pub fn parse_physical_window_expr(
                 WindowFunctionDefinition::BuiltInWindowFunction(f.into())
             }
             protobuf::physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(udaf_name) => {
-                let agg_udf = registry.udaf(udaf_name)?;
-                WindowFunctionDefinition::AggregateUDF(agg_udf)
+                WindowFunctionDefinition::AggregateUDF(match &proto.fun_definition {
+                    Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
+                    None => registry.udaf(udaf_name)?
+                })
             }
         }
     } else {

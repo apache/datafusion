@@ -58,6 +58,8 @@ pub fn serialize_physical_aggr_expr(
 
     if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
         let name = a.fun().name().to_string();
+        let mut buf = Vec::new();
+        codec.try_encode_udaf(a.fun(), &mut buf)?;
         return Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                 protobuf::PhysicalAggregateExprNode {
@@ -65,6 +67,7 @@ pub fn serialize_physical_aggr_expr(
                     expr: expressions,
                     ordering_req,
                     distinct: false,
+                    fun_definition: if buf.is_empty() { None } else { Some(buf) }
                 },
             )),
         });
@@ -86,6 +89,7 @@ pub fn serialize_physical_aggr_expr(
                 expr: expressions,
                 ordering_req,
                 distinct,
+                fun_definition: None,
             },
         )),
     })
@@ -99,7 +103,7 @@ pub fn serialize_physical_window_expr(
     let mut args = window_expr.expressions().to_vec();
     let window_frame = window_expr.get_window_frame();
 
-    let window_function = if let Some(built_in_window_expr) =
+    let (window_function, fun_definition) = if let Some(built_in_window_expr) =
         expr.downcast_ref::<BuiltInWindowExpr>()
     {
         let expr = built_in_window_expr.get_built_in_func_expr();
@@ -160,14 +164,22 @@ pub fn serialize_physical_window_expr(
             return not_impl_err!("BuiltIn function not supported: {expr:?}");
         };
 
-        physical_window_expr_node::WindowFunction::BuiltInFunction(builtin_fn as i32)
+        (
+            physical_window_expr_node::WindowFunction::BuiltInFunction(builtin_fn as i32),
+            None,
+        )
     } else if let Some(plain_aggr_window_expr) =
         expr.downcast_ref::<PlainAggregateWindowExpr>()
     {
         let aggr_expr = plain_aggr_window_expr.get_aggregate_expr();
         if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-                a.fun().name().to_string(),
+            let mut buf = Vec::new();
+            codec.try_encode_udaf(a.fun(), &mut buf)?;
+            (
+                physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                    a.fun().name().to_string(),
+                ),
+                if buf.is_empty() { None } else { Some(buf) },
             )
         } else {
             let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
@@ -184,15 +196,23 @@ pub fn serialize_physical_window_expr(
                 return Err(DataFusionError::Internal(format!("Invalid PlainAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
             }
 
-            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
+            (
+                physical_window_expr_node::WindowFunction::AggrFunction(inner as i32),
+                None,
+            )
         }
     } else if let Some(sliding_aggr_window_expr) =
         expr.downcast_ref::<SlidingAggregateWindowExpr>()
     {
         let aggr_expr = sliding_aggr_window_expr.get_aggregate_expr();
         if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-                a.fun().name().to_string(),
+            let mut buf = Vec::new();
+            codec.try_encode_udaf(a.fun(), &mut buf)?;
+            (
+                physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                    a.fun().name().to_string(),
+                ),
+                if buf.is_empty() { None } else { Some(buf) },
             )
         } else {
             let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
@@ -210,7 +230,10 @@ pub fn serialize_physical_window_expr(
                 return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
             }
 
-            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
+            (
+                physical_window_expr_node::WindowFunction::AggrFunction(inner as i32),
+                None,
+            )
         }
     } else {
         return not_impl_err!("WindowExpr not supported: {window_expr:?}");
@@ -232,6 +255,7 @@ pub fn serialize_physical_window_expr(
         window_frame: Some(window_frame),
         window_function: Some(window_function),
         name: window_expr.name().to_string(),
+        fun_definition,
     })
 }
 
@@ -461,18 +485,14 @@ pub fn serialize_physical_expr(
             ))),
         })
     } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
-        let args = serialize_physical_exprs(expr.args().to_vec(), codec)?;
-
         let mut buf = Vec::new();
         codec.try_encode_udf(expr.fun(), &mut buf)?;
-
-        let fun_definition = if buf.is_empty() { None } else { Some(buf) };
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
                 protobuf::PhysicalScalarUdfNode {
                     name: expr.name().to_string(),
-                    args,
-                    fun_definition,
+                    args: serialize_physical_exprs(expr.args().to_vec(), codec)?,
+                    fun_definition: if buf.is_empty() { None } else { Some(buf) },
                     return_type: Some(expr.return_type().try_into()?),
                 },
             )),
