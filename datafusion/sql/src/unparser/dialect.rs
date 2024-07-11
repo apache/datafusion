@@ -35,6 +35,12 @@ pub trait Dialect {
     fn supports_nulls_first_in_sort(&self) -> bool {
         true
     }
+
+    // Does the dialect use TIMESTAMP to represent Date64 rather than DATETIME?
+    // E.g. Trino, Athena and Dremio does not have DATETIME data type
+    fn use_timestamp_for_date64(&self) -> bool {
+        false
+    }
 }
 pub struct DefaultDialect {}
 
@@ -81,12 +87,26 @@ impl Dialect for SqliteDialect {
 
 pub struct CustomDialect {
     identifier_quote_style: Option<char>,
+    supports_nulls_first_in_sort: bool,
+    use_timestamp_for_date64: bool,
+}
+
+impl Default for CustomDialect {
+    fn default() -> Self {
+        Self {
+            identifier_quote_style: None,
+            supports_nulls_first_in_sort: true,
+            use_timestamp_for_date64: false,
+        }
+    }
 }
 
 impl CustomDialect {
+    #[deprecated(note = "please use `CustomDialectBuilder` instead")]
     pub fn new(identifier_quote_style: Option<char>) -> Self {
         Self {
             identifier_quote_style,
+            ..Default::default()
         }
     }
 }
@@ -94,5 +114,59 @@ impl CustomDialect {
 impl Dialect for CustomDialect {
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         self.identifier_quote_style
+    }
+
+    fn supports_nulls_first_in_sort(&self) -> bool {
+        self.supports_nulls_first_in_sort
+    }
+
+    fn use_timestamp_for_date64(&self) -> bool {
+        self.use_timestamp_for_date64
+    }
+}
+
+// create a CustomDialectBuilder
+pub struct CustomDialectBuilder {
+    identifier_quote_style: Option<char>,
+    supports_nulls_first_in_sort: bool,
+    use_timestamp_for_date64: bool,
+}
+
+impl CustomDialectBuilder {
+    pub fn new() -> Self {
+        Self {
+            identifier_quote_style: None,
+            supports_nulls_first_in_sort: true,
+            use_timestamp_for_date64: false,
+        }
+    }
+
+    pub fn build(self) -> CustomDialect {
+        CustomDialect {
+            identifier_quote_style: self.identifier_quote_style,
+            supports_nulls_first_in_sort: self.supports_nulls_first_in_sort,
+            use_timestamp_for_date64: self.use_timestamp_for_date64,
+        }
+    }
+
+    pub fn with_identifier_quote_style(mut self, identifier_quote_style: char) -> Self {
+        self.identifier_quote_style = Some(identifier_quote_style);
+        self
+    }
+
+    pub fn with_supports_nulls_first_in_sort(
+        mut self,
+        supports_nulls_first_in_sort: bool,
+    ) -> Self {
+        self.supports_nulls_first_in_sort = supports_nulls_first_in_sort;
+        self
+    }
+
+    pub fn with_use_timestamp_for_date64(
+        mut self,
+        use_timestamp_for_date64: bool,
+    ) -> Self {
+        self.use_timestamp_for_date64 = use_timestamp_for_date64;
+        self
     }
 }
