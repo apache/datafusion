@@ -60,7 +60,8 @@ impl OptimizerRule for EliminateNestedUnion {
                 let inputs = inputs
                     .into_iter()
                     .flat_map(extract_plans_from_union)
-                    .collect::<Vec<_>>();
+                    .map(|plan| coerce_plan_expr_for_schema(&plan, &schema))
+                    .collect::<Result<Vec<_>>>()?;
 
                 Ok(Transformed::yes(LogicalPlan::Union(Union {
                     inputs: inputs.into_iter().map(Arc::new).collect_vec(),
@@ -74,7 +75,8 @@ impl OptimizerRule for EliminateNestedUnion {
                             .into_iter()
                             .map(extract_plan_from_distinct)
                             .flat_map(extract_plans_from_union)
-                            .collect::<Vec<_>>();
+                            .map(|plan| coerce_plan_expr_for_schema(&plan, &schema))
+                            .collect::<Result<Vec<_>>>()?;
 
                         Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::All(
                             Arc::new(LogicalPlan::Union(Union {
@@ -95,10 +97,9 @@ impl OptimizerRule for EliminateNestedUnion {
 
 fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
     match unwrap_arc(plan) {
-        LogicalPlan::Union(Union { inputs, schema }) => inputs
-            .into_iter()
-            .map(|plan| coerce_plan_expr_for_schema(&plan, &schema).unwrap())
-            .collect::<Vec<_>>(),
+        LogicalPlan::Union(Union { inputs, .. }) => {
+            inputs.into_iter().map(unwrap_arc).collect::<Vec<_>>()
+        }
         plan => vec![plan],
     }
 }
