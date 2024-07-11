@@ -324,28 +324,52 @@ impl<VAL: ValueType> TopKHeap<VAL> {
     }
 
     #[cfg(test)]
-    fn _tree_print(&self, idx: usize) -> Option<termtree::Tree<String>> {
-        let hi = self.heap.get(idx)?;
-        match hi {
-            None => None,
-            Some(hi) => {
-                let label =
-                    format!("val={:?} idx={}, bucket={}", hi.val, idx, hi.map_idx);
-                let left = self._tree_print(idx * 2 + 1);
-                let right = self._tree_print(idx * 2 + 2);
-                let children = left.into_iter().chain(right);
-                let me = termtree::Tree::new(label).with_leaves(children);
-                Some(me)
+    fn _tree_print(
+        &self,
+        idx: usize,
+        prefix: String,
+        is_tail: bool,
+        output: &mut String,
+    ) {
+        if let Some(Some(hi)) = self.heap.get(idx) {
+            let connector = if idx != 0 {
+                if is_tail {
+                    "└── "
+                } else {
+                    "├── "
+                }
+            } else {
+                ""
+            };
+            output.push_str(&format!(
+                "{}{}val={:?} idx={}, bucket={}\n",
+                prefix, connector, hi.val, idx, hi.map_idx
+            ));
+            let new_prefix = if is_tail { "" } else { "│   " };
+            let child_prefix = format!("{}{}", prefix, new_prefix);
+
+            let left_idx = idx * 2 + 1;
+            let right_idx = idx * 2 + 2;
+
+            let left_exists = left_idx < self.len;
+            let right_exists = right_idx < self.len;
+
+            if left_exists {
+                self._tree_print(left_idx, child_prefix.clone(), !right_exists, output);
+            }
+            if right_exists {
+                self._tree_print(right_idx, child_prefix, true, output);
             }
         }
     }
 
     #[cfg(test)]
     fn tree_print(&self) -> String {
-        match self._tree_print(0) {
-            None => "".to_string(),
-            Some(root) => format!("{}", root),
+        let mut output = String::new();
+        if self.heap.first().is_some() {
+            self._tree_print(0, String::new(), true, &mut output);
         }
+        output
     }
 }
 
