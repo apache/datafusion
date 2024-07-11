@@ -1425,7 +1425,7 @@ impl Expr {
     /// Adds references to all columns and their occurrence counts in the expression to
     /// the map.
     ///
-    /// See [`Self::column_refs`] for details
+    /// See [`Self::column_refs_counts`] for details
     pub fn add_column_ref_counts<'a>(&'a self, map: &mut HashMap<&'a Column, usize>) {
         self.apply(|expr| {
             if let Expr::Column(col) = expr {

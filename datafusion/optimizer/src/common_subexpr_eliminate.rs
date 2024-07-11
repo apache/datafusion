@@ -899,7 +899,9 @@ struct ExprIdentifierVisitor<'a, 'n> {
     random_state: &'a RandomState,
     // a flag to indicate that common expression found
     found_common: bool,
-    // if we are in a conditional branch
+    // if we are in a conditional branch. A conditional branch means that the expression
+    // might not be executed depending on the runtime values of other expressions, and
+    // thus can not be extracted as a common expression.
     conditional: bool,
 }
 
@@ -1053,7 +1055,7 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_, 'n> {
             } else {
                 *count += 1;
             }
-            if *count > 1 || *count == 1 && *conditional_count > 0 {
+            if *count > 1 || (*count == 1 && *conditional_count > 0) {
                 self.found_common = true;
             }
         }
