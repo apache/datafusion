@@ -19,50 +19,20 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, ArrayData, ArrayRef, MapArray, StructArray};
+use arrow::array::{Array, ArrayData, ArrayRef, MapArray, StructArray};
 use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, SchemaBuilder};
 use arrow_buffer::{Buffer, ToByteSlice};
+
 use datafusion_common::Result;
 use datafusion_common::{exec_err, internal_err, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.is_empty() {
-        return exec_err!("map requires at least one pair of arguments, got 0 instead");
-    }
-
-    if args.len() % 2 != 0 {
-        return exec_err!(
-            "map requires an even number of arguments, got {} instead",
-            args.len()
-        );
-    }
-
-    let mut value_type = args[1].data_type();
-
-    let (key, value): (Vec<_>, Vec<_>) = args.chunks_exact(2)
-        .enumerate()
-        .map(|(i, chunk)| {
-            if chunk[0].data_type().is_null() {
-                return exec_err!("map key cannot be null");
-            }
-            if !chunk[1].data_type().is_null() {
-                if value_type.is_null() {
-                    value_type = chunk[1].data_type();
-                }
-                else if chunk[1].data_type() != value_type {
-                    return exec_err!(
-                        "map requires all values to have the same type {}, got {} instead at position {}",
-                        value_type,
-                        chunk[1].data_type(),
-                        i
-                    );
-                }
-            }
-            Ok((chunk[0].clone(), chunk[1].clone()))
-        })
-        .collect::<Result<Vec<_>>>()?.into_iter().unzip();
+    let (key, value): (Vec<_>, Vec<_>) = args
+        .chunks_exact(2)
+        .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
+        .unzip();
 
     let key = ColumnarValue::values_to_arrays(&key)?;
     let value = ColumnarValue::values_to_arrays(&value)?;
@@ -70,17 +40,9 @@ fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let mut keys = Vec::new();
     let mut values = Vec::new();
 
-    // Since a null scalar value be transformed into [NullArray] by ColumnarValue::values_to_arrays,
-    // `arrow_select::concat` will panic if we pass a [NullArray] and a non-null array to it.
-    // So we need to create a [NullArray] with the same data type as the non-null array.
-    let null_array = new_null_array(&value_type, 1);
     for (key, value) in key.iter().zip(value.iter()) {
         keys.push(key.as_ref());
-        if value.data_type().is_null() {
-            values.push(null_array.as_ref());
-        } else {
-            values.push(value.as_ref());
-        }
+        values.push(value.as_ref());
     }
     let key = match concat(&keys) {
         Ok(key) => key,
@@ -174,7 +136,7 @@ impl Default for MakeMap {
 impl MakeMap {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -192,7 +154,7 @@ impl ScalarUDFImpl for MakeMap {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.is_empty() {
             return exec_err!(
                 "make_map requires at least one pair of arguments, got 0 instead"
@@ -231,6 +193,27 @@ impl ScalarUDFImpl for MakeMap {
                         &chunk[1],
                         i
                     );
+                }
+            }
+        }
+
+        let mut result = Vec::new();
+        for _ in 0..arg_types.len() / 2 {
+            result.push(key_type.clone());
+            result.push(value_type.clone());
+        }
+
+        Ok(result)
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let key_type = &arg_types[0];
+        let mut value_type = &arg_types[1];
+
+        for chunk in arg_types.chunks_exact(2) {
+            if !chunk[1].is_null() {
+                if value_type.is_null() {
+                    value_type = &chunk[1];
                 }
             }
         }

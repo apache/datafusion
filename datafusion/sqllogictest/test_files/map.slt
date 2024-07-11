@@ -131,19 +131,19 @@ SELECT MAKE_MAP([1,2], ['a', 'b'], [3,4], ['b']);
 ----
 {[1, 2]: [a, b], [3, 4]: [b]}
 
-query error DataFusion error: Execution error: map requires all values to have the same type Int64, got Utf8 instead at position 1
+query error DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution\("map requires all values to have the same type Int64, got Utf8 instead at position 1"\)(.|\n)*
 SELECT MAKE_MAP('POST', 41, 'HEAD', 'ab', 'PATCH', 30);
 
-query error DataFusion error: Execution error: make_map key cannot be null at position 2
+query error DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution\("make_map key cannot be null at position 2"\)(.|\n)*
 SELECT MAKE_MAP('POST', 41, 'HEAD', 33, null, 30);
 
-query error DataFusion error: Execution error: make_map requires all keys to have the same type Utf8, got Int64 instead at position 1
+query error DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution\("make_map requires all keys to have the same type Utf8, got Int64 instead at position 1"\)(.|\n)*
 SELECT MAKE_MAP('POST', 41, 123, 33,'PATCH', 30);
 
 query error
 SELECT MAKE_MAP()
 
-query error DataFusion error: Execution error: make_map requires an even number of arguments, got 3 instead
+query error  DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution\("make_map requires an even number of arguments, got 3 instead"\)(.|\n)*
 SELECT MAKE_MAP('POST', 41, 'HEAD');
 
 query ?
