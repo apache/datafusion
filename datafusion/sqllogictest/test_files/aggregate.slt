@@ -2019,6 +2019,10 @@ SELECT count(c1, c2) FROM test
 ----
 3
 
+# count(distinct) with multiple arguments
+query error DataFusion error: This feature is not implemented: COUNT DISTINCT with multiple arguments
+SELECT count(distinct c1, c2) FROM test
+
 # count_null
 query III
 SELECT count(null), count(null, null), count(distinct null) FROM test
