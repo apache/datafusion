@@ -124,7 +124,7 @@ async fn empty_statement_returns_error() {
     let plan_res = state.create_logical_plan("").await;
     assert_eq!(
         plan_res.unwrap_err().strip_backtrace(),
-        "This feature is not implemented: No SQL statements were provided in the query string"
+        "Error during planning: No SQL statements were provided in the query string"
     );
 }
 
