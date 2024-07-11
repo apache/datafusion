@@ -217,10 +217,8 @@ impl ScalarUDFImpl for MakeMap {
         let mut value_type = &arg_types[1];
 
         for chunk in arg_types.chunks_exact(2) {
-            if !chunk[1].is_null() {
-                if value_type.is_null() {
-                    value_type = &chunk[1];
-                }
+            if !chunk[1].is_null() && value_type.is_null() {
+                value_type = &chunk[1];
             }
         }
 
