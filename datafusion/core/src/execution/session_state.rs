@@ -554,9 +554,7 @@ impl SessionState {
             );
         }
         let statement = statements.pop_front().ok_or_else(|| {
-            DataFusionError::NotImplemented(
-                "No SQL statements were provided in the query string".to_string(),
-            )
+            plan_datafusion_err!("No SQL statements were provided in the query string")
         })?;
         Ok(statement)
     }
