@@ -39,8 +39,7 @@ use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::SessionState;
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
@@ -202,10 +201,7 @@ async fn roundtrip_custom_tables() -> Result<()> {
     let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
         HashMap::new();
     table_factories.insert("TESTTABLE".to_string(), Arc::new(TestTableFactory {}));
-    let cfg = RuntimeConfig::new();
-    let env = RuntimeEnv::new(cfg).unwrap();
-    let ses = SessionConfig::new();
-    let mut state = SessionState::new_with_config_rt(ses, Arc::new(env));
+    let mut state = SessionStateBuilder::new().with_default_features().build();
     // replace factories
     *state.table_factories_mut() = table_factories;
     let ctx = SessionContext::new_with_state(state);

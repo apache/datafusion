@@ -1121,13 +1121,12 @@ async fn function_extension_info(sql: &str) -> Result<(Vec<String>, Vec<u32>)> {
 }
 
 async fn create_context() -> Result<SessionContext> {
-    let mut state = SessionStateBuilder::new_with_config_rt(
-        SessionConfig::default(),
-        Arc::new(RuntimeEnv::default()),
-    )
-    .with_defaults(true)
-    .with_serializer_registry(Arc::new(MockSerializerRegistry))
-    .build();
+    let mut state = SessionStateBuilder::new()
+        .with_config(SessionConfig::default())
+        .with_runtime_env(Arc::new(RuntimeEnv::default()))
+        .with_default_features()
+        .with_serializer_registry(Arc::new(MockSerializerRegistry))
+        .build();
 
     // register udaf for test, e.g. `sum()`
     datafusion_functions_aggregate::register_all(&mut state)

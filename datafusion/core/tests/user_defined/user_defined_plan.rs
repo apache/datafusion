@@ -291,8 +291,10 @@ async fn topk_plan() -> Result<()> {
 fn make_topk_context() -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(48);
     let runtime = Arc::new(RuntimeEnv::default());
-    let state = SessionStateBuilder::new_with_config_rt(config, runtime)
-        .with_defaults(true)
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
         .add_optimizer_rule(Arc::new(TopKOptimizerRule {}))
         .add_analyzer_rule(Arc::new(MyAnalyzerRule {}))

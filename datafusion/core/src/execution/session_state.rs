@@ -77,6 +77,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+use itertools::Itertools;
+use log::{debug, info};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
 use std::collections::hash_map::Entry;
@@ -88,6 +90,25 @@ use uuid::Uuid;
 
 /// Execution context for registering data sources and executing queries.
 /// See [`SessionContext`] for a higher level API.
+///
+/// Use the [`SessionStateBuilder`] to build a SessionState object.
+///
+/// ```
+/// use datafusion::prelude::*;
+/// # use datafusion::{error::Result, assert_batches_eq};
+/// # use datafusion::execution::session_state::SessionStateBuilder;
+/// # use datafusion_execution::runtime_env::RuntimeEnv;
+/// # use std::sync::Arc;
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+///     let state = SessionStateBuilder::new()
+///         .with_config(SessionConfig::new())  
+///         .with_runtime_env(Arc::new(RuntimeEnv::default()))
+///         .with_default_features()
+///         .build();
+///     Ok(())  
+/// # }
+/// ```
 ///
 /// Note that there is no `Default` or `new()` for SessionState,
 /// to avoid accidentally running queries or other operations without passing through
@@ -176,43 +197,56 @@ impl Debug for SessionState {
 impl SessionState {
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        let catalog_list =
-            Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>;
-        Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
+        SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build()
     }
 
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
+    #[deprecated(since = "32.0.0", note = "Use SessionStateBuilder")]
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        Self::new_with_config_rt(config, runtime)
+        SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build()
     }
 
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogProviderList`]
+    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     pub fn new_with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
         catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
-        SessionStateBuilder::new_with_config_rt(config, runtime)
-            .with_defaults(true)
+        SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
             .with_catalog_list(catalog_list)
+            .with_default_features()
             .build()
     }
+
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(
-        since = "32.0.0",
-        note = "Use SessionState::new_with_config_rt_and_catalog_list"
-    )]
+    #[deprecated(since = "32.0.0", note = "Use SessionStateBuilder")]
     pub fn with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
         catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
-        Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
+        SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_catalog_list(catalog_list)
+            .with_default_features()
+            .build()
     }
 
     pub(crate) fn resolve_table_ref(
@@ -721,19 +755,20 @@ impl SessionState {
         &self.table_options
     }
 
-    /// Return mutable table opptions
+    /// Return mutable table options
     pub fn table_options_mut(&mut self) -> &mut TableOptions {
         &mut self.table_options
     }
 
-    /// Registers a [`ConfigExtension`] as a table option extention that can be
+    /// Registers a [`ConfigExtension`] as a table option extension that can be
     /// referenced from SQL statements executed against this context.
     pub fn register_table_options_extension<T: ConfigExtension>(&mut self, extension: T) {
         self.table_options.extensions.insert(extension)
     }
 
-    /// Adds or updates a [FileFormatFactory] which can be used with COPY TO or CREATE EXTERNAL TABLE statements for reading
-    /// and writing files of custom formats.
+    /// Adds or updates a [FileFormatFactory] which can be used with COPY TO or
+    /// CREATE EXTERNAL TABLE statements for reading and writing files of custom
+    /// formats.
     pub fn register_file_format(
         &mut self,
         file_format: Arc<dyn FileFormatFactory>,
@@ -813,7 +848,7 @@ impl SessionState {
         );
     }
 
-    /// Deregsiter a user defined table function
+    /// Deregister a user defined table function
     pub fn deregister_udtf(
         &mut self,
         name: &str,
@@ -837,94 +872,124 @@ impl SessionState {
     }
 }
 
-/// A builder to be used for building [`SessionState`]'s. Defaults will be used for all values
-/// unless explicitly provided. Note that there is no `Default` or `new()` for SessionState,
-/// to avoid accidentally running queries or other operations without passing through
-/// the [`SessionConfig`] or [`RuntimeEnv`].
+/// A builder to be used for building [`SessionState`]'s. Defaults will
+/// be used for all values unless explicitly provided.
 pub struct SessionStateBuilder {
-    state: SessionState,
-    use_defaults: bool,
+    session_id: Option<String>,
+    analyzer: Option<Analyzer>,
+    expr_planners: Option<Vec<Arc<dyn ExprPlanner>>>,
+    optimizer: Option<Optimizer>,
+    physical_optimizers: Option<PhysicalOptimizer>,
+    query_planner: Option<Arc<dyn QueryPlanner + Send + Sync>>,
+    catalog_list: Option<Arc<dyn CatalogProviderList>>,
+    table_functions: Option<HashMap<String, Arc<TableFunction>>>,
+    scalar_functions: Option<Vec<Arc<ScalarUDF>>>,
+    aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
+    window_functions: Option<Vec<Arc<WindowUDF>>>,
+    serializer_registry: Option<Arc<dyn SerializerRegistry>>,
+    file_formats: Option<Vec<Arc<dyn FileFormatFactory>>>,
+    config: Option<SessionConfig>,
+    table_options: Option<TableOptions>,
+    execution_props: Option<ExecutionProps>,
+    table_factories: Option<HashMap<String, Arc<dyn TableProviderFactory>>>,
+    runtime_env: Option<Arc<RuntimeEnv>>,
+    function_factory: Option<Arc<dyn FunctionFactory>>,
+    // fields to support convenience functions
+    analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
+    optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
+    physical_optimizer_rules: Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
 }
 
 impl SessionStateBuilder {
-    /// Returns new [`SessionStateBuilder`] using the provided
-    /// [`SessionConfig`] and [`RuntimeEnv`].
-    pub fn new_with_config_rt(
-        config: SessionConfig,
-        runtime_env: Arc<RuntimeEnv>,
-    ) -> Self {
-        let session_id = Uuid::new_v4().to_string();
-        let catalog_list =
-            Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>;
-
+    /// Returns a new [`SessionStateBuilder`] with no options set.
+    pub fn new() -> Self {
         Self {
-            state: SessionState {
-                session_id,
-                analyzer: Analyzer::new(),
-                expr_planners: vec![],
-                optimizer: Optimizer::new(),
-                physical_optimizers: PhysicalOptimizer::new(),
-                query_planner: Arc::new(DefaultQueryPlanner {}),
-                catalog_list,
-                table_functions: HashMap::new(),
-                scalar_functions: HashMap::new(),
-                aggregate_functions: HashMap::new(),
-                window_functions: HashMap::new(),
-                serializer_registry: Arc::new(EmptySerializerRegistry),
-                file_formats: HashMap::new(),
-                table_options: TableOptions::default_from_session_config(
-                    config.options(),
-                ),
-                config,
-                execution_props: ExecutionProps::new(),
-                table_factories: HashMap::new(),
-                runtime_env,
-                function_factory: None,
-            },
-            use_defaults: true,
+            session_id: None,
+            analyzer: None,
+            expr_planners: None,
+            optimizer: None,
+            physical_optimizers: None,
+            query_planner: None,
+            catalog_list: None,
+            table_functions: None,
+            scalar_functions: None,
+            aggregate_functions: None,
+            window_functions: None,
+            serializer_registry: None,
+            file_formats: None,
+            table_options: None,
+            config: None,
+            execution_props: None,
+            table_factories: None,
+            runtime_env: None,
+            function_factory: None,
+            // fields to support convenience functions
+            analyzer_rules: None,
+            optimizer_rules: None,
+            physical_optimizer_rules: None,
         }
     }
 
     /// Returns a new [SessionStateBuilder] based on an existing [SessionState]
-    /// The session id for the new builder will be set to a unique value; all
-    /// other fields will be cloned from what is set in the provided session state
-    pub fn new_from_existing(existing: &SessionState) -> Self {
-        let session_id = Uuid::new_v4().to_string();
+    /// The session id for the new builder will be unset; all other fields will
+    /// be cloned from what is set in the provided session state
+    pub fn new_from_existing(existing: SessionState) -> Self {
+        let cloned = existing.clone();
 
         Self {
-            state: SessionState {
-                session_id,
-                ..existing.clone()
-            },
-            use_defaults: true,
+            session_id: None,
+            analyzer: Some(cloned.analyzer),
+            expr_planners: Some(cloned.expr_planners),
+            optimizer: Some(cloned.optimizer),
+            physical_optimizers: Some(cloned.physical_optimizers),
+            query_planner: Some(cloned.query_planner),
+            catalog_list: Some(cloned.catalog_list),
+            table_functions: Some(cloned.table_functions),
+            scalar_functions: Some(cloned.scalar_functions.into_values().collect_vec()),
+            aggregate_functions: Some(
+                cloned.aggregate_functions.into_values().collect_vec(),
+            ),
+            window_functions: Some(cloned.window_functions.into_values().collect_vec()),
+            serializer_registry: Some(cloned.serializer_registry),
+            file_formats: Some(cloned.file_formats.into_values().collect_vec()),
+            config: Some(cloned.config),
+            table_options: Some(cloned.table_options),
+            execution_props: Some(cloned.execution_props),
+            table_factories: Some(cloned.table_factories),
+            runtime_env: Some(cloned.runtime_env),
+            function_factory: cloned.function_factory,
+
+            // fields to support convenience functions
+            analyzer_rules: None,
+            optimizer_rules: None,
+            physical_optimizer_rules: None,
         }
     }
 
-    /// Set to true (default = true) if defaults for table_factories, expr_planners, file formats
-    /// and builtin functions should be set.
-    /// Note that there is an explicit option for enabling catalog and schema default
-    /// via [SessionConfig::create_default_catalog_and_schema] which will only be used
-    /// if the use_defaults is enabled here.
-    /// Also note that if a field is explicitly set to a non-empty value -
-    /// for example by using the [SessionStateBuilder::with_file_formats] function,
-    /// then defaults for that field will not be set.
-    pub fn with_defaults(mut self, use_defaults: bool) -> Self {
-        self.use_defaults = use_defaults;
+    /// Set defaults for table_factories, file formats, expr_planners and builtin 
+    /// scalar and aggregate functions.
+    pub fn with_default_features(mut self) -> Self {
+        self.table_factories = Some(SessionStateDefaults::default_table_factories());
+        self.file_formats = Some(SessionStateDefaults::default_file_formats());
+        self.expr_planners = Some(SessionStateDefaults::default_expr_planners());
+        self.scalar_functions = Some(SessionStateDefaults::default_scalar_functions());
+        self.aggregate_functions =
+            Some(SessionStateDefaults::default_aggregate_functions());
         self
     }
 
-    /// Replace the random session id.
+    /// Set the session id.
     pub fn with_session_id(mut self, session_id: String) -> Self {
-        self.state.session_id = session_id;
+        self.session_id = Some(session_id);
         self
     }
 
-    /// Override the [`AnalyzerRule`]s optimizer plan rules.
+    /// Set the [`AnalyzerRule`]s optimizer plan rules.
     pub fn with_analyzer_rules(
         mut self,
         rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
     ) -> Self {
-        self.state.analyzer = Analyzer::with_rules(rules);
+        self.analyzer = Some(Analyzer::with_rules(rules));
         self
     }
 
@@ -934,16 +999,18 @@ impl SessionStateBuilder {
         mut self,
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
     ) -> Self {
-        self.state.analyzer.rules.push(analyzer_rule);
+        let mut rules = self.analyzer_rules.unwrap_or_default();
+        rules.push(analyzer_rule);
+        self.analyzer_rules = Some(rules);
         self
     }
 
-    /// Replace the entire list of [`OptimizerRule`]s used to optimize plans
+    /// Set the [`OptimizerRule`]s used to optimize plans.
     pub fn with_optimizer_rules(
         mut self,
         rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     ) -> Self {
-        self.state.optimizer = Optimizer::with_rules(rules);
+        self.optimizer = Some(Optimizer::with_rules(rules));
         self
     }
 
@@ -953,26 +1020,28 @@ impl SessionStateBuilder {
         mut self,
         optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
     ) -> Self {
-        self.state.optimizer.rules.push(optimizer_rule);
+        let mut rules = self.optimizer_rules.unwrap_or_default();
+        rules.push(optimizer_rule);
+        self.optimizer_rules = Some(rules);
         self
     }
 
-    /// Replace the entire list of [`ExprPlanner`]s used to customize the behavior of the SQL planner
+    /// Set the [`ExprPlanner`]s used to customize the behavior of the SQL planner.
     pub fn with_expr_planners(
         mut self,
         expr_planners: Vec<Arc<dyn ExprPlanner>>,
     ) -> Self {
-        self.state.expr_planners = expr_planners;
+        self.expr_planners = Some(expr_planners);
         self
     }
 
-    /// Replace the entire list of [`PhysicalOptimizerRule`]s used to optimize plans
+    /// Set tje [`PhysicalOptimizerRule`]s used to optimize plans.
     pub fn with_physical_optimizer_rules(
         mut self,
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
     ) -> Self {
-        self.state.physical_optimizers =
-            PhysicalOptimizer::with_rules(physical_optimizers);
+        self.physical_optimizers =
+            Some(PhysicalOptimizer::with_rules(physical_optimizers));
         self
     }
 
@@ -982,175 +1051,368 @@ impl SessionStateBuilder {
         mut self,
         physical_optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     ) -> Self {
-        self.state
-            .physical_optimizers
-            .rules
-            .push(physical_optimizer_rule);
+        let mut rules = self.physical_optimizer_rules.unwrap_or_default();
+        rules.push(physical_optimizer_rule);
+        self.physical_optimizer_rules = Some(rules);
         self
     }
 
-    /// override default query planner with `query_planner`
+    /// Set the [`QueryPlanner`]
     pub fn with_query_planner(
         mut self,
         query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     ) -> Self {
-        self.state.query_planner = query_planner;
+        self.query_planner = Some(query_planner);
         self
     }
 
-    /// override default catalog list with `catalog_list`
+    /// Set the [`CatalogProviderList`]
     pub fn with_catalog_list(
         mut self,
         catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
-        self.state.catalog_list = catalog_list;
+        self.catalog_list = Some(catalog_list);
         self
     }
 
-    /// override default table functions with `table_functions`
+    /// Set the map of [`TableFunction`]s
     pub fn with_table_functions(
         mut self,
         table_functions: HashMap<String, Arc<TableFunction>>,
     ) -> Self {
-        self.state.table_functions = table_functions;
+        self.table_functions = Some(table_functions);
         self
     }
 
-    /// override default scalar functions with `scalar_functions`
+    /// Set the map of [`ScalarUDF`]s
     pub fn with_scalar_functions(
         mut self,
-        scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+        scalar_functions: Vec<Arc<ScalarUDF>>,
     ) -> Self {
-        self.state.scalar_functions = scalar_functions;
+        self.scalar_functions = Some(scalar_functions);
         self
     }
 
-    /// override default aggregate functions with `aggregate_functions`
+    /// Set the map of [`AggregateUDF`]s
     pub fn with_aggregate_functions(
         mut self,
-        aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+        aggregate_functions: Vec<Arc<AggregateUDF>>,
     ) -> Self {
-        self.state.aggregate_functions = aggregate_functions;
+        self.aggregate_functions = Some(aggregate_functions);
         self
     }
 
-    /// override default window functions with `window_functions`
+    /// Set the map of [`WindowUDF`]s
     pub fn with_window_functions(
         mut self,
-        window_functions: HashMap<String, Arc<WindowUDF>>,
+        window_functions: Vec<Arc<WindowUDF>>,
     ) -> Self {
-        self.state.window_functions = window_functions;
+        self.window_functions = Some(window_functions);
         self
     }
 
-    /// Registers a [`SerializerRegistry`]
+    /// Set the [`SerializerRegistry`]
     pub fn with_serializer_registry(
         mut self,
         serializer_registry: Arc<dyn SerializerRegistry>,
     ) -> Self {
-        self.state.serializer_registry = serializer_registry;
+        self.serializer_registry = Some(serializer_registry);
         self
     }
 
-    /// override default list of file formats with `file_formats`
+    /// Set the map of [`FileFormatFactory`]s
     pub fn with_file_formats(
         mut self,
-        file_formats: HashMap<String, Arc<dyn FileFormatFactory>>,
+        file_formats: Vec<Arc<dyn FileFormatFactory>>,
     ) -> Self {
-        self.state.file_formats = file_formats;
+        self.file_formats = Some(file_formats);
         self
     }
 
-    /// override the session config with `config`
+    /// Set the [`SessionConfig`]
     pub fn with_config(mut self, config: SessionConfig) -> Self {
-        self.state.config = config;
+        self.config = Some(config);
         self
     }
 
-    /// override default table options with `table_options`
+    /// Set the [`TableOptions`]
     pub fn with_table_options(mut self, table_options: TableOptions) -> Self {
-        self.state.table_options = table_options;
+        self.table_options = Some(table_options);
         self
     }
 
-    /// Adds a new [`ConfigExtension`] to TableOptions
-    pub fn with_table_options_extension<T: ConfigExtension>(
-        mut self,
-        extension: T,
-    ) -> Self {
-        self.state.table_options.extensions.insert(extension);
-        self
-    }
-
-    /// override default execution props with `execution_props`
+    /// Set the [`ExecutionProps`]
     pub fn with_execution_props(mut self, execution_props: ExecutionProps) -> Self {
-        self.state.execution_props = execution_props;
+        self.execution_props = Some(execution_props);
         self
     }
 
-    /// override default table factories with `table_factories`
+    /// Set the map of [`TableProviderFactory`]s
     pub fn with_table_factories(
         mut self,
         table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     ) -> Self {
-        self.state.table_factories = table_factories;
+        self.table_factories = Some(table_factories);
         self
     }
 
-    /// override the runtime env with `runtime_env`
+    /// Set the [`RuntimeEnv`]
     pub fn with_runtime_env(mut self, runtime_env: Arc<RuntimeEnv>) -> Self {
-        self.state.runtime_env = runtime_env;
+        self.runtime_env = Some(runtime_env);
         self
     }
 
-    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
+    /// Set a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
     pub fn with_function_factory(
         mut self,
         function_factory: Option<Arc<dyn FunctionFactory>>,
     ) -> Self {
-        self.state.function_factory = function_factory;
+        self.function_factory = function_factory;
         self
     }
 
-    /// build a [`SessionState`] with the current configuration
-    pub fn build(mut self) -> SessionState {
-        if self.use_defaults {
-            if self.state.table_factories.is_empty() {
-                self.state.table_factories =
-                    SessionStateDefaults::default_table_factories();
-            }
-            if self.state.expr_planners.is_empty() {
-                self.state.expr_planners = SessionStateDefaults::default_expr_planners();
-            }
+    /// Builds a [`SessionState`] with the current configuration.
+    ///
+    /// Note that there is an explicit option for enabling catalog and schema defaults
+    /// in [SessionConfig::create_default_catalog_and_schema] which if enabled
+    /// will be built here.
+    pub fn build(self) -> SessionState {
+        let config = self.config.unwrap_or_default();
+        let runtime_env = self.runtime_env.unwrap_or(Arc::new(RuntimeEnv::default()));
 
-            if self.state.config.create_default_catalog_and_schema() {
-                let default_catalog = SessionStateDefaults::default_catalog(
-                    &self.state.config,
-                    &self.state.table_factories,
-                    &self.state.runtime_env,
-                );
+        let mut state = SessionState {
+            session_id: self.session_id.unwrap_or(Uuid::new_v4().to_string()),
+            analyzer: self.analyzer.unwrap_or_default(),
+            expr_planners: self.expr_planners.unwrap_or_default(),
+            optimizer: self.optimizer.unwrap_or_default(),
+            physical_optimizers: self.physical_optimizers.unwrap_or_default(),
+            query_planner: self
+                .query_planner
+                .unwrap_or(Arc::new(DefaultQueryPlanner {})),
+            catalog_list: self
+                .catalog_list
+                .unwrap_or(Arc::new(MemoryCatalogProviderList::new())
+                    as Arc<dyn CatalogProviderList>),
+            table_functions: self.table_functions.unwrap_or_default(),
+            scalar_functions: HashMap::new(),
+            aggregate_functions: HashMap::new(),
+            window_functions: HashMap::new(),
+            serializer_registry: self
+                .serializer_registry
+                .unwrap_or(Arc::new(EmptySerializerRegistry)),
+            file_formats: HashMap::new(),
+            table_options: self
+                .table_options
+                .unwrap_or(TableOptions::default_from_session_config(config.options())),
+            config,
+            execution_props: self.execution_props.unwrap_or_default(),
+            table_factories: self.table_factories.unwrap_or_default(),
+            runtime_env,
+            function_factory: self.function_factory,
+        };
 
-                self.state.catalog_list.register_catalog(
-                    self.state.config.options().catalog.default_catalog.clone(),
-                    Arc::new(default_catalog),
-                );
-            }
-
-            if self.state.file_formats.is_empty() {
-                SessionStateDefaults::register_default_file_formats(&mut self.state);
-            }
-
-            if self.state.scalar_functions.is_empty() {
-                SessionStateDefaults::register_scalar_functions(&mut self.state);
-                SessionStateDefaults::register_array_functions(&mut self.state);
-            }
-
-            if self.state.aggregate_functions.is_empty() {
-                SessionStateDefaults::register_aggregate_functions(&mut self.state);
+        if let Some(file_formats) = self.file_formats {
+            for file_format in file_formats {
+                if let Err(e) = state.register_file_format(file_format, false) {
+                    info!("Unable to register file format: {e}")
+                };
             }
         }
 
-        self.state.clone()
+        if let Some(scalar_functions) = self.scalar_functions {
+            scalar_functions.into_iter().for_each(|udf| {
+                let existing_udf = state.register_udf(udf);
+                if let Ok(Some(existing_udf)) = existing_udf {
+                    debug!("Overwrote an existing UDF: {}", existing_udf.name());
+                }
+            });
+        }
+
+        if let Some(aggregate_functions) = self.aggregate_functions {
+            aggregate_functions.into_iter().for_each(|udaf| {
+                let existing_udf = state.register_udaf(udaf);
+                if let Ok(Some(existing_udf)) = existing_udf {
+                    debug!("Overwrote an existing UDF: {}", existing_udf.name());
+                }
+            });
+        }
+
+        if let Some(window_functions) = self.window_functions {
+            window_functions.into_iter().for_each(|udwf| {
+                let existing_udf = state.register_udwf(udwf);
+                if let Ok(Some(existing_udf)) = existing_udf {
+                    debug!("Overwrote an existing UDF: {}", existing_udf.name());
+                }
+            });
+        }
+
+        if state.config.create_default_catalog_and_schema() {
+            let default_catalog = SessionStateDefaults::default_catalog(
+                &state.config,
+                &state.table_factories,
+                &state.runtime_env,
+            );
+
+            state.catalog_list.register_catalog(
+                state.config.options().catalog.default_catalog.clone(),
+                Arc::new(default_catalog),
+            );
+        }
+
+        if let Some(analyzer_rules) = self.analyzer_rules {
+            for analyzer_rule in analyzer_rules {
+                state.analyzer.rules.push(analyzer_rule);
+            }
+        }
+
+        if let Some(optimizer_rules) = self.optimizer_rules {
+            for optimizer_rule in optimizer_rules {
+                state.optimizer.rules.push(optimizer_rule);
+            }
+        }
+
+        if let Some(physical_optimizer_rules) = self.physical_optimizer_rules {
+            for physical_optimizer_rule in physical_optimizer_rules {
+                state
+                    .physical_optimizers
+                    .rules
+                    .push(physical_optimizer_rule);
+            }
+        }
+
+        state
+    }
+
+    /// Returns the current session_id value
+    pub fn session_id(&self) -> &Option<String> {
+        &self.session_id
+    }
+
+    /// Returns the current analyzer value
+    pub fn analyzer(&mut self) -> &mut Option<Analyzer> {
+        &mut self.analyzer
+    }
+
+    /// Returns the current expr_planners value
+    pub fn expr_planners(&mut self) -> &mut Option<Vec<Arc<dyn ExprPlanner>>> {
+        &mut self.expr_planners
+    }
+
+    /// Returns the current optimizer value
+    pub fn optimizer(&mut self) -> &mut Option<Optimizer> {
+        &mut self.optimizer
+    }
+
+    /// Returns the current physical_optimizers value
+    pub fn physical_optimizers(&mut self) -> &mut Option<PhysicalOptimizer> {
+        &mut self.physical_optimizers
+    }
+
+    /// Returns the current query_planner value
+    pub fn query_planner(&mut self) -> &mut Option<Arc<dyn QueryPlanner + Send + Sync>> {
+        &mut self.query_planner
+    }
+
+    /// Returns the current catalog_list value
+    pub fn catalog_list(&mut self) -> &mut Option<Arc<dyn CatalogProviderList>> {
+        &mut self.catalog_list
+    }
+
+    /// Returns the current table_functions value
+    pub fn table_functions(
+        &mut self,
+    ) -> &mut Option<HashMap<String, Arc<TableFunction>>> {
+        &mut self.table_functions
+    }
+
+    /// Returns the current scalar_functions value
+    pub fn scalar_functions(&mut self) -> &mut Option<Vec<Arc<ScalarUDF>>> {
+        &mut self.scalar_functions
+    }
+
+    /// Returns the current aggregate_functions value
+    pub fn aggregate_functions(&mut self) -> &mut Option<Vec<Arc<AggregateUDF>>> {
+        &mut self.aggregate_functions
+    }
+
+    /// Returns the current window_functions value
+    pub fn window_functions(&mut self) -> &mut Option<Vec<Arc<WindowUDF>>> {
+        &mut self.window_functions
+    }
+
+    /// Returns the current serializer_registry value
+    pub fn serializer_registry(&mut self) -> &mut Option<Arc<dyn SerializerRegistry>> {
+        &mut self.serializer_registry
+    }
+
+    /// Returns the current file_formats value
+    pub fn file_formats(&mut self) -> &mut Option<Vec<Arc<dyn FileFormatFactory>>> {
+        &mut self.file_formats
+    }
+
+    /// Returns the current session_config value
+    pub fn config(&mut self) -> &mut Option<SessionConfig> {
+        &mut self.config
+    }
+
+    /// Returns the current table_options value
+    pub fn table_options(&mut self) -> &mut Option<TableOptions> {
+        &mut self.table_options
+    }
+
+    /// Returns the current execution_props value
+    pub fn execution_props(&mut self) -> &mut Option<ExecutionProps> {
+        &mut self.execution_props
+    }
+
+    /// Returns the current table_factories value
+    pub fn table_factories(
+        &mut self,
+    ) -> &mut Option<HashMap<String, Arc<dyn TableProviderFactory>>> {
+        &mut self.table_factories
+    }
+
+    /// Returns the current runtime_env value
+    pub fn runtime_env(&mut self) -> &mut Option<Arc<RuntimeEnv>> {
+        &mut self.runtime_env
+    }
+
+    /// Returns the current function_factory value
+    pub fn function_factory(&mut self) -> &mut Option<Arc<dyn FunctionFactory>> {
+        &mut self.function_factory
+    }
+
+    /// Returns the current analyzer_rules value
+    pub fn analyzer_rules(
+        &mut self,
+    ) -> &mut Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>> {
+        &mut self.analyzer_rules
+    }
+
+    /// Returns the current optimizer_rules value
+    pub fn optimizer_rules(
+        &mut self,
+    ) -> &mut Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>> {
+        &mut self.optimizer_rules
+    }
+
+    /// Returns the current physical_optimizer_rules value
+    pub fn physical_optimizer_rules(
+        &mut self,
+    ) -> &mut Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>> {
+        &mut self.physical_optimizer_rules
+    }
+}
+
+impl Default for SessionStateBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<SessionState> for SessionStateBuilder {
+    fn from(state: SessionState) -> Self {
+        SessionStateBuilder::new_from_existing(state)
     }
 }
 
@@ -1211,6 +1473,33 @@ impl SessionStateDefaults {
         ];
 
         expr_planners
+    }
+
+    /// returns a map of default [`ScalarUDF']'s keyed by name
+    pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
+        let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
+        functions.append(&mut functions_array::all_default_array_functions());
+
+        functions
+    }
+
+    /// returns a map of default [`AggregateUDF']'s keyed by named
+    pub fn default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
+        functions_aggregate::all_default_aggregate_functions()
+    }
+
+    /// returns a map of default [`FileFormatFactory']'s keyed by extension
+    pub fn default_file_formats() -> Vec<Arc<dyn FileFormatFactory>> {
+        let file_formats: Vec<Arc<dyn FileFormatFactory>> = vec![
+            #[cfg(feature = "parquet")]
+            Arc::new(ParquetFormatFactory::new()),
+            Arc::new(JsonFormatFactory::new()),
+            Arc::new(CsvFormatFactory::new()),
+            Arc::new(ArrowFormatFactory::new()),
+            Arc::new(AvroFormatFactory::new()),
+        ];
+
+        file_formats
     }
 
     /// registers all builtin functions - scalar, array and aggregate
@@ -1280,36 +1569,12 @@ impl SessionStateDefaults {
 
     /// registers the default [`FileFormatFactory`]s
     pub fn register_default_file_formats(state: &mut SessionState) {
-        #[cfg(feature = "parquet")]
-        if let Err(e) =
-            state.register_file_format(Arc::new(ParquetFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default ParquetFormat: {e}")
-        };
-
-        if let Err(e) =
-            state.register_file_format(Arc::new(JsonFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default JsonFormat: {e}")
-        };
-
-        if let Err(e) =
-            state.register_file_format(Arc::new(CsvFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default CsvFormat: {e}")
-        };
-
-        if let Err(e) =
-            state.register_file_format(Arc::new(ArrowFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default ArrowFormat: {e}")
-        };
-
-        if let Err(e) =
-            state.register_file_format(Arc::new(AvroFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default AvroFormat: {e}")
-        };
+        let formats = SessionStateDefaults::default_file_formats();
+        for format in formats {
+            if let Err(e) = state.register_file_format(format, false) {
+                log::info!("Unable to register default file format: {e}")
+            };
+        }
     }
 }
 
