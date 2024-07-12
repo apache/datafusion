@@ -180,6 +180,7 @@ async fn sort_merge_join_no_spill() {
         ])
         .with_memory_limit(1_000)
         .with_config(config)
+        .with_scenario(Scenario::AccessLogStreaming)
         .run()
         .await
 }
@@ -198,6 +199,7 @@ async fn sort_merge_join_spill() {
         .with_memory_limit(1_000)
         .with_config(config)
         .with_disk_manager_config(DiskManagerConfig::NewOs)
+        .with_scenario(Scenario::AccessLogStreaming)
         .run()
         .await
 }
@@ -471,7 +473,7 @@ impl TestCase {
         let table = scenario.table();
 
         let rt_config = RuntimeConfig::new()
-            // do not allow spilling
+            // disk manager setting controls the spilling
             .with_disk_manager(disk_manager_config)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
