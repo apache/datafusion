@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ArrowBytesMap`] and [`ArrowBytesSet`] for storing maps/sets of values from
+//! [`ArrowBytesViewMap`] and [`ArrowBytesViewSet`] for storing maps/sets of values from
 //! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
 use ahash::RandomState;
 use arrow::array::cast::AsArray;
@@ -111,7 +111,7 @@ impl ArrowBytesViewSet {
 /// in the same order as they were inserted.
 ///
 /// Note this structure can be used as a `HashSet` by specifying the value type
-/// as `()`, as is done by [`ArrowByteViewSet`].
+/// as `()`, as is done by [`ArrowBytesViewSet`].
 ///
 /// This map is used by the special `COUNT DISTINCT` aggregate function to
 /// store the distinct values, and by the `GROUP BY` operator to store
@@ -437,7 +437,7 @@ where
     }
 }
 
-/// Entry in the hash table -- see [`ArrowViewBytesMap`] for more details
+/// Entry in the hash table -- see [`ArrowBytesViewMap`] for more details
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct Entry<V>
 where
