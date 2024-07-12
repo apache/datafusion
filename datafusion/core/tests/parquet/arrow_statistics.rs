@@ -32,12 +32,13 @@ use arrow_array::{
     make_array, new_null_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array,
     Date64Array, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
     Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    LargeBinaryArray, LargeStringArray, RecordBatch, StringArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    LargeBinaryArray, LargeStringArray, RecordBatch, StringArray, StructArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
 };
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 use datafusion::datasource::physical_plan::parquet::StatisticsConverter;
 use half::f16;
 use parquet::arrow::arrow_reader::{
@@ -250,9 +251,7 @@ impl<'a> Test<'a> {
             column_name,
             check,
         } = self;
-
         let row_groups = reader.metadata().row_groups();
-
         if check.data_page() {
             let column_page_index = reader
                 .metadata()
@@ -2036,7 +2035,6 @@ async fn test_boolean() {
 // BUG
 // https://github.com/apache/datafusion/issues/10609
 // Note that: since I have not worked on struct array before, there may be a bug in the test code rather than the real bug in the code
-#[ignore]
 #[tokio::test]
 async fn test_struct() {
     // This creates a parquet files of 1 column named "struct"
@@ -2058,7 +2056,96 @@ async fn test_struct() {
     }
     .run();
 }
+// test nested struct
+#[tokio::test]
+async fn test_nested_struct() {
+    // This creates a parquet file with 1 column named "nested_struct"
+    // The file is created by 1 record batch with 3 rows in the nested struct array
+    let reader = TestReader {
+        scenario: Scenario::StructArrayNested,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
 
+    // Expected minimum and maximum values for nested struct fields
+    let inner_min = StructArray::from(vec![
+        (
+            Arc::new(Field::new("b", DataType::Boolean, false)),
+            Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("c", DataType::Int32, false)),
+            Arc::new(Int32Array::from(vec![Some(42)])) as ArrayRef,
+        ),
+    ]);
+    let inner_max = StructArray::from(vec![
+        (
+            Arc::new(Field::new("b", DataType::Boolean, false)),
+            Arc::new(BooleanArray::from(vec![Some(true)])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("c", DataType::Int32, false)),
+            Arc::new(Int32Array::from(vec![Some(44)])) as ArrayRef,
+        ),
+    ]);
+
+    let inner_fields = Fields::from(vec![
+        Field::new("b", DataType::Boolean, false),
+        Field::new("c", DataType::Int32, false),
+    ]);
+
+    // Expected minimum outer struct
+    let expected_min_outer = StructArray::from(vec![
+        (
+            Arc::new(Field::new(
+                "inner_struct",
+                DataType::Struct(inner_fields.clone()),
+                false,
+            )),
+            Arc::new(inner_min) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("outer_float", DataType::Float64, false)),
+            Arc::new(Float64Array::from(vec![Some(5.0)])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("outer_boolean", DataType::Boolean, false)),
+            Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
+        ),
+    ]);
+
+    // Expected maximum outer struct
+    let expected_max_outer = StructArray::from(vec![
+        (
+            Arc::new(Field::new(
+                "inner_struct",
+                DataType::Struct(inner_fields),
+                false,
+            )),
+            Arc::new(inner_max) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("outer_float", DataType::Float64, false)),
+            Arc::new(Float64Array::from(vec![Some(7.0)])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("outer_boolean", DataType::Boolean, false)),
+            Arc::new(BooleanArray::from(vec![Some(true)])) as ArrayRef,
+        ),
+    ]);
+
+    Test {
+        reader: &reader,
+        expected_min: Arc::new(expected_min_outer),
+        expected_max: Arc::new(expected_max_outer),
+        expected_null_counts: UInt64Array::from(vec![0]),
+        expected_row_counts: Some(UInt64Array::from(vec![3])),
+        column_name: "nested_struct",
+        check: Check::RowGroup,
+    }
+    .run();
+}
 // UTF8
 #[tokio::test]
 async fn test_utf8() {
