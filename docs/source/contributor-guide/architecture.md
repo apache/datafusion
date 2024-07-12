@@ -75,4 +75,4 @@ Some benefits of using an example based approach are
 
 An example of this process was [creating a SQL Extension Planning API].
 
-[creating a sql extension planning api]: https://github.com/apache/datafusion/issues/11207.
+[creating a sql extension planning api]: https://github.com/apache/datafusion/issues/11207
