@@ -17,6 +17,17 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
+use std::any::Any;
+use std::fmt::{self, Debug, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
+use std::vec;
+
+use arrow::datatypes::{DataType, Field};
+use sqlparser::ast::NullTreatment;
+
+use datafusion_common::{exec_err, not_impl_err, plan_err, Result};
+
 use crate::expr::AggregateFunction;
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
@@ -26,13 +37,6 @@ use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
 use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, not_impl_err, plan_err, Result};
-use sqlparser::ast::NullTreatment;
-use std::any::Any;
-use std::fmt::{self, Debug, Formatter};
-use std::sync::Arc;
-use std::vec;
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
 ///
@@ -72,20 +76,19 @@ pub struct AggregateUDF {
 
 impl PartialEq for AggregateUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        self.inner.equals(other.inner.as_ref())
     }
 }
 
 impl Eq for AggregateUDF {}
 
-impl std::hash::Hash for AggregateUDF {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name().hash(state);
-        self.signature().hash(state);
+impl Hash for AggregateUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.hash_value().hash(state)
     }
 }
 
-impl std::fmt::Display for AggregateUDF {
+impl fmt::Display for AggregateUDF {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", self.name())
     }
@@ -280,7 +283,7 @@ where
 /// #[derive(Debug, Clone)]
 /// struct GeoMeanUdf {
 ///   signature: Signature
-/// };
+/// }
 ///
 /// impl GeoMeanUdf {
 ///   fn new() -> Self {
@@ -507,6 +510,33 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
+
+    /// Return true if this aggregate UDF is equal to the other.
+    ///
+    /// Allows customizing the equality of aggregate UDFs.
+    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
+    ///
+    /// - reflexive: `a.equals(a)`;
+    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
+    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
+    ///
+    /// By default, compares [`Self::name`] and [`Self::signature`].
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        self.name() == other.name() && self.signature() == other.signature()
+    }
+
+    /// Returns a hash value for this aggregate UDF.
+    ///
+    /// Allows customizing the hash code of aggregate UDFs. Similarly to [`Hash`] and [`Eq`],
+    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
+    ///
+    /// By default, hashes [`Self::name`] and [`Self::signature`].
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.name().hash(hasher);
+        self.signature().hash(hasher);
+        hasher.finish()
+    }
 }
 
 pub enum ReversedUDAF {
@@ -561,6 +591,21 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<AliasedAggregateUDFImpl>() {
+            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
+        } else {
+            false
+        }
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.inner.hash_value().hash(hasher);
+        self.aliases.hash(hasher);
+        hasher.finish()
     }
 }
 
