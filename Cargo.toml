@@ -70,9 +70,9 @@ arrow = { version = "52.1.0", features = [
 arrow-array = { version = "52.1.0", default-features = false, features = [
     "chrono-tz",
 ] }
-arrow-buffer = { version = "52.0.0", default-features = false }
-arrow-data = { version = "52.0.0", default-features = false }
-arrow-flight = { version = "52.0.0", features = [
+arrow-buffer = { version = "52.1.0", default-features = false }
+arrow-data = { version = "52.1.0", default-features = false }
+arrow-flight = { version = "52.1.0", features = [
     "flight-sql-experimental",
 ] }
 arrow-ipc = { version = "52.1.0", default-features = false, features = [
