@@ -17,7 +17,7 @@
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
-//! This module provides:
+//! This crate provides:
 //!
 //! 1. A SQL parser, [`DFParser`], that translates SQL query text into
 //! an abstract syntax tree (AST), [`Statement`].
@@ -25,10 +25,14 @@
 //! 2. A SQL query planner [`SqlToRel`] that creates [`LogicalPlan`]s
 //! from [`Statement`]s.
 //!
+//! 3. A SQL [`unparser`] that converts [`Expr`]s and [`LogicalPlan`]s
+//! into SQL query text.
+//!
 //! [`DFParser`]: parser::DFParser
 //! [`Statement`]: parser::Statement
 //! [`SqlToRel`]: planner::SqlToRel
 //! [`LogicalPlan`]: datafusion_expr::logical_plan::LogicalPlan
+//! [`Expr`]: datafusion_expr::expr::Expr
 
 mod cte;
 mod expr;
