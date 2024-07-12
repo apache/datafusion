@@ -19,7 +19,7 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 use datafusion::{
     config::ConfigOptions,
     dataframe::DataFrame,
@@ -82,11 +82,19 @@ async fn main() {
     let mut fields = inferred_schema.fields().to_vec();
 
     // Add a new column to the dataset that should mirror the occurred_at_ms field
+    let struct_fields = vec![
+        Arc::new(Field::new("barrier_batch", DataType::Utf8, false)),
+        Arc::new(Field::new(
+            String::from("canonical_timestamp"),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        )),
+    ];
     fields.insert(
         fields.len(),
         Arc::new(Field::new(
-            String::from("franz_canonical_timestamp"),
-            DataType::Timestamp(TimeUnit::Millisecond, None),
+            String::from("_streaming_internal_metadata"),
+            DataType::Struct(Fields::from(struct_fields)),
             true,
         )),
     );
