@@ -55,7 +55,7 @@ use num::{
 };
 use regex::Regex;
 
-use datafusion_comet_utils::{array_with_timezone, down_cast_any_ref};
+use crate::utils::{array_with_timezone, down_cast_any_ref};
 
 use crate::{EvalMode, SparkError, SparkResult};
 

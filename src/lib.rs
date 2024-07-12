@@ -20,6 +20,9 @@ pub mod cast;
 mod error;
 mod if_expr;
 
+pub mod timezone;
+pub mod utils;
+
 pub use abs::Abs;
 pub use error::{SparkError, SparkResult};
 pub use if_expr::IfExpr;

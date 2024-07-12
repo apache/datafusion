@@ -31,7 +31,7 @@ use datafusion::logical_expr::ColumnarValue;
 use datafusion_common::{cast::as_boolean_array, Result};
 use datafusion_physical_expr::PhysicalExpr;
 
-use datafusion_comet_utils::down_cast_any_ref;
+use crate::utils::down_cast_any_ref;
 
 #[derive(Debug, Hash)]
 pub struct IfExpr {

@@ -36,7 +36,8 @@ datafusion-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
-datafusion-comet-utils = { workspace = true }
+datafusion-physical-plan = { workspace = true }
+chrono-tz = { workspace = true }
 num = { workspace = true }
 regex = { workspace = true }
 thiserror = { workspace = true }
