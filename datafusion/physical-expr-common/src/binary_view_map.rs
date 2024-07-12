@@ -135,7 +135,7 @@ where
 }
 
 /// The size, in number of entries, of the initial hash table
-const INITIAL_MAP_CAPACITY: usize = 128;
+const INITIAL_MAP_CAPACITY: usize = 512;
 
 impl<V> ArrowBytesViewMap<V>
 where
@@ -288,13 +288,14 @@ where
                 let inner_view_idx = self.builder.len();
                 let new_header = Entry {
                     view_idx: inner_view_idx,
+                    hash,
                     payload,
                 };
 
                 self.builder.append_value(value);
 
                 self.map
-                    .insert_accounted(new_header, |_| hash, &mut self.map_size);
+                    .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
                 payload
             };
             observe_payload_fn(payload);
@@ -374,6 +375,8 @@ where
 {
     /// The idx into the views array
     view_idx: usize,
+
+    hash: u64,
 
     /// value stored by the entry
     payload: V,
