@@ -127,6 +127,11 @@ pub fn as_generic_binary_array<T: OffsetSizeTrait>(
     Ok(downcast_value!(array, GenericBinaryArray, T))
 }
 
+// Downcast ArrayRef to BinaryViewArray
+pub fn as_binary_view_array(array: &dyn Array) -> Result<&BinaryViewArray> {
+    Ok(downcast_value!(array, BinaryViewArray))
+}
+
 // Downcast ArrayRef to GenericListArray
 pub fn as_generic_list_array<T: OffsetSizeTrait>(
     array: &dyn Array,
