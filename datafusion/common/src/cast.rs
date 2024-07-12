@@ -36,6 +36,7 @@ use arrow::{
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
+use arrow_array::{BinaryViewArray, StringViewArray};
 
 // Downcast ArrayRef to Date32Array
 pub fn as_date32_array(array: &dyn Array) -> Result<&Date32Array> {
@@ -87,6 +88,11 @@ pub fn as_string_array(array: &dyn Array) -> Result<&StringArray> {
     Ok(downcast_value!(array, StringArray))
 }
 
+// Downcast ArrayRef to StringViewArray
+pub fn as_string_view_array(array: &dyn Array) -> Result<&StringViewArray> {
+    Ok(downcast_value!(array, StringViewArray))
+}
+
 // Downcast ArrayRef to UInt32Array
 pub fn as_uint32_array(array: &dyn Array) -> Result<&UInt32Array> {
     Ok(downcast_value!(array, UInt32Array))
@@ -119,6 +125,11 @@ pub fn as_generic_binary_array<T: OffsetSizeTrait>(
     array: &dyn Array,
 ) -> Result<&GenericBinaryArray<T>> {
     Ok(downcast_value!(array, GenericBinaryArray, T))
+}
+
+// Downcast ArrayRef to BinaryViewArray
+pub fn as_binary_view_array(array: &dyn Array) -> Result<&BinaryViewArray> {
+    Ok(downcast_value!(array, BinaryViewArray))
 }
 
 // Downcast ArrayRef to GenericListArray

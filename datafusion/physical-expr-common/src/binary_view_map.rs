@@ -50,12 +50,6 @@ impl ArrowBytesViewSet {
         Self(ArrowBytesViewMap::new(output_type))
     }
 
-    /// Return the contents of this set and replace it with a new empty
-    /// set with the same output type
-    pub(super) fn take(&mut self) -> Self {
-        Self(self.0.take())
-    }
-
     /// Inserts each value from `values` into the set
     pub fn insert(&mut self, values: &ArrayRef) {
         fn make_payload_fn(_value: Option<&[u8]>) {}
