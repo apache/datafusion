@@ -486,7 +486,7 @@ mod tests {
         let mut heap = TopKHeap::new(10, false);
         heap.append_or_replace(1, 1, &mut map);
 
-        let actual = format!("{heap}");
+        let actual = heap.to_string();
         let expected = r#"
 val=1 idx=0, bucket=1
         "#;
@@ -506,7 +506,7 @@ val=1 idx=0, bucket=1
         heap.append_or_replace(2, 2, &mut map);
         assert_eq!(map, vec![(2, 0), (1, 1)]);
 
-        let actual = format!("{heap}");
+        let actual = heap.to_string();
         let expected = r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
@@ -524,7 +524,7 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(1, 1, &mut map);
         heap.append_or_replace(2, 2, &mut map);
         heap.append_or_replace(3, 3, &mut map);
-        let actual = format!("{heap}");
+        let actual = heap.to_string();
         let expected = r#"
 val=3 idx=0, bucket=3
 ├── val=1 idx=1, bucket=1
@@ -534,7 +534,7 @@ val=3 idx=0, bucket=3
 
         let mut map = vec![];
         heap.append_or_replace(0, 0, &mut map);
-        let actual = format!("{heap}");
+        let actual = heap.to_string();
         let expected = r#"
 val=2 idx=0, bucket=2
 ├── val=1 idx=1, bucket=1
@@ -555,7 +555,7 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(2, 2, &mut map);
         heap.append_or_replace(3, 3, &mut map);
         heap.append_or_replace(4, 4, &mut map);
-        let actual = format!("{heap}");
+        let actual = heap.to_string();
         let expected = r#"
 val=4 idx=0, bucket=4
 ├── val=3 idx=1, bucket=3
@@ -566,7 +566,7 @@ val=4 idx=0, bucket=4
 
         let mut map = vec![];
         heap.replace_if_better(1, 0, &mut map);
-        let actual = format!("{heap}");
+        let actual = heap.to_string();
         let expected = r#"
 val=4 idx=0, bucket=4
 ├── val=1 idx=1, bucket=1
@@ -587,7 +587,7 @@ val=4 idx=0, bucket=4
         heap.append_or_replace(1, 1, &mut map);
         heap.append_or_replace(2, 2, &mut map);
 
-        let actual = format!("{heap}");
+        let actual = heap.to_string();
         let expected = r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
@@ -608,7 +608,7 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(1, 1, &mut map);
         heap.append_or_replace(2, 2, &mut map);
 
-        let actual = format!("{heap}");
+        let actual = heap.to_string();
         let expected = r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
@@ -631,7 +631,7 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(1, 1, &mut map);
         heap.append_or_replace(2, 2, &mut map);
 
-        let actual = format!("{heap}");
+        let actual = heap.to_string();
         let expected = r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
@@ -640,7 +640,7 @@ val=2 idx=0, bucket=2
 
         let numbers = vec![(0, 1), (1, 2)];
         heap.renumber(numbers.as_slice());
-        let actual = format!("{heap}");
+        let actual = heap.to_string();
         let expected = r#"
 val=2 idx=0, bucket=1
 └── val=1 idx=1, bucket=2
