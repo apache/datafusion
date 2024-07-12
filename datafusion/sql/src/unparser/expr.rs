@@ -72,21 +72,34 @@ impl Display for Unparsed {
     }
 }
 
-/// Convert a DataFusion [`Expr`] to `sqlparser::ast::Expr`
+/// Convert a DataFusion [`Expr`] to [`ast::Expr`]
 ///
-/// This function is the opposite of `SqlToRel::sql_to_expr` and can
-/// be used to, among other things, convert [`Expr`]s to strings.
-/// Throws an error if [`Expr`] can not be represented by an `sqlparser::ast::Expr`
+/// This function is the opposite of [`SqlToRel::sql_to_expr`] and can be used
+/// to, among other things, convert [`Expr`]s to SQL strings. Such strings could
+/// be used to pass filters or other expressions to another SQL engine.
+///
+/// # Errors
+///
+/// Throws an error if [`Expr`] can not be represented by an [`ast::Expr`]
+///
+/// # See Also
+///
+/// * [`Unparser`] for more control over the conversion to SQL
+/// * [`plan_to_sql`] for converting a [`LogicalPlan`] to SQL
 ///
 /// # Example
 /// ```
 /// use datafusion_expr::{col, lit};
 /// use datafusion_sql::unparser::expr_to_sql;
-/// let expr = col("a").gt(lit(4));
-/// let sql = expr_to_sql(&expr).unwrap();
-///
-/// assert_eq!(format!("{}", sql), "(a > 4)")
+/// let expr = col("a").gt(lit(4)); // form an expression `a > 4`
+/// let sql = expr_to_sql(&expr).unwrap(); // convert to ast::Expr
+/// // use the Display impl to convert to SQL text
+/// assert_eq!(sql.to_string(), "(a > 4)")
 /// ```
+///
+/// [`SqlToRel::sql_to_expr`]: crate::planner::SqlToRel::sql_to_expr
+/// [`plan_to_sql`]: crate::unparser::plan_to_sql
+/// [`LogicalPlan`]: datafusion_expr::logical_plan::LogicalPlan
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
     unparser.expr_to_sql(expr)
