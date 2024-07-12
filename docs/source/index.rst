@@ -121,7 +121,6 @@ To get started, see
    contributor-guide/testing
    contributor-guide/howtos
    contributor-guide/roadmap
-   contributor-guide/quarterly_roadmap
    contributor-guide/governance
    contributor-guide/inviting
    contributor-guide/specification/index
