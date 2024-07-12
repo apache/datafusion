@@ -321,7 +321,12 @@ where
             } else {
                 // no existing value, make a new one.
                 let payload = make_payload_fn(Some(value));
-                let new_header = Entry { view_idx, payload };
+
+                let inner_view_idx = self.views.len();
+                let new_header = Entry {
+                    view_idx: inner_view_idx,
+                    payload,
+                };
 
                 let view = if value.len() <= 12 {
                     unsafe { *values.views().get_unchecked(view_idx) }
@@ -447,6 +452,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use hashbrown::HashMap;
+
     use super::*;
 
     // asserts that the set contains the expected strings, in the same order
@@ -577,5 +584,168 @@ mod tests {
         let mut set = ArrowBytesViewSet::new(OutputType::BinaryView);
         set.insert(&values);
         assert_eq!(&set.into_state(), &expected);
+    }
+
+    // inserting strings into the set does not increase reported memory
+    #[test]
+    fn test_string_set_memory_usage() {
+        let strings1 = StringViewArray::from(vec![
+            Some("a"),
+            Some("b"),
+            Some("CXCCCCCCCCCCC"), // 13 bytes
+            Some("AAAAAAAA"),      // 8 bytes
+            Some("BBBBBQBBB"),     // 9 bytes
+        ]);
+        let total_strings1_len = strings1
+            .iter()
+            .map(|s| s.map(|s| s.len()).unwrap_or(0))
+            .sum::<usize>();
+        let values1: ArrayRef = Arc::new(StringViewArray::from(strings1));
+
+        // Much larger strings in strings2
+        let strings2 = StringViewArray::from(vec![
+            "FOO".repeat(1000),
+            "BAR larger than 12 bytes.".repeat(1000),
+            "more unique.".repeat(1000),
+            "more unique2.".repeat(1000),
+            "BAZ".repeat(3000),
+        ]);
+        let total_strings2_len = strings2
+            .iter()
+            .map(|s| s.map(|s| s.len()).unwrap_or(0))
+            .sum::<usize>();
+        let values2: ArrayRef = Arc::new(StringViewArray::from(strings2));
+
+        let mut set = ArrowBytesViewSet::new(OutputType::Utf8View);
+        let size_empty = set.size();
+
+        set.insert(&values1);
+        let size_after_values1 = set.size();
+        assert!(size_empty < size_after_values1);
+        assert!(
+            size_after_values1 > total_strings1_len,
+            "expect {size_after_values1} to be more than {total_strings1_len}"
+        );
+        assert!(size_after_values1 < total_strings1_len + total_strings2_len);
+
+        // inserting the same strings should not affect the size
+        set.insert(&values1);
+        assert_eq!(set.size(), size_after_values1);
+
+        // inserting the large strings should increase the reported size
+        set.insert(&values2);
+        let size_after_values2 = set.size();
+        assert!(size_after_values2 > size_after_values1);
+
+        // the consumed size should be less than the sum of the sizes of the strings
+        // bc the strings are deduplicated
+        assert!(size_after_values2 < total_strings1_len + total_strings2_len);
+    }
+
+    #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
+    struct TestPayload {
+        // store the string value to check against input
+        index: usize, // store the index of the string (each new string gets the next sequential input)
+    }
+
+    /// Wraps an [`ArrowBytesViewMap`], validating its invariants
+    struct TestMap {
+        map: ArrowBytesViewMap<TestPayload>,
+        // stores distinct strings seen, in order
+        strings: Vec<Option<String>>,
+        // map strings to index in strings
+        indexes: HashMap<Option<String>, usize>,
+    }
+
+    impl TestMap {
+        /// creates a map with TestPayloads for the given strings and then
+        /// validates the payloads
+        fn new() -> Self {
+            Self {
+                map: ArrowBytesViewMap::new(OutputType::Utf8View),
+                strings: vec![],
+                indexes: HashMap::new(),
+            }
+        }
+
+        /// Inserts strings into the map
+        fn insert(&mut self, strings: &[Option<&str>]) {
+            let string_array = StringViewArray::from(strings.to_vec());
+            let arr: ArrayRef = Arc::new(string_array);
+
+            let mut next_index = self.indexes.len();
+            let mut actual_new_strings = vec![];
+            let mut actual_seen_indexes = vec![];
+            // update self with new values, keeping track of newly added values
+            for str in strings {
+                let str = str.map(|s| s.to_string());
+                let index = self.indexes.get(&str).cloned().unwrap_or_else(|| {
+                    actual_new_strings.push(str.clone());
+                    let index = self.strings.len();
+                    self.strings.push(str.clone());
+                    self.indexes.insert(str, index);
+                    index
+                });
+                actual_seen_indexes.push(index);
+            }
+
+            // insert the values into the map, recording what we did
+            let mut seen_new_strings = vec![];
+            let mut seen_indexes = vec![];
+            self.map.insert_if_new(
+                &arr,
+                |s| {
+                    let value = s
+                        .map(|s| String::from_utf8(s.to_vec()).expect("Non utf8 string"));
+                    let index = next_index;
+                    next_index += 1;
+                    seen_new_strings.push(value);
+                    TestPayload { index }
+                },
+                |payload| {
+                    seen_indexes.push(payload.index);
+                },
+            );
+
+            assert_eq!(actual_seen_indexes, seen_indexes);
+            assert_eq!(actual_new_strings, seen_new_strings);
+        }
+
+        /// Call `self.map.into_array()` validating that the strings are in the same
+        /// order as they were inserted
+        fn into_array(self) -> ArrayRef {
+            let Self {
+                map,
+                strings,
+                indexes: _,
+            } = self;
+
+            let arr = map.into_state();
+            let expected: ArrayRef = Arc::new(StringViewArray::from(strings));
+            assert_eq!(&arr, &expected);
+            arr
+        }
+    }
+
+    #[test]
+    fn test_map() {
+        let input = vec![
+            // Note mix of short/long strings
+            Some("A"),
+            Some("bcdefghijklmnop1234567"),
+            Some("X"),
+            Some("Y"),
+            None,
+            Some("qrstuvqxyzhjwya"),
+            Some("✨🔥"),
+            Some("🔥"),
+            Some("🔥🔥🔥🔥🔥🔥"),
+        ];
+
+        let mut test_map = TestMap::new();
+        test_map.insert(&input);
+        test_map.insert(&input); // put it in twice
+        let expected_output: ArrayRef = Arc::new(StringViewArray::from(input));
+        assert_eq!(&test_map.into_array(), &expected_output);
     }
 }
