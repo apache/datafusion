@@ -53,6 +53,8 @@ pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
     right: Arc<dyn PhysicalExpr>,
+    /// Specifies whether an error is returned on overflow or not
+    fail_on_overflow: bool,
 }
 
 impl BinaryExpr {
@@ -62,7 +64,22 @@ impl BinaryExpr {
         op: Operator,
         right: Arc<dyn PhysicalExpr>,
     ) -> Self {
-        Self { left, op, right }
+        Self {
+            left,
+            op,
+            right,
+            fail_on_overflow: false,
+        }
+    }
+
+    /// Create new binary expression with explicit fail_on_overflow value
+    pub fn with_fail_on_overflow(self, fail_on_overflow: bool) -> Self {
+        Self {
+            left: self.left,
+            op: self.op,
+            right: self.right,
+            fail_on_overflow,
+        }
     }
 
     /// Get the left side of the binary expression
@@ -273,8 +290,11 @@ impl PhysicalExpr for BinaryExpr {
         }
 
         match self.op {
+            Operator::Plus if self.fail_on_overflow => return apply(&lhs, &rhs, add),
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
+            Operator::Minus if self.fail_on_overflow => return apply(&lhs, &rhs, sub),
             Operator::Minus => return apply(&lhs, &rhs, sub_wrapping),
+            Operator::Multiply if self.fail_on_overflow => return apply(&lhs, &rhs, mul),
             Operator::Multiply => return apply(&lhs, &rhs, mul_wrapping),
             Operator::Divide => return apply(&lhs, &rhs, div),
             Operator::Modulo => return apply(&lhs, &rhs, rem),
@@ -327,11 +347,10 @@ impl PhysicalExpr for BinaryExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(BinaryExpr::new(
-            Arc::clone(&children[0]),
-            self.op,
-            Arc::clone(&children[1]),
-        )))
+        Ok(Arc::new(
+            BinaryExpr::new(Arc::clone(&children[0]), self.op, Arc::clone(&children[1]))
+                .with_fail_on_overflow(self.fail_on_overflow),
+        ))
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
@@ -496,7 +515,12 @@ impl PartialEq<dyn Any> for BinaryExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
-            .map(|x| self.left.eq(&x.left) && self.op == x.op && self.right.eq(&x.right))
+            .map(|x| {
+                self.left.eq(&x.left)
+                    && self.op == x.op
+                    && self.right.eq(&x.right)
+                    && self.fail_on_overflow.eq(&x.fail_on_overflow)
+            })
             .unwrap_or(false)
     }
 }
@@ -661,6 +685,7 @@ mod tests {
 
     use datafusion_common::plan_datafusion_err;
     use datafusion_expr::type_coercion::binary::get_input_types;
+    use datafusion_physical_expr_common::expressions::column::Column;
 
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
@@ -4007,5 +4032,92 @@ mod tests {
         )
         .unwrap();
         assert_eq!(&casted, &dictionary);
+    }
+
+    #[test]
+    fn test_add_with_overflow() -> Result<()> {
+        // create test data
+        let l = Arc::new(Int32Array::from(vec![1, i32::MAX]));
+        let r = Arc::new(Int32Array::from(vec![2, 1]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("l", DataType::Int32, false),
+            Field::new("r", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![l, r])?;
+
+        // create expression
+        let expr = BinaryExpr::new(
+            Arc::new(Column::new("l", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("r", 1)),
+        )
+        .with_fail_on_overflow(true);
+
+        // evaluate expression
+        let result = expr.evaluate(&batch);
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Overflow happened on: 2147483647 + 1"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_subtract_with_overflow() -> Result<()> {
+        // create test data
+        let l = Arc::new(Int32Array::from(vec![1, i32::MIN]));
+        let r = Arc::new(Int32Array::from(vec![2, 1]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("l", DataType::Int32, false),
+            Field::new("r", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![l, r])?;
+
+        // create expression
+        let expr = BinaryExpr::new(
+            Arc::new(Column::new("l", 0)),
+            Operator::Minus,
+            Arc::new(Column::new("r", 1)),
+        )
+        .with_fail_on_overflow(true);
+
+        // evaluate expression
+        let result = expr.evaluate(&batch);
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Overflow happened on: -2147483648 - 1"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_mul_with_overflow() -> Result<()> {
+        // create test data
+        let l = Arc::new(Int32Array::from(vec![1, i32::MAX]));
+        let r = Arc::new(Int32Array::from(vec![2, 2]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("l", DataType::Int32, false),
+            Field::new("r", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![l, r])?;
+
+        // create expression
+        let expr = BinaryExpr::new(
+            Arc::new(Column::new("l", 0)),
+            Operator::Multiply,
+            Arc::new(Column::new("r", 1)),
+        )
+        .with_fail_on_overflow(true);
+
+        // evaluate expression
+        let result = expr.evaluate(&batch);
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Overflow happened on: 2147483647 * 2"));
+        Ok(())
     }
 }

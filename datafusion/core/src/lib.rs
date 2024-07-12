@@ -622,6 +622,12 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/crate-configuration.md",
+    user_guide_crate_configuration
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/configs.md",
     user_guide_configs
 );

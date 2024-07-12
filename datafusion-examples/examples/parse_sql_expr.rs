@@ -153,5 +153,14 @@ async fn round_trip_parse_sql_expr_demo() -> Result<()> {
 
     assert_eq!(sql, round_trip_sql);
 
+    // enable pretty-unparsing. This make the output more human-readable
+    // but can be problematic when passed to other SQL engines due to
+    // difference in precedence rules between DataFusion and target engines.
+    let unparser = Unparser::default().with_pretty(true);
+
+    let pretty = "int_col < 5 OR double_col = 8";
+    let pretty_round_trip_sql = unparser.expr_to_sql(&parsed_expr)?.to_string();
+    assert_eq!(pretty, pretty_round_trip_sql);
+
     Ok(())
 }

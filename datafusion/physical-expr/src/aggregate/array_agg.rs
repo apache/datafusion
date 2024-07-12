@@ -71,7 +71,7 @@ impl AggregateExpr for ArrayAgg {
             &self.name,
             // This should be the same as return type of AggregateFunction::ArrayAgg
             Field::new("item", self.input_data_type.clone(), self.nullable),
-            false,
+            true,
         ))
     }
 
@@ -86,7 +86,7 @@ impl AggregateExpr for ArrayAgg {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
             Field::new("item", self.input_data_type.clone(), self.nullable),
-            false,
+            true,
         )])
     }
 
@@ -137,8 +137,11 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
         assert!(values.len() == 1, "array_agg can only take 1 param!");
+
         let val = Arc::clone(&values[0]);
-        self.values.push(val);
+        if val.len() > 0 {
+            self.values.push(val);
+        }
         Ok(())
     }
 
@@ -162,13 +165,15 @@ impl Accumulator for ArrayAggAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         // Transform Vec<ListArr> to ListArr
-
         let element_arrays: Vec<&dyn Array> =
             self.values.iter().map(|a| a.as_ref()).collect();
 
         if element_arrays.is_empty() {
-            let arr = ScalarValue::new_list(&[], &self.datatype, self.nullable);
-            return Ok(ScalarValue::List(arr));
+            return Ok(ScalarValue::new_null_list(
+                self.datatype.clone(),
+                self.nullable,
+                1,
+            ));
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;

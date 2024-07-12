@@ -1694,7 +1694,7 @@ SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 
 query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
 ----
-[]
+NULL
 
 # csv_query_array_agg_one
 query ?
@@ -1753,31 +1753,12 @@ NULL 4 29 1.260869565217 123 -117 23
 NULL 5 -194 -13.857142857143 118 -101 14
 NULL NULL 781 7.81 125 -117 100
 
-# TODO: array_agg_distinct output is non-deterministic -- rewrite with array_sort(list_sort)
-#       unnest is also not available, so manually unnesting via CROSS JOIN
-# additional count(1) forces array_agg_distinct instead of array_agg over aggregated by c2 data
-#
+# select with count to forces array_agg_distinct function, since single distinct expression is converted to group by by optimizer
 # csv_query_array_agg_distinct
-query III
-WITH indices AS (
-  SELECT 1 AS idx UNION ALL
-  SELECT 2 AS idx UNION ALL
-  SELECT 3 AS idx UNION ALL
-  SELECT 4 AS idx UNION ALL
-  SELECT 5 AS idx
-)
-SELECT data.arr[indices.idx] as element, array_length(data.arr) as array_len, dummy
-FROM (
-  SELECT array_agg(distinct c2) as arr, count(1) as dummy FROM aggregate_test_100
-) data
-  CROSS JOIN indices
-ORDER BY 1
+query ?I
+SELECT array_sort(array_agg(distinct c2)), count(1) FROM aggregate_test_100
 ----
-1 5 100
-2 5 100
-3 5 100
-4 5 100
-5 5 100
+[1, 2, 3, 4, 5] 100
 
 # aggregate_time_min_and_max
 query TT
@@ -2037,6 +2018,10 @@ query I
 SELECT count(c1, c2) FROM test
 ----
 3
+
+# count(distinct) with multiple arguments
+query error DataFusion error: This feature is not implemented: COUNT DISTINCT with multiple arguments
+SELECT count(distinct c1, c2) FROM test
 
 # count_null
 query III
@@ -2732,6 +2717,16 @@ SELECT COUNT(DISTINCT c1) FROM test
 
 # TODO: aggregate_with_alias
 
+# test_approx_percentile_cont_decimal_support
+query TI
+SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 4
+b 5
+c 4
+d 4
+e 4
+
 # array_agg_zero
 query ?
 SELECT ARRAY_AGG([])
@@ -2744,28 +2739,114 @@ SELECT ARRAY_AGG([1])
 ----
 [[1]]
 
-# test_approx_percentile_cont_decimal_support
-query TI
-SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
-----
-a 4
-b 5
-c 4
-d 4
-e 4
+# test array_agg with no row qualified
+statement ok
+create table t(a int, b float, c bigint) as values (1, 1.2, 2);
 
-
-# array_agg_zero
+# returns NULL, follows DuckDB's behaviour
 query ?
-SELECT ARRAY_AGG([]);
+select array_agg(a) from t where a > 2;
 ----
-[[]]
+NULL
 
-# array_agg_one
 query ?
-SELECT ARRAY_AGG([1]);
+select array_agg(b) from t where b > 3.1;
 ----
-[[1]]
+NULL
+
+query ?
+select array_agg(c) from t where c > 3;
+----
+NULL
+
+query ?I
+select array_agg(c), count(1) from t where c > 3;
+----
+NULL 0
+
+# returns 0 rows if group by is applied, follows DuckDB's behaviour
+query ?
+select array_agg(a) from t where a > 3 group by a;
+----
+
+query ?I
+select array_agg(a), count(1) from t where a > 3 group by a;
+----
+
+# returns NULL, follows DuckDB's behaviour
+query ?
+select array_agg(distinct a) from t where a > 3;
+----
+NULL
+
+query ?I
+select array_agg(distinct a), count(1) from t where a > 3;
+----
+NULL 0
+
+# returns 0 rows if group by is applied, follows DuckDB's behaviour
+query ?
+select array_agg(distinct a) from t where a > 3 group by a;
+----
+
+query ?I
+select array_agg(distinct a), count(1) from t where a > 3 group by a;
+----
+
+# test order sensitive array agg
+query ?
+select array_agg(a order by a) from t where a > 3;
+----
+NULL
+
+query ?
+select array_agg(a order by a) from t where a > 3 group by a;
+----
+
+query ?I
+select array_agg(a order by a), count(1) from t where a > 3 group by a;
+----
+
+statement ok
+drop table t;
+
+# test with no values
+statement ok
+create table t(a int, b float, c bigint);
+
+query ?
+select array_agg(a) from t;
+----
+NULL
+
+query ?
+select array_agg(b) from t;
+----
+NULL
+
+query ?
+select array_agg(c) from t;
+----
+NULL
+
+query ?I
+select array_agg(distinct a), count(1) from t;
+----
+NULL 0
+
+query ?I
+select array_agg(distinct b), count(1) from t;
+----
+NULL 0
+
+query ?I
+select array_agg(distinct b), count(1) from t;
+----
+NULL 0
+
+statement ok
+drop table t;
+
 
 # array_agg_i32
 statement ok

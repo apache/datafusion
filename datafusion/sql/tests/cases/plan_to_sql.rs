@@ -104,26 +104,26 @@ fn roundtrip_statement() -> Result<()> {
             "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",
             "select id, count(*), first_name from person group by first_name, id",
             "select id, sum(age), first_name from person group by first_name, id",
-            "select id, count(*), first_name 
-            from person 
+            "select id, count(*), first_name
+            from person
             where id!=3 and first_name=='test'
-            group by first_name, id 
+            group by first_name, id
             having count(*)>5 and count(*)<10
             order by count(*)",
-            r#"select id, count("First Name") as count_first_name, "Last Name" 
+            r#"select id, count("First Name") as count_first_name, "Last Name"
             from person_quoted_cols
             where id!=3 and "First Name"=='test'
-            group by "Last Name", id 
+            group by "Last Name", id
             having count_first_name>5 and count_first_name<10
             order by count_first_name, "Last Name""#,
             r#"select p.id, count("First Name") as count_first_name,
-            "Last Name", sum(qp.id/p.id - (select sum(id) from person_quoted_cols) ) / (select count(*) from person) 
+            "Last Name", sum(qp.id/p.id - (select sum(id) from person_quoted_cols) ) / (select count(*) from person)
             from (select id, "First Name", "Last Name" from person_quoted_cols) qp
             inner join (select * from person) p
             on p.id = qp.id
-            where p.id!=3 and "First Name"=='test' and qp.id in 
+            where p.id!=3 and "First Name"=='test' and qp.id in
             (select id from (select id, count(*) from person group by id having count(*) > 0))
-            group by "Last Name", p.id 
+            group by "Last Name", p.id
             having count_first_name>5 and count_first_name<10
             order by count_first_name, "Last Name""#,
             r#"SELECT j1_string as string FROM j1
@@ -134,12 +134,12 @@ fn roundtrip_statement() -> Result<()> {
             SELECT j2_string as string FROM j2
             ORDER BY string DESC
             LIMIT 10"#,
-            "SELECT id, count(*) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), 
-            last_name, sum(id) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), 
+            "SELECT id, count(*) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+            last_name, sum(id) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             first_name from person",
-            r#"SELECT id, count(distinct id) over (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), 
+            r#"SELECT id, count(distinct id) over (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             sum(id) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) from person"#,
-            "SELECT id, sum(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) from person",            
+            "SELECT id, sum(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) from person",
         ];
 
     // For each test sql string, we transform as follows:
@@ -313,4 +313,79 @@ fn test_table_references_in_plan_to_sql() {
         "table",
         "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"",
     );
+}
+
+#[test]
+fn test_pretty_roundtrip() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+
+    let df_schema = DFSchema::try_from(schema)?;
+
+    let context = MockContextProvider::default();
+    let sql_to_rel = SqlToRel::new(&context);
+
+    let unparser = Unparser::default().with_pretty(true);
+
+    let sql_to_pretty_unparse = vec![
+        ("((id < 5) OR (age = 8))", "id < 5 OR age = 8"),
+        ("((id + 5) * (age * 8))", "(id + 5) * age * 8"),
+        ("(3 + (5 * 6) * 3)", "3 + 5 * 6 * 3"),
+        ("((3 * (5 + 6)) * 3)", "3 * (5 + 6) * 3"),
+        ("((3 AND (5 OR 6)) * 3)", "(3 AND (5 OR 6)) * 3"),
+        ("((3 + (5 + 6)) * 3)", "(3 + 5 + 6) * 3"),
+        ("((3 + (5 + 6)) + 3)", "3 + 5 + 6 + 3"),
+        ("3 + 5 + 6 + 3", "3 + 5 + 6 + 3"),
+        ("3 + (5 + (6 + 3))", "3 + 5 + 6 + 3"),
+        ("3 + ((5 + 6) + 3)", "3 + 5 + 6 + 3"),
+        ("(3 + 5) + (6 + 3)", "3 + 5 + 6 + 3"),
+        ("((3 + 5) + (6 + 3))", "3 + 5 + 6 + 3"),
+        (
+            "((id > 10) OR (age BETWEEN 10 AND 20))",
+            "id > 10 OR age BETWEEN 10 AND 20",
+        ),
+        (
+            "((id > 10) * (age BETWEEN 10 AND 20))",
+            "(id > 10) * (age BETWEEN 10 AND 20)",
+        ),
+        ("id - (age - 8)", "id - (age - 8)"),
+        ("((id - age) - 8)", "id - age - 8"),
+        ("(id OR (age - 8))", "id OR age - 8"),
+        ("(id / (age - 8))", "id / (age - 8)"),
+        ("((id / age) * 8)", "id / age * 8"),
+        ("((age + 10) < 20) IS TRUE", "(age + 10 < 20) IS TRUE"),
+        (
+            "(20 > (age + 5)) IS NOT FALSE",
+            "(20 > age + 5) IS NOT FALSE",
+        ),
+        ("(true AND false) IS FALSE", "(true AND false) IS FALSE"),
+        ("true AND (false IS FALSE)", "true AND false IS FALSE"),
+    ];
+
+    for (sql, pretty) in sql_to_pretty_unparse.iter() {
+        let sql_expr = Parser::new(&GenericDialect {})
+            .try_with_sql(sql)?
+            .parse_expr()?;
+        let expr =
+            sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
+        let round_trip_sql = unparser.expr_to_sql(&expr)?.to_string();
+        assert_eq!(pretty.to_string(), round_trip_sql);
+
+        // verify that the pretty string parses to the same underlying Expr
+        let pretty_sql_expr = Parser::new(&GenericDialect {})
+            .try_with_sql(pretty)?
+            .parse_expr()?;
+
+        let pretty_expr = sql_to_rel.sql_to_expr(
+            pretty_sql_expr,
+            &df_schema,
+            &mut PlannerContext::new(),
+        )?;
+
+        assert_eq!(expr.to_string(), pretty_expr.to_string());
+    }
+
+    Ok(())
 }

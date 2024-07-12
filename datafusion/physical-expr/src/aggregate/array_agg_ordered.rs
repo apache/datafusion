@@ -92,7 +92,7 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
             &self.name,
             // This should be the same as return type of AggregateFunction::ArrayAgg
             Field::new("item", self.input_data_type.clone(), self.nullable),
-            false,
+            true,
         ))
     }
 
@@ -111,7 +111,7 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
         let mut fields = vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
             Field::new("item", self.input_data_type.clone(), self.nullable),
-            false, // This should be the same as field()
+            true, // This should be the same as field()
         )];
         let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
         fields.push(Field::new_list(
@@ -309,6 +309,14 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        if self.values.is_empty() {
+            return Ok(ScalarValue::new_null_list(
+                self.datatypes[0].clone(),
+                self.nullable,
+                1,
+            ));
+        }
+
         let values = self.values.clone();
         let array = if self.reverse {
             ScalarValue::new_list_from_iter(

@@ -1278,6 +1278,7 @@ name = "datafusion-functions"
 version = "40.0.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "base64 0.22.1",
  "blake2",
  "blake3",
