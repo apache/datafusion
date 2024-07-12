@@ -16,6 +16,7 @@
 // under the License.
 
 mod abs;
+pub mod cast;
 mod error;
 mod if_expr;
 

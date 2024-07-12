@@ -28,12 +28,17 @@ edition = { workspace = true }
 
 [dependencies]
 arrow = { workspace = true }
+arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
+chrono = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-functions = { workspace = true }
+datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-comet-utils = { workspace = true }
+num = { workspace = true }
+regex = { workspace = true }
 thiserror = { workspace = true }
 
 [lib]
