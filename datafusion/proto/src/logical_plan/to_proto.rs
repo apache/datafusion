@@ -339,7 +339,7 @@ pub fn serialize_expr(
                         protobuf::window_expr_node::WindowFunction::Udaf(
                             aggr_udf.name().to_string(),
                         ),
-                        if buf.is_empty() { None } else { Some(buf) },
+                        (!buf.is_empty()).then_some(buf),
                     )
                 }
                 WindowFunctionDefinition::WindowUDF(window_udf) => {
@@ -349,7 +349,7 @@ pub fn serialize_expr(
                         protobuf::window_expr_node::WindowFunction::Udwf(
                             window_udf.name().to_string(),
                         ),
-                        if buf.is_empty() { None } else { Some(buf) },
+                        (!buf.is_empty()).then_some(buf),
                     )
                 }
             };
@@ -427,7 +427,7 @@ pub fn serialize_expr(
                                 Some(e) => serialize_exprs(e, codec)?,
                                 None => vec![],
                             },
-                            fun_definition: if buf.is_empty() { None } else { Some(buf) },
+                            fun_definition: (!buf.is_empty()).then_some(buf),
                         },
                     ))),
                 }
@@ -445,7 +445,7 @@ pub fn serialize_expr(
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
                     fun_name: func.name().to_string(),
-                    fun_definition: if buf.is_empty() { None } else { Some(buf) },
+                    fun_definition: (!buf.is_empty()).then_some(buf),
                     args: serialize_exprs(args, codec)?,
                 })),
             }

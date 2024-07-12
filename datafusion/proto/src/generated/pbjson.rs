@@ -12652,6 +12652,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         if self.distinct {
             len += 1;
         }
+        if self.ignore_nulls {
+            len += 1;
+        }
         if self.fun_definition.is_some() {
             len += 1;
         }
@@ -12667,6 +12670,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         }
         if self.distinct {
             struct_ser.serialize_field("distinct", &self.distinct)?;
+        }
+        if self.ignore_nulls {
+            struct_ser.serialize_field("ignoreNulls", &self.ignore_nulls)?;
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
@@ -12698,6 +12704,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
             "ordering_req",
             "orderingReq",
             "distinct",
+            "ignore_nulls",
+            "ignoreNulls",
             "fun_definition",
             "funDefinition",
             "aggr_function",
@@ -12711,6 +12719,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
             Expr,
             OrderingReq,
             Distinct,
+            IgnoreNulls,
             FunDefinition,
             AggrFunction,
             UserDefinedAggrFunction,
@@ -12738,6 +12747,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                             "expr" => Ok(GeneratedField::Expr),
                             "orderingReq" | "ordering_req" => Ok(GeneratedField::OrderingReq),
                             "distinct" => Ok(GeneratedField::Distinct),
+                            "ignoreNulls" | "ignore_nulls" => Ok(GeneratedField::IgnoreNulls),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
                             "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
@@ -12763,6 +12773,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                 let mut expr__ = None;
                 let mut ordering_req__ = None;
                 let mut distinct__ = None;
+                let mut ignore_nulls__ = None;
                 let mut fun_definition__ = None;
                 let mut aggregate_function__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -12784,6 +12795,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                                 return Err(serde::de::Error::duplicate_field("distinct"));
                             }
                             distinct__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::IgnoreNulls => {
+                            if ignore_nulls__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreNulls"));
+                            }
+                            ignore_nulls__ = Some(map_.next_value()?);
                         }
                         GeneratedField::FunDefinition => {
                             if fun_definition__.is_some() {
@@ -12811,6 +12828,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                     expr: expr__.unwrap_or_default(),
                     ordering_req: ordering_req__.unwrap_or_default(),
                     distinct: distinct__.unwrap_or_default(),
+                    ignore_nulls: ignore_nulls__.unwrap_or_default(),
                     fun_definition: fun_definition__,
                     aggregate_function: aggregate_function__,
                 })

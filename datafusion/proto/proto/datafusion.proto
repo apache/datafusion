@@ -858,7 +858,8 @@ message PhysicalAggregateExprNode {
   repeated PhysicalExprNode expr = 2;
   repeated PhysicalSortExprNode ordering_req = 5;
   bool distinct = 3;
-  optional bytes fun_definition = 6;
+  bool ignore_nulls = 6;
+  optional bytes fun_definition = 7;
 }
 
 message PhysicalWindowExprNode {

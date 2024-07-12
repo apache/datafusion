@@ -491,7 +491,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                                 &ordering_req,
                                                 &physical_schema,
                                                 name.to_string(),
-                                                false,
+                                                agg_node.ignore_nulls,
                                             )
                                         }
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
@@ -506,8 +506,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                             // TODO: `order by` is not supported for UDAF yet
                                             let sort_exprs = &[];
                                             let ordering_req = &[];
-                                            let ignore_nulls = false;
-                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, logical_exprs, sort_exprs, ordering_req, &physical_schema, name, ignore_nulls, false)
+                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, logical_exprs, sort_exprs, ordering_req, &physical_schema, name, agg_node.ignore_nulls, agg_node.distinct)
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {
@@ -2041,7 +2040,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
 
     fn try_decode_udaf(&self, name: &str, _buf: &[u8]) -> Result<Arc<AggregateUDF>> {
         not_impl_err!(
-            "LogicalExtensionCodec is not provided for aggregate function {name}"
+            "PhysicalExtensionCodec is not provided for aggregate function {name}"
         )
     }
 

@@ -40,6 +40,7 @@ use datafusion::{
     physical_plan::expressions::LikeExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_expr::WindowFrame;
 
 use crate::protobuf::{
     self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
@@ -66,8 +67,9 @@ pub fn serialize_physical_aggr_expr(
                     aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
                     expr: expressions,
                     ordering_req,
-                    distinct: false,
-                    fun_definition: if buf.is_empty() { None } else { Some(buf) }
+                    distinct: a.is_distinct(),
+                    ignore_nulls: a.ignore_nulls(),
+                    fun_definition: (!buf.is_empty()).then_some(buf)
                 },
             )),
         });
@@ -89,10 +91,53 @@ pub fn serialize_physical_aggr_expr(
                 expr: expressions,
                 ordering_req,
                 distinct,
+                ignore_nulls: false,
                 fun_definition: None,
             },
         )),
     })
+}
+
+fn serialize_physical_window_aggr_expr(
+    aggr_expr: &dyn AggregateExpr,
+    window_frame: &WindowFrame,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<(physical_window_expr_node::WindowFunction, Option<Vec<u8>>)> {
+    if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+        if a.is_distinct() || a.ignore_nulls() {
+            // TODO
+            return not_impl_err!(
+                "Distinct aggregate functions not supported in window expressions"
+            );
+        }
+
+        let mut buf = Vec::new();
+        codec.try_encode_udaf(a.fun(), &mut buf)?;
+        Ok((
+            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                a.fun().name().to_string(),
+            ),
+            (!buf.is_empty()).then_some(buf),
+        ))
+    } else {
+        let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(aggr_expr)?;
+        if distinct {
+            return not_impl_err!(
+                "Distinct aggregate functions not supported in window expressions"
+            );
+        }
+
+        if !window_frame.start_bound.is_unbounded() {
+            return Err(DataFusionError::Internal(format!(
+                "Unbounded start bound in WindowFrame = {window_frame}"
+            )));
+        }
+
+        Ok((
+            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32),
+            None,
+        ))
+    }
 }
 
 pub fn serialize_physical_window_expr(
@@ -171,70 +216,19 @@ pub fn serialize_physical_window_expr(
     } else if let Some(plain_aggr_window_expr) =
         expr.downcast_ref::<PlainAggregateWindowExpr>()
     {
-        let aggr_expr = plain_aggr_window_expr.get_aggregate_expr();
-        if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-            let mut buf = Vec::new();
-            codec.try_encode_udaf(a.fun(), &mut buf)?;
-            (
-                physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-                    a.fun().name().to_string(),
-                ),
-                if buf.is_empty() { None } else { Some(buf) },
-            )
-        } else {
-            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
-                plain_aggr_window_expr.get_aggregate_expr().as_ref(),
-            )?;
-
-            if distinct {
-                return not_impl_err!(
-                    "Distinct aggregate functions not supported in window expressions"
-                );
-            }
-
-            if !window_frame.start_bound.is_unbounded() {
-                return Err(DataFusionError::Internal(format!("Invalid PlainAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
-            }
-
-            (
-                physical_window_expr_node::WindowFunction::AggrFunction(inner as i32),
-                None,
-            )
-        }
+        serialize_physical_window_aggr_expr(
+            plain_aggr_window_expr.get_aggregate_expr().as_ref(),
+            window_frame,
+            codec,
+        )?
     } else if let Some(sliding_aggr_window_expr) =
         expr.downcast_ref::<SlidingAggregateWindowExpr>()
     {
-        let aggr_expr = sliding_aggr_window_expr.get_aggregate_expr();
-        if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-            let mut buf = Vec::new();
-            codec.try_encode_udaf(a.fun(), &mut buf)?;
-            (
-                physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-                    a.fun().name().to_string(),
-                ),
-                if buf.is_empty() { None } else { Some(buf) },
-            )
-        } else {
-            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
-                sliding_aggr_window_expr.get_aggregate_expr().as_ref(),
-            )?;
-
-            if distinct {
-                // TODO
-                return not_impl_err!(
-                    "Distinct aggregate functions not supported in window expressions"
-                );
-            }
-
-            if window_frame.start_bound.is_unbounded() {
-                return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
-            }
-
-            (
-                physical_window_expr_node::WindowFunction::AggrFunction(inner as i32),
-                None,
-            )
-        }
+        serialize_physical_window_aggr_expr(
+            sliding_aggr_window_expr.get_aggregate_expr().as_ref(),
+            window_frame,
+            codec,
+        )?
     } else {
         return not_impl_err!("WindowExpr not supported: {window_expr:?}");
     };
@@ -492,7 +486,7 @@ pub fn serialize_physical_expr(
                 protobuf::PhysicalScalarUdfNode {
                     name: expr.name().to_string(),
                     args: serialize_physical_exprs(expr.args().to_vec(), codec)?,
-                    fun_definition: if buf.is_empty() { None } else { Some(buf) },
+                    fun_definition: (!buf.is_empty()).then_some(buf),
                     return_type: Some(expr.return_type().try_into()?),
                 },
             )),

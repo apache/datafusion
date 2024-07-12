@@ -1295,7 +1295,9 @@ pub struct PhysicalAggregateExprNode {
     pub ordering_req: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
-    #[prost(bytes = "vec", optional, tag = "6")]
+    #[prost(bool, tag = "6")]
+    pub ignore_nulls: bool,
+    #[prost(bytes = "vec", optional, tag = "7")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
     pub aggregate_function: ::core::option::Option<
