@@ -66,6 +66,7 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
+arrow-buffer = { workspace = true }
 base64 = { version = "0.22", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
@@ -86,7 +87,6 @@ uuid = { version = "1.7", features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
-arrow-buffer = { workspace = true }
 criterion = "0.5"
 rand = { workspace = true }
 rstest = { workspace = true }
@@ -141,3 +141,8 @@ required-features = ["string_expressions"]
 harness = false
 name = "upper"
 required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "map"
+required-features = ["core_expressions"]
