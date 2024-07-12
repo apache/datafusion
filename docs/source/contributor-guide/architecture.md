@@ -55,6 +55,14 @@ work with you to design a new general purpose API. There are often others are
 interested in similar extensions and the act of defining the API often improves
 the code overall for everyone.
 
+Extension APIs that provide "safe" default behaviors are more likely to be
+suitable for inclusion in DataFusion, while APIs that require major changes to
+built-in operators are likely less likely. For example, it might make less sense
+to add an API to support a stream processing feature if that would result in
+slower performance for built-in operators. It may still make sense to add
+extension APIs for such features, but leave implementation of such operators in
+downstream projects.
+
 The process to create a new extension API is typically:
 
 - Look for an existing issue describing what you want to do, and file one if it
