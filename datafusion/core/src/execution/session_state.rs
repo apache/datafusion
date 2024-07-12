@@ -966,7 +966,7 @@ impl SessionStateBuilder {
         }
     }
 
-    /// Set defaults for table_factories, file formats, expr_planners and builtin 
+    /// Set defaults for table_factories, file formats, expr_planners and builtin
     /// scalar and aggregate functions.
     pub fn with_default_features(mut self) -> Self {
         self.table_factories = Some(SessionStateDefaults::default_table_factories());
@@ -1478,6 +1478,7 @@ impl SessionStateDefaults {
     /// returns a map of default [`ScalarUDF']'s keyed by name
     pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
         let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
+        #[cfg(feature = "array_expressions")]
         functions.append(&mut functions_array::all_default_array_functions());
 
         functions
