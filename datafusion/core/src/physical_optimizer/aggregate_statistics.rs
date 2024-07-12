@@ -263,6 +263,8 @@ fn take_optimizable_max(
     None
 }
 
+// TODO: Move this check into AggregateUDFImpl
+// https://github.com/apache/datafusion/issues/11153
 fn is_non_distinct_count(agg_expr: &dyn AggregateExpr) -> bool {
     if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
         if agg_expr.fun().name() == "count" && !agg_expr.is_distinct() {
@@ -273,6 +275,8 @@ fn is_non_distinct_count(agg_expr: &dyn AggregateExpr) -> bool {
     false
 }
 
+// TODO: Move this check into AggregateUDFImpl
+// https://github.com/apache/datafusion/issues/11153
 fn is_min(agg_expr: &dyn AggregateExpr) -> bool {
     if agg_expr.as_any().is::<expressions::Min>() {
         return true;
@@ -287,6 +291,8 @@ fn is_min(agg_expr: &dyn AggregateExpr) -> bool {
     false
 }
 
+// TODO: Move this check into AggregateUDFImpl
+// https://github.com/apache/datafusion/issues/11153
 fn is_max(agg_expr: &dyn AggregateExpr) -> bool {
     if agg_expr.as_any().is::<expressions::Max>() {
         return true;
