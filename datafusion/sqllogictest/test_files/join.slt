@@ -1010,7 +1010,7 @@ SELECT * FROM t1 INNER JOIN t2 ON NULL RIGHT JOIN t3 ON TRUE;
 NULL NULL 0.051120151935
 
 # ON expression must be boolean type
-query error DataFusion error: Error during planning: ON expression must be boolean, but got Utf8
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Join condition must be boolean type, but got Utf8
 SELECT * FROM t1 INNER JOIN t2 ON 'TRUE'
 
 statement ok

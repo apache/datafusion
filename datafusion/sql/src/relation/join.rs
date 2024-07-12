@@ -16,11 +16,8 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use arrow_schema::DataType;
-use datafusion_common::{not_impl_err, plan_err, Column, Result};
-use datafusion_expr::{
-    Cast, Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder,
-};
+use datafusion_common::{not_impl_err, Column, Result};
+use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableWithJoins};
 use std::collections::HashSet;
 
@@ -110,20 +107,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::On(sql_expr) => {
                 let join_schema = left.schema().join(right.schema())?;
                 // parse ON expression
-                let mut expr =
-                    self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
-                // ON expression must be a boolean expression
-                match expr.get_type(&join_schema)? {
-                    DataType::Boolean => {}
-                    DataType::Null => {
-                        expr = Expr::Cast(Cast::new(expr.into(), DataType::Boolean))
-                    }
-                    other => {
-                        return plan_err!(
-                            "ON expression must be boolean, but got {other:?}"
-                        )
-                    }
-                }
+                let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
                 LogicalPlanBuilder::from(left)
                     .join_on(right, join_type, Some(expr))?
                     .build()
