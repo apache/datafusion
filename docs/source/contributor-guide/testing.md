@@ -57,10 +57,9 @@ queries and execute them against DataFusion to find bugs.
 The code is in the [datafusion-sqllancer] repository, and we welcome further
 contributions. Kudos to [@2010YOUY01] for the initial implementation.
 
-[SQLancer]: https://github.com/sqlancer/sqlancer
+[sqlancer]: https://github.com/sqlancer/sqlancer
 [datafusion-sqllancer]: https://github.com/datafusion-contrib/datafusion-sqllancer
-[@2010YOUY01]: https://github.com/2010YOUY01
-
+[@2010youy01]: https://github.com/2010YOUY01
 
 ## Documentation Examples
 
