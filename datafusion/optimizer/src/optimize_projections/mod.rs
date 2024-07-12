@@ -19,7 +19,7 @@
 
 mod required_indices;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
@@ -42,7 +42,6 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
-use hashbrown::HashMap;
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
 /// inside the [`LogicalPlan`]. This rule:
@@ -472,11 +471,8 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
     // Count usages (referrals) of each projection expression in its input fields:
     let mut column_referral_map = HashMap::<&Column, usize>::new();
-    for columns in expr.iter().map(|expr| expr.column_refs()) {
-        for col in columns.into_iter() {
-            *column_referral_map.entry(col).or_default() += 1;
-        }
-    }
+    expr.iter()
+        .for_each(|expr| expr.add_column_ref_counts(&mut column_referral_map));
 
     // If an expression is non-trivial and appears more than once, do not merge
     // them as consecutive projections will benefit from a compute-once approach.

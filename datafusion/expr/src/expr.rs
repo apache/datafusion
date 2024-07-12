@@ -17,7 +17,7 @@
 
 //! Logical Expressions: [`Expr`]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -1380,7 +1380,7 @@ impl Expr {
     /// // refs contains "a" and "b"
     /// assert_eq!(refs.len(), 2);
     /// assert!(refs.contains(&Column::new_unqualified("a")));
-    ///  assert!(refs.contains(&Column::new_unqualified("b")));
+    /// assert!(refs.contains(&Column::new_unqualified("b")));
     /// ```
     pub fn column_refs(&self) -> HashSet<&Column> {
         let mut using_columns = HashSet::new();
@@ -1395,6 +1395,41 @@ impl Expr {
         self.apply(|expr| {
             if let Expr::Column(col) = expr {
                 set.insert(col);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("traversal is infallable");
+    }
+
+    /// Return all references to columns and their occurrence counts in the expression.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::collections::HashMap;
+    /// # use datafusion_common::Column;
+    /// # use datafusion_expr::col;
+    /// // For an expression `a + (b * a)`
+    /// let expr = col("a") + (col("b") * col("a"));
+    /// let mut refs = expr.column_refs_counts();
+    /// // refs contains "a" and "b"
+    /// assert_eq!(refs.len(), 2);
+    /// assert_eq!(*refs.get(&Column::new_unqualified("a")).unwrap(), 2);
+    /// assert_eq!(*refs.get(&Column::new_unqualified("b")).unwrap(), 1);
+    /// ```
+    pub fn column_refs_counts(&self) -> HashMap<&Column, usize> {
+        let mut map = HashMap::new();
+        self.add_column_ref_counts(&mut map);
+        map
+    }
+
+    /// Adds references to all columns and their occurrence counts in the expression to
+    /// the map.
+    ///
+    /// See [`Self::column_refs_counts`] for details
+    pub fn add_column_ref_counts<'a>(&'a self, map: &mut HashMap<&'a Column, usize>) {
+        self.apply(|expr| {
+            if let Expr::Column(col) = expr {
+                *map.entry(col).or_default() += 1;
             }
             Ok(TreeNodeRecursion::Continue)
         })
