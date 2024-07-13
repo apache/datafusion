@@ -143,7 +143,7 @@ cargo build --features=backtrace
 RUST_BACKTRACE=1 cargo test --features=backtrace --package datafusion --lib -- physical_planner::tests::test_get_backtrace_for_failed_code --exact --nocapture
 
 running 1 test
-Error: Plan("Invalid function 'row_numer'.\nDid you mean 'ROW_NUMBER'?\n\nbacktrace:    0: std::backtrace_rs::backtrace::libunwind::trace\n             at /rustc/129f3b9964af4d4a709d1383930ade12dfe7c081/library/std/src/../../backtrace/src/backtrace/libunwind.rs:105:5\n   1: std::backtrace_rs::backtrace::trace_unsynchronized\n... 
+Error: Plan("Invalid function 'row_numer'.\nDid you mean 'ROW_NUMBER'?\n\nbacktrace:    0: std::backtrace_rs::backtrace::libunwind::trace\n             at /rustc/129f3b9964af4d4a709d1383930ade12dfe7c081/library/std/src/../../backtrace/src/backtrace/libunwind.rs:105:5\n   1: std::backtrace_rs::backtrace::trace_unsynchronized\n...
 ```
 
 Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored
