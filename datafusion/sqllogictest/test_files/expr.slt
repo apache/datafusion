@@ -1807,6 +1807,7 @@ SELECT decode('','base64');
 
 
 
+
 query T
 SELECT encode('','hex');
 ----
@@ -1815,6 +1816,7 @@ SELECT encode('','hex');
 query ?
 SELECT decode('','hex');
 ----
+
 
 
 

@@ -4547,8 +4547,8 @@ SELECT date_trunc('week', t1) as week, sum(c2)
 FROM timestamp_table
 GROUP BY date_trunc('week', t1)
 ----
-2020-12-14T00:00:00 156
 2020-12-07T00:00:00 24
+2020-12-14T00:00:00 156
 
 # GROUP BY using LIMIT
 query IP
