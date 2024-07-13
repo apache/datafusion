@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Datafusion's `expr_fn` API makes it easy to create [`Expr`]s for the
+/// DataFusion's `expr_fn` API makes it easy to create [`Expr`]s for the
 /// full range of expression types such as aggregates and window functions.
 fn expr_fn_demo() -> Result<()> {
     // Let's say you want to call the "first_value" aggregate function

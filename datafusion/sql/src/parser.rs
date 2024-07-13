@@ -253,7 +253,7 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
     Ok(())
 }
 
-/// Datafusion SQL Parser based on [`sqlparser`]
+/// DataFusion SQL Parser based on [`sqlparser`]
 ///
 /// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s [`Parser`].
 ///
