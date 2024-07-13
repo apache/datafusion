@@ -59,7 +59,7 @@ the person. Here is an example:
 To: private@datafusion.apache.org
 Subject: [DISCUSS] $PERSONS_NAME for Committer
 
-$PERSONS_NAME has been an active contributor to the Datafusion community for the
+$PERSONS_NAME has been an active contributor to the DataFusion community for the
 last 6 months[1][2], helping others, answering questions, and improving the
 project's code.
 
