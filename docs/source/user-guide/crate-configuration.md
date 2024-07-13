@@ -121,7 +121,7 @@ backtrace:    0: std::backtrace_rs::backtrace::libunwind::trace
 
 The backtraces are useful when debugging code. If there is a test in `datafusion/core/src/physical_planner.rs`
 
-```
+```rust
 #[tokio::test]
 async fn test_get_backtrace_for_failed_code() -> Result<()> {
     let ctx = SessionContext::new();
@@ -141,6 +141,48 @@ To obtain a backtrace:
 ```bash
 cargo build --features=backtrace
 RUST_BACKTRACE=1 cargo test --features=backtrace --package datafusion --lib -- physical_planner::tests::test_get_backtrace_for_failed_code --exact --nocapture
+
+running 1 test
+Error: Plan("Invalid function 'row_numer'.\nDid you mean 'ROW_NUMBER'?\n\nbacktrace:    0: std::backtrace_rs::backtrace::libunwind::trace\n             at /rustc/129f3b9964af4d4a709d1383930ade12dfe7c081/library/std/src/../../backtrace/src/backtrace/libunwind.rs:105:5\n   1: std::backtrace_rs::backtrace::trace_unsynchronized\n...
 ```
 
 Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored
+
+To show the backtrace in a pretty-printed format use `eprintln!("{e}");`.
+
+```rust
+#[tokio::test]
+async fn test_get_backtrace_for_failed_code() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select row_numer() over (partition by a order by a) from (select 1 a);";
+
+    let _ = match ctx.sql(sql).await {
+        Ok(result) => result.show().await?,
+        Err(e) => {
+            eprintln!("{e}");
+        }
+    };
+
+    Ok(())
+}
+```
+
+Then run the test:
+
+```bash
+$ RUST_BACKTRACE=1 cargo test --features=backtrace --package datafusion --lib -- physical_planner::tests::test_get_backtrace_for_failed_code --exact --nocapture
+
+running 1 test
+Error during planning: Invalid function 'row_numer'.
+Did you mean 'ROW_NUMBER'?
+
+backtrace:    0: std::backtrace_rs::backtrace::libunwind::trace
+             at /rustc/129f3b9964af4d4a709d1383930ade12dfe7c081/library/std/src/../../backtrace/src/backtrace/libunwind.rs:105:5
+   1: std::backtrace_rs::backtrace::trace_unsynchronized
+             at /rustc/129f3b9964af4d4a709d1383930ade12dfe7c081/library/std/src/../../backtrace/src/backtrace/mod.rs:66:5
+   2: std::backtrace::Backtrace::create
+             at /rustc/129f3b9964af4d4a709d1383930ade12dfe7c081/library/std/src/backtrace.rs:331:13
+   3: std::backtrace::Backtrace::capture
+   ...
+```
