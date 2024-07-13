@@ -39,7 +39,7 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-LOCATION '../../testing/data/csv/aggregate_test_100.csv' 
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 OPTIONS ('format.has_header' 'true');
 
 statement ok
@@ -692,7 +692,7 @@ CREATE TABLE IF NOT EXISTS partsupp (
     ps_suppkey BIGINT,
     ps_availqty INTEGER,
     ps_supplycost DECIMAL(15, 2),
-    ps_comment VARCHAR,
+    ps_comment VARCHAR
 ) AS VALUES
 (63700, 7311, 100, 993.49, 'ven ideas. quickly even packages print. pending multipliers must have to are fluff');
 

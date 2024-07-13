@@ -504,7 +504,7 @@ NULL
 query T
 SELECT ltrim(' zzzytest ')
 ----
-zzzytest 
+zzzytest
 
 query T
 SELECT ltrim('zzzytest', 'xyz')
@@ -682,7 +682,7 @@ tom
 query T
 SELECT trim(LEADING ' tom ')
 ----
-tom 
+tom
 
 query T
 SELECT trim(TRAILING ' tom ')
@@ -697,7 +697,7 @@ tom
 query T
 SELECT trim(LEADING ' ' FROM ' tom ')
 ----
-tom 
+tom
 
 query T
 SELECT trim(TRAILING ' ' FROM ' tom ')
@@ -803,7 +803,7 @@ NULL
 
 # test_random_expression
 query BB
-SELECT 
+SELECT
     random() BETWEEN 0.0 AND 1.0,
     random() = random()
 ----
@@ -1802,7 +1802,10 @@ SELECT encode('','base64');
 query ?
 SELECT decode('','base64');
 ----
-    
+
+
+
+
 
 query T
 SELECT encode('','hex');
@@ -1812,7 +1815,10 @@ SELECT encode('','hex');
 query ?
 SELECT decode('','hex');
 ----
-    
+
+
+
+
 
 query T
 SELECT md5('tom');
@@ -2351,12 +2357,12 @@ NULL
 
 # query_binary_eq
 
-statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
+statement ok
 CREATE TABLE t_source(
     column1 String,
     column2 String,
     column3 String,
-    column4 String,
+    column4 String
 ) AS VALUES
 ('one', 'one', 'one', 'one'),
 ('two', 'two', '', 'two'),
@@ -2365,7 +2371,7 @@ CREATE TABLE t_source(
 ('three', 'three', 'three', '');
 
 
-statement error DataFusion error: Error during planning: table 'datafusion\.public\.t_source' not found
+statement ok
 CREATE TABLE test as
 select
   arrow_cast(column1, 'Binary') as c1,
@@ -2374,8 +2380,14 @@ select
   arrow_cast(column4, 'LargeBinary') as c4
 from t_source;
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
+query BBBB
 SELECT sha256(c1)=digest('one', 'sha256'), sha256(c2)=sha256('two'), digest(c1, 'blake2b')=digest(c3, 'blake2b'), c2=c4 FROM test;
+----
+true false true true
+false true false true
+NULL NULL NULL NULL
+false false true true
+false false true false
 
 
 #############
@@ -2446,20 +2458,20 @@ host3 3.3
 
 # can have an aggregate function with an inner CASE WHEN
 query TR
-select 
-    t2.server_host as host, 
+select
+    t2.server_host as host,
     sum((
-        case when t2.server_host is not null 
+        case when t2.server_host is not null
         then t2.server_load2
         end
-    )) 
+    ))
     from (
-        select 
+        select
             struct(time,load1,load2,host)['c2'] as server_load2,
             struct(time,load1,load2,host)['c3'] as server_host
         from t1
-    ) t2 
-    where server_host IS NOT NULL 
+    ) t2
+    where server_host IS NOT NULL
     group by server_host order by host;
 ----
 host1 101
@@ -2468,19 +2480,19 @@ host3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
 query TR
-select 
-    t2.server['c3'] as host, 
+select
+    t2.server['c3'] as host,
     sum((
-        case when t2.server['c3'] is not null 
+        case when t2.server['c3'] is not null
         then t2.server['c2']
         end
-    )) 
+    ))
     from (
-        select 
+        select
             struct(time,load1,load2,host) as server
         from t1
-    ) t2 
-    where t2.server['c3'] IS NOT NULL 
+    ) t2
+    where t2.server['c3'] IS NOT NULL
     group by t2.server['c3'] order by host;
 ----
 host1 101
@@ -2489,22 +2501,22 @@ host3 303
 
 # can have 2 projections with aggr(short_circuited), with different short-circuited expr
 query TRR
-select 
-    t2.server_host as host, 
+select
+    t2.server_host as host,
     sum(coalesce(server_load1)),
     sum((
-        case when t2.server_host is not null 
+        case when t2.server_host is not null
         then t2.server_load2
         end
-    )) 
+    ))
     from (
-        select 
+        select
             struct(time,load1,load2,host)['c1'] as server_load1,
             struct(time,load1,load2,host)['c2'] as server_load2,
             struct(time,load1,load2,host)['c3'] as server_host
         from t1
-    ) t2 
-    where server_host IS NOT NULL 
+    ) t2
+    where server_host IS NOT NULL
     group by server_host order by host;
 ----
 host1 1.1 101
@@ -2513,43 +2525,43 @@ host3 3.3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
 query error
-select 
-    t2.server['c3'] as host, 
+select
+    t2.server['c3'] as host,
     sum(coalesce(server['c1'])),
     sum((
-        case when t2.server['c3'] is not null 
+        case when t2.server['c3'] is not null
         then t2.server['c2']
         end
-    )) 
+    ))
     from (
-        select 
+        select
             struct(time,load1,load2,host) as server,
         from t1
-    ) t2 
-    where server_host IS NOT NULL 
+    ) t2
+    where server_host IS NOT NULL
     group by server_host order by host;
 
 query TRR
-select 
-    t2.server_host as host, 
+select
+    t2.server_host as host,
     sum((
-        case when t2.server_host is not null 
-        then server_load1 
+        case when t2.server_host is not null
+        then server_load1
         end
-    )), 
+    )),
     sum((
-        case when server_host is not null 
-        then server_load2 
+        case when server_host is not null
+        then server_load2
         end
-    )) 
+    ))
     from (
-        select 
+        select
             struct(time,load1,load2,host)['c1'] as server_load1,
             struct(time,load1,load2,host)['c2'] as server_load2,
             struct(time,load1,load2,host)['c3'] as server_host
         from t1
-    ) t2 
-    where server_host IS NOT NULL 
+    ) t2
+    where server_host IS NOT NULL
     group by server_host order by host;
 ----
 host1 1.1 101
@@ -2558,24 +2570,24 @@ host3 3.3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
 query TRR
-select 
-    t2.server['c3'] as host, 
+select
+    t2.server['c3'] as host,
     sum((
-        case when t2.server['c3'] is not null 
+        case when t2.server['c3'] is not null
         then t2.server['c1']
         end
-    )), 
+    )),
     sum((
-        case when t2.server['c3'] is not null 
+        case when t2.server['c3'] is not null
         then t2.server['c2']
         end
-    )) 
+    ))
     from (
-        select 
-            struct(time,load1,load2,host) as server 
+        select
+            struct(time,load1,load2,host) as server
         from t1
-    ) t2 
-    where t2.server['c3'] IS NOT NULL 
+    ) t2
+    where t2.server['c3'] IS NOT NULL
     group by t2.server['c3'] order by host;
 ----
 host1 1.1 101

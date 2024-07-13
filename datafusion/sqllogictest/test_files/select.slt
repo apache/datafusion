@@ -101,7 +101,7 @@ statement error DataFusion error: SQL error: ParserError\("Expected: column name
 CREATE TABLE test (
   c1 BIGINT NOT NULL,
   c2 BIGINT NOT NULL,
-  c3 BOOLEAN NOT NULL,
+  c3 BOOLEAN NOT NULL
 ) AS VALUES (0, 1, false),
 (0, 10, true),
 (0, 2, true),
@@ -375,7 +375,7 @@ VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)
 
 # Test non-literal expressions in VALUES
 query II
-VALUES (1, CASE WHEN RANDOM() > 0.5 THEN 1 ELSE 1 END), 
+VALUES (1, CASE WHEN RANDOM() > 0.5 THEN 1 ELSE 1 END),
        (2, CASE WHEN RANDOM() > 0.5 THEN 2 ELSE 2 END);
 ----
 1 1
@@ -1452,7 +1452,7 @@ query II
 SELECT
 CASE WHEN B.x > 0 THEN A.x / B.x ELSE 0 END AS value1,
 CASE WHEN B.x > 0 AND B.y > 0 THEN A.x / B.x ELSE 0 END AS value3
-FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B; 
+FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B;
 ----
 0 0
 0 0

@@ -21,33 +21,33 @@
 
 statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE t1(
-  id INT,  
-  name TEXT,
+  id INT,
+  name TEXT
 ) as VALUES
-  (1, 'Alex'), 
-  (2, 'Bob'), 
+  (1, 'Alex'),
+  (2, 'Bob'),
   (3, 'Alice')
 ;
 
 statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE t2(
   id TINYINT,
-  name TEXT,
+  name TEXT
 ) as VALUES
-  (1, 'Alex'), 
-  (2, 'Bob'), 
+  (1, 'Alex'),
+  (2, 'Bob'),
   (3, 'John')
 ;
 
 # union with EXCEPT(JOIN)
 query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
-(   
+(
     SELECT name FROM t1
     EXCEPT
     SELECT name FROM t2
-)  
+)
 UNION ALL
-(   
+(
     SELECT name FROM t2
     EXCEPT
     SELECT name FROM t1
@@ -55,13 +55,13 @@ UNION ALL
 
 # union with type coercion
 query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
-(   
+(
     SELECT * FROM t1
     EXCEPT
     SELECT * FROM t2
-)  
+)
 UNION ALL
-(   
+(
     SELECT * FROM t2
     EXCEPT
     SELECT * FROM t1
@@ -349,11 +349,11 @@ OPTIONS ('format.has_header' 'true');
 query TT
 explain
 SELECT c1 FROM(
-(   
+(
     SELECT c1 FROM t1
-)  
+)
 UNION ALL
-(   
+(
     SELECT c1a FROM t2
 ))
 ORDER BY c1

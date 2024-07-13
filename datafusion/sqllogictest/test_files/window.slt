@@ -1766,7 +1766,7 @@ logical_plan
 01)Projection: count(*) AS global_count
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
 03)----SubqueryAlias: a
-04)------Projection: 
+04)------Projection:
 05)--------Sort: aggregate_test_100.c1 ASC NULLS LAST
 06)----------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 07)------------Projection: aggregate_test_100.c1
@@ -3415,7 +3415,7 @@ SELECT
 # window1 spec is defined multiple times
 statement error DataFusion error: SQL error: ParserError\("Expected an expression, found: FROM"\)
 SELECT
-  MAX(c12) OVER window1 as min1,
+  MAX(c12) OVER window1 as min1
   FROM aggregate_test_100
   WINDOW window1 AS (ORDER BY C12),
   window1 AS (ORDER BY C3)

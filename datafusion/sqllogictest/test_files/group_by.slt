@@ -4486,10 +4486,10 @@ LIMIT 5
 1 TUR 4 2022-01-03T10:00:00 TRY 100
 
 # Create a table with timestamp data
-statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
+statement ok
 CREATE TABLE src_table (
 	t1 TIMESTAMP,
-	c2 INT,
+	c2 INT
 ) AS VALUES
 ('2020-12-10T00:00:00.00Z', 0),
 ('2020-12-11T00:00:00.00Z', 1),
@@ -4503,25 +4503,33 @@ CREATE TABLE src_table (
 ('2020-12-19T00:00:00.00Z', 9);
 
 # Use src_table to create a partitioned file
-query error DataFusion error: Error during planning: table 'datafusion\.public\.src_table' not found
+query PI
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/0.csv'
 STORED AS CSV;
+----
+10
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.src_table' not found
+query PI
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/1.csv'
 STORED AS CSV;
+----
+10
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.src_table' not found
+query PI
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/2.csv'
 STORED AS CSV;
+----
+10
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.src_table' not found
+query PI
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/3.csv'
 STORED AS CSV;
+----
+10
 
 # Create a table from the generated CSV files:
 statement ok
@@ -4534,18 +4542,26 @@ LOCATION 'test_files/scratch/group_by/timestamp_table'
 OPTIONS ('format.has_header' 'true');
 
 # Group By using date_trunc
-query error DataFusion error: Object Store error: Object at location /home/mabdeen/dev/arrow\-datafusion/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table not found: No such file or directory \(os error 2\)
+query PI
 SELECT date_trunc('week', t1) as week, sum(c2)
 FROM timestamp_table
 GROUP BY date_trunc('week', t1)
+----
+2020-12-14T00:00:00 156
+2020-12-07T00:00:00 24
 
 # GROUP BY using LIMIT
-query error DataFusion error: Object Store error: Object at location /home/mabdeen/dev/arrow\-datafusion/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table not found: No such file or directory \(os error 2\)
+query IP
 SELECT c2, MAX(t1)
 FROM timestamp_table
 GROUP BY c2
 ORDER BY MAX(t1) DESC
 LIMIT 4;
+----
+9 2020-12-19T00:00:00
+8 2020-12-18T00:00:00
+7 2020-12-17T00:00:00
+6 2020-12-16T00:00:00
 
 # Explain the GROUP BY with LIMIT to ensure the plan contains `lim=[4]`
 query TT
@@ -4561,9 +4577,19 @@ logical_plan
 02)--Sort: MAX(timestamp_table.t1) DESC NULLS FIRST, fetch=4
 03)----Aggregate: groupBy=[[timestamp_table.c2]], aggr=[[MAX(timestamp_table.t1)]]
 04)------TableScan: timestamp_table projection=[t1, c2]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=4
+02)--SortPreservingMergeExec: [MAX(timestamp_table.t1)@1 DESC], fetch=4
+03)----SortExec: TopK(fetch=4), expr=[MAX(timestamp_table.t1)@1 DESC], preserve_partitioning=[true]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[MAX(timestamp_table.t1)], lim=[4]
+05)--------CoalesceBatchesExec: target_batch_size=2
+06)----------RepartitionExec: partitioning=Hash([c2@0], 8), input_partitions=8
+07)------------AggregateExec: mode=Partial, gby=[c2@1 as c2], aggr=[MAX(timestamp_table.t1)], lim=[4]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+09)----------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/3.csv]]}, projection=[t1, c2], has_header=true
 
 # Clean up
-statement error DataFusion error: Execution error: Table 'src_table' doesn't exist\.
+statement ok
 DROP TABLE src_table;
 
 statement ok
@@ -5115,7 +5141,7 @@ statement ok
 CREATE TABLE test_case_expr(a INT, b TEXT) AS VALUES (1,'hello'), (2,'world')
 
 query T
-SELECT (CASE WHEN CONCAT(b, 'hello') = 'test' THEN 'good' ELSE 'bad' END) AS c 
+SELECT (CASE WHEN CONCAT(b, 'hello') = 'test' THEN 'good' ELSE 'bad' END) AS c
   FROM test_case_expr GROUP BY c;
 ----
 bad

@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
 # Test coalesce function
 query I
 select coalesce(1, 2, 3);
@@ -247,7 +246,7 @@ statement ok
 create table t(c varchar) as values ('a'), (null);
 
 query TT
-select 
+select
   coalesce(c, arrow_cast('b', 'Dictionary(Int32, Utf8)')),
   arrow_typeof(coalesce(c, arrow_cast('b', 'Dictionary(Int32, Utf8)')))
 from t;
@@ -260,12 +259,12 @@ drop table t;
 
 # test dict coercion with dict
 statement ok
-create table t as values 
-  (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), 
+create table t as values
+  (arrow_cast('foo', 'Dictionary(Int32, Utf8)')),
   (null);
 
 query ?T
-select 
+select
   coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, LargeUtf8)')),
   arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, LargeUtf8)')))
 from t;
@@ -274,7 +273,7 @@ foo Dictionary(Int64, LargeUtf8)
 bar Dictionary(Int64, LargeUtf8)
 
 query ?T
-select 
+select
   coalesce(column1, arrow_cast('bar', 'Dictionary(Int32, LargeUtf8)')),
   arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int32, LargeUtf8)')))
 from t;
@@ -283,7 +282,7 @@ foo Dictionary(Int32, LargeUtf8)
 bar Dictionary(Int32, LargeUtf8)
 
 query ?T
-select 
+select
   coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, Utf8)')),
   arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, Utf8)')))
 from t;
@@ -358,10 +357,10 @@ SELECT COALESCE(c1, c2, '-1') FROM test;
 statement ok
 drop table test
 
-statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
+statement ok
 CREATE TABLE test(
   c1 BIGINT,
-  c2 BIGINT,
+  c2 BIGINT
 ) as VALUES
 (1, 2),
 (NULL, 2),
@@ -369,14 +368,21 @@ CREATE TABLE test(
 (NULL, NULL);
 
 # coalesce sum with default value
-query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
+query I
 SELECT SUM(COALESCE(c1, c2, 0)) FROM test
+----
+4
 
 # coalesce mul with default value
-query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
+query I
 SELECT COALESCE(c1 * c2, 0) FROM test
+----
+2
+0
+0
+0
 
-statement error DataFusion error: Execution error: Table 'test' doesn't exist\.
+statement ok
 drop table test
 
 # coalesce date32

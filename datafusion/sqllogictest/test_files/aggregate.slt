@@ -1966,7 +1966,7 @@ drop table t;
 
 # test count with largeutf8
 statement ok
-create table t (c string) as values 
+create table t (c string) as values
   (arrow_cast('a', 'LargeUtf8')),
   (arrow_cast('b', 'LargeUtf8')),
   (arrow_cast(null, 'LargeUtf8')),
@@ -3634,7 +3634,7 @@ DROP TABLE min_bool;
 # Min_Max End #
 #################
 
-statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
+statement ok
 create table bool_aggregate_functions (
   c1 boolean not null,
   c2 boolean not null,
@@ -3643,7 +3643,7 @@ create table bool_aggregate_functions (
   c5 boolean,
   c6 boolean,
   c7 boolean,
-  c8 boolean,
+  c8 boolean
 )
 as values
   (true, true, false, false, true, true, null, null),
@@ -3651,20 +3651,28 @@ as values
   (true, true, false, false, null, true, false, null);
 
 # query_bool_and
-query error DataFusion error: Error during planning: table 'datafusion\.public\.bool_aggregate_functions' not found
+query BBBBBBBB
 SELECT bool_and(c1), bool_and(c2), bool_and(c3), bool_and(c4), bool_and(c5), bool_and(c6), bool_and(c7), bool_and(c8) FROM bool_aggregate_functions
+----
+true false false false false true false NULL
 
 # query_bool_and_distinct
-query error DataFusion error: Error during planning: table 'datafusion\.public\.bool_aggregate_functions' not found
+query BBBBBBBB
 SELECT bool_and(distinct c1), bool_and(distinct c2), bool_and(distinct c3), bool_and(distinct c4), bool_and(distinct c5), bool_and(distinct c6), bool_and(distinct c7), bool_and(distinct c8) FROM bool_aggregate_functions
+----
+true false false false false true false NULL
 
 # query_bool_or
-query error DataFusion error: Error during planning: table 'datafusion\.public\.bool_aggregate_functions' not found
+query BBBBBBBB
 SELECT bool_or(c1), bool_or(c2), bool_or(c3), bool_or(c4), bool_or(c5), bool_or(c6), bool_or(c7), bool_or(c8) FROM bool_aggregate_functions
+----
+true true true false true true false NULL
 
 # query_bool_or_distinct
-query error DataFusion error: Error during planning: table 'datafusion\.public\.bool_aggregate_functions' not found
+query BBBBBBBB
 SELECT bool_or(distinct c1), bool_or(distinct c2), bool_or(distinct c3), bool_or(distinct c4), bool_or(distinct c5), bool_or(distinct c6), bool_or(distinct c7), bool_or(distinct c8) FROM bool_aggregate_functions
+----
+true true true false true true false NULL
 
 # All supported timestamp types
 
@@ -4129,7 +4137,7 @@ statement ok
 create table t (c1 decimal(10, 0), c2 int) as values (null, null), (null, null), (null, null);
 
 query RTIT
-select 
+select
   sum(c1), arrow_typeof(sum(c1)),
   sum(c2), arrow_typeof(sum(c2))
 from t;
@@ -4763,7 +4771,7 @@ NULL NULL 3 NULL 1 4 0 8 0
 
 # regr_*() basic tests
 query RRRRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -4778,7 +4786,7 @@ from (values (1,2), (2,4), (3,6));
 2 0 3 1 2 4 2 8 4
 
 query RRRRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -4796,7 +4804,7 @@ from aggregate_test_100;
 
 # regr_*() functions ignore NULLs
 query RRRRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -4811,7 +4819,7 @@ from (values (1,NULL), (2,4), (3,6));
 2 0 2 1 2.5 5 0.5 2 1
 
 query RRRRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -4826,7 +4834,7 @@ from (values (1,NULL), (NULL,4), (3,6));
 NULL NULL 1 NULL 3 6 0 0 0
 
 query RRRRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -4841,8 +4849,8 @@ from (values (1,NULL), (NULL,4), (NULL,NULL));
 NULL NULL 0 NULL NULL NULL NULL NULL NULL
 
 query TRRRRRRRRR rowsort
-select 
-    column3, 
+select
+    column3,
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -4866,7 +4874,7 @@ statement ok
 set datafusion.execution.batch_size = 1;
 
 query RRRRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -4884,7 +4892,7 @@ statement ok
 set datafusion.execution.batch_size = 2;
 
 query RRRRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -4902,7 +4910,7 @@ statement ok
 set datafusion.execution.batch_size = 3;
 
 query RRRRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5056,7 +5064,7 @@ CREATE TABLE float_table (
 
 # Test string_agg with largeutf8
 statement ok
-create table string_agg_large_utf8 (c string) as values 
+create table string_agg_large_utf8 (c string) as values
   (arrow_cast('a', 'LargeUtf8')),
   (arrow_cast('b', 'LargeUtf8')),
   (arrow_cast('c', 'LargeUtf8'))
@@ -5111,7 +5119,7 @@ select count(*) from (select count(*) a, count(*) b from (select 1));
 
 # UTF8 string matters for string to &[u8] conversion, add it to prevent regression
 statement ok
-create table distinct_count_string_table as values 
+create table distinct_count_string_table as values
     (1, 'a', 'longstringtest_a', '台灣'),
     (2, 'b', 'longstringtest_b1', '日本'),
     (2, 'b', 'longstringtest_b2', '中國'),
