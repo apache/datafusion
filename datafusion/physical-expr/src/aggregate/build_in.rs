@@ -62,16 +62,14 @@ pub fn create_aggregate_expr(
     Ok(match (fun, distinct) {
         (AggregateFunction::ArrayAgg, false) => {
             let expr = Arc::clone(&input_phy_exprs[0]);
-            let nullable = expr.nullable(input_schema)?;
 
             if ordering_req.is_empty() {
-                Arc::new(expressions::ArrayAgg::new(expr, name, data_type, nullable))
+                Arc::new(expressions::ArrayAgg::new(expr, name, data_type))
             } else {
                 Arc::new(expressions::OrderSensitiveArrayAgg::new(
                     expr,
                     name,
                     data_type,
-                    nullable,
                     ordering_types,
                     ordering_req.to_vec(),
                 ))
@@ -84,12 +82,10 @@ pub fn create_aggregate_expr(
                 );
             }
             let expr = Arc::clone(&input_phy_exprs[0]);
-            let is_expr_nullable = expr.nullable(input_schema)?;
             Arc::new(expressions::DistinctArrayAgg::new(
                 expr,
                 name,
                 data_type,
-                is_expr_nullable,
             ))
         }
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
