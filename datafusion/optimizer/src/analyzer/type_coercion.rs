@@ -164,10 +164,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         let expr_type = expr.get_type(self.schema)?;
         match expr_type {
             DataType::Boolean => Ok(expr),
-            DataType::Null => Ok(Expr::Cast(expr::Cast::new(
-                Box::new(expr),
-                DataType::Boolean,
-            ))),
+            DataType::Null => expr.cast_to(&DataType::Boolean, self.schema),
             other => plan_err!("Join condition must be boolean type, but got {other:?}"),
         }
     }
