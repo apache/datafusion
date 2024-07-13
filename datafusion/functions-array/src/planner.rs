@@ -17,7 +17,8 @@
 
 //! SQL planning extensions like [`ArrayFunctionPlanner`] and [`FieldAccessPlanner`]
 
-use datafusion_common::{utils::list_ndims, DFSchema, Result};
+use datafusion_common::{exec_err, utils::list_ndims, DFSchema, Result};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
     sqlparser, AggregateFunction, Expr, ExprSchemable, GetFieldAccess,
@@ -96,6 +97,27 @@ impl ExprPlanner for ArrayFunctionPlanner {
         _schema: &DFSchema,
     ) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Planned(make_array(exprs)))
+    }
+
+    fn plan_make_map(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        if args.len() % 2 != 0 {
+            return exec_err!("make_map requires an even number of arguments");
+        }
+
+        let (keys, values): (Vec<_>, Vec<_>) = args
+            .chunks_exact(2)
+            .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
+            .unzip();
+
+        let keys = make_array(keys);
+        let values = make_array(values);
+
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(
+                datafusion_functions::core::map(),
+                vec![keys, values],
+            ),
+        )))
     }
 }
 
