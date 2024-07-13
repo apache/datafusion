@@ -618,26 +618,64 @@ backtrace:<span class="w">    </span><span class="m">0</span>:<span class="w"> <
 </pre></div>
 </div>
 <p>The backtraces are useful when debugging code. If there is a test in <code class="docutils literal notranslate"><span class="pre">datafusion/core/src/physical_planner.rs</span></code></p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>#[tokio::test]
-async fn test_get_backtrace_for_failed_code() -&gt; Result&lt;()&gt; {
-    let ctx = SessionContext::new();
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[tokio::test]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">test_get_backtrace_for_failed_code</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
 
-    let sql = &quot;
-    select row_numer() over (partition by a order by a) from (select 1 a);
-    &quot;;
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">sql</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;</span>
+<span class="s">    select row_numer() over (partition by a order by a) from (select 1 a);</span>
+<span class="s">    &quot;</span><span class="p">;</span>
 
-    let _ = ctx.sql(sql).await?.collect().await?;
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="n">sql</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 
-    Ok(())
-}
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>To obtain a backtrace:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>build<span class="w"> </span>--features<span class="o">=</span>backtrace
 <span class="nv">RUST_BACKTRACE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--features<span class="o">=</span>backtrace<span class="w"> </span>--package<span class="w"> </span>datafusion<span class="w"> </span>--lib<span class="w"> </span>--<span class="w"> </span>physical_planner::tests::test_get_backtrace_for_failed_code<span class="w"> </span>--exact<span class="w"> </span>--nocapture
+
+running<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="nb">test</span>
+Error:<span class="w"> </span>Plan<span class="o">(</span><span class="s2">&quot;Invalid function &#39;row_numer&#39;.\nDid you mean &#39;ROW_NUMBER&#39;?\n\nbacktrace:    0: std::backtrace_rs::backtrace::libunwind::trace\n             at /rustc/129f3b9964af4d4a709d1383930ade12dfe7c081/library/std/src/../../backtrace/src/backtrace/libunwind.rs:105:5\n   1: std::backtrace_rs::backtrace::trace_unsynchronized\n...</span>
 </pre></div>
 </div>
 <p>Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored</p>
+<p>To show the backtrace in a pretty-printed format use <code class="docutils literal notranslate"><span class="pre">eprintln!(&quot;{e}&quot;);</span></code>.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[tokio::test]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">test_get_backtrace_for_failed_code</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">sql</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;select row_numer() over (partition by a order by a) from (select 1 a);&quot;</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">match</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="n">sql</span><span class="p">).</span><span class="k">await</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">result</span><span class="p">.</span><span class="n">show</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">,</span>
+<span class="w">        </span><span class="nb">Err</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="fm">eprintln!</span><span class="p">(</span><span class="s">&quot;{e}&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">};</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Then run the test:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span><span class="nv">RUST_BACKTRACE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--features<span class="o">=</span>backtrace<span class="w"> </span>--package<span class="w"> </span>datafusion<span class="w"> </span>--lib<span class="w"> </span>--<span class="w"> </span>physical_planner::tests::test_get_backtrace_for_failed_code<span class="w"> </span>--exact<span class="w"> </span>--nocapture
+
+running<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="nb">test</span>
+Error<span class="w"> </span>during<span class="w"> </span>planning:<span class="w"> </span>Invalid<span class="w"> </span><span class="k">function</span><span class="w"> </span><span class="s1">&#39;row_numer&#39;</span>.
+Did<span class="w"> </span>you<span class="w"> </span>mean<span class="w"> </span><span class="s1">&#39;ROW_NUMBER&#39;</span>?
+
+backtrace:<span class="w">    </span><span class="m">0</span>:<span class="w"> </span>std::backtrace_rs::backtrace::libunwind::trace
+<span class="w">             </span>at<span class="w"> </span>/rustc/129f3b9964af4d4a709d1383930ade12dfe7c081/library/std/src/../../backtrace/src/backtrace/libunwind.rs:105:5
+<span class="w">   </span><span class="m">1</span>:<span class="w"> </span>std::backtrace_rs::backtrace::trace_unsynchronized
+<span class="w">             </span>at<span class="w"> </span>/rustc/129f3b9964af4d4a709d1383930ade12dfe7c081/library/std/src/../../backtrace/src/backtrace/mod.rs:66:5
+<span class="w">   </span><span class="m">2</span>:<span class="w"> </span>std::backtrace::Backtrace::create
+<span class="w">             </span>at<span class="w"> </span>/rustc/129f3b9964af4d4a709d1383930ade12dfe7c081/library/std/src/backtrace.rs:331:13
+<span class="w">   </span><span class="m">3</span>:<span class="w"> </span>std::backtrace::Backtrace::capture
+<span class="w">   </span>...
+</pre></div>
+</div>
 </section>
 </section>
 
