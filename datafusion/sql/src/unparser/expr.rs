@@ -1272,8 +1272,16 @@ impl Unparser<'_> {
             DataType::BinaryView => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Utf8 => Ok(ast::DataType::Varchar(None)),
-            DataType::LargeUtf8 => Ok(ast::DataType::Text),
+            DataType::Utf8 => Ok(if self.dialect.use_char_for_utf8_cast() {
+                ast::DataType::Char(None)
+            } else {
+                ast::DataType::Varchar(None)
+            }),
+            DataType::LargeUtf8 => Ok(if self.dialect.use_char_for_utf8_cast() {
+                ast::DataType::Char(None)
+            } else {
+                ast::DataType::Text
+            }),
             DataType::Utf8View => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1932,5 +1940,32 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn custom_dialect_use_char_for_utf8_cast() -> Result<()> {
+        for (use_char_for_utf8_cast, data_type, identifier) in [
+            (false, DataType::Utf8, "VARCHAR"),
+            (true, DataType::Utf8, "CHAR"),
+            (false, DataType::LargeUtf8, "TEXT"),
+            (true, DataType::LargeUtf8, "CHAR"),
+        ] {
+            let dialect = CustomDialectBuilder::new()
+                .with_use_char_for_utf8_cast(use_char_for_utf8_cast)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
     }
 }
