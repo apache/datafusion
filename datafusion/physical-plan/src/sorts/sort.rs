@@ -926,6 +926,17 @@ impl ExecutionPlan for SortExec {
     fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
     }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(SortExec{
+            input: self.input.clone(),
+            expr: self.expr.clone(),
+            metrics_set: self.metrics_set.clone(),
+            preserve_partitioning: self.preserve_partitioning,
+            fetch: limit,
+            cache: self.cache.clone(),
+        }))
+    }
 }
 
 #[cfg(test)]
