@@ -4044,3 +4044,52 @@ physical_plan
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 04)----SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
 05)------MemoryExec: partitions=1, partition_sizes=[1]
+
+
+# Test CROSS JOIN LATERAL syntax (planning)
+query TT
+explain select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
+----
+logical_plan
+01)CrossJoin:
+02)--SubqueryAlias: t1
+03)----TableScan: join_t1 projection=[t1_id, t1_name]
+04)--SubqueryAlias: series
+05)----Subquery:
+06)------Projection: unnest(generate_series(Int64(1),outer_ref(t1.t1_int))) AS i
+07)--------Unnest: lists[unnest(generate_series(Int64(1),outer_ref(t1.t1_int)))] structs[]
+08)----------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS unnest(generate_series(Int64(1),outer_ref(t1.t1_int)))
+09)------------EmptyRelation
+
+
+# Test CROSS JOIN LATERAL syntax (execution)
+# TODO: https://github.com/apache/datafusion/issues/10048
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(UInt32, Column \{ relation: Some\(Bare \{ table: "t1" \}\), name: "t1_int" \}\)
+select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
+
+
+# Test INNER JOIN LATERAL syntax (planning)
+query TT
+explain select t1_id, t1_name, i from join_t1 t2 inner join lateral (select * from unnest(generate_series(1, t1_int))) as series(i) on(t1_id > i);
+----
+logical_plan
+01)Inner Join:  Filter: CAST(t2.t1_id AS Int64) > series.i
+02)--SubqueryAlias: t2
+03)----TableScan: join_t1 projection=[t1_id, t1_name]
+04)--SubqueryAlias: series
+05)----Subquery:
+06)------Projection: unnest(generate_series(Int64(1),outer_ref(t2.t1_int))) AS i
+07)--------Unnest: lists[unnest(generate_series(Int64(1),outer_ref(t2.t1_int)))] structs[]
+08)----------Projection: generate_series(Int64(1), CAST(outer_ref(t2.t1_int) AS Int64)) AS unnest(generate_series(Int64(1),outer_ref(t2.t1_int)))
+09)------------EmptyRelation
+
+
+# Test INNER JOIN LATERAL syntax (execution)
+# TODO: https://github.com/apache/datafusion/issues/10048
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(UInt32, Column \{ relation: Some\(Bare \{ table: "t2" \}\), name: "t1_int" \}\)
+select t1_id, t1_name, i from join_t1 t2 inner join lateral (select * from unnest(generate_series(1, t1_int))) as series(i) on(t1_id > i);
+
+
+# Test RIGHT JOIN LATERAL syntax (unsupported)
+query error DataFusion error: This feature is not implemented: LATERAL syntax is not supported for FULL OUTER and RIGHT \[OUTER \| ANTI \| SEMI\] joins
+select t1_id, t1_name, i from join_t1 t1 right join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
