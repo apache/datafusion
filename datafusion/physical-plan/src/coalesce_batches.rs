@@ -46,6 +46,9 @@ pub struct CoalesceBatchesExec {
     input: Arc<dyn ExecutionPlan>,
     /// Minimum number of rows for coalesces batches
     target_batch_size: usize,
+    /// Maximum number of rows to fetch,
+    /// `None` means fetching all rows
+    fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
@@ -58,6 +61,7 @@ impl CoalesceBatchesExec {
         Self {
             input,
             target_batch_size,
+            fetch: None,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
@@ -95,8 +99,9 @@ impl DisplayAs for CoalesceBatchesExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "CoalesceBatchesExec: target_batch_size={}",
-                    self.target_batch_size
+                    "CoalesceBatchesExec: target_batch_size={}, fetch={}",
+                    self.target_batch_size,
+                    self.fetch.map_or("None".to_string(), |x| x.to_string())
                 )
             }
         }
@@ -161,6 +166,16 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(CoalesceBatchesExec {
+            input: self.input.clone(),
+            target_batch_size: self.target_batch_size,
+            fetch: limit,
+            metrics: self.metrics.clone(),
+            cache: self.cache.clone(),
+        }))
     }
 }
 
