@@ -208,9 +208,11 @@ impl ColumnarValue {
                     } else {
                         // Arrow by default will parse str as Month for unit MonthDayNano.
                         // So we need to be explict that we want it to parse as second.
-                        match scalar {
-                            ScalarValue::Utf8(Some(s_val))
-                            if cast_type == &DataType::Interval(IntervalUnit::MonthDayNano) => {
+                        match (scalar, cast_type) {
+                            (
+                                ScalarValue::Utf8(Some(s_val)),
+                                &DataType::Interval(IntervalUnit::MonthDayNano)
+                            ) => {
                                 // negative case
                                 let start_idx = if s_val.starts_with('-') { 1 } else { 0 };
 
@@ -221,7 +223,7 @@ impl ColumnarValue {
                                     scalar.to_array()
                                 }
                             },
-                            _ => scalar.to_array(),
+                            (_, _) => scalar.to_array(),
                         }?
                     };
                 let cast_array = kernels::cast::cast_with_options(
