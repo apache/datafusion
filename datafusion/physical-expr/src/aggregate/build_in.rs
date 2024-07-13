@@ -82,11 +82,7 @@ pub fn create_aggregate_expr(
                 );
             }
             let expr = Arc::clone(&input_phy_exprs[0]);
-            Arc::new(expressions::DistinctArrayAgg::new(
-                expr,
-                name,
-                data_type,
-            ))
+            Arc::new(expressions::DistinctArrayAgg::new(expr, name, data_type))
         }
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             Arc::clone(&input_phy_exprs[0]),
