@@ -58,8 +58,8 @@
 pub mod macros;
 
 pub mod approx_distinct;
-pub mod correlation;
 pub mod array_agg;
+pub mod correlation;
 pub mod count;
 pub mod covariance;
 pub mod first_last;
@@ -94,8 +94,8 @@ pub mod expr_fn {
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
-    pub use super::average::avg;
     pub use super::array_agg::array_agg;
+    pub use super::average::avg;
     pub use super::bit_and_or_xor::bit_and;
     pub use super::bit_and_or_xor::bit_or;
     pub use super::bit_and_or_xor::bit_xor;

@@ -440,7 +440,6 @@ impl AggregateUDFImpl for LastValue {
         let StateFieldsArgs {
             name,
             input_type,
-            input_nullable: _,
             return_type: _,
             ordering_fields,
             is_distinct: _,

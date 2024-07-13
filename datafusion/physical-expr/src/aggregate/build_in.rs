@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::expressions::{self};

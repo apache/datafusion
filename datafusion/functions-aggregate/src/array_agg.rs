@@ -22,16 +22,12 @@ use arrow::datatypes::DataType;
 use arrow_schema::Field;
 
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::array_into_list_array;
+use datafusion_common::utils::array_into_list_array_nullable;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr::AggregateFunction;
-use datafusion_expr::expr::AggregateFunctionDefinition;
-use datafusion_expr::function::AccumulatorArgs;
-use datafusion_expr::simplify::SimplifyInfo;
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::AggregateUDFImpl;
-use datafusion_expr::Expr;
 use datafusion_expr::{Accumulator, Signature, Volatility};
 use std::sync::Arc;
 
@@ -84,46 +80,16 @@ impl AggregateUDFImpl for ArrayAgg {
         ))))
     }
 
-    fn state_fields(
-        &self,
-        args: datafusion_expr::function::StateFieldsArgs,
-    ) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![Field::new_list(
             format_state_name(args.name, "array_agg"),
             Field::new("item", args.input_type.clone(), true),
-            args.input_nullable,
+            true,
         )])
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(ArrayAggAccumulator::try_new(acc_args.input_type)?))
-    }
-
-    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
-        datafusion_expr::ReversedUDAF::Identical
-    }
-
-    fn simplify(
-        &self,
-    ) -> Option<datafusion_expr::function::AggregateFunctionSimplification> {
-        let simplify = |aggregate_function: AggregateFunction, _: &dyn SimplifyInfo| {
-            if aggregate_function.order_by.is_some() || aggregate_function.distinct {
-                Ok(Expr::AggregateFunction(AggregateFunction {
-                    func_def: AggregateFunctionDefinition::BuiltIn(
-                        datafusion_expr::aggregate_function::AggregateFunction::ArrayAgg,
-                    ),
-                    args: aggregate_function.args,
-                    distinct: aggregate_function.distinct,
-                    filter: aggregate_function.filter,
-                    order_by: aggregate_function.order_by,
-                    null_treatment: aggregate_function.null_treatment,
-                }))
-            } else {
-                Ok(Expr::AggregateFunction(aggregate_function))
-            }
-        };
-
-        Some(Box::new(simplify))
     }
 }
 
@@ -150,8 +116,11 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
         assert!(values.len() == 1, "array_agg can only take 1 param!");
-        let val = values[0].clone();
-        self.values.push(val);
+
+        let val = Arc::clone(&values[0]);
+        if val.len() > 0 {
+            self.values.push(val);
+        }
         Ok(())
     }
 
@@ -175,17 +144,15 @@ impl Accumulator for ArrayAggAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         // Transform Vec<ListArr> to ListArr
-
         let element_arrays: Vec<&dyn Array> =
             self.values.iter().map(|a| a.as_ref()).collect();
 
         if element_arrays.is_empty() {
-            let arr = ScalarValue::new_list(&[], &self.datatype);
-            return Ok(ScalarValue::List(arr));
+            return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
-        let list_array = array_into_list_array(concated_array);
+        let list_array = array_into_list_array_nullable(concated_array);
 
         Ok(ScalarValue::List(Arc::new(list_array)))
     }

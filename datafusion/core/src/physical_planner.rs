@@ -85,7 +85,6 @@ use datafusion_expr::{
     DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, StringifiedPlan,
     WindowFrame, WindowFrameBound, WriteOp,
 };
-use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
@@ -1840,11 +1839,11 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
 
+            // TODO: Remove this after array_agg are all udafs
             let (agg_expr, filter, order_by) = match func_def {
-                AggregateFunctionDefinition::BuiltIn(
-                    datafusion_expr::AggregateFunction::ArrayAgg,
-                ) if !distinct && order_by.is_none() => {
-                    let sort_exprs = order_by.clone().unwrap_or(vec![]);
+                AggregateFunctionDefinition::UDF(udf)
+                    if udf.name() == "ARRAY_AGG" && (*distinct || order_by.is_some()) =>
+                {
                     let physical_sort_exprs = match order_by {
                         Some(exprs) => Some(create_physical_sort_exprs(
                             exprs,
@@ -1855,16 +1854,15 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     };
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         physical_sort_exprs.clone().unwrap_or(vec![]);
-                    let agg_expr = udaf::create_aggregate_expr(
-                        &array_agg_udaf(),
+                    let fun = aggregates::AggregateFunction::ArrayAgg;
+                    let agg_expr = aggregates::create_aggregate_expr(
+                        &fun,
+                        *distinct,
                         &physical_args,
-                        args,
-                        &sort_exprs,
                         &ordering_reqs,
                         physical_input_schema,
                         name,
                         ignore_nulls,
-                        *distinct,
                     )?;
                     (agg_expr, filter, physical_sort_exprs)
                 }
@@ -1916,6 +1914,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     (agg_expr, filter, physical_sort_exprs)
                 }
             };
+
             Ok((agg_expr, filter, order_by))
         }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),
