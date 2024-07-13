@@ -148,7 +148,7 @@ Error: Plan("Invalid function 'row_numer'.\nDid you mean 'ROW_NUMBER'?\n\nbacktr
 
 Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored
 
-If you want to show the backtrace in a pretty-printed format, you can print the `DataFusionError` using `eprintln!("{e}");`.
+To show the backtrace in a pretty-printed format use `eprintln!("{e}");`.
 
 ```rust
 #[tokio::test]
