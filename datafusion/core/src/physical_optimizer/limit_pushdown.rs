@@ -19,7 +19,9 @@
 
 use std::sync::Arc;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::plan_datafusion_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_plan::{ExecutionPlanProperties, get_plan_string};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -58,37 +60,148 @@ impl PhysicalOptimizerRule for LimitPushdown {
 pub fn push_down_limits(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    // TODO: Clean up and refactor
     if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
         let child = global_limit.input();
-        let fetch = global_limit.fetch();
-        let skip = global_limit.skip();
+        if let Some(child_limit) = child.as_any().downcast_ref::<LocalLimitExec>() {
+            // Merge limits
+            let parent_skip = global_limit.skip();
+            let parent_fetch = global_limit.fetch();
+            let parent_max = parent_fetch.and_then(|f| Some(f + parent_skip));
+            let child_fetch = child_limit.fetch();
 
-        let child_fetch = fetch.map_or(None, |f| Some(f + skip));
-
-        if let Some(child_with_fetch) = child.with_fetch(child_fetch) {
-            if skip > 0 {
-                Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
-                    child_with_fetch,
-                    skip,
-                    fetch,
-                ))))
+            if let Some(parent_max) = parent_max {
+                if child_fetch >= parent_max {
+                    // Child fetch is larger than or equal to parent max, so we can remove the child
+                    let merged = Arc::new(GlobalLimitExec::new(
+                        child_limit.input().clone(),
+                        parent_skip,
+                        parent_fetch,
+                    ));
+                    Ok(Transformed::yes(push_down_limits(merged)?.data))
+                } else if child_fetch > parent_skip {
+                    // Child fetch is larger than parent skip, so we can trim the parent fetch
+                    let merged = Arc::new(GlobalLimitExec::new(
+                        child_limit.input().clone(),
+                        parent_skip,
+                        Some(child_fetch - parent_skip),
+                    ));
+                    Ok(Transformed::yes(push_down_limits(merged)?.data))
+                } else {
+                    // This would return an empty result
+                    Err(plan_datafusion_err!("Child fetch is less than parent skip"))
+                }
             } else {
-                Ok(Transformed::yes(child_with_fetch))
+                // Parent's fetch is infinite, use child's
+                let new_global_limit = Arc::new(GlobalLimitExec::new(
+                    child_limit.input().clone(),
+                    parent_skip,
+                    Some(child_fetch),
+                ));
+                Ok(Transformed::yes(new_global_limit))
+            }
+        } else if child.supports_limit_pushdown() {
+            let grandchildren = child.children();
+            if let Some(&grandchild) = grandchildren.first() {
+                if grandchild.output_partitioning().partition_count() > 1 {
+                    // Insert a LocalLimitExec after the child
+                    if let Some(fetch) = global_limit.fetch() {
+                        let new_local_limit = Arc::new(LocalLimitExec::new(
+                            grandchild.clone(),
+                            fetch + global_limit.skip(),
+                        ));
+                        let new_child = child.clone().with_new_children(vec![new_local_limit])?;
+                        Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
+                            new_child,
+                            global_limit.skip(),
+                            global_limit.fetch(),
+                        ))))
+                    } else {
+                        Ok(Transformed::no(plan))
+                    }
+                } else {
+                    // Swap current with child
+                    let new_global_limit = Arc::new(GlobalLimitExec::new(
+                        grandchild.clone(),
+                        global_limit.skip(),
+                        global_limit.fetch(),
+                    ));
+                    let new_child = child.clone().with_new_children(vec![new_global_limit])?;
+                    Ok(Transformed::yes(new_child))
+                }
+            } else {
+                // GlobalLimitExec would have no input, which should be impossible
+                Err(plan_datafusion_err!("GlobalLimitExec has no input"))
             }
         } else {
-            Ok(Transformed::no(plan))
+            let fetch = global_limit.fetch();
+            let skip = global_limit.skip();
+
+            let child_fetch = fetch.and_then(|f| Some(f + skip));
+
+            if let Some(child_with_fetch) = child.with_fetch(child_fetch) {
+                if skip > 0 {
+                    Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
+                        child_with_fetch,
+                        skip,
+                        fetch,
+                    ))))
+                } else {
+                    Ok(Transformed::yes(child_with_fetch))
+                }
+            } else {
+                Ok(Transformed::no(plan))
+            }
         }
     } else if let Some(local_limit) = plan.as_any().downcast_ref::<LocalLimitExec>() {
         let child = local_limit.input();
-        let fetch = local_limit.fetch();
+        if let Some(child) = child.as_any().downcast_ref::<LocalLimitExec>() {
+            // Keep the smaller limit
+            let parent_fetch = local_limit.fetch();
+            let child_fetch = child.fetch();
 
-        if let Some(child_with_fetch) = child.with_fetch(Some(fetch)) {
-            Ok(Transformed::yes(child_with_fetch))
+            let merged = Arc::new(LocalLimitExec::new(
+                child.input().clone(),
+                std::cmp::min(parent_fetch, child_fetch),
+            ));
+            Ok(Transformed::yes(push_down_limits(merged)?.data))
+        } else if child.supports_limit_pushdown() {
+            let grandchildren = child.children();
+            if let Some(&grandchild) = grandchildren.first() {
+                if grandchild.output_partitioning().partition_count() > 1 {
+                    // Insert a LocalLimitExec after the child
+                    let new_local_limit = Arc::new(LocalLimitExec::new(
+                        grandchild.clone(),
+                        local_limit.fetch(),
+                    ));
+                    let new_child = child.clone().with_new_children(vec![new_local_limit])?;
+                    Ok(Transformed::yes(Arc::new(LocalLimitExec::new(
+                        new_child,
+                        local_limit.fetch(),
+                    ))))
+                } else {
+                    // Swap current with child
+                    let new_global_limit = Arc::new(LocalLimitExec::new(
+                        grandchild.clone(),
+                        local_limit.fetch(),
+                    ));
+                    let new_child = child.clone().with_new_children(vec![new_global_limit])?;
+                    Ok(Transformed::yes(new_child))
+                }
+            } else {
+                // LocalLimitExec would have no input, which should be impossible
+                Err(plan_datafusion_err!("LocalLimitExec has no input"))
+            }
         } else {
-            Ok(Transformed::no(plan))
+            let fetch = local_limit.fetch();
+
+            if let Some(child_with_fetch) = child.with_fetch(Some(fetch)) {
+                Ok(Transformed::yes(child_with_fetch))
+            } else {
+                Ok(Transformed::no(plan))
+            }
         }
-    }
-    else {
+    } else {
         Ok(Transformed::no(plan))
     }
 }
@@ -107,6 +220,7 @@ mod tests {
     use datafusion_physical_plan::filter::FilterExec;
     use datafusion_physical_plan::get_plan_string;
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+    use datafusion_physical_plan::projection::ProjectionExec;
     use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
     use super::*;
@@ -229,7 +343,7 @@ mod tests {
 
         let repartition = Arc::new(RepartitionExec::try_new(
             streaming_table,
-            Partitioning::RoundRobinBatch(8)
+            Partitioning::RoundRobinBatch(8),
         )?);
 
         let coalesce_batches = Arc::new(CoalesceBatchesExec::new(
@@ -280,6 +394,72 @@ mod tests {
             "      FilterExec: c3@2 > 0",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+        ];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Int32, true),
+            Field::new("c3", DataType::Int32, true),
+        ]));
+
+        let streaming_table = Arc::new(StreamingTableExec::try_new(
+            schema.clone(),
+            vec![Arc::new(DummyStreamPartition {
+                schema: schema.clone(),
+            }) as _],
+            None,
+            None,
+            true,
+            None,
+        )?);
+
+        let filter = Arc::new(FilterExec::try_new(
+            Arc::new(BinaryExpr::new(
+                col("c3", schema.as_ref()).unwrap(),
+                Operator::Gt,
+                lit(0))),
+            streaming_table,
+        )?);
+
+        let projection = Arc::new(ProjectionExec::try_new(
+            vec![
+                (col("c1", schema.as_ref()).unwrap(), "c1".to_string()),
+                (col("c2", schema.as_ref()).unwrap(), "c2".to_string()),
+                (col("c3", schema.as_ref()).unwrap(), "c3".to_string()),
+            ],
+            filter,
+        )?);
+
+        let global_limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
+            projection,
+            0,
+            Some(5),
+        ));
+
+        let initial = get_plan_string(&global_limit);
+        let expected_initial = [
+            "GlobalLimitExec: skip=0, fetch=5",
+            "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+            "    FilterExec: c3@2 > 0",
+            "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+        ];
+
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+        let expected = [
+            "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+            "  GlobalLimitExec: skip=0, fetch=5",
+            "    FilterExec: c3@2 > 0",
+            "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
