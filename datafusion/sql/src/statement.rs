@@ -46,18 +46,19 @@ use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateMemoryTable, CreateView, DescribeTable, DmlStatement, DropCatalogSchema,
-    DropFunction, DropTable, DropView, EmptyRelation, Explain, ExprSchemable, Filter,
-    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
-    Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
+    DropFunction, DropTable, DropView, EmptyRelation, Explain, Expr, ExprSchemable,
+    Filter, LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
+    SetVariable, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     Volatility, WriteOp,
 };
-use sqlparser::ast::{self, AssignmentTarget, CreateTable};
+use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, ColumnDef, CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr,
-    Expr, FromTable, Ident, Insert, ObjectName, ObjectType, OneOrManyWithParens, Query,
-    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
-    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
+    Assignment, AssignmentTarget, ColumnDef, CreateTable, CreateTableOptions, Delete,
+    DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert, ObjectName, ObjectType,
+    OneOrManyWithParens, Query, SchemaName, SetExpr, ShowCreateObject,
+    ShowStatementFilter, Statement, TableConstraint, TableFactor, TableWithJoins,
+    TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -954,7 +955,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         order_exprs: Vec<LexOrdering>,
         schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<Vec<datafusion_expr::Expr>>> {
+    ) -> Result<Vec<Vec<Expr>>> {
         // Ask user to provide a schema if schema is empty.
         if !order_exprs.is_empty() && schema.fields().is_empty() {
             return plan_err!(
@@ -1159,7 +1160,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         local: bool,
         hivevar: bool,
         variables: &OneOrManyWithParens<ObjectName>,
-        value: Vec<Expr>,
+        value: Vec<SQLExpr>,
     ) -> Result<LogicalPlan> {
         if local {
             return not_impl_err!("LOCAL is not supported");
@@ -1218,7 +1219,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn delete_to_plan(
         &self,
         table_name: ObjectName,
-        predicate_expr: Option<Expr>,
+        predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
@@ -1264,7 +1265,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         table: TableWithJoins,
         assignments: Vec<Assignment>,
         from: Option<TableWithJoins>,
-        predicate_expr: Option<Expr>,
+        predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
         let (table_name, table_alias) = match &table.relation {
             TableFactor::Table { name, alias, .. } => (name.clone(), alias.clone()),
@@ -1297,7 +1298,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_schema.field_with_unqualified_name(&col_name.value)?;
                 Ok((col_name.value.clone(), assign.value.clone()))
             })
-            .collect::<Result<HashMap<String, Expr>>>()?;
+            .collect::<Result<HashMap<String, SQLExpr>>>()?;
 
         // Build scan, join with from table if it exists.
         let mut input_tables = vec![table];
@@ -1336,8 +1337,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             &mut planner_context,
                         )?;
                         // Update placeholder's datatype to the type of the target column
-                        if let datafusion_expr::Expr::Placeholder(placeholder) = &mut expr
-                        {
+                        if let Expr::Placeholder(placeholder) = &mut expr {
                             placeholder.data_type = placeholder
                                 .data_type
                                 .take()
@@ -1349,14 +1349,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None => {
                         // If the target table has an alias, use it to qualify the column name
                         if let Some(alias) = &table_alias {
-                            datafusion_expr::Expr::Column(Column::new(
+                            Expr::Column(Column::new(
                                 Some(self.normalizer.normalize(alias.name.clone())),
                                 field.name(),
                             ))
                         } else {
-                            datafusion_expr::Expr::Column(Column::from((
-                                qualifier, field,
-                            )))
+                            Expr::Column(Column::from((qualifier, field)))
                         }
                     }
                 };
@@ -1431,7 +1429,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let SetExpr::Values(ast::Values { rows, .. }) = (*source.body).clone() {
             for row in rows.iter() {
                 for (idx, val) in row.iter().enumerate() {
-                    if let ast::Expr::Value(Value::Placeholder(name)) = val {
+                    if let SQLExpr::Value(Value::Placeholder(name)) = val {
                         let name =
                             name.replace('$', "").parse::<usize>().map_err(|_| {
                                 plan_datafusion_err!("Can't parse placeholder: {name}")
@@ -1464,23 +1462,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|(i, value_index)| {
                 let target_field = table_schema.field(i);
                 let expr = match value_index {
-                    Some(v) => datafusion_expr::Expr::Column(Column::from(
-                        source.schema().qualified_field(v),
-                    ))
-                    .cast_to(target_field.data_type(), source.schema())?,
+                    Some(v) => {
+                        Expr::Column(Column::from(source.schema().qualified_field(v)))
+                            .cast_to(target_field.data_type(), source.schema())?
+                    }
                     // The value is not specified. Fill in the default value for the column.
                     None => table_source
                         .get_column_default(target_field.name())
                         .cloned()
                         .unwrap_or_else(|| {
                             // If there is no default for the column, then the default is NULL
-                            datafusion_expr::Expr::Literal(ScalarValue::Null)
+                            Expr::Literal(ScalarValue::Null)
                         })
                         .cast_to(target_field.data_type(), &DFSchema::empty())?,
                 };
                 Ok(expr.alias(target_field.name()))
             })
-            .collect::<Result<Vec<datafusion_expr::Expr>>>()?;
+            .collect::<Result<Vec<Expr>>>()?;
         let source = project(source, exprs)?;
 
         let op = if overwrite {
