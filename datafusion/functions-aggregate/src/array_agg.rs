@@ -60,6 +60,7 @@ impl AggregateUDFImpl for ArrayAgg {
         self
     }
 
+    // TODO: change name to lowercase
     fn name(&self) -> &str {
         "ARRAY_AGG"
     }
