@@ -21,11 +21,11 @@
 
 statement ok
 CREATE TABLE t1(
-  id INT,
+  id INT,  
   name TEXT
 ) as VALUES
-  (1, 'Alex'),
-  (2, 'Bob'),
+  (1, 'Alex'), 
+  (2, 'Bob'), 
   (3, 'Alice')
 ;
 
@@ -34,20 +34,20 @@ CREATE TABLE t2(
   id TINYINT,
   name TEXT
 ) as VALUES
-  (1, 'Alex'),
-  (2, 'Bob'),
+  (1, 'Alex'), 
+  (2, 'Bob'), 
   (3, 'John')
 ;
 
 # union with EXCEPT(JOIN)
 query T rowsort
-(
+(   
     SELECT name FROM t1
     EXCEPT
     SELECT name FROM t2
-)
+)  
 UNION ALL
-(
+(   
     SELECT name FROM t2
     EXCEPT
     SELECT name FROM t1
@@ -58,13 +58,13 @@ John
 
 # union with type coercion
 query IT rowsort
-(
+(   
     SELECT * FROM t1
     EXCEPT
     SELECT * FROM t2
-)
+)  
 UNION ALL
-(
+(   
     SELECT * FROM t2
     EXCEPT
     SELECT * FROM t1
@@ -518,11 +518,11 @@ OPTIONS ('format.has_header' 'true');
 query TT
 explain
 SELECT c1 FROM(
-(
+(   
     SELECT c1 FROM t1
-)
+)  
 UNION ALL
-(
+(   
     SELECT c1a FROM t2
 ))
 ORDER BY c1

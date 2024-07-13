@@ -5141,7 +5141,7 @@ statement ok
 CREATE TABLE test_case_expr(a INT, b TEXT) AS VALUES (1,'hello'), (2,'world')
 
 query T
-SELECT (CASE WHEN CONCAT(b, 'hello') = 'test' THEN 'good' ELSE 'bad' END) AS c
+SELECT (CASE WHEN CONCAT(b, 'hello') = 'test' THEN 'good' ELSE 'bad' END) AS c 
   FROM test_case_expr GROUP BY c;
 ----
 bad

@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+
 # Test coalesce function
 query I
 select coalesce(1, 2, 3);
@@ -246,7 +247,7 @@ statement ok
 create table t(c varchar) as values ('a'), (null);
 
 query TT
-select
+select 
   coalesce(c, arrow_cast('b', 'Dictionary(Int32, Utf8)')),
   arrow_typeof(coalesce(c, arrow_cast('b', 'Dictionary(Int32, Utf8)')))
 from t;
@@ -259,12 +260,12 @@ drop table t;
 
 # test dict coercion with dict
 statement ok
-create table t as values
-  (arrow_cast('foo', 'Dictionary(Int32, Utf8)')),
+create table t as values 
+  (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), 
   (null);
 
 query ?T
-select
+select 
   coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, LargeUtf8)')),
   arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, LargeUtf8)')))
 from t;
@@ -273,7 +274,7 @@ foo Dictionary(Int64, LargeUtf8)
 bar Dictionary(Int64, LargeUtf8)
 
 query ?T
-select
+select 
   coalesce(column1, arrow_cast('bar', 'Dictionary(Int32, LargeUtf8)')),
   arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int32, LargeUtf8)')))
 from t;
@@ -282,7 +283,7 @@ foo Dictionary(Int32, LargeUtf8)
 bar Dictionary(Int32, LargeUtf8)
 
 query ?T
-select
+select 
   coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, Utf8)')),
   arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, Utf8)')))
 from t;

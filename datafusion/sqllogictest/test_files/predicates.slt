@@ -39,7 +39,7 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+LOCATION '../../testing/data/csv/aggregate_test_100.csv' 
 OPTIONS ('format.has_header' 'true');
 
 statement ok

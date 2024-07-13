@@ -127,16 +127,16 @@ SELECT abs('foo');
 
 statement ok
 CREATE TABLE test_nullable_integer(
-    c1 TINYINT,
-    c2 SMALLINT,
-    c3 INT,
-    c4 BIGINT,
-    c5 TINYINT UNSIGNED,
-    c6 SMALLINT UNSIGNED,
-    c7 INT UNSIGNED,
-    c8 BIGINT UNSIGNED,
+    c1 TINYINT, 
+    c2 SMALLINT, 
+    c3 INT, 
+    c4 BIGINT, 
+    c5 TINYINT UNSIGNED, 
+    c6 SMALLINT UNSIGNED, 
+    c7 INT UNSIGNED, 
+    c8 BIGINT UNSIGNED, 
     dataset TEXT
-    )
+    ) 
     AS VALUES
     (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'nulls'),
     (0, 0, 0, 0, 0, 0, 0, 0, 'zeros'),
@@ -225,7 +225,7 @@ SELECT c8%0 FROM test_nullable_integer
 
 # abs: return type
 query TTTTTTTT rowsort
-select
+select 
    arrow_typeof(abs(c1)), arrow_typeof(abs(c2)), arrow_typeof(abs(c3)), arrow_typeof(abs(c4)),
    arrow_typeof(abs(c5)), arrow_typeof(abs(c6)), arrow_typeof(abs(c7)), arrow_typeof(abs(c8))
 from test_nullable_integer limit 1
@@ -273,13 +273,13 @@ drop table test_nullable_integer
 
 statement ok
 CREATE TABLE test_non_nullable_integer(
-    c1 TINYINT NOT NULL,
-    c2 SMALLINT NOT NULL,
-    c3 INT NOT NULL,
-    c4 BIGINT NOT NULL,
-    c5 TINYINT UNSIGNED NOT NULL,
-    c6 SMALLINT UNSIGNED NOT NULL,
-    c7 INT UNSIGNED NOT NULL,
+    c1 TINYINT NOT NULL, 
+    c2 SMALLINT NOT NULL, 
+    c3 INT NOT NULL, 
+    c4 BIGINT NOT NULL, 
+    c5 TINYINT UNSIGNED NOT NULL, 
+    c6 SMALLINT UNSIGNED NOT NULL, 
+    c7 INT UNSIGNED NOT NULL, 
     c8 BIGINT UNSIGNED NOT NULL
     );
 
@@ -351,7 +351,7 @@ CREATE TABLE test_nullable_float(
     c2 double
     ) AS VALUES
     (-1.0, -1.0),
-    (1.0, 1.0),
+    (1.0, 1.0), 
     (NULL, NULL),
     (0., 0.),
     ('NaN'::double, 'NaN'::double);
@@ -400,7 +400,7 @@ Float32 Float64
 
 # abs: floats
 query RR rowsort
-SELECT abs(c1), abs(c2) from test_nullable_float
+SELECT abs(c1), abs(c2) from test_nullable_float 
 ----
 0 0
 1 1
@@ -416,7 +416,7 @@ statement ok
 CREATE TABLE test_non_nullable_float(
     c1 float NOT NULL,
     c2 double NOT NULL
-    );
+    ); 
 
 query I
 INSERT INTO test_non_nullable_float VALUES
@@ -466,27 +466,27 @@ drop table test_non_nullable_float
 statement ok
 CREATE TABLE test_nullable_decimal(
     c1 DECIMAL(10, 2),    /* Decimal128 */
-    c2 DECIMAL(38, 10),   /* Decimal128 with max precision */
+    c2 DECIMAL(38, 10),   /* Decimal128 with max precision */ 
     c3 DECIMAL(40, 2),    /* Decimal256 */
-    c4 DECIMAL(76, 10)    /* Decimal256 with max precision */
- ) AS VALUES
-    (0, 0, 0, 0),
+    c4 DECIMAL(76, 10)    /* Decimal256 with max precision */ 
+ ) AS VALUES 
+    (0, 0, 0, 0), 
     (NULL, NULL, NULL, NULL);
 
 query I
 INSERT into test_nullable_decimal values
     (
-        -99999999.99,
-        '-9999999999999999999999999999.9999999999',
-        '-99999999999999999999999999999999999999.99',
+        -99999999.99, 
+        '-9999999999999999999999999999.9999999999', 
+        '-99999999999999999999999999999999999999.99', 
         '-999999999999999999999999999999999999999999999999999999999999999999.9999999999'
-    ),
+    ), 
     (
-        99999999.99,
-        '9999999999999999999999999999.9999999999',
-        '99999999999999999999999999999999999999.99',
+        99999999.99, 
+        '9999999999999999999999999999.9999999999', 
+        '99999999999999999999999999999999999999.99', 
         '999999999999999999999999999999999999999999999999999999999999999999.9999999999'
-    )
+    ) 
 ----
 2
 
@@ -521,9 +521,9 @@ SELECT c1%0 FROM test_nullable_decimal WHERE c1 IS NOT NULL;
 
 # abs: return type
 query TTTT
-SELECT
-    arrow_typeof(abs(c1)),
-    arrow_typeof(abs(c2)),
+SELECT 
+    arrow_typeof(abs(c1)), 
+    arrow_typeof(abs(c2)), 
     arrow_typeof(abs(c3)),
     arrow_typeof(abs(c4))
 FROM test_nullable_decimal limit 1
@@ -540,11 +540,11 @@ SELECT abs(c1), abs(c2), abs(c3), abs(c4) FROM test_nullable_decimal
 NULL NULL NULL NULL
 
 statement ok
-drop table test_nullable_decimal
+drop table test_nullable_decimal  
 
 
 statement ok
-CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL);
+CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL); 
 
 query I
 INSERT INTO test_non_nullable_decimal VALUES(1)
@@ -557,13 +557,13 @@ SELECT c1*0 FROM test_non_nullable_decimal
 0
 
 query error DataFusion error: Arrow error: Divide by zero error
-SELECT c1/0 FROM test_non_nullable_decimal
+SELECT c1/0 FROM test_non_nullable_decimal 
 
 query error DataFusion error: Arrow error: Divide by zero error
-SELECT c1%0 FROM test_non_nullable_decimal
+SELECT c1%0 FROM test_non_nullable_decimal 
 
 statement ok
-drop table test_non_nullable_decimal
+drop table test_non_nullable_decimal 
 
 statement ok
 CREATE TABLE signed_integers(
@@ -603,7 +603,7 @@ NULL NULL NULL
 
 # scalar maxes and/or negative 1
 query III
-select
+select 
   gcd(9223372036854775807, -9223372036854775808), -- i64::MAX, i64::MIN
   gcd(9223372036854775807, -1), -- i64::MAX, -1
   gcd(-9223372036854775808, -1); -- i64::MIN, -1
