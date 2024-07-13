@@ -1592,49 +1592,49 @@ CREATE TABLE t1(
 ;
 
 # csv query boolean eq neq
-query BBBBBB
+query BBBBBB rowsort
 SELECT a, b, a = b as eq, b = true as eq_scalar, a != b as neq, a != true as neq_scalar FROM t1
 ----
-true true true true false false
+NULL NULL NULL NULL NULL NULL
+NULL false NULL false NULL NULL
+NULL true NULL true NULL NULL
+false NULL NULL NULL NULL true
+false NULL NULL NULL NULL true
+false true false true true true
 true NULL NULL NULL NULL false
 true false false false true false
-NULL true NULL true NULL NULL
-NULL NULL NULL NULL NULL NULL
-NULL false NULL false NULL NULL
-false true false true true true
-false NULL NULL NULL NULL true
-false NULL NULL NULL NULL true
+true true true true false false
 
 # csv query boolean lt lt eq
-query BBBBBB
+query BBBBBB rowsort
 SELECT a, b, a < b as lt, b = true as lt_scalar, a <= b as lt_eq, a <= true as lt_eq_scalar FROM t1
 ----
-true true false true true true
+NULL NULL NULL NULL NULL NULL
+NULL false NULL false NULL NULL
+NULL true NULL true NULL NULL
+false NULL NULL NULL NULL true
+false NULL NULL NULL NULL true
+false true true true true true
 true NULL NULL NULL NULL true
 true false false false false true
-NULL true NULL true NULL NULL
-NULL NULL NULL NULL NULL NULL
-NULL false NULL false NULL NULL
-false true true true true true
-false NULL NULL NULL NULL true
-false NULL NULL NULL NULL true
+true true false true true true
 
 # csv query boolean gt gt eq
-query BBBBBB
+query BBBBBB rowsort
 SELECT a, b, a > b as gt, b = true as gt_scalar, a >= b as gt_eq, a >= true as gt_eq_scalar FROM t1
 ----
-true true false true true true
-true NULL NULL NULL NULL true
-true false true false true true
-NULL true NULL true NULL NULL
 NULL NULL NULL NULL NULL NULL
 NULL false NULL false NULL NULL
+NULL true NULL true NULL NULL
+false NULL NULL NULL NULL false
+false NULL NULL NULL NULL false
 false true false true false false
-false NULL NULL NULL NULL false
-false NULL NULL NULL NULL false
+true NULL NULL NULL NULL true
+true false true false true true
+true true false true true true
 
 # csv query boolean distinct from
-query BBBBBB
+query BBBBBB rowsort
 SELECT a, b,
       a is distinct from b as df,
       b is distinct from true as df_scalar,
@@ -1642,15 +1642,15 @@ SELECT a, b,
       a is not distinct from true as ndf_scalar
 FROM t1
 ----
-true true false false true true
-true NULL true true false true
-true false true true false true
-NULL true true false false false
 NULL NULL false true true false
 NULL false true true false false
+NULL true true false false false
+false NULL true true false false
+false NULL true true false false
 false true true false false false
-false NULL true true false false
-false NULL true true false false
+true NULL true true false true
+true false true true false true
+true true false false true true
 
 statement ok
 drop table t1

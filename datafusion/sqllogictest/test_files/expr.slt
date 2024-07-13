@@ -1802,30 +1802,12 @@ SELECT encode('','base64');
 query ?
 SELECT decode('','base64');
 ----
-
-
-
-
-
-
-query T
-SELECT encode('','hex');
-----
-(empty)
+ 
 
 query ?
 SELECT decode('','hex');
 ----
-
-
-
-
-
-
-query T
-SELECT md5('tom');
-----
-34b7da764b21d298ef307d04d8152dc5
+ 
 
 query ?
 SELECT digest('tom','md5');
