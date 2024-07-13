@@ -245,6 +245,10 @@ impl ExecutionPlan for ProjectionExec {
             Arc::clone(&self.schema),
         ))
     }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
 }
 
 /// If e is a direct column reference, returns the field level
