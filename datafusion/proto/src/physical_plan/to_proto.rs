@@ -495,7 +495,24 @@ pub fn serialize_physical_expr(
             ))),
         })
     } else {
-        internal_err!("physical_plan::to_proto() unsupported expression {value:?}")
+        let mut buf: Vec<u8> = vec![];
+        match codec.try_encode_expr(Arc::clone(&value), &mut buf) {
+            Ok(_) => {
+                let inputs: Vec<protobuf::PhysicalExprNode> = value
+                    .children()
+                    .into_iter()
+                    .map(|e| serialize_physical_expr(Arc::clone(e), codec))
+                    .collect::<Result<_>>()?;
+                Ok(protobuf::PhysicalExprNode {
+                    expr_type: Some(protobuf::physical_expr_node::ExprType::Extension(
+                        protobuf::PhysicalExtensionExprNode { expr: buf, inputs },
+                    )),
+                })
+            }
+            Err(e) => internal_err!(
+                "Unsupported physical expr and extension codec failed with [{e}]. Expr: {value:?}"
+            ),
+        }
     }
 }
 

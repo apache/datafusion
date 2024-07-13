@@ -836,6 +836,8 @@ message PhysicalExprNode {
     // was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
 
     PhysicalLikeExprNode like_expr = 18;
+
+    PhysicalExtensionExprNode extension = 19;
   }
 }
 
@@ -940,6 +942,11 @@ message PhysicalCastNode {
 
 message PhysicalNegativeNode {
   PhysicalExprNode expr = 1;
+}
+
+message PhysicalExtensionExprNode {
+  bytes expr = 1;
+  repeated PhysicalExprNode inputs = 2;
 }
 
 message FilterExecNode {

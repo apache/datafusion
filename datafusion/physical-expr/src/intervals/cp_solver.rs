@@ -176,7 +176,7 @@ impl ExprIntervalGraphNode {
         &self.interval
     }
 
-    /// This function creates a DAEG node from Datafusion's [`ExprTreeNode`]
+    /// This function creates a DAEG node from DataFusion's [`ExprTreeNode`]
     /// object. Literals are created with definite, singleton intervals while
     /// any other expression starts with an indefinite interval ([-∞, ∞]).
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
