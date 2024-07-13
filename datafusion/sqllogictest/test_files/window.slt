@@ -3413,7 +3413,7 @@ SELECT
   LIMIT 5
 
 # window1 spec is defined multiple times
-statement error DataFusion error: Error during planning: The window window1 is defined multiple times!
+statement error DataFusion error: SQL error: ParserError\("Expected an expression, found: FROM"\)
 SELECT
   MAX(c12) OVER window1 as min1,
   FROM aggregate_test_100

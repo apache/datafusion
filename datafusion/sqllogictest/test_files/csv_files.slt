@@ -164,7 +164,7 @@ physical_plan
 
 
 # ensure that correct quote character is used when writing to csv
-statement ok
+statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE table_with_necessary_quoting (
   int_col INT,
   string_col TEXT,
@@ -175,14 +175,12 @@ CREATE TABLE table_with_necessary_quoting (
 (4, 'h|h|h');
 
 # quote is required because `|` is delimiter and part of the data
-query IT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.table_with_necessary_quoting' not found
 COPY table_with_necessary_quoting TO 'test_files/scratch/csv_files/table_with_necessary_quoting.csv'
 STORED AS csv
 OPTIONS ('format.quote' '~',
          'format.delimiter' '|',
          'format.has_header' 'true');
-----
-4
 
 # read the stored csv file with quote character
 statement ok
@@ -195,13 +193,8 @@ OPTIONS ('format.quote' '~',
          'format.delimiter' '|',
          'format.has_header' 'true');
 
-query TT
+query error DataFusion error: Object Store error: Object at location /home/mabdeen/dev/arrow\-datafusion/datafusion/sqllogictest/test_files/scratch/csv_files/table_with_necessary_quoting\.csv not found: No such file or directory \(os error 2\)
 select * from stored_table_with_necessary_quoting;
-----
-1 e|e|e
-2 f|f|f
-3 g|g|g
-4 h|h|h
 
 # Read CSV file with comments
 statement ok

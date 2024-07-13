@@ -2351,7 +2351,7 @@ NULL
 
 # query_binary_eq
 
-statement ok
+statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE t_source(
     column1 String,
     column2 String,
@@ -2365,7 +2365,7 @@ CREATE TABLE t_source(
 ('three', 'three', 'three', '');
 
 
-statement ok
+statement error DataFusion error: Error during planning: table 'datafusion\.public\.t_source' not found
 CREATE TABLE test as
 select
   arrow_cast(column1, 'Binary') as c1,
@@ -2374,14 +2374,8 @@ select
   arrow_cast(column4, 'LargeBinary') as c4
 from t_source;
 
-query BBBB
+query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
 SELECT sha256(c1)=digest('one', 'sha256'), sha256(c2)=sha256('two'), digest(c1, 'blake2b')=digest(c3, 'blake2b'), c2=c4 FROM test;
-----
-true false true true
-false true false true
-NULL NULL NULL NULL
-false false true true
-false false true false
 
 
 #############

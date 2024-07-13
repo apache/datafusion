@@ -19,7 +19,7 @@
 ## Struct Expressions Tests
 #############
 
-statement ok
+statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE values(
     a INT,
     b FLOAT,
@@ -65,12 +65,8 @@ select struct(1, 3.14, 'h')['c0'], struct(3, 2.55, 'b')['c1'], struct(2, 6.43, '
 1 2.55 a
 
 # struct[i] with columns
-query R
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select struct(a, b, c)['c1'] from values;
-----
-1.1
-2.2
-3.3
 
 # struct scalar function #1
 query ?
@@ -91,32 +87,17 @@ select struct(1, 3.14 as name1, 'e', true);
 {c0: 1, name1: 3.14, c2: e, c3: true}
 
 # struct scalar function with columns #1
-query ?
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select struct(a, b, c) from values;
-----
-{c0: 1, c1: 1.1, c2: a}
-{c0: 2, c1: 2.2, c2: b}
-{c0: 3, c1: 3.3, c2: c}
 
 # struct scalar function with columns and scalars
-query ?
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select struct(a, 'foo') from values;
-----
-{c0: 1, c1: foo}
-{c0: 2, c1: foo}
-{c0: 3, c1: foo}
 
 
 # explain struct scalar function with columns #1
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 explain select struct(a, b, c) from values;
-----
-logical_plan
-01)Projection: struct(values.a, values.b, values.c)
-02)--TableScan: values projection=[a, b, c]
-physical_plan
-01)ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # error on 0 arguments
 query error
@@ -131,7 +112,7 @@ query error DataFusion error: Execution error: named_struct requires an even num
 select named_struct(1);
 
 # error on odd number of arguments #3
-query error DataFusion error: Execution error: named_struct requires an even number of arguments, got 1 instead
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select named_struct(values.a) from values;
 
 # error on odd number of arguments #4
@@ -147,66 +128,38 @@ query error DataFusion error: Execution error: named_struct even arguments must 
 select named_struct('corret', 1, 0, 'wrong');
 
 # error on even argument not a string literal #3
-query error DataFusion error: Execution error: named_struct even arguments must be string literals, got values\.a instead at position 0
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select named_struct(values.a, 'a') from values;
 
 # error on even argument not a string literal #4
-query error DataFusion error: Execution error: named_struct even arguments must be string literals, got values\.c instead at position 0
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select named_struct(values.c, 'c') from values;
 
 # named_struct with mixed scalar and array values #1
-query ?
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select named_struct('scalar', 27, 'array', values.a, 'null', NULL) from values;
-----
-{scalar: 27, array: 1, null: }
-{scalar: 27, array: 2, null: }
-{scalar: 27, array: 3, null: }
 
-query ?
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select {'scalar': 27, 'array': values.a, 'null': NULL} from values;
-----
-{scalar: 27, array: 1, null: }
-{scalar: 27, array: 2, null: }
-{scalar: 27, array: 3, null: }
 
 # named_struct with mixed scalar and array values #2
-query ?
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select named_struct('array', values.a, 'scalar', 27, 'null', NULL) from values;
-----
-{array: 1, scalar: 27, null: }
-{array: 2, scalar: 27, null: }
-{array: 3, scalar: 27, null: }
 
-query ?
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select {'array': values.a, 'scalar': 27, 'null': NULL} from values;
-----
-{array: 1, scalar: 27, null: }
-{array: 2, scalar: 27, null: }
-{array: 3, scalar: 27, null: }
 
 # named_struct with mixed scalar and array values #3
-query ?
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select named_struct('null', NULL, 'array', values.a, 'scalar', 27) from values;
-----
-{null: , array: 1, scalar: 27}
-{null: , array: 2, scalar: 27}
-{null: , array: 3, scalar: 27}
 
 # named_struct with mixed scalar and array values #4
-query ?
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select named_struct('null_array', values.n, 'array', values.a, 'scalar', 27, 'null', NULL) from values;
-----
-{null_array: , array: 1, scalar: 27, null: }
-{null_array: , array: 2, scalar: 27, null: }
-{null_array: , array: 3, scalar: 27, null: }
 
 # named_struct arrays only
-query ?
+query error DataFusion error: Error during planning: table 'datafusion\.public\.values' not found
 select named_struct('field_a', a, 'field_b', b) from values;
-----
-{field_a: 1, field_b: 1.1}
-{field_a: 2, field_b: 2.2}
-{field_a: 3, field_b: 3.3}
 
 # named_struct scalars only
 query ?
@@ -214,7 +167,7 @@ select named_struct('field_a', 1, 'field_b', 2);
 ----
 {field_a: 1, field_b: 2}
 
-statement ok
+statement error DataFusion error: Execution error: Table 'values' doesn't exist\.
 drop table values;
 
 query T

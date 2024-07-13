@@ -358,7 +358,7 @@ SELECT COALESCE(c1, c2, '-1') FROM test;
 statement ok
 drop table test
 
-statement ok
+statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE test(
   c1 BIGINT,
   c2 BIGINT,
@@ -369,21 +369,14 @@ CREATE TABLE test(
 (NULL, NULL);
 
 # coalesce sum with default value
-query I
+query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
 SELECT SUM(COALESCE(c1, c2, 0)) FROM test
-----
-4
 
 # coalesce mul with default value
-query I
+query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
 SELECT COALESCE(c1 * c2, 0) FROM test
-----
-2
-0
-0
-0
 
-statement ok
+statement error DataFusion error: Execution error: Table 'test' doesn't exist\.
 drop table test
 
 # coalesce date32

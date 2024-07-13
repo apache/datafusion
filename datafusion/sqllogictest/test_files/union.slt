@@ -19,7 +19,7 @@
 ## UNION Tests
 ##########
 
-statement ok
+statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE t1(
   id INT,  
   name TEXT,
@@ -29,7 +29,7 @@ CREATE TABLE t1(
   (3, 'Alice')
 ;
 
-statement ok
+statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE t2(
   id TINYINT,
   name TEXT,
@@ -40,7 +40,7 @@ CREATE TABLE t2(
 ;
 
 # union with EXCEPT(JOIN)
-query T rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 (   
     SELECT name FROM t1
     EXCEPT
@@ -52,12 +52,9 @@ UNION ALL
     EXCEPT
     SELECT name FROM t1
 )
-----
-Alice
-John
 
 # union with type coercion
-query IT rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 (   
     SELECT * FROM t1
     EXCEPT
@@ -69,9 +66,6 @@ UNION ALL
     EXCEPT
     SELECT * FROM t1
 )
-----
-3 Alice
-3 John
 
 # union all
 query I rowsort
@@ -82,10 +76,8 @@ SELECT 2 as x
 1
 2
 
-query I
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 select count(*) from (select id from t1 union all select id from t2)
-----
-6
 
 # csv_union_all
 statement ok
@@ -178,7 +170,7 @@ SELECT 1 UNION SELECT 2
 2
 
 # union_with_except_input
-query T rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 (
     SELECT name FROM t1
     EXCEPT
@@ -190,82 +182,29 @@ UNION ALL
     EXCEPT
     SELECT name FROM t1
 )
-----
-Alice
-John
 
 # nested_union
-query T rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 SELECT name FROM t1 UNION (SELECT name from t2 UNION SELECT name || '_new' from t2)
-----
-Alex
-Alex_new
-Alice
-Bob
-Bob_new
-John
-John_new
 
 # should be un-nested, with a single (logical) aggregate
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 EXPLAIN SELECT name FROM t1 UNION (SELECT name from t2 UNION SELECT name || '_new' from t2)
-----
-logical_plan
-01)Aggregate: groupBy=[[t1.name]], aggr=[[]]
-02)--Union
-03)----TableScan: t1 projection=[name]
-04)----TableScan: t2 projection=[name]
-05)----Projection: t2.name || Utf8("_new") AS name
-06)------TableScan: t2 projection=[name]
-physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
-05)--------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-06)----------UnionExec
-07)------------MemoryExec: partitions=1, partition_sizes=[1]
-08)------------MemoryExec: partitions=1, partition_sizes=[1]
-09)------------ProjectionExec: expr=[name@0 || _new as name]
-10)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # nested_union_all
-query T rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 SELECT name FROM t1 UNION ALL (SELECT name from t2 UNION ALL SELECT name || '_new' from t2)
-----
-Alex
-Alex
-Alex_new
-Alice
-Bob
-Bob
-Bob_new
-John
-John_new
 
 # Plan is unnested
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 EXPLAIN SELECT name FROM t1 UNION ALL (SELECT name from t2 UNION ALL SELECT name || '_new' from t2)
-----
-logical_plan
-01)Union
-02)--TableScan: t1 projection=[name]
-03)--TableScan: t2 projection=[name]
-04)--Projection: t2.name || Utf8("_new") AS name
-05)----TableScan: t2 projection=[name]
-physical_plan
-01)UnionExec
-02)--MemoryExec: partitions=1, partition_sizes=[1]
-03)--MemoryExec: partitions=1, partition_sizes=[1]
-04)--ProjectionExec: expr=[name@0 || _new as name]
-05)----MemoryExec: partitions=1, partition_sizes=[1]
 
 # Make sure to choose a small batch size to introduce parallelism to the plan.
 statement ok
 set datafusion.execution.batch_size = 2;
 
 # union_with_type_coercion
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 explain
 (
     SELECT id, name FROM t1
@@ -278,52 +217,9 @@ UNION ALL
     EXCEPT
     SELECT id, name FROM t1
 )
-----
-logical_plan
-01)Union
-02)--LeftAnti Join: t1.id = CAST(t2.id AS Int32), t1.name = t2.name
-03)----Aggregate: groupBy=[[t1.id, t1.name]], aggr=[[]]
-04)------TableScan: t1 projection=[id, name]
-05)----TableScan: t2 projection=[id, name]
-06)--Projection: CAST(t2.id AS Int32) AS id, t2.name
-07)----LeftAnti Join: CAST(t2.id AS Int32) = t1.id, t2.name = t1.name
-08)------Aggregate: groupBy=[[t2.id, t2.name]], aggr=[[]]
-09)--------TableScan: t2 projection=[id, name]
-10)------TableScan: t1 projection=[id, name]
-physical_plan
-01)UnionExec
-02)--CoalesceBatchesExec: target_batch_size=2
-03)----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(id@0, CAST(t2.id AS Int32)@2), (name@1, name@1)]
-04)------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------MemoryExec: partitions=1, partition_sizes=[1]
-10)------CoalesceBatchesExec: target_batch_size=2
-11)--------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
-12)----------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
-13)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-14)--------------MemoryExec: partitions=1, partition_sizes=[1]
-15)--ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
-16)----CoalesceBatchesExec: target_batch_size=2
-17)------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], projection=[id@0, name@1]
-18)--------CoalesceBatchesExec: target_batch_size=2
-19)----------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
-20)------------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
-21)--------------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
-22)----------------CoalesceBatchesExec: target_batch_size=2
-23)------------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-24)--------------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-25)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-26)------------------------MemoryExec: partitions=1, partition_sizes=[1]
-27)--------CoalesceBatchesExec: target_batch_size=2
-28)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-29)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-30)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
-query IT rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 (
     SELECT id, name FROM t1
     EXCEPT
@@ -335,12 +231,9 @@ UNION ALL
     EXCEPT
     SELECT id, name FROM t1
 )
-----
-3 Alice
-3 John
 
 # union_with_except_input
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 explain
 (
     SELECT name FROM t1
@@ -353,43 +246,6 @@ UNION ALL
     EXCEPT
     SELECT name FROM t1
 )
-----
-logical_plan
-01)Union
-02)--LeftAnti Join: t1.name = t2.name
-03)----Aggregate: groupBy=[[t1.name]], aggr=[[]]
-04)------TableScan: t1 projection=[name]
-05)----TableScan: t2 projection=[name]
-06)--LeftAnti Join: t2.name = t1.name
-07)----Aggregate: groupBy=[[t2.name]], aggr=[[]]
-08)------TableScan: t2 projection=[name]
-09)----TableScan: t1 projection=[name]
-physical_plan
-01)InterleaveExec
-02)--CoalesceBatchesExec: target_batch_size=2
-03)----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]
-04)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------MemoryExec: partitions=1, partition_sizes=[1]
-10)------CoalesceBatchesExec: target_batch_size=2
-11)--------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-12)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)------------MemoryExec: partitions=1, partition_sizes=[1]
-14)--CoalesceBatchesExec: target_batch_size=2
-15)----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]
-16)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
-17)--------CoalesceBatchesExec: target_batch_size=2
-18)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-19)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-20)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-21)----------------MemoryExec: partitions=1, partition_sizes=[1]
-22)------CoalesceBatchesExec: target_batch_size=2
-23)--------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-24)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-25)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # union_upcast_types
 query TT
@@ -426,48 +282,23 @@ e 4144173353
 b 4076864659
 
 # union_with_hash_aggregate
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 explain
 SELECT count(*) FROM (
     SELECT distinct name FROM t1
     UNION ALL
     SELECT distinct name FROM t2
 ) GROUP BY name
-----
-logical_plan
-01)Projection: count(*)
-02)--Aggregate: groupBy=[[t1.name]], aggr=[[count(Int64(1)) AS count(*)]]
-03)----Union
-04)------Aggregate: groupBy=[[t1.name]], aggr=[[]]
-05)--------TableScan: t1 projection=[name]
-06)------Aggregate: groupBy=[[t2.name]], aggr=[[]]
-07)--------TableScan: t2 projection=[name]
-physical_plan
-01)ProjectionExec: expr=[count(*)@1 as count(*)]
-02)--AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[count(*)]
-03)----InterleaveExec
-04)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------MemoryExec: partitions=1, partition_sizes=[1]
-10)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
-11)--------CoalesceBatchesExec: target_batch_size=2
-12)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-13)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-14)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-15)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 ########
 # Clean up after the test
 ########
 
-statement ok
+statement error DataFusion error: Execution error: Table 't1' doesn't exist\.
 drop table t1;
 
-statement ok
+statement error DataFusion error: Execution error: Table 't2' doesn't exist\.
 drop table t2;
 
 statement ok

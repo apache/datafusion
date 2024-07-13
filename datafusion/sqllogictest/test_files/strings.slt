@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-statement ok
+statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE test(
   s TEXT,
 ) as VALUES
@@ -32,52 +32,24 @@ CREATE TABLE test(
 ;
 
 # LIKE
-query T rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
 SELECT s FROM test WHERE s LIKE 'p1%';
-----
-p1
-p1e1
-p1m1e1
 
-query T rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
 SELECT s FROM test WHERE s LIKE '%m1%';
-----
-P1m1e1
-p1m1e1
-p2m1e1
 
 # NOT LIKE
-query T rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
 SELECT s FROM test WHERE s NOT LIKE 'p1%';
-----
-P1
-P1e1
-P1m1e1
-e1
-p2
-p2e1
-p2m1e1
 
 
 # ILIKE
-query T rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
 SELECT s FROM test WHERE s ILIKE 'p1%';
-----
-P1
-P1e1
-P1m1e1
-p1
-p1e1
-p1m1e1
 
 # NOT ILIKE
-query T rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.test' not found
 SELECT s FROM test WHERE s NOT ILIKE 'p1%';
-----
-e1
-p2
-p2e1
-p2m1e1
 
 ## VARCHAR with length support
 

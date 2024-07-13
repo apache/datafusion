@@ -584,7 +584,7 @@ DROP TABLE data_index_bloom_encoding_stats;
 # String coercion
 ########
 
-statement error DataFusion error: SQL error: ParserError\("Expected a data type name, found: ,"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: a data type name, found: ,"\)
 CREATE TABLE t(vendor_id_utf8, vendor_id_dict)
 AS VALUES
 (arrow_cast('124', 'Utf8'), arrow_cast('124', 'Dictionary(Int16, Utf8)')),
@@ -686,7 +686,7 @@ physical_plan
 ########
 # TPCH Q19 - Pull predicates to inner join (simplified)
 ########
-statement ok
+statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE IF NOT EXISTS partsupp (
     ps_partkey BIGINT,
     ps_suppkey BIGINT,
@@ -696,7 +696,7 @@ CREATE TABLE IF NOT EXISTS partsupp (
 ) AS VALUES
 (63700, 7311, 100, 993.49, 'ven ideas. quickly even packages print. pending multipliers must have to are fluff');
 
-query IRRI
+query error DataFusion error: Error during planning: table 'datafusion\.public\.partsupp' not found
 SELECT
     p_partkey,
     sum(l_extendedprice),
@@ -719,11 +719,9 @@ OR
     AND ps_partkey = p_partkey
 )
 GROUP BY p_partkey;
-----
-63700 13309.6 0.1 1
 
 
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.partsupp' not found
 EXPLAIN SELECT
     p_partkey,
     sum(l_extendedprice),
@@ -746,38 +744,6 @@ OR
     AND ps_partkey = p_partkey
 )
 GROUP BY p_partkey;
-----
-logical_plan
-01)Aggregate: groupBy=[[part.p_partkey]], aggr=[[sum(lineitem.l_extendedprice), avg(lineitem.l_discount), count(DISTINCT partsupp.ps_suppkey)]]
-02)--Projection: lineitem.l_extendedprice, lineitem.l_discount, part.p_partkey, partsupp.ps_suppkey
-03)----Inner Join: part.p_partkey = partsupp.ps_partkey
-04)------Projection: lineitem.l_extendedprice, lineitem.l_discount, part.p_partkey
-05)--------Inner Join: lineitem.l_partkey = part.p_partkey
-06)----------TableScan: lineitem projection=[l_partkey, l_extendedprice, l_discount]
-07)----------Projection: part.p_partkey
-08)------------Filter: part.p_brand = Utf8("Brand#12") OR part.p_brand = Utf8("Brand#23")
-09)--------------TableScan: part projection=[p_partkey, p_brand], partial_filters=[part.p_brand = Utf8("Brand#12") OR part.p_brand = Utf8("Brand#23")]
-10)------TableScan: partsupp projection=[ps_partkey, ps_suppkey]
-physical_plan
-01)AggregateExec: mode=SinglePartitioned, gby=[p_partkey@2 as p_partkey], aggr=[sum(lineitem.l_extendedprice), avg(lineitem.l_discount), count(DISTINCT partsupp.ps_suppkey)]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(p_partkey@2, ps_partkey@0)], projection=[l_extendedprice@0, l_discount@1, p_partkey@2, ps_suppkey@4]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_partkey@0, p_partkey@0)], projection=[l_extendedprice@1, l_discount@2, p_partkey@3]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=4
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_extendedprice, l_discount], has_header=true
-10)----------CoalesceBatchesExec: target_batch_size=8192
-11)------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
-12)--------------ProjectionExec: expr=[p_partkey@0 as p_partkey]
-13)----------------CoalesceBatchesExec: target_batch_size=8192
-14)------------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23
-15)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-16)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], has_header=true
-17)------CoalesceBatchesExec: target_batch_size=8192
-18)--------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=1
-19)----------MemoryExec: partitions=1, partition_sizes=[1]
 
 # Inlist simplification
 

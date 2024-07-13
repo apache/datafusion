@@ -52,7 +52,7 @@ use datafusion_expr::{
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     Volatility, WriteOp,
 };
-use sqlparser::ast;
+use sqlparser::ast::{self, AssignmentTarget, CreateTable};
 use sqlparser::ast::{
     Assignment, ColumnDef, CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr,
     Expr, FromTable, Ident, Insert, ObjectName, ObjectType, OneOrManyWithParens, Query,
@@ -240,7 +240,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 value,
             } => self.set_variable_to_plan(local, hivevar, &variables, value),
 
-            Statement::CreateTable {
+            Statement::CreateTable(CreateTable {
                 query,
                 name,
                 columns,
@@ -250,7 +250,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_not_exists,
                 or_replace,
                 ..
-            } if table_properties.is_empty() && with_options.is_empty() => {
+            }) if table_properties.is_empty() && with_options.is_empty() => {
                 // Merge inline constraints and existing constraints
                 let mut all_constraints = constraints;
                 let inline_constraints = calc_inline_constraints_from_columns(&columns);
@@ -1284,8 +1284,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut assign_map = assignments
             .iter()
             .map(|assign| {
-                let col_name: &Ident = assign
-                    .id
+                let cols = match &assign.target {
+                    AssignmentTarget::ColumnName(cols) => cols,
+                    _ => plan_err!("Tuples are not supported")?,
+                };
+                let col_name: &Ident = cols
+                    .0
                     .iter()
                     .last()
                     .ok_or_else(|| plan_datafusion_err!("Empty column id"))?;

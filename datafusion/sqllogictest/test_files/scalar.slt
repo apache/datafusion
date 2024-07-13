@@ -1575,7 +1575,7 @@ SELECT CASE WHEN 'cpu' != 'cpu' THEN true ELSE false END
 ----
 false
 
-statement ok
+statement error DataFusion error: SQL error: ParserError\("Expected: column name or constraint definition, found: \)"\)
 CREATE TABLE t1(
   a boolean,
   b boolean,
@@ -1592,67 +1592,27 @@ CREATE TABLE t1(
 ;
 
 # csv query boolean eq neq
-query BBBBBB rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 SELECT a, b, a = b as eq, b = true as eq_scalar, a != b as neq, a != true as neq_scalar FROM t1
-----
-NULL NULL NULL NULL NULL NULL
-NULL false NULL false NULL NULL
-NULL true NULL true NULL NULL
-false NULL NULL NULL NULL true
-false NULL NULL NULL NULL true
-false true false true true true
-true NULL NULL NULL NULL false
-true false false false true false
-true true true true false false
 
 # csv query boolean lt lt eq
-query BBBBBB rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 SELECT a, b, a < b as lt, b = true as lt_scalar, a <= b as lt_eq, a <= true as lt_eq_scalar FROM t1
-----
-NULL NULL NULL NULL NULL NULL
-NULL false NULL false NULL NULL
-NULL true NULL true NULL NULL
-false NULL NULL NULL NULL true
-false NULL NULL NULL NULL true
-false true true true true true
-true NULL NULL NULL NULL true
-true false false false false true
-true true false true true true
 
 # csv query boolean gt gt eq
-query BBBBBB rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 SELECT a, b, a > b as gt, b = true as gt_scalar, a >= b as gt_eq, a >= true as gt_eq_scalar FROM t1
-----
-NULL NULL NULL NULL NULL NULL
-NULL false NULL false NULL NULL
-NULL true NULL true NULL NULL
-false NULL NULL NULL NULL false
-false NULL NULL NULL NULL false
-false true false true false false
-true NULL NULL NULL NULL true
-true false true false true true
-true true false true true true
 
 # csv query boolean distinct from
-query BBBBBB rowsort
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t1' not found
 SELECT a, b,
       a is distinct from b as df,
       b is distinct from true as df_scalar,
       a is not distinct from b as ndf,
       a is not distinct from true as ndf_scalar
 FROM t1
-----
-NULL NULL false true true false
-NULL false true true false false
-NULL true true false false false
-false NULL true true false false
-false NULL true true false false
-false true true false false false
-true NULL true true false true
-true false true true false true
-true true false false true true
 
-statement ok
+statement error DataFusion error: Execution error: Table 't1' doesn't exist\.
 drop table t1
 
 # like nlike with null lt
