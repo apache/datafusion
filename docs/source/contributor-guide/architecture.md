@@ -51,13 +51,13 @@ functionality (such as very specific time series or stream processing features)
 are typically implemented using the extension APIs.
 
 If have a use case that is not covered by the existing APIs, we would love to
-work with you to design a new general purpose API. There are often others are
+work with you to design a new general purpose API. There are often others who are
 interested in similar extensions and the act of defining the API often improves
 the code overall for everyone.
 
 Extension APIs that provide "safe" default behaviors are more likely to be
 suitable for inclusion in DataFusion, while APIs that require major changes to
-built-in operators are likely less likely. For example, it might make less sense
+built-in operators are less likely. For example, it might make less sense
 to add an API to support a stream processing feature if that would result in
 slower performance for built-in operators. It may still make sense to add
 extension APIs for such features, but leave implementation of such operators in
