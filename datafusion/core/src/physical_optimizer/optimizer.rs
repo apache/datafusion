@@ -125,6 +125,10 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // The LimitPushdown rule tries to push limits down as far as possible,
+            // replacing ExecutionPlans with fetching versions or adding limits
+            // past ExecutionPlans that support limit pushdown.
+            Arc::new(LimitPushdown::new()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query
@@ -133,8 +137,7 @@ impl PhysicalOptimizer {
             // message for invalid plans. It makes no changes to the
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
-            Arc::new(SanityCheckPlan::new()),
-            Arc::new(LimitPushdown::new())
+            Arc::new(SanityCheckPlan::new())
         ];
 
         Self::with_rules(rules)
