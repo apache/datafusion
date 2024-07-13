@@ -4542,7 +4542,7 @@ LOCATION 'test_files/scratch/group_by/timestamp_table'
 OPTIONS ('format.has_header' 'true');
 
 # Group By using date_trunc
-query PI
+query PI rowsort
 SELECT date_trunc('week', t1) as week, sum(c2)
 FROM timestamp_table
 GROUP BY date_trunc('week', t1)

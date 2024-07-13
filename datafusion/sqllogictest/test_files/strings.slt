@@ -32,22 +32,22 @@ CREATE TABLE test(
 ;
 
 # LIKE
-query T
+query T rowsort
 SELECT s FROM test WHERE s LIKE 'p1%';
 ----
 p1
 p1e1
 p1m1e1
 
-query T
+query T rowsort
 SELECT s FROM test WHERE s LIKE '%m1%';
 ----
-p1m1e1
 P1m1e1
+p1m1e1
 p2m1e1
 
 # NOT LIKE
-query T
+query T rowsort
 SELECT s FROM test WHERE s NOT LIKE 'p1%';
 ----
 P1
@@ -60,18 +60,18 @@ p2m1e1
 
 
 # ILIKE
-query T
+query T rowsort
 SELECT s FROM test WHERE s ILIKE 'p1%';
 ----
-p1
-p1e1
-p1m1e1
 P1
 P1e1
 P1m1e1
+p1
+p1e1
+p1m1e1
 
 # NOT ILIKE
-query T
+query T rowsort
 SELECT s FROM test WHERE s NOT ILIKE 'p1%';
 ----
 e1
