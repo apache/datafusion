@@ -1502,12 +1502,12 @@ impl SessionStateDefaults {
         functions
     }
 
-    /// returns the list of default [`AggregateUDF']'s 
+    /// returns the list of default [`AggregateUDF']'s
     pub fn default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         functions_aggregate::all_default_aggregate_functions()
     }
 
-    /// returns the list of default [`FileFormatFactory']'s 
+    /// returns the list of default [`FileFormatFactory']'s
     pub fn default_file_formats() -> Vec<Arc<dyn FileFormatFactory>> {
         let file_formats: Vec<Arc<dyn FileFormatFactory>> = vec![
             #[cfg(feature = "parquet")]
