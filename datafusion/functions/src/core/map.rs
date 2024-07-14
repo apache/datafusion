@@ -28,11 +28,18 @@ use datafusion_common::{exec_err, internal_err, ScalarValue};
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
+/// Check if we can evaluate the expr to constant directly.
+///
+/// # Example
+/// ```sql
+/// SELECT make_map('type', 'test') from test
+/// ```
+/// We can evaluate the result of `make_map` directly.
 #[inline]
 fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
-    args.iter().all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
+    args.iter()
+        .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
-
 
 fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let can_evaluate_to_const = can_evaluate_to_const(args);
@@ -96,7 +103,11 @@ fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
     }
 }
 
-fn make_map_batch_internal(keys: ArrayRef, values: ArrayRef, can_evaluate_to_const: bool) -> Result<ColumnarValue> {
+fn make_map_batch_internal(
+    keys: ArrayRef,
+    values: ArrayRef,
+    can_evaluate_to_const: bool,
+) -> Result<ColumnarValue> {
     if keys.null_count() > 0 {
         return exec_err!("map key cannot be null");
     }
@@ -137,13 +148,11 @@ fn make_map_batch_internal(keys: ArrayRef, values: ArrayRef, can_evaluate_to_con
         .build()?;
     let map_array = Arc::new(MapArray::from(map_data));
 
-    // If all inputs are constants(such as `make_map('type', 'test')`),
-    // the result should be scalar.
     Ok(if can_evaluate_to_const {
         ColumnarValue::Scalar(ScalarValue::try_from_array(map_array.as_ref(), 0)?)
     } else {
         ColumnarValue::Array(map_array)
-    })    
+    })
 }
 
 #[derive(Debug)]

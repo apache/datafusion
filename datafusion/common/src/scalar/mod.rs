@@ -2678,7 +2678,10 @@ impl ScalarValue {
             DataType::Duration(TimeUnit::Nanosecond) => {
                 typed_cast!(array, index, DurationNanosecondArray, DurationNanosecond)?
             }
-
+            DataType::Map(_, _) => {
+                let a = array.slice(index, 1);
+                Self::Map(Arc::new(a.as_map().to_owned()))
+            }
             other => {
                 return _not_impl_err!(
                     "Can't create a scalar from array of type \"{other:?}\""
