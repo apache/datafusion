@@ -29,7 +29,6 @@ use arrow::{
 
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
-    not_impl_err,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
