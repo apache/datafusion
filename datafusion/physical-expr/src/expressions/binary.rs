@@ -54,7 +54,8 @@ pub struct BinaryExpr {
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
-    /// precompiled regexp pattern
+    /// Only used when evaluating literal regex expressions. Example regex expression: c1 ~ '^a' 
+    /// It's helpful saving time of compiling literal pattern string for each execution.
     precompiled_regexp: Option<regex::Regex>,
 }
 
@@ -101,7 +102,7 @@ impl BinaryExpr {
         &self.op
     }
 
-    /// precomile literal regexp pattern
+    /// Get pre-compiled regexp 
     fn precompile_regexp_pattern(op: &Operator, lit: &Arc<dyn PhysicalExpr>) -> Option<regex::Regex> {
         match op {
             Operator::RegexMatch | 
@@ -713,7 +714,7 @@ pub fn binary(
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
 }
 
-/// copy from arrow::compute::kernels::comparison::regexp_scalar_match
+/// It is used for scalar regexp matching
 fn regexp_scalar_match<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex: &regex::Regex,
