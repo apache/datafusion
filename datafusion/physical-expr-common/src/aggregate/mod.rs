@@ -43,6 +43,9 @@ use datafusion_expr::utils::AggregateOrderSensitivity;
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
+/// 
+/// `input_exprs` and `sort_exprs` are used for customizing Accumulator as the arguments in `AccumulatorArgs`, 
+/// if you don't need them it is fine to pass empty slice `&[]`.
 #[allow(clippy::too_many_arguments)]
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
