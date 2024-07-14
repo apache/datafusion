@@ -1080,7 +1080,7 @@ mod tests {
                 ),
             };
 
-            // Datafusion ignores timezones for comparisons of ScalarValue
+            // DataFusion ignores timezones for comparisons of ScalarValue
             // so double check it here
             assert_eq!(lit_tz_none, lit_tz_utc);
 

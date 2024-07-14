@@ -39,7 +39,7 @@ DataFusion's SQL implementation is tested using [sqllogictest](https://github.co
 
 Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.
 
-### Rust Integration Tests
+## Rust Integration Tests
 
 There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/datafusion/tree/main/datafusion/core/tests) directory.
 
@@ -48,6 +48,18 @@ You can run these tests individually using `cargo` as normal command such as
 ```shell
 cargo test -p datafusion --test parquet_exec
 ```
+
+## SQL "Fuzz" testing
+
+DataFusion uses the [SQLancer] for "fuzz" testing: it generates random SQL
+queries and execute them against DataFusion to find bugs.
+
+The code is in the [datafusion-sqllancer] repository, and we welcome further
+contributions. Kudos to [@2010YOUY01] for the initial implementation.
+
+[sqlancer]: https://github.com/sqlancer/sqlancer
+[datafusion-sqllancer]: https://github.com/datafusion-contrib/datafusion-sqllancer
+[@2010youy01]: https://github.com/2010YOUY01
 
 ## Documentation Examples
 

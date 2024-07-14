@@ -394,6 +394,14 @@ pub fn parse_physical_expr(
                 codec,
             )?,
         )),
+        ExprType::Extension(extension) => {
+            let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
+                .inputs
+                .iter()
+                .map(|e| parse_physical_expr(e, registry, input_schema, codec))
+                .collect::<Result<_>>()?;
+            (codec.try_decode_expr(extension.expr.as_slice(), &inputs)?) as _
+        }
     };
 
     Ok(pexpr)

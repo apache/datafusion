@@ -17,16 +17,20 @@
 
 //! [`WindowUDF`]: User Defined Window Functions
 
-use crate::{
-    function::WindowFunctionSimplification, Expr, PartitionEvaluator,
-    PartitionEvaluatorFactory, ReturnTypeFunction, Signature, WindowFrame,
-};
-use arrow::datatypes::DataType;
-use datafusion_common::Result;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
     any::Any,
     fmt::{self, Debug, Display, Formatter},
     sync::Arc,
+};
+
+use arrow::datatypes::DataType;
+
+use datafusion_common::Result;
+
+use crate::{
+    function::WindowFunctionSimplification, Expr, PartitionEvaluator,
+    PartitionEvaluatorFactory, ReturnTypeFunction, Signature, WindowFrame,
 };
 
 /// Logical representation of a user-defined window function (UDWF)
@@ -62,16 +66,15 @@ impl Display for WindowUDF {
 
 impl PartialEq for WindowUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        self.inner.equals(other.inner.as_ref())
     }
 }
 
 impl Eq for WindowUDF {}
 
-impl std::hash::Hash for WindowUDF {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name().hash(state);
-        self.signature().hash(state);
+impl Hash for WindowUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.hash_value().hash(state)
     }
 }
 
@@ -212,7 +215,7 @@ where
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
 ///   signature: Signature
-/// };
+/// }
 ///
 /// impl SmoothIt {
 ///   fn new() -> Self {
@@ -296,6 +299,33 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         None
     }
+
+    /// Return true if this window UDF is equal to the other.
+    ///
+    /// Allows customizing the equality of window UDFs.
+    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
+    ///
+    /// - reflexive: `a.equals(a)`;
+    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
+    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
+    ///
+    /// By default, compares [`Self::name`] and [`Self::signature`].
+    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+        self.name() == other.name() && self.signature() == other.signature()
+    }
+
+    /// Returns a hash value for this window UDF.
+    ///
+    /// Allows customizing the hash code of window UDFs. Similarly to [`Hash`] and [`Eq`],
+    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
+    ///
+    /// By default, hashes [`Self::name`] and [`Self::signature`].
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.name().hash(hasher);
+        self.signature().hash(hasher);
+        hasher.finish()
+    }
 }
 
 /// WindowUDF that adds an alias to the underlying function. It is better to
@@ -341,6 +371,21 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<AliasedWindowUDFImpl>() {
+            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
+        } else {
+            false
+        }
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.inner.hash_value().hash(hasher);
+        self.aliases.hash(hasher);
+        hasher.finish()
     }
 }
 

@@ -93,7 +93,7 @@ pub enum TypeSignature {
     Variadic(Vec<DataType>),
     /// The acceptable signature and coercions rules to coerce arguments to this
     /// signature are special for this function. If this signature is specified,
-    /// Datafusion will call [`ScalarUDFImpl::coerce_types`] to prepare argument types.
+    /// DataFusion will call [`ScalarUDFImpl::coerce_types`] to prepare argument types.
     ///
     /// [`ScalarUDFImpl::coerce_types`]: crate::udf::ScalarUDFImpl::coerce_types
     UserDefined,

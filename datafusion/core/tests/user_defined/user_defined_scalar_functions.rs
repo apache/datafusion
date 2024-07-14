@@ -16,11 +16,20 @@
 // under the License.
 
 use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::compute::kernels::numeric::add;
-use arrow_array::{ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch};
+use arrow_array::builder::BooleanBuilder;
+use arrow_array::cast::AsArray;
+use arrow_array::{
+    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+};
 use arrow_schema::{DataType, Field, Schema};
+use parking_lot::Mutex;
+use regex::Regex;
+use sqlparser::ast::Ident;
+
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
@@ -37,8 +46,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions_array::range::range_udf;
-use parking_lot::Mutex;
-use sqlparser::ast::Ident;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -1018,6 +1025,121 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
 
     assert_eq!(call, &expected);
 
+    Ok(())
+}
+
+#[derive(Debug)]
+struct MyRegexUdf {
+    signature: Signature,
+    regex: Regex,
+}
+
+impl MyRegexUdf {
+    fn new(pattern: &str) -> Self {
+        Self {
+            signature: Signature::exact(vec![DataType::Utf8], Volatility::Immutable),
+            regex: Regex::new(pattern).expect("regex"),
+        }
+    }
+
+    fn matches(&self, value: Option<&str>) -> Option<bool> {
+        Some(self.regex.is_match(value?))
+    }
+}
+
+impl ScalarUDFImpl for MyRegexUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "regex_udf"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        if matches!(args, [DataType::Utf8]) {
+            Ok(DataType::Boolean)
+        } else {
+            plan_err!("regex_udf only accepts a Utf8 argument")
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        match args {
+            [ColumnarValue::Scalar(ScalarValue::Utf8(value))] => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
+                    self.matches(value.as_deref()),
+                )))
+            }
+            [ColumnarValue::Array(values)] => {
+                let mut builder = BooleanBuilder::with_capacity(values.len());
+                for value in values.as_string::<i32>() {
+                    builder.append_option(self.matches(value))
+                }
+                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+            }
+            _ => exec_err!("regex_udf only accepts a Utf8 arguments"),
+        }
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<MyRegexUdf>() {
+            self.regex.as_str() == other.regex.as_str()
+        } else {
+            false
+        }
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.regex.as_str().hash(hasher);
+        hasher.finish()
+    }
+}
+
+#[tokio::test]
+async fn test_parameterized_scalar_udf() -> Result<()> {
+    let batch = RecordBatch::try_from_iter([(
+        "text",
+        Arc::new(StringArray::from(vec!["foo", "bar", "foobar", "barfoo"])) as ArrayRef,
+    )])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let t = ctx.table("t").await?;
+    let foo_udf = ScalarUDF::from(MyRegexUdf::new("fo{2}"));
+    let bar_udf = ScalarUDF::from(MyRegexUdf::new("[Bb]ar"));
+
+    let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
+        .filter(
+            foo_udf
+                .call(vec![col("text")])
+                .and(bar_udf.call(vec![col("text")])),
+        )?
+        .filter(col("text").is_not_null())?
+        .build()?;
+
+    assert_eq!(
+        format!("{plan:?}"),
+        "Filter: t.text IS NOT NULL\n  Filter: regex_udf(t.text) AND regex_udf(t.text)\n    TableScan: t projection=[text]"
+    );
+
+    let actual = DataFrame::new(ctx.state(), plan).collect().await?;
+    let expected = [
+        "+--------+",
+        "| text   |",
+        "+--------+",
+        "| foobar |",
+        "| barfoo |",
+        "+--------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    ctx.deregister_table("t")?;
     Ok(())
 }
 

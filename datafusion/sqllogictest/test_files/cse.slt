@@ -93,15 +93,16 @@ FROM t1
 ----
 logical_plan
 01)Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 AS c3, __common_expr_2 AS c4, __common_expr_3 AS c5, __common_expr_3 AS c6
-02)--Projection: t1.a = Float64(0) AND t1.b = Float64(0) AS __common_expr_1, t1.a = Float64(0) OR t1.b = Float64(0) AS __common_expr_2, CASE WHEN t1.a = Float64(0) THEN Int64(0) ELSE Int64(1) END AS __common_expr_3
-03)----TableScan: t1 projection=[a, b]
+02)--Projection: __common_expr_4 AND t1.b = Float64(0) AS __common_expr_1, __common_expr_4 OR t1.b = Float64(0) AS __common_expr_2, CASE WHEN __common_expr_4 THEN Int64(0) ELSE Int64(1) END AS __common_expr_3
+03)----Projection: t1.a = Float64(0) AS __common_expr_4, t1.b
+04)------TableScan: t1 projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 as c1, __common_expr_1@0 as c2, __common_expr_2@1 as c3, __common_expr_2@1 as c4, __common_expr_3@2 as c5, __common_expr_3@2 as c6]
-02)--ProjectionExec: expr=[a@0 = 0 AND b@1 = 0 as __common_expr_1, a@0 = 0 OR b@1 = 0 as __common_expr_2, CASE WHEN a@0 = 0 THEN 0 ELSE 1 END as __common_expr_3]
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+02)--ProjectionExec: expr=[__common_expr_4@0 AND b@1 = 0 as __common_expr_1, __common_expr_4@0 OR b@1 = 0 as __common_expr_2, CASE WHEN __common_expr_4@0 THEN 0 ELSE 1 END as __common_expr_3]
+03)----ProjectionExec: expr=[a@0 = 0 as __common_expr_4, b@1 as b]
+04)------MemoryExec: partitions=1, partition_sizes=[0]
 
 # Common children of short-circuit expression
-# TODO: consider surely executed children of "short circuited"s for CSE. i.e. `a = 0`, `a = 2`, `a = 4` should be extracted
 query TT
 EXPLAIN SELECT
     a = 0 AND b = 0 AS c1,
@@ -121,14 +122,15 @@ EXPLAIN SELECT
 FROM t1
 ----
 logical_plan
-01)Projection: t1.a = Float64(0) AND t1.b = Float64(0) AS c1, t1.a = Float64(0) AND t1.b = Float64(1) AS c2, t1.b = Float64(2) AND t1.a = Float64(1) AS c3, t1.b = Float64(3) AND t1.a = Float64(1) AS c4, t1.a = Float64(2) OR t1.b = Float64(4) AS c5, t1.a = Float64(2) OR t1.b = Float64(5) AS c6, t1.b = Float64(6) OR t1.a = Float64(3) AS c7, t1.b = Float64(7) OR t1.a = Float64(3) AS c8, CASE WHEN t1.a = Float64(4) THEN Int64(0) ELSE Int64(1) END AS c9, CASE WHEN t1.a = Float64(4) THEN Int64(0) ELSE Int64(2) END AS c10, CASE WHEN t1.b = Float64(8) THEN t1.a + Float64(1) ELSE Float64(0) END AS c11, CASE WHEN t1.b = Float64(9) THEN t1.a + Float64(1) ELSE Float64(0) END AS c12, CASE WHEN t1.b = Float64(10) THEN Float64(0) ELSE t1.a + Float64(2) END AS c13, CASE WHEN t1.b = Float64(11) THEN Float64(0) ELSE t1.a + Float64(2) END AS c14
-02)--TableScan: t1 projection=[a, b]
+01)Projection: __common_expr_1 AND t1.b = Float64(0) AS c1, __common_expr_1 AND t1.b = Float64(1) AS c2, t1.b = Float64(2) AND t1.a = Float64(1) AS c3, t1.b = Float64(3) AND t1.a = Float64(1) AS c4, __common_expr_2 OR t1.b = Float64(4) AS c5, __common_expr_2 OR t1.b = Float64(5) AS c6, t1.b = Float64(6) OR t1.a = Float64(3) AS c7, t1.b = Float64(7) OR t1.a = Float64(3) AS c8, CASE WHEN __common_expr_3 THEN Int64(0) ELSE Int64(1) END AS c9, CASE WHEN __common_expr_3 THEN Int64(0) ELSE Int64(2) END AS c10, CASE WHEN t1.b = Float64(8) THEN t1.a + Float64(1) ELSE Float64(0) END AS c11, CASE WHEN t1.b = Float64(9) THEN t1.a + Float64(1) ELSE Float64(0) END AS c12, CASE WHEN t1.b = Float64(10) THEN Float64(0) ELSE t1.a + Float64(2) END AS c13, CASE WHEN t1.b = Float64(11) THEN Float64(0) ELSE t1.a + Float64(2) END AS c14
+02)--Projection: t1.a = Float64(0) AS __common_expr_1, t1.a = Float64(2) AS __common_expr_2, t1.a = Float64(4) AS __common_expr_3, t1.a, t1.b
+03)----TableScan: t1 projection=[a, b]
 physical_plan
-01)ProjectionExec: expr=[a@0 = 0 AND b@1 = 0 as c1, a@0 = 0 AND b@1 = 1 as c2, b@1 = 2 AND a@0 = 1 as c3, b@1 = 3 AND a@0 = 1 as c4, a@0 = 2 OR b@1 = 4 as c5, a@0 = 2 OR b@1 = 5 as c6, b@1 = 6 OR a@0 = 3 as c7, b@1 = 7 OR a@0 = 3 as c8, CASE WHEN a@0 = 4 THEN 0 ELSE 1 END as c9, CASE WHEN a@0 = 4 THEN 0 ELSE 2 END as c10, CASE WHEN b@1 = 8 THEN a@0 + 1 ELSE 0 END as c11, CASE WHEN b@1 = 9 THEN a@0 + 1 ELSE 0 END as c12, CASE WHEN b@1 = 10 THEN 0 ELSE a@0 + 2 END as c13, CASE WHEN b@1 = 11 THEN 0 ELSE a@0 + 2 END as c14]
-02)--MemoryExec: partitions=1, partition_sizes=[0]
+01)ProjectionExec: expr=[__common_expr_1@0 AND b@4 = 0 as c1, __common_expr_1@0 AND b@4 = 1 as c2, b@4 = 2 AND a@3 = 1 as c3, b@4 = 3 AND a@3 = 1 as c4, __common_expr_2@1 OR b@4 = 4 as c5, __common_expr_2@1 OR b@4 = 5 as c6, b@4 = 6 OR a@3 = 3 as c7, b@4 = 7 OR a@3 = 3 as c8, CASE WHEN __common_expr_3@2 THEN 0 ELSE 1 END as c9, CASE WHEN __common_expr_3@2 THEN 0 ELSE 2 END as c10, CASE WHEN b@4 = 8 THEN a@3 + 1 ELSE 0 END as c11, CASE WHEN b@4 = 9 THEN a@3 + 1 ELSE 0 END as c12, CASE WHEN b@4 = 10 THEN 0 ELSE a@3 + 2 END as c13, CASE WHEN b@4 = 11 THEN 0 ELSE a@3 + 2 END as c14]
+02)--ProjectionExec: expr=[a@0 = 0 as __common_expr_1, a@0 = 2 as __common_expr_2, a@0 = 4 as __common_expr_3, a@0 as a, b@1 as b]
+03)----MemoryExec: partitions=1, partition_sizes=[0]
 
 # Common children of volatile, short-circuit expression
-# TODO: consider surely executed children of "short circuited"s for CSE. i.e. `a = 0`, `a = 2`, `a = 4` should be extracted
 query TT
 EXPLAIN SELECT
     a = 0 AND b = random() AS c1,
@@ -148,11 +150,13 @@ EXPLAIN SELECT
 FROM t1
 ----
 logical_plan
-01)Projection: t1.a = Float64(0) AND t1.b = random() AS c1, t1.a = Float64(0) AND t1.b = Float64(1) + random() AS c2, t1.b = Float64(2) + random() AND t1.a = Float64(1) AS c3, t1.b = Float64(3) + random() AND t1.a = Float64(1) AS c4, t1.a = Float64(2) OR t1.b = Float64(4) + random() AS c5, t1.a = Float64(2) OR t1.b = Float64(5) + random() AS c6, t1.b = Float64(6) + random() OR t1.a = Float64(3) AS c7, t1.b = Float64(7) + random() OR t1.a = Float64(3) AS c8, CASE WHEN t1.a = Float64(4) THEN random() ELSE Float64(1) END AS c9, CASE WHEN t1.a = Float64(4) THEN random() ELSE Float64(2) END AS c10, CASE WHEN t1.b = Float64(8) + random() THEN t1.a + Float64(1) ELSE Float64(0) END AS c11, CASE WHEN t1.b = Float64(9) + random() THEN t1.a + Float64(1) ELSE Float64(0) END AS c12, CASE WHEN t1.b = Float64(10) + random() THEN Float64(0) ELSE t1.a + Float64(2) END AS c13, CASE WHEN t1.b = Float64(11) + random() THEN Float64(0) ELSE t1.a + Float64(2) END AS c14
-02)--TableScan: t1 projection=[a, b]
+01)Projection: __common_expr_1 AND t1.b = random() AS c1, __common_expr_1 AND t1.b = Float64(1) + random() AS c2, t1.b = Float64(2) + random() AND t1.a = Float64(1) AS c3, t1.b = Float64(3) + random() AND t1.a = Float64(1) AS c4, __common_expr_2 OR t1.b = Float64(4) + random() AS c5, __common_expr_2 OR t1.b = Float64(5) + random() AS c6, t1.b = Float64(6) + random() OR t1.a = Float64(3) AS c7, t1.b = Float64(7) + random() OR t1.a = Float64(3) AS c8, CASE WHEN __common_expr_3 THEN random() ELSE Float64(1) END AS c9, CASE WHEN __common_expr_3 THEN random() ELSE Float64(2) END AS c10, CASE WHEN t1.b = Float64(8) + random() THEN t1.a + Float64(1) ELSE Float64(0) END AS c11, CASE WHEN t1.b = Float64(9) + random() THEN t1.a + Float64(1) ELSE Float64(0) END AS c12, CASE WHEN t1.b = Float64(10) + random() THEN Float64(0) ELSE t1.a + Float64(2) END AS c13, CASE WHEN t1.b = Float64(11) + random() THEN Float64(0) ELSE t1.a + Float64(2) END AS c14
+02)--Projection: t1.a = Float64(0) AS __common_expr_1, t1.a = Float64(2) AS __common_expr_2, t1.a = Float64(4) AS __common_expr_3, t1.a, t1.b
+03)----TableScan: t1 projection=[a, b]
 physical_plan
-01)ProjectionExec: expr=[a@0 = 0 AND b@1 = random() as c1, a@0 = 0 AND b@1 = 1 + random() as c2, b@1 = 2 + random() AND a@0 = 1 as c3, b@1 = 3 + random() AND a@0 = 1 as c4, a@0 = 2 OR b@1 = 4 + random() as c5, a@0 = 2 OR b@1 = 5 + random() as c6, b@1 = 6 + random() OR a@0 = 3 as c7, b@1 = 7 + random() OR a@0 = 3 as c8, CASE WHEN a@0 = 4 THEN random() ELSE 1 END as c9, CASE WHEN a@0 = 4 THEN random() ELSE 2 END as c10, CASE WHEN b@1 = 8 + random() THEN a@0 + 1 ELSE 0 END as c11, CASE WHEN b@1 = 9 + random() THEN a@0 + 1 ELSE 0 END as c12, CASE WHEN b@1 = 10 + random() THEN 0 ELSE a@0 + 2 END as c13, CASE WHEN b@1 = 11 + random() THEN 0 ELSE a@0 + 2 END as c14]
-02)--MemoryExec: partitions=1, partition_sizes=[0]
+01)ProjectionExec: expr=[__common_expr_1@0 AND b@4 = random() as c1, __common_expr_1@0 AND b@4 = 1 + random() as c2, b@4 = 2 + random() AND a@3 = 1 as c3, b@4 = 3 + random() AND a@3 = 1 as c4, __common_expr_2@1 OR b@4 = 4 + random() as c5, __common_expr_2@1 OR b@4 = 5 + random() as c6, b@4 = 6 + random() OR a@3 = 3 as c7, b@4 = 7 + random() OR a@3 = 3 as c8, CASE WHEN __common_expr_3@2 THEN random() ELSE 1 END as c9, CASE WHEN __common_expr_3@2 THEN random() ELSE 2 END as c10, CASE WHEN b@4 = 8 + random() THEN a@3 + 1 ELSE 0 END as c11, CASE WHEN b@4 = 9 + random() THEN a@3 + 1 ELSE 0 END as c12, CASE WHEN b@4 = 10 + random() THEN 0 ELSE a@3 + 2 END as c13, CASE WHEN b@4 = 11 + random() THEN 0 ELSE a@3 + 2 END as c14]
+02)--ProjectionExec: expr=[a@0 = 0 as __common_expr_1, a@0 = 2 as __common_expr_2, a@0 = 4 as __common_expr_3, a@0 as a, b@1 as b]
+03)----MemoryExec: partitions=1, partition_sizes=[0]
 
 # Common volatile children of short-circuit expression
 query TT
@@ -170,4 +174,60 @@ logical_plan
 02)--TableScan: t1 projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 = random() AND b@1 = 0 as c1, a@0 = random() AND b@1 = 1 as c2, a@0 = 2 + random() OR b@1 = 4 as c3, a@0 = 2 + random() OR b@1 = 5 as c4, CASE WHEN a@0 = 4 + random() THEN 0 ELSE 1 END as c5, CASE WHEN a@0 = 4 + random() THEN 0 ELSE 2 END as c6]
+02)--MemoryExec: partitions=1, partition_sizes=[0]
+
+# Surely only once but also conditionally evaluated expressions
+query TT
+EXPLAIN SELECT
+    (a = 1 OR random() = 0) AND a = 1 AS c1,
+    (a = 2 AND random() = 0) OR a = 2 AS c2,
+    CASE WHEN a + 3 = 0 THEN a + 3 ELSE 0 END AS c3,
+    CASE WHEN a + 4 = 0 THEN 0 WHEN a + 4 THEN 0 ELSE 0 END AS c4,
+    CASE WHEN a + 5 = 0 THEN 0 WHEN random() = 0 THEN a + 5 ELSE 0 END AS c5,
+    CASE WHEN a + 6 = 0 THEN 0 ELSE a + 6 END AS c6
+FROM t1
+----
+logical_plan
+01)Projection: (__common_expr_1 OR random() = Float64(0)) AND __common_expr_1 AS c1, __common_expr_2 AND random() = Float64(0) OR __common_expr_2 AS c2, CASE WHEN __common_expr_3 = Float64(0) THEN __common_expr_3 ELSE Float64(0) END AS c3, CASE WHEN __common_expr_4 = Float64(0) THEN Int64(0) WHEN CAST(__common_expr_4 AS Boolean) THEN Int64(0) ELSE Int64(0) END AS c4, CASE WHEN __common_expr_5 = Float64(0) THEN Float64(0) WHEN random() = Float64(0) THEN __common_expr_5 ELSE Float64(0) END AS c5, CASE WHEN __common_expr_6 = Float64(0) THEN Float64(0) ELSE __common_expr_6 END AS c6
+02)--Projection: t1.a = Float64(1) AS __common_expr_1, t1.a = Float64(2) AS __common_expr_2, t1.a + Float64(3) AS __common_expr_3, t1.a + Float64(4) AS __common_expr_4, t1.a + Float64(5) AS __common_expr_5, t1.a + Float64(6) AS __common_expr_6
+03)----TableScan: t1 projection=[a]
+physical_plan
+01)ProjectionExec: expr=[(__common_expr_1@0 OR random() = 0) AND __common_expr_1@0 as c1, __common_expr_2@1 AND random() = 0 OR __common_expr_2@1 as c2, CASE WHEN __common_expr_3@2 = 0 THEN __common_expr_3@2 ELSE 0 END as c3, CASE WHEN __common_expr_4@3 = 0 THEN 0 WHEN CAST(__common_expr_4@3 AS Boolean) THEN 0 ELSE 0 END as c4, CASE WHEN __common_expr_5@4 = 0 THEN 0 WHEN random() = 0 THEN __common_expr_5@4 ELSE 0 END as c5, CASE WHEN __common_expr_6@5 = 0 THEN 0 ELSE __common_expr_6@5 END as c6]
+02)--ProjectionExec: expr=[a@0 = 1 as __common_expr_1, a@0 = 2 as __common_expr_2, a@0 + 3 as __common_expr_3, a@0 + 4 as __common_expr_4, a@0 + 5 as __common_expr_5, a@0 + 6 as __common_expr_6]
+03)----MemoryExec: partitions=1, partition_sizes=[0]
+
+# Surely only once but also conditionally evaluated subexpressions
+query TT
+EXPLAIN SELECT
+    (a = 1 OR random() = 0) AND (a = 1 OR random() = 1) AS c1,
+    (a = 2 AND random() = 0) OR (a = 2 AND random() = 1) AS c2,
+    CASE WHEN a + 3 = 0 THEN a + 3 + random() ELSE 0 END AS c3,
+    CASE WHEN a + 4 = 0 THEN 0 ELSE a + 4 + random() END AS c4
+FROM t1
+----
+logical_plan
+01)Projection: (__common_expr_1 OR random() = Float64(0)) AND (__common_expr_1 OR random() = Float64(1)) AS c1, __common_expr_2 AND random() = Float64(0) OR __common_expr_2 AND random() = Float64(1) AS c2, CASE WHEN __common_expr_3 = Float64(0) THEN __common_expr_3 + random() ELSE Float64(0) END AS c3, CASE WHEN __common_expr_4 = Float64(0) THEN Float64(0) ELSE __common_expr_4 + random() END AS c4
+02)--Projection: t1.a = Float64(1) AS __common_expr_1, t1.a = Float64(2) AS __common_expr_2, t1.a + Float64(3) AS __common_expr_3, t1.a + Float64(4) AS __common_expr_4
+03)----TableScan: t1 projection=[a]
+physical_plan
+01)ProjectionExec: expr=[(__common_expr_1@0 OR random() = 0) AND (__common_expr_1@0 OR random() = 1) as c1, __common_expr_2@1 AND random() = 0 OR __common_expr_2@1 AND random() = 1 as c2, CASE WHEN __common_expr_3@2 = 0 THEN __common_expr_3@2 + random() ELSE 0 END as c3, CASE WHEN __common_expr_4@3 = 0 THEN 0 ELSE __common_expr_4@3 + random() END as c4]
+02)--ProjectionExec: expr=[a@0 = 1 as __common_expr_1, a@0 = 2 as __common_expr_2, a@0 + 3 as __common_expr_3, a@0 + 4 as __common_expr_4]
+03)----MemoryExec: partitions=1, partition_sizes=[0]
+
+# Only conditionally evaluated expressions
+query TT
+EXPLAIN SELECT
+    (random() = 0 OR a = 1) AND a = 1 AS c1,
+    (random() = 0 AND a = 2) OR a = 2 AS c2,
+    CASE WHEN random() = 0 THEN a + 3 ELSE a + 3 END AS c3,
+    CASE WHEN random() = 0 THEN 0 WHEN a + 4 = 0 THEN a + 4 ELSE 0 END AS c4,
+    CASE WHEN random() = 0 THEN 0 WHEN a + 5 = 0 THEN 0 ELSE a + 5 END AS c5,
+    CASE WHEN random() = 0 THEN 0 WHEN random() = 0 THEN a + 6 ELSE a + 6 END AS c6
+FROM t1
+----
+logical_plan
+01)Projection: (random() = Float64(0) OR t1.a = Float64(1)) AND t1.a = Float64(1) AS c1, random() = Float64(0) AND t1.a = Float64(2) OR t1.a = Float64(2) AS c2, CASE WHEN random() = Float64(0) THEN t1.a + Float64(3) ELSE t1.a + Float64(3) END AS c3, CASE WHEN random() = Float64(0) THEN Float64(0) WHEN t1.a + Float64(4) = Float64(0) THEN t1.a + Float64(4) ELSE Float64(0) END AS c4, CASE WHEN random() = Float64(0) THEN Float64(0) WHEN t1.a + Float64(5) = Float64(0) THEN Float64(0) ELSE t1.a + Float64(5) END AS c5, CASE WHEN random() = Float64(0) THEN Float64(0) WHEN random() = Float64(0) THEN t1.a + Float64(6) ELSE t1.a + Float64(6) END AS c6
+02)--TableScan: t1 projection=[a]
+physical_plan
+01)ProjectionExec: expr=[(random() = 0 OR a@0 = 1) AND a@0 = 1 as c1, random() = 0 AND a@0 = 2 OR a@0 = 2 as c2, CASE WHEN random() = 0 THEN a@0 + 3 ELSE a@0 + 3 END as c3, CASE WHEN random() = 0 THEN 0 WHEN a@0 + 4 = 0 THEN a@0 + 4 ELSE 0 END as c4, CASE WHEN random() = 0 THEN 0 WHEN a@0 + 5 = 0 THEN 0 ELSE a@0 + 5 END as c5, CASE WHEN random() = 0 THEN 0 WHEN random() = 0 THEN a@0 + 6 ELSE a@0 + 6 END as c6]
 02)--MemoryExec: partitions=1, partition_sizes=[0]

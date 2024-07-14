@@ -2844,3 +2844,180 @@ select arrow_cast('2024-06-17T13:00:00', 'Timestamp(Nanosecond, Some("UTC"))') -
 
 query error
 select arrow_cast('2024-06-17T13:00:00', 'Timestamp(Nanosecond, Some("+00:00"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("+01:00"))');
+
+##########
+## Test to_local_time function
+##########
+
+# invalid number of arguments -- no argument
+statement error
+select to_local_time();
+
+# invalid number of arguments -- more than 1 argument
+statement error
+select to_local_time('2024-04-01T00:00:20Z'::timestamp, 'some string');
+
+# invalid argument data type
+statement error DataFusion error: Execution error: The to_local_time function can only accept timestamp as the arg, got Utf8
+select to_local_time('2024-04-01T00:00:20Z');
+
+# invalid timezone
+statement error DataFusion error: Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
+select to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/timezone');
+
+# valid query
+query P
+select to_local_time('2024-04-01T00:00:20Z'::timestamp);
+----
+2024-04-01T00:00:20
+
+query P
+select to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE '+05:00');
+----
+2024-04-01T00:00:20
+
+query P
+select to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels');
+----
+2024-04-01T00:00:20
+
+query PTPT
+select
+  time,
+  arrow_typeof(time) as type,
+  to_local_time(time) as to_local_time,
+  arrow_typeof(to_local_time(time)) as to_local_time_type
+from (
+  select '2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels' as time
+);
+----
+2024-04-01T00:00:20+02:00 Timestamp(Nanosecond, Some("Europe/Brussels")) 2024-04-01T00:00:20 Timestamp(Nanosecond, None)
+
+# use to_local_time() in date_bin()
+query P
+select date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels'));
+----
+2024-04-01T00:00:00
+
+query P
+select date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels')) AT TIME ZONE 'Europe/Brussels';
+----
+2024-04-01T00:00:00+02:00
+
+# test using to_local_time() on array values
+statement ok
+create table t AS
+VALUES
+  ('2024-01-01T00:00:01Z'),
+  ('2024-02-01T00:00:01Z'),
+  ('2024-03-01T00:00:01Z'),
+  ('2024-04-01T00:00:01Z'),
+  ('2024-05-01T00:00:01Z'),
+  ('2024-06-01T00:00:01Z'),
+  ('2024-07-01T00:00:01Z'),
+  ('2024-08-01T00:00:01Z'),
+  ('2024-09-01T00:00:01Z'),
+  ('2024-10-01T00:00:01Z'),
+  ('2024-11-01T00:00:01Z'),
+  ('2024-12-01T00:00:01Z')
+;
+
+statement ok
+create view t_utc as
+select column1::timestamp AT TIME ZONE 'UTC' as "column1"
+from t;
+
+statement ok
+create view t_timezone as
+select column1::timestamp AT TIME ZONE 'Europe/Brussels' as "column1"
+from t;
+
+query PPT
+select column1, to_local_time(column1::timestamp), arrow_typeof(to_local_time(column1::timestamp)) from t_utc;
+----
+2024-01-01T00:00:01Z 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
+2024-02-01T00:00:01Z 2024-02-01T00:00:01 Timestamp(Nanosecond, None)
+2024-03-01T00:00:01Z 2024-03-01T00:00:01 Timestamp(Nanosecond, None)
+2024-04-01T00:00:01Z 2024-04-01T00:00:01 Timestamp(Nanosecond, None)
+2024-05-01T00:00:01Z 2024-05-01T00:00:01 Timestamp(Nanosecond, None)
+2024-06-01T00:00:01Z 2024-06-01T00:00:01 Timestamp(Nanosecond, None)
+2024-07-01T00:00:01Z 2024-07-01T00:00:01 Timestamp(Nanosecond, None)
+2024-08-01T00:00:01Z 2024-08-01T00:00:01 Timestamp(Nanosecond, None)
+2024-09-01T00:00:01Z 2024-09-01T00:00:01 Timestamp(Nanosecond, None)
+2024-10-01T00:00:01Z 2024-10-01T00:00:01 Timestamp(Nanosecond, None)
+2024-11-01T00:00:01Z 2024-11-01T00:00:01 Timestamp(Nanosecond, None)
+2024-12-01T00:00:01Z 2024-12-01T00:00:01 Timestamp(Nanosecond, None)
+
+query PPT
+select column1, to_local_time(column1), arrow_typeof(to_local_time(column1)) from t_utc;
+----
+2024-01-01T00:00:01Z 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
+2024-02-01T00:00:01Z 2024-02-01T00:00:01 Timestamp(Nanosecond, None)
+2024-03-01T00:00:01Z 2024-03-01T00:00:01 Timestamp(Nanosecond, None)
+2024-04-01T00:00:01Z 2024-04-01T00:00:01 Timestamp(Nanosecond, None)
+2024-05-01T00:00:01Z 2024-05-01T00:00:01 Timestamp(Nanosecond, None)
+2024-06-01T00:00:01Z 2024-06-01T00:00:01 Timestamp(Nanosecond, None)
+2024-07-01T00:00:01Z 2024-07-01T00:00:01 Timestamp(Nanosecond, None)
+2024-08-01T00:00:01Z 2024-08-01T00:00:01 Timestamp(Nanosecond, None)
+2024-09-01T00:00:01Z 2024-09-01T00:00:01 Timestamp(Nanosecond, None)
+2024-10-01T00:00:01Z 2024-10-01T00:00:01 Timestamp(Nanosecond, None)
+2024-11-01T00:00:01Z 2024-11-01T00:00:01 Timestamp(Nanosecond, None)
+2024-12-01T00:00:01Z 2024-12-01T00:00:01 Timestamp(Nanosecond, None)
+
+query PPT
+select column1, to_local_time(column1), arrow_typeof(to_local_time(column1)) from t_timezone;
+----
+2024-01-01T00:00:01+01:00 2024-01-01T00:00:01 Timestamp(Nanosecond, None)
+2024-02-01T00:00:01+01:00 2024-02-01T00:00:01 Timestamp(Nanosecond, None)
+2024-03-01T00:00:01+01:00 2024-03-01T00:00:01 Timestamp(Nanosecond, None)
+2024-04-01T00:00:01+02:00 2024-04-01T00:00:01 Timestamp(Nanosecond, None)
+2024-05-01T00:00:01+02:00 2024-05-01T00:00:01 Timestamp(Nanosecond, None)
+2024-06-01T00:00:01+02:00 2024-06-01T00:00:01 Timestamp(Nanosecond, None)
+2024-07-01T00:00:01+02:00 2024-07-01T00:00:01 Timestamp(Nanosecond, None)
+2024-08-01T00:00:01+02:00 2024-08-01T00:00:01 Timestamp(Nanosecond, None)
+2024-09-01T00:00:01+02:00 2024-09-01T00:00:01 Timestamp(Nanosecond, None)
+2024-10-01T00:00:01+02:00 2024-10-01T00:00:01 Timestamp(Nanosecond, None)
+2024-11-01T00:00:01+01:00 2024-11-01T00:00:01 Timestamp(Nanosecond, None)
+2024-12-01T00:00:01+01:00 2024-12-01T00:00:01 Timestamp(Nanosecond, None)
+
+# combine to_local_time() with date_bin()
+query P
+select date_bin(interval '1 day', to_local_time(column1)) AT TIME ZONE 'Europe/Brussels' as date_bin from t_utc;
+----
+2024-01-01T00:00:00+01:00
+2024-02-01T00:00:00+01:00
+2024-03-01T00:00:00+01:00
+2024-04-01T00:00:00+02:00
+2024-05-01T00:00:00+02:00
+2024-06-01T00:00:00+02:00
+2024-07-01T00:00:00+02:00
+2024-08-01T00:00:00+02:00
+2024-09-01T00:00:00+02:00
+2024-10-01T00:00:00+02:00
+2024-11-01T00:00:00+01:00
+2024-12-01T00:00:00+01:00
+
+query P
+select date_bin(interval '1 day', to_local_time(column1)) AT TIME ZONE 'Europe/Brussels' as date_bin from t_timezone;
+----
+2024-01-01T00:00:00+01:00
+2024-02-01T00:00:00+01:00
+2024-03-01T00:00:00+01:00
+2024-04-01T00:00:00+02:00
+2024-05-01T00:00:00+02:00
+2024-06-01T00:00:00+02:00
+2024-07-01T00:00:00+02:00
+2024-08-01T00:00:00+02:00
+2024-09-01T00:00:00+02:00
+2024-10-01T00:00:00+02:00
+2024-11-01T00:00:00+01:00
+2024-12-01T00:00:00+01:00
+
+statement ok
+drop table t;
+
+statement ok
+drop view t_utc;
+
+statement ok
+drop view t_timezone;

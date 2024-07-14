@@ -18,14 +18,19 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
-use arrow::{array::AsArray, datatypes::Fields};
-use arrow_array::{types::UInt64Type, Int32Array, PrimitiveArray, StructArray};
-use arrow_schema::Schema;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 
+use arrow::{array::AsArray, datatypes::Fields};
+use arrow_array::{
+    types::UInt64Type, Int32Array, PrimitiveArray, StringArray, StructArray,
+};
+use arrow_schema::Schema;
+
+use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
 use datafusion::test_util::plan_and_collect;
 use datafusion::{
@@ -45,8 +50,8 @@ use datafusion::{
 };
 use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err};
 use datafusion_expr::{
-    create_udaf, function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator,
-    SimpleAggregateUDF,
+    col, create_udaf, function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator,
+    LogicalPlanBuilder, SimpleAggregateUDF,
 };
 use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -374,6 +379,55 @@ async fn test_groups_accumulator() -> Result<()> {
     let sql_df = ctx.sql("SELECT geo_mean(a) FROM t group by a").await?;
     sql_df.show().await?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_parameterized_aggregate_udf() -> Result<()> {
+    let batch = RecordBatch::try_from_iter([(
+        "text",
+        Arc::new(StringArray::from(vec!["foo"])) as ArrayRef,
+    )])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let t = ctx.table("t").await?;
+    let signature = Signature::exact(vec![DataType::Utf8], Volatility::Immutable);
+    let udf1 = AggregateUDF::from(TestGroupsAccumulator {
+        signature: signature.clone(),
+        result: 1,
+    });
+    let udf2 = AggregateUDF::from(TestGroupsAccumulator {
+        signature: signature.clone(),
+        result: 2,
+    });
+
+    let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
+        .aggregate(
+            [col("text")],
+            [
+                udf1.call(vec![col("text")]).alias("a"),
+                udf2.call(vec![col("text")]).alias("b"),
+            ],
+        )?
+        .build()?;
+
+    assert_eq!(
+        format!("{plan:?}"),
+        "Aggregate: groupBy=[[t.text]], aggr=[[geo_mean(t.text) AS a, geo_mean(t.text) AS b]]\n  TableScan: t projection=[text]"
+    );
+
+    let actual = DataFrame::new(ctx.state(), plan).collect().await?;
+    let expected = [
+        "+------+---+---+",
+        "| text | a | b |",
+        "+------+---+---+",
+        "| foo  | 1 | 2 |",
+        "+------+---+---+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    ctx.deregister_table("t")?;
     Ok(())
 }
 
@@ -734,6 +788,21 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         _args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(self.clone()))
+    }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<TestGroupsAccumulator>() {
+            self.result == other.result && self.signature == other.signature
+        } else {
+            false
+        }
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.signature.hash(hasher);
+        self.result.hash(hasher);
+        hasher.finish()
     }
 }
 

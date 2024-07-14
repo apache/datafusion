@@ -193,7 +193,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
 
-                not_impl_err!("Extract not supported by UserDefinedExtensionPlanners: {extract_args:?}")
+                not_impl_err!("Extract not supported by ExprPlanner: {extract_args:?}")
             }
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
@@ -292,7 +292,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
 
-                not_impl_err!("GetFieldAccess not supported by UserDefinedExtensionPlanners: {field_access_expr:?}")
+                not_impl_err!(
+                    "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
+                )
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
@@ -657,7 +659,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 PlannerResult::Original(args) => create_struct_args = args,
             }
         }
-        not_impl_err!("Struct not supported by UserDefinedExtensionPlanners: {create_struct_args:?}")
+        not_impl_err!("Struct not supported by ExprPlanner: {create_struct_args:?}")
     }
 
     fn sql_position_to_expr(
@@ -680,9 +682,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
 
-        not_impl_err!(
-            "Position not supported by UserDefinedExtensionPlanners: {position_args:?}"
-        )
+        not_impl_err!("Position not supported by ExprPlanner: {position_args:?}")
     }
 
     fn try_plan_dictionary_literal(
@@ -914,18 +914,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let fun = self
-            .context_provider
-            .get_function_meta("overlay")
-            .ok_or_else(|| {
-                internal_datafusion_err!("Unable to find expected 'overlay' function")
-            })?;
         let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
         let what_arg =
             self.sql_expr_to_logical_expr(overlay_what, schema, planner_context)?;
         let from_arg =
             self.sql_expr_to_logical_expr(overlay_from, schema, planner_context)?;
-        let args = match overlay_for {
+        let mut overlay_args = match overlay_for {
             Some(for_expr) => {
                 let for_expr =
                     self.sql_expr_to_logical_expr(*for_expr, schema, planner_context)?;
@@ -933,7 +927,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             None => vec![arg, what_arg, from_arg],
         };
-        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
+        for planner in self.planners.iter() {
+            match planner.plan_overlay(overlay_args)? {
+                PlannerResult::Planned(expr) => return Ok(expr),
+                PlannerResult::Original(args) => overlay_args = args,
+            }
+        }
+        not_impl_err!("Overlay not supported by ExprPlanner: {overlay_args:?}")
     }
 }
 
@@ -981,7 +981,7 @@ mod tests {
     impl ContextProvider for TestContextProvider {
         fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
             match self.tables.get(name.table()) {
-                Some(table) => Ok(table.clone()),
+                Some(table) => Ok(Arc::clone(table)),
                 _ => plan_err!("Table not found: {}", name.table()),
             }
         }
