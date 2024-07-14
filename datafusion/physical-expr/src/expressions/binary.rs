@@ -33,6 +33,7 @@ use arrow::compute::kernels::comparison::{
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
+use arrow_udf::sig::REGISTRY;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
@@ -298,7 +299,45 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Multiply => return apply(&lhs, &rhs, mul_wrapping),
             Operator::Divide => return apply(&lhs, &rhs, div),
             Operator::Modulo => return apply(&lhs, &rhs, rem),
-            Operator::Eq => return apply_cmp(&lhs, &rhs, eq),
+            Operator::Eq => {
+                println!("schema: {:?}", schema);
+
+                let record_batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        lhs.clone().into_array(batch.num_rows())?,
+                        rhs.clone().into_array(batch.num_rows())?,
+                    ],
+                )?;
+
+                println!("RecordBatch: {:?}", record_batch);
+
+                let Some(eval_eq_string) = REGISTRY
+                    .get(
+                        "eq",
+                        &schema
+                            .all_fields()
+                            .into_iter()
+                            .map(|f| f.to_owned())
+                            .collect::<Vec<Field>>()
+                            .as_slice(),
+                        &Field::new("bool", DataType::Boolean, false),
+                    )
+                    .and_then(|f| f.function.as_scalar())
+                else {
+                    return internal_err!("Failed to get eq function");
+                };
+
+                let result = eval_eq_string(&record_batch)?;
+
+                println!("Result: {:?}", result);
+
+                let Some(result_array) = result.column_by_name("eq") else {
+                    return internal_err!("Failed to get result array");
+                };
+
+                return Ok(ColumnarValue::Array(result_array.clone()));
+            }
             Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
             Operator::Lt => return apply_cmp(&lhs, &rhs, lt),
             Operator::Gt => return apply_cmp(&lhs, &rhs, gt),

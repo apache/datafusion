@@ -80,6 +80,7 @@ arrow-ipc = { version = "52.1.0", default-features = false, features = [
 arrow-ord = { version = "52.1.0", default-features = false }
 arrow-schema = { version = "52.1.0", default-features = false }
 arrow-string = { version = "52.1.0", default-features = false }
+arrow-udf = { version = "0.3", features = ["global_registry"] }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
