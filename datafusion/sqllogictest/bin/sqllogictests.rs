@@ -18,8 +18,6 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(target_family = "windows")]
-use std::thread;
 
 use clap::Parser;
 use datafusion_sqllogictest::{DataFusion, TestContext};
