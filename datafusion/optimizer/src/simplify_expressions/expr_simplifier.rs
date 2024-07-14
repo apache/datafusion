@@ -29,6 +29,7 @@ use arrow::{
 
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
+    not_impl_err,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
@@ -659,7 +660,10 @@ impl<'a> ConstEvaluator<'a> {
                         Ok(s) => {
                             // TODO: support the optimization for `Map` type after support impl hash for it
                             if matches!(&s, ScalarValue::Map(_)) {
-                                ConstSimplifyResult::SimplifyRuntimeError(DataFusionError::Execution("const evaluate for Map type is still not supported".to_string()), expr)
+                                ConstSimplifyResult::SimplifyRuntimeError(
+                                    not_impl_err!("Const evaluate for Map type is still not supported"),
+                                    expr,
+                                )
                             } else {
                                 ConstSimplifyResult::Simplified(s)
                             }
@@ -672,9 +676,8 @@ impl<'a> ConstEvaluator<'a> {
                 // TODO: support the optimization for `Map` type after support impl hash for it
                 if matches!(&s, ScalarValue::Map(_)) {
                     ConstSimplifyResult::SimplifyRuntimeError(
-                        DataFusionError::Execution(
-                            "const evaluate for Map type is still not supported"
-                                .to_string(),
+                        not_impl_err!(
+                            "Const evaluate for Map type is still not supported"
                         ),
                         expr,
                     )
