@@ -34,25 +34,17 @@ const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 
 #[cfg(target_family = "windows")]
-pub fn main() {
-    // Tests from `tpch/tpch.slt` fail with stackoverflow with the default stack size.
-    thread::Builder::new()
-        .stack_size(2 * 1024 * 1024) // 2 MB
-        .spawn(move || {
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async { run_tests().await })
-                .unwrap()
-        })
+pub fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(2 * 1024 * 1024 + 512 * 1024)
+        .enable_all()
+        .build()
         .unwrap()
-        .join()
-        .unwrap();
+        .block_on(run_tests())
 }
 
 #[cfg(not(target_family = "windows"))]
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .thread_stack_size(2 * 1024 * 1024 + 512 * 1024)
         .enable_all()
