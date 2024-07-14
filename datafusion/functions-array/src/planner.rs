@@ -104,13 +104,9 @@ impl ExprPlanner for ArrayFunctionPlanner {
             return exec_err!("make_map requires an even number of arguments");
         }
 
-        let (keys, values): (Vec<_>, Vec<_>) = args
-            .chunks_exact(2)
-            .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
-            .unzip();
-
-        let keys = make_array(keys);
-        let values = make_array(values);
+        let (keys, values): (Vec<_>, Vec<_>) = args.into_iter().enumerate().partition(|(i, _)| i % 2 == 0);
+        let keys = make_array(keys.into_iter().map(|(_, e)| e).collect());
+        let values = make_array(values.into_iter().map(|(_, e)| e).collect());
 
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(
