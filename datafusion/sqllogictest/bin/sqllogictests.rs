@@ -51,10 +51,14 @@ pub fn main() {
         .unwrap();
 }
 
-#[tokio::main]
 #[cfg(not(target_family = "windows"))]
-pub async fn main() -> Result<()> {
-    run_tests().await
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(2 * 1024 * 1024 + 512 * 1024)
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run_tests())
 }
 
 /// Sets up an empty directory at test_files/scratch/<name>
