@@ -28,7 +28,15 @@ use datafusion_common::{exec_err, internal_err, ScalarValue};
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
+#[inline]
+fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
+    args.iter().all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
+}
+
+
 fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let can_evaluate_to_const = can_evaluate_to_const(args);
+
     let (key, value): (Vec<_>, Vec<_>) = args
         .chunks_exact(2)
         .map(|chunk| {
@@ -58,7 +66,7 @@ fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         Ok(value) => value,
         Err(e) => return internal_err!("Error concatenating values: {}", e),
     };
-    make_map_batch_internal(key, value)
+    make_map_batch_internal(key, value, can_evaluate_to_const)
 }
 
 fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -68,9 +76,12 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             args.len()
         );
     }
+
+    let can_evaluate_to_const = can_evaluate_to_const(args);
+
     let key = get_first_array_ref(&args[0])?;
     let value = get_first_array_ref(&args[1])?;
-    make_map_batch_internal(key, value)
+    make_map_batch_internal(key, value, can_evaluate_to_const)
 }
 
 fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
@@ -85,7 +96,7 @@ fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
     }
 }
 
-fn make_map_batch_internal(keys: ArrayRef, values: ArrayRef) -> Result<ColumnarValue> {
+fn make_map_batch_internal(keys: ArrayRef, values: ArrayRef, can_evaluate_to_const: bool) -> Result<ColumnarValue> {
     if keys.null_count() > 0 {
         return exec_err!("map key cannot be null");
     }
@@ -124,8 +135,15 @@ fn make_map_batch_internal(keys: ArrayRef, values: ArrayRef) -> Result<ColumnarV
         .add_buffer(entry_offsets_buffer)
         .add_child_data(entry_struct.to_data())
         .build()?;
+    let map_array = Arc::new(MapArray::from(map_data));
 
-    Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
+    // If all inputs are constants(such as `make_map('type', 'test')`),
+    // the result should be scalar.
+    Ok(if can_evaluate_to_const {
+        ColumnarValue::Scalar(ScalarValue::try_from_array(map_array.as_ref(), 0)?)
+    } else {
+        ColumnarValue::Array(map_array)
+    })    
 }
 
 #[derive(Debug)]
