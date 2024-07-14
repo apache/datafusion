@@ -661,7 +661,7 @@ impl<'a> ConstEvaluator<'a> {
                             // TODO: support the optimization for `Map` type after support impl hash for it
                             if matches!(&s, ScalarValue::Map(_)) {
                                 ConstSimplifyResult::SimplifyRuntimeError(
-                                    not_impl_err!("Const evaluate for Map type is still not supported"),
+                                    DataFusionError::NotImplemented("Const evaluate for Map type is still not supported".to_string()),
                                     expr,
                                 )
                             } else {
@@ -676,8 +676,9 @@ impl<'a> ConstEvaluator<'a> {
                 // TODO: support the optimization for `Map` type after support impl hash for it
                 if matches!(&s, ScalarValue::Map(_)) {
                     ConstSimplifyResult::SimplifyRuntimeError(
-                        not_impl_err!(
+                        DataFusionError::NotImplemented(
                             "Const evaluate for Map type is still not supported"
+                                .to_string(),
                         ),
                         expr,
                     )
