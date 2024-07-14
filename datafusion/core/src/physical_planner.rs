@@ -2269,6 +2269,7 @@ mod tests {
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
 
+    use crate::execution::session_state::SessionStateBuilder;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
@@ -2282,7 +2283,11 @@ mod tests {
         let runtime = Arc::new(RuntimeEnv::default());
         let config = SessionConfig::new().with_target_partitions(4);
         let config = config.set_bool("datafusion.optimizer.skip_failed_rules", false);
-        SessionState::new_with_config_rt(config, runtime)
+        SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build()
     }
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {

@@ -42,7 +42,8 @@ use url::Url;
 use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::execution::context::{SessionContext, SessionState};
+use datafusion::execution::context::SessionContext;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::test_util::{parquet_test_data, populate_csv_partitions};
@@ -1544,7 +1545,11 @@ async fn unnest_non_nullable_list() -> Result<()> {
 async fn test_read_batches() -> Result<()> {
     let config = SessionConfig::new();
     let runtime = Arc::new(RuntimeEnv::default());
-    let state = SessionState::new_with_config_rt(config, runtime);
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
+        .build();
     let ctx = SessionContext::new_with_state(state);
 
     let schema = Arc::new(Schema::new(vec![
@@ -1594,7 +1599,11 @@ async fn test_read_batches() -> Result<()> {
 async fn test_read_batches_empty() -> Result<()> {
     let config = SessionConfig::new();
     let runtime = Arc::new(RuntimeEnv::default());
-    let state = SessionState::new_with_config_rt(config, runtime);
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
+        .build();
     let ctx = SessionContext::new_with_state(state);
 
     let batches = vec![];
@@ -1608,9 +1617,7 @@ async fn test_read_batches_empty() -> Result<()> {
 
 #[tokio::test]
 async fn consecutive_projection_same_schema() -> Result<()> {
-    let config = SessionConfig::new();
-    let runtime = Arc::new(RuntimeEnv::default());
-    let state = SessionState::new_with_config_rt(config, runtime);
+    let state = SessionStateBuilder::new().with_default_features().build();
     let ctx = SessionContext::new_with_state(state);
 
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));

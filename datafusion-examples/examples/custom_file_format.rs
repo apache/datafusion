@@ -22,6 +22,7 @@ use arrow::{
     datatypes::UInt64Type,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
     datasource::{
         file_format::{
@@ -32,9 +33,9 @@ use datafusion::{
         MemTable,
     },
     error::Result,
-    execution::{context::SessionState, runtime_env::RuntimeEnv},
+    execution::context::SessionState,
     physical_plan::ExecutionPlan,
-    prelude::{SessionConfig, SessionContext},
+    prelude::SessionContext,
 };
 use datafusion_common::{GetExt, Statistics};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
@@ -176,9 +177,7 @@ impl GetExt for TSVFileFactory {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Create a new context with the default configuration
-    let config = SessionConfig::new();
-    let runtime = RuntimeEnv::default();
-    let mut state = SessionState::new_with_config_rt(config, Arc::new(runtime));
+    let mut state = SessionStateBuilder::new().with_default_features().build();
 
     // Register the custom file format
     let file_format = Arc::new(TSVFileFactory::new());
