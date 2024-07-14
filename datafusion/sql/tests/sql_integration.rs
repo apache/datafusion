@@ -3104,6 +3104,19 @@ fn join_on_complex_condition() {
 }
 
 #[test]
+fn lateral_constant() {
+    let sql = "SELECT * FROM j1, LATERAL (SELECT 1) AS j2";
+    let expected = "Projection: j1.j1_id, j1.j1_string, j2.Int64(1)\
+            \n  CrossJoin:\
+            \n    TableScan: j1\
+            \n    SubqueryAlias: j2\
+            \n      Subquery:\
+            \n        Projection: Int64(1)\
+            \n          EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn lateral_comma_join() {
     let sql = "SELECT j1_string, j2_string FROM
             j1, \
@@ -3145,7 +3158,7 @@ fn lateral_comma_join_with_shadowing() {
     let sql = "\
             SELECT * FROM j1, LATERAL (\
               SELECT * FROM j1, LATERAL (\
-                SELECT * FROM j2 WHERE j1.j1_id = j2_id\
+                SELECT * FROM j2 WHERE j1_id = j2_id\
               ) as j2\
             ) as j2;";
     let expected = "Projection: j1.j1_id, j1.j1_string, j2.j1_id, j2.j1_string, j2.j2_id, j2.j2_string\

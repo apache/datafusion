@@ -169,9 +169,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // factors, and those can never be the first factor in a FROM list. This
         // means we arrived here through the `for` loop in `plan_from_tables` or
         // the `for` loop in `plan_table_with_joins`.
-        let old_from_schema = planner_context.set_outer_from_schema(None).unwrap();
+        let old_from_schema = planner_context
+            .set_outer_from_schema(None)
+            .unwrap_or_else(|| Arc::new(DFSchema::empty()));
         let new_query_schema = match planner_context.outer_query_schema() {
-            Some(lhs) => Some(Arc::new(lhs.join(&old_from_schema)?)),
+            Some(old_query_schema) => {
+                let mut new_query_schema = old_from_schema.as_ref().clone();
+                new_query_schema.merge(old_query_schema);
+                Some(Arc::new(new_query_schema))
+            }
             None => Some(Arc::clone(&old_from_schema)),
         };
         let old_query_schema = planner_context.set_outer_query_schema(new_query_schema);
