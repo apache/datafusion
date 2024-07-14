@@ -872,6 +872,8 @@ impl SessionState {
 
 /// A builder to be used for building [`SessionState`]'s. Defaults will
 /// be used for all values unless explicitly provided.
+///
+/// See example on [`SessionState`]
 pub struct SessionStateBuilder {
     session_id: Option<String>,
     analyzer: Option<Analyzer>,
@@ -932,30 +934,28 @@ impl SessionStateBuilder {
     /// The session id for the new builder will be unset; all other fields will
     /// be cloned from what is set in the provided session state
     pub fn new_from_existing(existing: SessionState) -> Self {
-        let cloned = existing.clone();
-
         Self {
             session_id: None,
-            analyzer: Some(cloned.analyzer),
-            expr_planners: Some(cloned.expr_planners),
-            optimizer: Some(cloned.optimizer),
-            physical_optimizers: Some(cloned.physical_optimizers),
-            query_planner: Some(cloned.query_planner),
-            catalog_list: Some(cloned.catalog_list),
-            table_functions: Some(cloned.table_functions),
-            scalar_functions: Some(cloned.scalar_functions.into_values().collect_vec()),
+            analyzer: Some(existing.analyzer),
+            expr_planners: Some(existing.expr_planners),
+            optimizer: Some(existing.optimizer),
+            physical_optimizers: Some(existing.physical_optimizers),
+            query_planner: Some(existing.query_planner),
+            catalog_list: Some(existing.catalog_list),
+            table_functions: Some(existing.table_functions),
+            scalar_functions: Some(existing.scalar_functions.into_values().collect_vec()),
             aggregate_functions: Some(
-                cloned.aggregate_functions.into_values().collect_vec(),
+                existing.aggregate_functions.into_values().collect_vec(),
             ),
-            window_functions: Some(cloned.window_functions.into_values().collect_vec()),
-            serializer_registry: Some(cloned.serializer_registry),
-            file_formats: Some(cloned.file_formats.into_values().collect_vec()),
-            config: Some(cloned.config),
-            table_options: Some(cloned.table_options),
-            execution_props: Some(cloned.execution_props),
-            table_factories: Some(cloned.table_factories),
-            runtime_env: Some(cloned.runtime_env),
-            function_factory: cloned.function_factory,
+            window_functions: Some(existing.window_functions.into_values().collect_vec()),
+            serializer_registry: Some(existing.serializer_registry),
+            file_formats: Some(existing.file_formats.into_values().collect_vec()),
+            config: Some(existing.config),
+            table_options: Some(existing.table_options),
+            execution_props: Some(existing.execution_props),
+            table_factories: Some(existing.table_factories),
+            runtime_env: Some(existing.runtime_env),
+            function_factory: existing.function_factory,
 
             // fields to support convenience functions
             analyzer_rules: None,
@@ -993,7 +993,7 @@ impl SessionStateBuilder {
 
     /// Add `analyzer_rule` to the end of the list of
     /// [`AnalyzerRule`]s used to rewrite queries.
-    pub fn add_analyzer_rule(
+    pub fn with_analyzer_rule(
         mut self,
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
     ) -> Self {
@@ -1014,7 +1014,7 @@ impl SessionStateBuilder {
 
     /// Add `optimizer_rule` to the end of the list of
     /// [`OptimizerRule`]s used to rewrite queries.
-    pub fn add_optimizer_rule(
+    pub fn with_optimizer_rule(
         mut self,
         optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
     ) -> Self {
@@ -1045,7 +1045,7 @@ impl SessionStateBuilder {
 
     /// Add `physical_optimizer_rule` to the end of the list of
     /// [`PhysicalOptimizerRule`]s used to rewrite queries.
-    pub fn add_physical_optimizer_rule(
+    pub fn with_physical_optimizer_rule(
         mut self,
         physical_optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     ) -> Self {
@@ -1175,41 +1175,61 @@ impl SessionStateBuilder {
     /// in [SessionConfig::create_default_catalog_and_schema] which if enabled
     /// will be built here.
     pub fn build(self) -> SessionState {
-        let config = self.config.unwrap_or_default();
-        let runtime_env = self.runtime_env.unwrap_or(Arc::new(RuntimeEnv::default()));
+        let Self {
+            session_id,
+            analyzer,
+            expr_planners,
+            optimizer,
+            physical_optimizers,
+            query_planner,
+            catalog_list,
+            table_functions,
+            scalar_functions,
+            aggregate_functions,
+            window_functions,
+            serializer_registry,
+            file_formats,
+            table_options,
+            config,
+            execution_props,
+            table_factories,
+            runtime_env,
+            function_factory,
+            analyzer_rules,
+            optimizer_rules,
+            physical_optimizer_rules,
+        } = self;
+
+        let config = config.unwrap_or_default();
+        let runtime_env = runtime_env.unwrap_or(Arc::new(RuntimeEnv::default()));
 
         let mut state = SessionState {
-            session_id: self.session_id.unwrap_or(Uuid::new_v4().to_string()),
-            analyzer: self.analyzer.unwrap_or_default(),
-            expr_planners: self.expr_planners.unwrap_or_default(),
-            optimizer: self.optimizer.unwrap_or_default(),
-            physical_optimizers: self.physical_optimizers.unwrap_or_default(),
-            query_planner: self
-                .query_planner
-                .unwrap_or(Arc::new(DefaultQueryPlanner {})),
-            catalog_list: self
-                .catalog_list
+            session_id: session_id.unwrap_or(Uuid::new_v4().to_string()),
+            analyzer: analyzer.unwrap_or_default(),
+            expr_planners: expr_planners.unwrap_or_default(),
+            optimizer: optimizer.unwrap_or_default(),
+            physical_optimizers: physical_optimizers.unwrap_or_default(),
+            query_planner: query_planner.unwrap_or(Arc::new(DefaultQueryPlanner {})),
+            catalog_list: catalog_list
                 .unwrap_or(Arc::new(MemoryCatalogProviderList::new())
                     as Arc<dyn CatalogProviderList>),
-            table_functions: self.table_functions.unwrap_or_default(),
+            table_functions: table_functions.unwrap_or_default(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
-            serializer_registry: self
-                .serializer_registry
+            serializer_registry: serializer_registry
                 .unwrap_or(Arc::new(EmptySerializerRegistry)),
             file_formats: HashMap::new(),
-            table_options: self
-                .table_options
+            table_options: table_options
                 .unwrap_or(TableOptions::default_from_session_config(config.options())),
             config,
-            execution_props: self.execution_props.unwrap_or_default(),
-            table_factories: self.table_factories.unwrap_or_default(),
+            execution_props: execution_props.unwrap_or_default(),
+            table_factories: table_factories.unwrap_or_default(),
             runtime_env,
-            function_factory: self.function_factory,
+            function_factory,
         };
 
-        if let Some(file_formats) = self.file_formats {
+        if let Some(file_formats) = file_formats {
             for file_format in file_formats {
                 if let Err(e) = state.register_file_format(file_format, false) {
                     info!("Unable to register file format: {e}")
@@ -1217,7 +1237,7 @@ impl SessionStateBuilder {
             }
         }
 
-        if let Some(scalar_functions) = self.scalar_functions {
+        if let Some(scalar_functions) = scalar_functions {
             scalar_functions.into_iter().for_each(|udf| {
                 let existing_udf = state.register_udf(udf);
                 if let Ok(Some(existing_udf)) = existing_udf {
@@ -1226,7 +1246,7 @@ impl SessionStateBuilder {
             });
         }
 
-        if let Some(aggregate_functions) = self.aggregate_functions {
+        if let Some(aggregate_functions) = aggregate_functions {
             aggregate_functions.into_iter().for_each(|udaf| {
                 let existing_udf = state.register_udaf(udaf);
                 if let Ok(Some(existing_udf)) = existing_udf {
@@ -1235,7 +1255,7 @@ impl SessionStateBuilder {
             });
         }
 
-        if let Some(window_functions) = self.window_functions {
+        if let Some(window_functions) = window_functions {
             window_functions.into_iter().for_each(|udwf| {
                 let existing_udf = state.register_udwf(udwf);
                 if let Ok(Some(existing_udf)) = existing_udf {
@@ -1257,19 +1277,19 @@ impl SessionStateBuilder {
             );
         }
 
-        if let Some(analyzer_rules) = self.analyzer_rules {
+        if let Some(analyzer_rules) = analyzer_rules {
             for analyzer_rule in analyzer_rules {
                 state.analyzer.rules.push(analyzer_rule);
             }
         }
 
-        if let Some(optimizer_rules) = self.optimizer_rules {
+        if let Some(optimizer_rules) = optimizer_rules {
             for optimizer_rule in optimizer_rules {
                 state.optimizer.rules.push(optimizer_rule);
             }
         }
 
-        if let Some(physical_optimizer_rules) = self.physical_optimizer_rules {
+        if let Some(physical_optimizer_rules) = physical_optimizer_rules {
             for physical_optimizer_rule in physical_optimizer_rules {
                 state
                     .physical_optimizers
@@ -1473,7 +1493,7 @@ impl SessionStateDefaults {
         expr_planners
     }
 
-    /// returns a map of default [`ScalarUDF']'s keyed by name
+    /// returns the list of default [`ScalarUDF']'s
     pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
         let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
         #[cfg(feature = "array_expressions")]
@@ -1482,12 +1502,12 @@ impl SessionStateDefaults {
         functions
     }
 
-    /// returns a map of default [`AggregateUDF']'s keyed by named
+    /// returns the list of default [`AggregateUDF']'s 
     pub fn default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         functions_aggregate::all_default_aggregate_functions()
     }
 
-    /// returns a map of default [`FileFormatFactory']'s keyed by extension
+    /// returns the list of default [`FileFormatFactory']'s 
     pub fn default_file_formats() -> Vec<Arc<dyn FileFormatFactory>> {
         let file_formats: Vec<Arc<dyn FileFormatFactory>> = vec![
             #[cfg(feature = "parquet")]

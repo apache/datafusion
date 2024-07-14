@@ -296,8 +296,8 @@ fn make_topk_context() -> SessionContext {
         .with_runtime_env(runtime)
         .with_default_features()
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
-        .add_optimizer_rule(Arc::new(TopKOptimizerRule {}))
-        .add_analyzer_rule(Arc::new(MyAnalyzerRule {}))
+        .with_optimizer_rule(Arc::new(TopKOptimizerRule {}))
+        .with_analyzer_rule(Arc::new(MyAnalyzerRule {}))
         .build();
     SessionContext::new_with_state(state)
 }
