@@ -336,16 +336,18 @@ mod tests {
             bloom_filter_ndv: Some(42),
 
             // not in WriterProperties, but itemizing here to not skip newly added props
-            enable_page_index: Default::default(),
-            pruning: Default::default(),
-            skip_metadata: Default::default(),
-            metadata_size_hint: Default::default(),
-            pushdown_filters: Default::default(),
-            reorder_filters: Default::default(),
-            allow_single_file_parallelism: Default::default(),
-            maximum_parallel_row_group_writers: Default::default(),
-            maximum_buffered_record_batches_per_stream: Default::default(),
-            bloom_filter_on_read: Default::default(),
+            enable_page_index: defaults.enable_page_index,
+            pruning: defaults.pruning,
+            skip_metadata: defaults.skip_metadata,
+            metadata_size_hint: defaults.metadata_size_hint,
+            pushdown_filters: defaults.pushdown_filters,
+            reorder_filters: defaults.reorder_filters,
+            allow_single_file_parallelism: defaults.allow_single_file_parallelism,
+            maximum_parallel_row_group_writers: defaults
+                .maximum_parallel_row_group_writers,
+            maximum_buffered_record_batches_per_stream: defaults
+                .maximum_buffered_record_batches_per_stream,
+            bloom_filter_on_read: defaults.bloom_filter_on_read,
         }
     }
 
@@ -400,6 +402,8 @@ mod tests {
             })
             .unwrap_or_default();
 
+        let global_options_defaults = ParquetOptions::default();
+
         TableParquetOptions {
             global: ParquetOptions {
                 // global options
@@ -425,16 +429,19 @@ mod tests {
                 bloom_filter_ndv: default_col_props.bloom_filter_ndv,
 
                 // not in WriterProperties
-                enable_page_index: Default::default(),
-                pruning: Default::default(),
-                skip_metadata: Default::default(),
-                metadata_size_hint: Default::default(),
-                pushdown_filters: Default::default(),
-                reorder_filters: Default::default(),
-                allow_single_file_parallelism: Default::default(),
-                maximum_parallel_row_group_writers: Default::default(),
-                maximum_buffered_record_batches_per_stream: Default::default(),
-                bloom_filter_on_read: Default::default(),
+                enable_page_index: global_options_defaults.enable_page_index,
+                pruning: global_options_defaults.pruning,
+                skip_metadata: global_options_defaults.skip_metadata,
+                metadata_size_hint: global_options_defaults.metadata_size_hint,
+                pushdown_filters: global_options_defaults.pushdown_filters,
+                reorder_filters: global_options_defaults.reorder_filters,
+                allow_single_file_parallelism: global_options_defaults
+                    .allow_single_file_parallelism,
+                maximum_parallel_row_group_writers: global_options_defaults
+                    .maximum_parallel_row_group_writers,
+                maximum_buffered_record_batches_per_stream: global_options_defaults
+                    .maximum_buffered_record_batches_per_stream,
+                bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
             },
             column_specific_options: HashMap::from([(
                 COL_NAME.into(),
