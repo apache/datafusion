@@ -21,7 +21,7 @@ use std::sync::Arc;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_datafusion_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_plan::{ExecutionPlanProperties, get_plan_string};
+use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -235,30 +235,12 @@ mod tests {
             unreachable!()
         }
     }
+
     #[test]
-    fn transforms_streaming_table_exec_into_fetching_version() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, true),
-            Field::new("c2", DataType::Utf8, true),
-            Field::new("c3", DataType::Float64, true),
-        ]));
-
-        let streaming_table = StreamingTableExec::try_new(
-            schema.clone(),
-            vec![Arc::new(DummyStreamPartition {
-                schema: schema.clone(),
-            }) as _],
-            None,
-            None,
-            true,
-            None,
-        )?;
-
-        let global_limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
-            Arc::new(streaming_table),
-            0,
-            Some(5),
-        ));
+    fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> Result<()> {
+        let schema = create_schema();
+        let streaming_table = streaming_table_exec(schema.clone())?;
+        let global_limit = global_limit_exec(streaming_table, 0, Some(5));
 
         let initial = get_plan_string(&global_limit);
         let expected_initial = [
@@ -279,29 +261,10 @@ mod tests {
     }
 
     #[test]
-    fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_nonzero() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, true),
-            Field::new("c2", DataType::Utf8, true),
-            Field::new("c3", DataType::Float64, true),
-        ]));
-
-        let streaming_table = Arc::new(StreamingTableExec::try_new(
-            schema.clone(),
-            vec![Arc::new(DummyStreamPartition {
-                schema: schema.clone(),
-            }) as _],
-            None,
-            None,
-            true,
-            None,
-        )?);
-
-        let global_limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
-            streaming_table,
-            2,
-            Some(5),
-        ));
+    fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_limit_when_skip_is_nonzero() -> Result<()> {
+        let schema = create_schema();
+        let streaming_table = streaming_table_exec(schema.clone())?;
+        let global_limit = global_limit_exec(streaming_table, 2, Some(5));
 
         let initial = get_plan_string(&global_limit);
         let expected_initial = [
@@ -324,22 +287,9 @@ mod tests {
 
     #[test]
     fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limit() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, true),
-            Field::new("c2", DataType::Int32, true),
-            Field::new("c3", DataType::Int32, true),
-        ]));
+        let schema = create_schema();
 
-        let streaming_table = Arc::new(StreamingTableExec::try_new(
-            schema.clone(),
-            vec![Arc::new(DummyStreamPartition {
-                schema: schema.clone(),
-            }) as _],
-            None,
-            None,
-            true,
-            None,
-        )?);
+        let streaming_table = streaming_table_exec(schema.clone())?;
 
         let repartition = Arc::new(RepartitionExec::try_new(
             streaming_table,
@@ -347,30 +297,17 @@ mod tests {
         )?);
 
         let coalesce_batches = Arc::new(CoalesceBatchesExec::new(
-            Arc::new(FilterExec::try_new(
-                Arc::new(BinaryExpr::new(
-                    col("c3", schema.as_ref()).unwrap(),
-                    Operator::Gt,
-                    lit(0))),
-                repartition)?
-            ),
+            filter_exec(schema.clone(), repartition)?,
             8192,
         ));
 
-        let local_limit = Arc::new(LocalLimitExec::new(
-            coalesce_batches,
-            5,
-        ));
+        let local_limit = local_limit_exec(coalesce_batches, 5);
 
         let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(
             local_limit
         ));
 
-        let global_limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
-            coalesce_partitions,
-            0,
-            Some(5),
-        ));
+        let global_limit= global_limit_exec(coalesce_partitions, 0, Some(5));
 
         let initial = get_plan_string(&global_limit);
         let expected_initial = [
@@ -402,30 +339,9 @@ mod tests {
 
     #[test]
     fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, true),
-            Field::new("c2", DataType::Int32, true),
-            Field::new("c3", DataType::Int32, true),
-        ]));
-
-        let streaming_table = Arc::new(StreamingTableExec::try_new(
-            schema.clone(),
-            vec![Arc::new(DummyStreamPartition {
-                schema: schema.clone(),
-            }) as _],
-            None,
-            None,
-            true,
-            None,
-        )?);
-
-        let filter = Arc::new(FilterExec::try_new(
-            Arc::new(BinaryExpr::new(
-                col("c3", schema.as_ref()).unwrap(),
-                Operator::Gt,
-                lit(0))),
-            streaming_table,
-        )?);
+        let schema = create_schema();
+        let streaming_table = streaming_table_exec(schema.clone())?;
+        let filter = filter_exec(schema.clone(), streaming_table)?;
 
         let projection = Arc::new(ProjectionExec::try_new(
             vec![
@@ -436,11 +352,7 @@ mod tests {
             filter,
         )?);
 
-        let global_limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
-            projection,
-            0,
-            Some(5),
-        ));
+        let global_limit = global_limit_exec(projection, 0, Some(5));
 
         let initial = get_plan_string(&global_limit);
         let expected_initial = [
@@ -464,5 +376,44 @@ mod tests {
         assert_eq!(get_plan_string(&after_optimize), expected);
 
         Ok(())
+    }
+
+    fn create_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Int32, true),
+            Field::new("c3", DataType::Int32, true),
+        ]))
+    }
+
+    fn streaming_table_exec(schema: SchemaRef) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(StreamingTableExec::try_new(
+            schema.clone(),
+            vec![Arc::new(DummyStreamPartition {
+                schema: schema.clone(),
+            }) as _],
+            None,
+            None,
+            true,
+            None,
+        )?))
+    }
+
+    fn global_limit_exec(input: Arc<dyn ExecutionPlan>, skip: usize, fetch: Option<usize>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(GlobalLimitExec::new(input, skip, fetch))
+    }
+
+    fn local_limit_exec(input: Arc<dyn ExecutionPlan>, fetch: usize) -> Arc<dyn ExecutionPlan> {
+        Arc::new(LocalLimitExec::new(input, fetch))
+    }
+
+    fn filter_exec(schema: SchemaRef, input: Arc<dyn ExecutionPlan>) -> Result<Arc<FilterExec>> {
+        Ok(Arc::new(FilterExec::try_new(
+            Arc::new(BinaryExpr::new(
+                col("c3", schema.as_ref()).unwrap(),
+                Operator::Gt,
+                lit(0))),
+            input,
+        )?))
     }
 }
