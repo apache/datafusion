@@ -675,5 +675,5 @@ select unnest(unnest(column2)) c2, count(column3) from recursive_unnest_table gr
 NULL 1
 
 ### TODO: group by unnest struct
-query error DataFusion error: Internal error: unnest on struct can ony be applied at the root level of select expression
+query error DataFusion error: Error during planning: Projection references non\-aggregate values
 select unnest(column1) c1 from nested_unnest_table group by c1.c0;
