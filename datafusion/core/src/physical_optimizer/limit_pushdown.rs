@@ -17,6 +17,7 @@
 
 //! This rule optimizes the amount of data transferred by pushing down limits
 
+use std::fmt::Debug;
 use std::sync::Arc;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_datafusion_err;
@@ -57,152 +58,198 @@ impl PhysicalOptimizerRule for LimitPushdown {
     }
 }
 
+/// Helper enum to make skip and fetch easier to handle
+#[derive(Debug)]
+enum GlobalOrLocal {
+    Global(GlobalLimitExec),
+    Local(LocalLimitExec),
+}
+
+impl GlobalOrLocal {
+    fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        match self {
+            Self::Global(global) => global.input(),
+            Self::Local(local) => local.input(),
+        }
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        match self {
+            Self::Global(global) => global.fetch(),
+            Self::Local(local) => Some(local.fetch()),
+        }
+    }
+
+    fn skip(&self) -> usize {
+        match self {
+            Self::Global(global) => global.skip(),
+            Self::Local(_) => 0,
+        }
+    }
+
+    fn with_child(&self, child: Arc<dyn ExecutionPlan>) -> Self {
+        match self {
+            Self::Global(global) => Self::Global(GlobalLimitExec::new(child, global.skip(), global.fetch())),
+            Self::Local(local) => Self::Local(LocalLimitExec::new(child, local.fetch())),
+        }
+    }
+
+    fn with_fetch(&self, fetch: usize) -> Self {
+        match self {
+            Self::Global(global) => Self::Global(GlobalLimitExec::new(global.input().clone(), global.skip(), Some(fetch))),
+            Self::Local(local) => Self::Local(LocalLimitExec::new(local.input().clone(), fetch)),
+        }
+    }
+}
+
+impl From<GlobalOrLocal> for Arc<dyn ExecutionPlan> {
+    fn from(global_or_local: GlobalOrLocal) -> Self {
+        match global_or_local {
+            GlobalOrLocal::Global(global) => Arc::new(global),
+            GlobalOrLocal::Local(local) => Arc::new(local),
+        }
+    }
+}
+
+/// Pushes down the limit through the plan.
 pub fn push_down_limits(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    // TODO: Clean up and refactor
-    if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
-        let child = global_limit.input();
+    let maybe_modified = if let Some(global_or_local) = extract_limit(plan.clone()) {
+        let child = global_or_local.input();
         if let Some(child_limit) = child.as_any().downcast_ref::<LocalLimitExec>() {
-            // Merge limits
-            let parent_skip = global_limit.skip();
-            let parent_fetch = global_limit.fetch();
-            let parent_max = parent_fetch.and_then(|f| Some(f + parent_skip));
-            let child_fetch = child_limit.fetch();
-
-            if let Some(parent_max) = parent_max {
-                if child_fetch >= parent_max {
-                    // Child fetch is larger than or equal to parent max, so we can remove the child
-                    let merged = Arc::new(GlobalLimitExec::new(
-                        child_limit.input().clone(),
-                        parent_skip,
-                        parent_fetch,
-                    ));
-                    Ok(Transformed::yes(push_down_limits(merged)?.data))
-                } else if child_fetch > parent_skip {
-                    // Child fetch is larger than parent skip, so we can trim the parent fetch
-                    let merged = Arc::new(GlobalLimitExec::new(
-                        child_limit.input().clone(),
-                        parent_skip,
-                        Some(child_fetch - parent_skip),
-                    ));
-                    Ok(Transformed::yes(push_down_limits(merged)?.data))
-                } else {
-                    // This would return an empty result
-                    Err(plan_datafusion_err!("Child fetch is less than parent skip"))
-                }
-            } else {
-                // Parent's fetch is infinite, use child's
-                let new_global_limit = Arc::new(GlobalLimitExec::new(
-                    child_limit.input().clone(),
-                    parent_skip,
-                    Some(child_fetch),
-                ));
-                Ok(Transformed::yes(new_global_limit))
-            }
+            let merged = try_merge_limits(&global_or_local, child_limit)?;
+            // Recurse in case of consecutive limits
+            // NOTE: There might be a better way to handle this
+            Some(push_down_limits(merged)?.data)
         } else if child.supports_limit_pushdown() {
-            let grandchildren = child.children();
-            if let Some(&grandchild) = grandchildren.first() {
-                if grandchild.output_partitioning().partition_count() > 1 {
-                    // Insert a LocalLimitExec after the child
-                    if let Some(fetch) = global_limit.fetch() {
-                        let new_local_limit = Arc::new(LocalLimitExec::new(
-                            grandchild.clone(),
-                            fetch + global_limit.skip(),
-                        ));
-                        let new_child = child.clone().with_new_children(vec![new_local_limit])?;
-                        Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
-                            new_child,
-                            global_limit.skip(),
-                            global_limit.fetch(),
-                        ))))
-                    } else {
-                        Ok(Transformed::no(plan))
-                    }
-                } else {
-                    // Swap current with child
-                    let new_global_limit = Arc::new(GlobalLimitExec::new(
-                        grandchild.clone(),
-                        global_limit.skip(),
-                        global_limit.fetch(),
-                    ));
-                    let new_child = child.clone().with_new_children(vec![new_global_limit])?;
-                    Ok(Transformed::yes(new_child))
-                }
-            } else {
-                // GlobalLimitExec would have no input, which should be impossible
-                Err(plan_datafusion_err!("GlobalLimitExec has no input"))
-            }
+            try_push_down_limit(&global_or_local, child.clone())?
         } else {
-            let fetch = global_limit.fetch();
-            let skip = global_limit.skip();
-
-            let child_fetch = fetch.and_then(|f| Some(f + skip));
-
-            if let Some(child_with_fetch) = child.with_fetch(child_fetch) {
-                if skip > 0 {
-                    Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
-                        child_with_fetch,
-                        skip,
-                        fetch,
-                    ))))
-                } else {
-                    Ok(Transformed::yes(child_with_fetch))
-                }
-            } else {
-                Ok(Transformed::no(plan))
-            }
-        }
-    } else if let Some(local_limit) = plan.as_any().downcast_ref::<LocalLimitExec>() {
-        let child = local_limit.input();
-        if let Some(child) = child.as_any().downcast_ref::<LocalLimitExec>() {
-            // Keep the smaller limit
-            let parent_fetch = local_limit.fetch();
-            let child_fetch = child.fetch();
-
-            let merged = Arc::new(LocalLimitExec::new(
-                child.input().clone(),
-                std::cmp::min(parent_fetch, child_fetch),
-            ));
-            Ok(Transformed::yes(push_down_limits(merged)?.data))
-        } else if child.supports_limit_pushdown() {
-            let grandchildren = child.children();
-            if let Some(&grandchild) = grandchildren.first() {
-                if grandchild.output_partitioning().partition_count() > 1 {
-                    // Insert a LocalLimitExec after the child
-                    let new_local_limit = Arc::new(LocalLimitExec::new(
-                        grandchild.clone(),
-                        local_limit.fetch(),
-                    ));
-                    let new_child = child.clone().with_new_children(vec![new_local_limit])?;
-                    Ok(Transformed::yes(Arc::new(LocalLimitExec::new(
-                        new_child,
-                        local_limit.fetch(),
-                    ))))
-                } else {
-                    // Swap current with child
-                    let new_global_limit = Arc::new(LocalLimitExec::new(
-                        grandchild.clone(),
-                        local_limit.fetch(),
-                    ));
-                    let new_child = child.clone().with_new_children(vec![new_global_limit])?;
-                    Ok(Transformed::yes(new_child))
-                }
-            } else {
-                // LocalLimitExec would have no input, which should be impossible
-                Err(plan_datafusion_err!("LocalLimitExec has no input"))
-            }
-        } else {
-            let fetch = local_limit.fetch();
-
-            if let Some(child_with_fetch) = child.with_fetch(Some(fetch)) {
-                Ok(Transformed::yes(child_with_fetch))
-            } else {
-                Ok(Transformed::no(plan))
-            }
+            add_fetch_to_child(&global_or_local, child.clone())
         }
     } else {
-        Ok(Transformed::no(plan))
+        None
+    };
+
+    Ok(maybe_modified.map_or(Transformed::no(plan), Transformed::yes))
+}
+
+/// Transforms the [`ExecutionPlan`] into a [`GlobalOrLocal`] if it is a
+/// [`GlobalLimitExec`] or a [`LocalLimitExec`].
+fn extract_limit(plan: Arc<dyn ExecutionPlan>) -> Option<GlobalOrLocal> {
+    if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
+        Some(GlobalOrLocal::Global(GlobalLimitExec::new(
+            global_limit.input().clone(),
+            global_limit.skip(),
+            global_limit.fetch(),
+        )))
+    } else if let Some(local_limit) = plan.as_any().downcast_ref::<LocalLimitExec>() {
+        Some(GlobalOrLocal::Local(LocalLimitExec::new(
+            local_limit.input().clone(),
+            local_limit.fetch(),
+        )))
+    } else {
+        None
+    }
+}
+
+/// Merge the limits of the parent and the child. The resulting [`ExecutionPlan`]
+/// is the same as the parent.
+fn try_merge_limits(
+    global_or_local: &GlobalOrLocal,
+    limit: &LocalLimitExec,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let parent_skip = global_or_local.skip();
+    let parent_fetch = global_or_local.fetch();
+    let parent_max = parent_fetch.and_then(|f| Some(f + parent_skip));
+    let child_fetch = limit.fetch();
+
+    if let Some(parent_max) = parent_max {
+        if child_fetch >= parent_max {
+            // Child fetch is larger than or equal to parent max, so we can remove the child
+            Ok(global_or_local
+                .with_child(limit.input().clone())
+                .into())
+        } else if child_fetch > parent_skip {
+            // Child fetch is larger than parent skip, so we can trim the parent fetch
+            Ok(global_or_local
+                .with_child(limit.input().clone())
+                .with_fetch(child_fetch - parent_skip)
+                .into())
+        } else {
+            // This would return an empty result
+            Err(plan_datafusion_err!("Child fetch is less than parent skip"))
+        }
+    } else {
+        // Parent's fetch is infinite, use child's
+        Ok(global_or_local
+            .with_fetch(child_fetch)
+            .into())
+    }
+}
+
+/// Pushes down the limit through the child. If the child has a single input
+/// partition, simply swaps the parent and the child. Otherwise, adds a
+/// [`LocalLimitExec`] after in between in addition to swapping, because of
+/// multiple input partitions.
+fn try_push_down_limit(
+    global_or_local: &GlobalOrLocal,
+    child: Arc<dyn ExecutionPlan>,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    let grandchildren = child.children();
+    if let Some(&grandchild) = grandchildren.first() {
+        // GlobalLimitExec and LocalLimitExec must have an input after pushdown
+        if grandchild.output_partitioning().partition_count() > 1 {
+            // There are multiple input partitions, we still need a LocalLimitExec after the child
+            if let Some(fetch) = global_or_local.fetch() {
+                let new_local_limit = Arc::new(LocalLimitExec::new(
+                    grandchild.clone(),
+                    fetch + global_or_local.skip(),
+                ));
+                let new_child = child.clone().with_new_children(vec![new_local_limit])?;
+                Ok(Some(global_or_local
+                    .with_child(new_child)
+                    .into()))
+            } else {
+                Ok(None)
+            }
+        } else {
+            // Swap current with child
+            let new_global_limit = Arc::new(GlobalLimitExec::new(
+                grandchild.clone(),
+                global_or_local.skip(),
+                global_or_local.fetch(),
+            ));
+            let new_child = child.clone().with_new_children(vec![new_global_limit])?;
+            Ok(Some(new_child))
+        }
+    } else {
+        // The LimitExec would not have an input, which should be impossible
+        Err(plan_datafusion_err!("{:#?} does not have a grandchild", global_or_local))
+    }
+}
+
+/// Transforms child to the fetching version if supported. Removes the parent if
+/// skip is zero. Otherwise, keeps the parent.
+fn add_fetch_to_child(
+    global_or_local: &GlobalOrLocal,
+    child: Arc<dyn ExecutionPlan>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    let fetch = global_or_local.fetch();
+    let skip = global_or_local.skip();
+
+    let child_fetch = fetch.and_then(|f| Some(f + skip));
+
+    if let Some(child_with_fetch) = child.with_fetch(child_fetch) {
+        if skip > 0 {
+            Some(global_or_local
+                .with_child(child_with_fetch)
+                .into())
+        } else {
+            Some(child_with_fetch)
+        }
+    } else {
+        None
     }
 }
 
