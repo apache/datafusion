@@ -48,12 +48,11 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
-use substrait::proto::expression::literal::user_defined::Val;
-use substrait::proto::expression::literal::UserDefined;
-use substrait::proto::expression::literal::{List, Struct};
+use substrait::proto::expression::literal::{
+    user_defined, IntervalDayToSecond, IntervalYearToMonth, List, Struct, UserDefined,
+};
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
-use substrait::proto::r#type::{parameter, Parameter};
 use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::{CrossRel, ExchangeRel};
 use substrait::{
@@ -95,9 +94,7 @@ use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_DAY_TIME_TYPE_URL,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_URL,
-    INTERVAL_YEAR_MONTH_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_URL,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
     TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
     TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
@@ -1534,47 +1531,31 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
             })),
         }),
         DataType::Interval(interval_unit) => {
-            // define two type parameters for convenience
-            let i32_param = Parameter {
-                parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
-                    kind: Some(r#type::Kind::I32(r#type::I32 {
+            match interval_unit {
+                IntervalUnit::YearMonth => Ok(substrait::proto::Type {
+                    kind: Some(r#type::Kind::IntervalYear(r#type::IntervalYear {
                         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                        nullability: r#type::Nullability::Unspecified as i32,
+                        nullability,
                     })),
-                })),
-            };
-            let i64_param = Parameter {
-                parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
-                    kind: Some(r#type::Kind::I64(r#type::I64 {
+                }),
+                IntervalUnit::DayTime => Ok(substrait::proto::Type {
+                    kind: Some(r#type::Kind::IntervalDay(r#type::IntervalDay {
                         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                        nullability: r#type::Nullability::Unspecified as i32,
+                        nullability,
                     })),
-                })),
-            };
-
-            let (type_parameters, type_reference) = match interval_unit {
-                IntervalUnit::YearMonth => {
-                    let type_parameters = vec![i32_param];
-                    (type_parameters, INTERVAL_YEAR_MONTH_TYPE_REF)
-                }
-                IntervalUnit::DayTime => {
-                    let type_parameters = vec![i64_param];
-                    (type_parameters, INTERVAL_DAY_TIME_TYPE_REF)
-                }
+                }),
                 IntervalUnit::MonthDayNano => {
-                    // use 2 `i64` as `i128`
-                    let type_parameters = vec![i64_param.clone(), i64_param];
-                    (type_parameters, INTERVAL_MONTH_DAY_NANO_TYPE_REF)
+                    // Substrait doesn't currently support this type, so we represent it as a UDT
+                    Ok(substrait::proto::Type {
+                        kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
+                            type_reference: INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+                            type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                            nullability,
+                            type_parameters: vec![],
+                        })),
+                    })
                 }
-            };
-            Ok(substrait::proto::Type {
-                kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
-                    type_reference,
-                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                    nullability,
-                    type_parameters,
-                })),
-            })
+            }
         }
         DataType::Binary => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Binary(r#type::Binary {
@@ -1954,45 +1935,23 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
             (LiteralType::Date(*d), DATE_32_TYPE_VARIATION_REF)
         }
         // Date64 literal is not supported in Substrait
-        ScalarValue::IntervalYearMonth(Some(i)) => {
-            let bytes = i.to_le_bytes();
-            (
-                LiteralType::UserDefined(UserDefined {
-                    type_reference: INTERVAL_YEAR_MONTH_TYPE_REF,
-                    type_parameters: vec![Parameter {
-                        parameter: Some(parameter::Parameter::DataType(
-                            substrait::proto::Type {
-                                kind: Some(r#type::Kind::I32(r#type::I32 {
-                                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                                    nullability: r#type::Nullability::Required as i32,
-                                })),
-                            },
-                        )),
-                    }],
-                    val: Some(Val::Value(ProtoAny {
-                        type_url: INTERVAL_YEAR_MONTH_TYPE_URL.to_string(),
-                        value: bytes.to_vec().into(),
-                    })),
-                }),
-                INTERVAL_YEAR_MONTH_TYPE_REF,
-            )
-        }
+        ScalarValue::IntervalYearMonth(Some(i)) => (
+            LiteralType::IntervalYearToMonth(IntervalYearToMonth {
+                // DF only tracks total months, but there should always be 12 months in a year
+                years: *i / 12,
+                months: *i % 12,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
         ScalarValue::IntervalMonthDayNano(Some(i)) => {
-            // treat `i128` as two contiguous `i64`
+            // IntervalMonthDayNano is internally represented as a 128-bit integer, containing
+            // months (32bit), days (32bit), and nanoseconds (64bit)
             let bytes = i.to_byte_slice();
-            let i64_param = Parameter {
-                parameter: Some(parameter::Parameter::DataType(substrait::proto::Type {
-                    kind: Some(r#type::Kind::I64(r#type::I64 {
-                        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                        nullability: r#type::Nullability::Required as i32,
-                    })),
-                })),
-            };
             (
                 LiteralType::UserDefined(UserDefined {
                     type_reference: INTERVAL_MONTH_DAY_NANO_TYPE_REF,
-                    type_parameters: vec![i64_param.clone(), i64_param],
-                    val: Some(Val::Value(ProtoAny {
+                    type_parameters: vec![],
+                    val: Some(user_defined::Val::Value(ProtoAny {
                         type_url: INTERVAL_MONTH_DAY_NANO_TYPE_URL.to_string(),
                         value: bytes.to_vec().into(),
                     })),
@@ -2000,29 +1959,14 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
                 INTERVAL_MONTH_DAY_NANO_TYPE_REF,
             )
         }
-        ScalarValue::IntervalDayTime(Some(i)) => {
-            let bytes = i.to_byte_slice();
-            (
-                LiteralType::UserDefined(UserDefined {
-                    type_reference: INTERVAL_DAY_TIME_TYPE_REF,
-                    type_parameters: vec![Parameter {
-                        parameter: Some(parameter::Parameter::DataType(
-                            substrait::proto::Type {
-                                kind: Some(r#type::Kind::I64(r#type::I64 {
-                                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                                    nullability: r#type::Nullability::Required as i32,
-                                })),
-                            },
-                        )),
-                    }],
-                    val: Some(Val::Value(ProtoAny {
-                        type_url: INTERVAL_DAY_TIME_TYPE_URL.to_string(),
-                        value: bytes.to_vec().into(),
-                    })),
-                }),
-                INTERVAL_DAY_TIME_TYPE_REF,
-            )
-        }
+        ScalarValue::IntervalDayTime(Some(i)) => (
+            LiteralType::IntervalDayToSecond(IntervalDayToSecond {
+                days: i.days,
+                seconds: i.milliseconds / 1000,
+                microseconds: (i.milliseconds % 1000) * 1000,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
         ScalarValue::Binary(Some(b)) => (
             LiteralType::Binary(b.clone()),
             DEFAULT_CONTAINER_TYPE_VARIATION_REF,
