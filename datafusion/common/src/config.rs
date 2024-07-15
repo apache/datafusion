@@ -311,6 +311,10 @@ config_namespace! {
 
         /// Should DataFusion keep the columns used for partition_by in the output RecordBatches
         pub keep_partition_by_columns: bool, default = false
+
+        /// If true, the parquet reader will replace `Utf8/Utf8Large` with `Utf8View`,
+        /// and `Binary/BinaryLarge` with `BinaryView`.
+        pub schema_force_string_view: bool, default = false
     }
 }
 

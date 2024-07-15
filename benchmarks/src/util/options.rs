@@ -37,6 +37,10 @@ pub struct CommonOpt {
     /// Activate debug mode to see more details
     #[structopt(short, long)]
     pub debug: bool,
+
+    /// If true, will use StringView/BinaryViewArray instead of String/BinaryArray.
+    #[structopt(long)]
+    pub string_view: bool,
 }
 
 impl CommonOpt {

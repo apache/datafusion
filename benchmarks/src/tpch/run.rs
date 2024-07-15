@@ -120,6 +120,7 @@ impl RunOpt {
             .config()
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
+        config.options_mut().execution.schema_force_string_view = self.common.string_view;
         let ctx = SessionContext::new_with_config(config);
 
         // register tables
