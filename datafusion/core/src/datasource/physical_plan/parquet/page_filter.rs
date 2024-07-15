@@ -17,8 +17,8 @@
 
 //! Contains code to filter entire pages
 
+use super::metrics::ParquetFileMetrics;
 use crate::datasource::physical_plan::parquet::ParquetAccessPlan;
-use crate::datasource::physical_plan::parquet::StatisticsConverter;
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use arrow::array::BooleanArray;
 use arrow::{array::ArrayRef, datatypes::SchemaRef};
@@ -26,6 +26,7 @@ use arrow_schema::Schema;
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 use log::{debug, trace};
+use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
 use parquet::format::PageLocation;
 use parquet::schema::types::SchemaDescriptor;
@@ -35,8 +36,6 @@ use parquet::{
 };
 use std::collections::HashSet;
 use std::sync::Arc;
-
-use super::metrics::ParquetFileMetrics;
 
 /// Filters a [`ParquetAccessPlan`] based on the [Parquet PageIndex], if present
 ///
@@ -377,7 +376,7 @@ impl<'a> PagesPruningStatistics<'a> {
         converter: StatisticsConverter<'a>,
         parquet_metadata: &'a ParquetMetaData,
     ) -> Option<Self> {
-        let Some(parquet_column_index) = converter.parquet_index() else {
+        let Some(parquet_column_index) = converter.parquet_column_index() else {
             trace!(
                 "Column {:?} not in parquet file, skipping",
                 converter.arrow_field()
@@ -432,7 +431,6 @@ impl<'a> PagesPruningStatistics<'a> {
         Some(vec)
     }
 }
-
 impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
     fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
         match self.converter.data_page_mins(
