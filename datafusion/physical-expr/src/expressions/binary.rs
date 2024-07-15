@@ -303,7 +303,7 @@ impl PhysicalExpr for BinaryExpr {
                 println!("schema: {:?}", schema);
 
                 let record_batch = RecordBatch::try_new(
-                    schema.clone(),
+                    Arc::clone(&schema),
                     vec![
                         lhs.clone().into_array(batch.num_rows())?,
                         rhs.clone().into_array(batch.num_rows())?,
@@ -315,7 +315,7 @@ impl PhysicalExpr for BinaryExpr {
                 let Some(eval_eq_string) = REGISTRY
                     .get(
                         "eq",
-                        &schema
+                        schema
                             .all_fields()
                             .into_iter()
                             .map(|f| f.to_owned())
@@ -323,7 +323,11 @@ impl PhysicalExpr for BinaryExpr {
                             .as_slice(),
                         &Field::new("bool", DataType::Boolean, false),
                     )
-                    .and_then(|f| f.function.as_scalar())
+                    .and_then(|f| {
+                        println!("Function found");
+
+                        return f.function.as_scalar();
+                    })
                 else {
                     return internal_err!("Failed to get eq function");
                 };
@@ -336,7 +340,7 @@ impl PhysicalExpr for BinaryExpr {
                     return internal_err!("Failed to get result array");
                 };
 
-                return Ok(ColumnarValue::Array(result_array.clone()));
+                return Ok(ColumnarValue::Array(Arc::clone(result_array)));
             }
             Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
             Operator::Lt => return apply_cmp(&lhs, &rhs, lt),

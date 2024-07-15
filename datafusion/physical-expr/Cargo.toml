@@ -42,10 +42,6 @@ default = [
 ]
 encoding_expressions = ["base64", "hex"]
 regex_expressions = ["regex"]
-arrow_udf = [
-    "arrow-udf",
-    "datafusion-functions/arrow_udf",
-]
 
 [dependencies]
 ahash = { workspace = true }
@@ -55,7 +51,7 @@ arrow-buffer = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-string = { workspace = true }
-arrow-udf = { workspace = true, optional = true, features = ["global_registry"] }
+arrow-udf = { workspace = true, features = ["global_registry"] }
 base64 = { version = "0.22", optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }

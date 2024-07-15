@@ -57,7 +57,6 @@ default = [
     "unicode_expressions",
     "compression",
     "parquet",
-    "arrow_udf",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
@@ -75,9 +74,6 @@ string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [
     "datafusion-sql/unicode_expressions",
     "datafusion-functions/unicode_expressions",
-]
-arrow_udf = [
-    "datafusion-functions/arrow_udf",
 ]
 
 [dependencies]

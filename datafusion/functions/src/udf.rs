@@ -17,11 +17,100 @@
 
 use arrow_udf::function;
 
-#[function("eq(bool, bool) -> bool", output="eval_eq_boolean")]
-#[function("eq(string, string) -> bool", output="eval_eq_string")]
-#[function("eq(binary, binary) -> bool", output="eval_eq_binary")]
-#[function("eq(largestring, largestring) -> bool", output="eval_eq_largestring")]
-#[function("eq(largebinary, largebinary) -> bool", output="eval_eq_largebinary")]
-fn eq<T: std::cmp::Eq>(_lhs: T, _rhs: T) -> bool {
-    _lhs == _rhs
+#[function("eq(boolean, boolean) -> boolean")]
+fn eq(lhs: bool, rhs: bool) -> bool {
+    lhs == rhs
+}
+
+#[function("gcd(int, int) -> int", output = "eval_gcd")]
+fn gcd(mut a: i32, mut b: i32) -> i32 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, vec};
+
+    use arrow::{
+        array::{BooleanArray, RecordBatch},
+        datatypes::{Field, Schema},
+    };
+    use arrow_udf::sig::REGISTRY;
+
+    #[test]
+    fn test_eq() {
+        let bool_field = Field::new("", arrow::datatypes::DataType::Boolean, false);
+        let schema = Schema::new(vec![bool_field.clone()]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(BooleanArray::from(vec![true, false, true]))],
+        )
+        .unwrap();
+
+        println!("Function signatures:");
+        REGISTRY.iter().for_each(|sig| {
+            println!("{:?}", sig.name);
+            println!("{:?}", sig.arg_types);
+            println!("{:?}", sig.return_type);
+        });
+
+        let eval_eq_boolean = REGISTRY
+            .get("eq", &[bool_field.clone(), bool_field.clone()], &bool_field)
+            .unwrap()
+            .function
+            .as_scalar()
+            .unwrap();
+
+        let result = eval_eq_boolean(&record_batch).unwrap();
+
+        assert!(result
+            .column(0)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap()
+            .value(0));
+    }
+
+    #[test]
+    fn test_gcd() {
+        let int_field = Field::new("", arrow::datatypes::DataType::Int32, false);
+        let schema = Schema::new(vec![int_field.clone(), int_field.clone()]);
+        let record_batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::Int32Array::from(vec![20, 30, 40])),
+            ],
+        )
+        .unwrap();
+
+        println!("Function signatures:");
+        REGISTRY.iter().for_each(|sig| {
+            println!("{:?}", sig.name);
+            println!("{:?}", sig.arg_types);
+            println!("{:?}", sig.return_type);
+        });
+
+        let eval_gcd_int = REGISTRY
+            .get("gcd", &[int_field.clone(), int_field.clone()], &int_field)
+            .unwrap()
+            .function
+            .as_scalar()
+            .unwrap();
+
+        let result = eval_gcd_int(&record_batch).unwrap();
+
+        assert_eq!(
+            result
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .unwrap()
+                .value(0),
+            10
+        );
+    }
 }
