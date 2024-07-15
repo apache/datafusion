@@ -609,6 +609,8 @@ impl PruningPredicate {
     ///
     /// This happens if the predicate is a literal `true`  and
     /// literal_guarantees is empty.
+    ///
+    /// This can happen when a predicate is simplified to a constant `true`
     pub fn always_true(&self) -> bool {
         is_always_true(&self.predicate_expr) && self.literal_guarantees.is_empty()
     }
@@ -736,12 +738,22 @@ impl RequiredColumns {
         Self::default()
     }
 
-    /// Returns number of unique columns
-    pub(crate) fn n_columns(&self) -> usize {
-        self.iter()
-            .map(|(c, _s, _f)| c)
-            .collect::<HashSet<_>>()
-            .len()
+    /// Returns Some(column) if this is a single column predicate.
+    ///
+    /// Returns None if this is a multi-column predicate.
+    ///
+    /// Examples:
+    /// * `a > 5 OR a < 10` returns `Some(a)`
+    /// * `a > 5 OR b < 10` returns `None`
+    /// * `true` returns None
+    pub(crate) fn single_column(&self) -> Option<&phys_expr::Column> {
+        let cols = self.iter().map(|(c, _s, _f)| c).collect::<HashSet<_>>();
+
+        if cols.len() == 1 {
+            cols.iter().next().copied()
+        } else {
+            None
+        }
     }
 
     /// Returns an iterator over items in columns (see doc on

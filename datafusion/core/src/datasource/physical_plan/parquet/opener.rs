@@ -17,7 +17,7 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
-use crate::datasource::physical_plan::parquet::page_filter::PagePruningPredicate;
+use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::row_groups::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
     row_filter, should_enable_page_index, ParquetAccessPlan,
@@ -46,7 +46,7 @@ pub(super) struct ParquetOpener {
     pub limit: Option<usize>,
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
     pub pruning_predicate: Option<Arc<PruningPredicate>>,
-    pub page_pruning_predicate: Option<Arc<PagePruningPredicate>>,
+    pub page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
     pub table_schema: SchemaRef,
     pub metadata_size_hint: Option<usize>,
     pub metrics: ExecutionPlanMetricsSet,
