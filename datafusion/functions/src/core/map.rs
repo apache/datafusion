@@ -35,7 +35,6 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 /// SELECT make_map('type', 'test') from test
 /// ```
 /// We can evaluate the result of `make_map` directly.
-#[inline]
 fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
     args.iter()
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
