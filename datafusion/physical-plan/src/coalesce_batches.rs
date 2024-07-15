@@ -67,6 +67,18 @@ impl CoalesceBatchesExec {
         }
     }
 
+    /// Create a new CoalesceBatchesExec with fetch
+    pub fn new_with_fetch(input: Arc<dyn ExecutionPlan>, target_batch_size: usize, fetch: Option<usize>) -> Self {
+        let cache = Self::compute_properties(&input);
+        Self {
+            input,
+            target_batch_size,
+            fetch,
+            metrics: ExecutionPlanMetricsSet::new(),
+            cache,
+        }
+    }
+
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -97,12 +109,20 @@ impl DisplayAs for CoalesceBatchesExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "CoalesceBatchesExec: target_batch_size={}, fetch={}",
-                    self.target_batch_size,
-                    self.fetch.map_or("None".to_string(), |x| x.to_string())
-                )
+                if let Some(fetch) = self.fetch {
+                    write!(
+                        f,
+                        "CoalesceBatchesExec: target_batch_size={}, fetch={}",
+                        self.target_batch_size,
+                        fetch
+                    )
+                } else {
+                    write!(
+                        f,
+                        "CoalesceBatchesExec: target_batch_size={}",
+                        self.target_batch_size
+                    )
+                }
             }
         }
     }
@@ -138,9 +158,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CoalesceBatchesExec::new(
+        Ok(Arc::new(CoalesceBatchesExec::new_with_fetch(
             Arc::clone(&children[0]),
             self.target_batch_size,
+            self.fetch,
         )))
     }
 
@@ -153,8 +174,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
             input: self.input.execute(partition, context)?,
             schema: self.input.schema(),
             target_batch_size: self.target_batch_size,
+            fetch: self.fetch,
             buffer: Vec::new(),
             buffered_rows: 0,
+            total_rows: 0,
             is_closed: false,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
@@ -186,10 +209,14 @@ struct CoalesceBatchesStream {
     schema: SchemaRef,
     /// Minimum number of rows for coalesces batches
     target_batch_size: usize,
+    /// Maximum number of rows to fetch,
+    fetch: Option<usize>,
     /// Buffered batches
     buffer: Vec<RecordBatch>,
     /// Buffered row count
     buffered_rows: usize,
+    /// Total number of rows returned
+    total_rows: usize,
     /// Whether the stream has finished returning all of its data or not
     is_closed: bool,
     /// Execution metrics
@@ -231,6 +258,42 @@ impl CoalesceBatchesStream {
             match input_batch {
                 Poll::Ready(x) => match x {
                     Some(Ok(batch)) => {
+                        // handle fetch limit
+                        if let Some(fetch) = self.fetch {
+                            if self.total_rows + batch.num_rows() >= fetch {
+                                // we have reached the fetch limit
+                                let remaining_rows = fetch - self.total_rows;
+                                if remaining_rows > 0 {
+                                    self.is_closed = true;
+                                    self.total_rows = fetch;
+                                    // trim the batch
+                                    let batch = batch.slice(0, remaining_rows);
+                                    // add to the buffered batches
+                                    self.buffered_rows += batch.num_rows();
+                                    self.buffer.push(batch);
+                                    // combine the batches and return
+                                    let batch = concat_batches(
+                                        &self.schema,
+                                        &self.buffer,
+                                        self.buffered_rows,
+                                    )?;
+                                    // reset buffer state
+                                    self.buffer.clear();
+                                    self.buffered_rows = 0;
+                                    // return batch
+                                    return Poll::Ready(Some(Ok(batch)));
+                                } else {
+                                    // should be unreachable but just in case
+                                    self.is_closed = true;
+                                    return Poll::Ready(None);
+                                }
+                            } else {
+                                self.total_rows += batch.num_rows();
+                            }
+                        } else {
+                            self.total_rows += batch.num_rows();
+                        }
+
                         if batch.num_rows() >= self.target_batch_size
                             && self.buffer.is_empty()
                         {
@@ -319,7 +382,7 @@ mod tests {
         let partition = create_vec_batches(&schema, 10);
         let partitions = vec![partition];
 
-        let output_partitions = coalesce_batches(&schema, partitions, 21).await?;
+        let output_partitions = coalesce_batches(&schema, partitions, 21, None).await?;
         assert_eq!(1, output_partitions.len());
 
         // input is 10 batches x 8 rows (80 rows)
@@ -334,6 +397,81 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_concat_batches_with_fetch_larger_than_input_size() -> Result<()> {
+        let schema = test_schema();
+        let partition = create_vec_batches(&schema, 10);
+        let partitions = vec![partition];
+
+        let output_partitions = coalesce_batches(&schema, partitions, 21, Some(100)).await?;
+        assert_eq!(1, output_partitions.len());
+
+        // input is 10 batches x 8 rows (80 rows) with fetch limit of 100
+        // expected to behave the same as `test_concat_batches`
+        let batches = &output_partitions[0];
+        assert_eq!(4, batches.len());
+        assert_eq!(24, batches[0].num_rows());
+        assert_eq!(24, batches[1].num_rows());
+        assert_eq!(24, batches[2].num_rows());
+        assert_eq!(8, batches[3].num_rows());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_concat_batches_with_fetch_less_than_input_size() -> Result<()> {
+        let schema = test_schema();
+        let partition = create_vec_batches(&schema, 10);
+        let partitions = vec![partition];
+
+        let output_partitions = coalesce_batches(&schema, partitions, 21, Some(50)).await?;
+        assert_eq!(1, output_partitions.len());
+
+        // input is 10 batches x 8 rows (80 rows) with fetch limit of 50
+        let batches = &output_partitions[0];
+        assert_eq!(3, batches.len());
+        assert_eq!(24, batches[0].num_rows());
+        assert_eq!(24, batches[1].num_rows());
+        assert_eq!(2, batches[2].num_rows());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_concat_batches_with_fetch_less_than_target_and_no_remaining_rows() -> Result<()> {
+        let schema = test_schema();
+        let partition = create_vec_batches(&schema, 10);
+        let partitions = vec![partition];
+
+        let output_partitions = coalesce_batches(&schema, partitions, 21, Some(48)).await?;
+        assert_eq!(1, output_partitions.len());
+
+        // input is 10 batches x 8 rows (80 rows) with fetch limit of 48
+        let batches = &output_partitions[0];
+        assert_eq!(2, batches.len());
+        assert_eq!(24, batches[0].num_rows());
+        assert_eq!(24, batches[1].num_rows());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_concat_batches_with_fetch_smaller_less_target_batch_size() -> Result<()> {
+        let schema = test_schema();
+        let partition = create_vec_batches(&schema, 10);
+        let partitions = vec![partition];
+
+        let output_partitions = coalesce_batches(&schema, partitions, 21, Some(10)).await?;
+        assert_eq!(1, output_partitions.len());
+
+        // input is 10 batches x 8 rows (80 rows) with fetch limit of 10
+        let batches = &output_partitions[0];
+        assert_eq!(1, batches.len());
+        assert_eq!(10, batches[0].num_rows());
+
+        Ok(())
+    }
+
     fn test_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
     }
@@ -342,13 +480,14 @@ mod tests {
         schema: &SchemaRef,
         input_partitions: Vec<Vec<RecordBatch>>,
         target_batch_size: usize,
+        fetch: Option<usize>,
     ) -> Result<Vec<Vec<RecordBatch>>> {
         // create physical plan
         let exec = MemoryExec::try_new(&input_partitions, Arc::clone(schema), None)?;
         let exec =
             RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(1))?;
         let exec: Arc<dyn ExecutionPlan> =
-            Arc::new(CoalesceBatchesExec::new(Arc::new(exec), target_batch_size));
+            Arc::new(CoalesceBatchesExec::new_with_fetch(Arc::new(exec), target_batch_size, fetch));
 
         // execute and collect results
         let output_partition_count = exec.output_partitioning().partition_count();
