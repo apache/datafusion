@@ -21,7 +21,6 @@ use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     Dependency, Result,
 };
-use datafusion_expr::planner::{PlannerResult, RawAggregateFunction};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     expr, AggregateFunction, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition,
@@ -350,30 +349,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
                     .transpose()?
                     .map(Box::new);
-
-                let raw_aggregate_function = RawAggregateFunction {
-                    udf: fm,
+                return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                    fm,
                     args,
                     distinct,
                     filter,
                     order_by,
-                    null_treatment,
-                };
-
-                for planner in self.planners.iter() {
-                    if let PlannerResult::Planned(aggregate_function) =
-                        planner.plan_aggregate_function(raw_aggregate_function.clone())?
-                    {
-                        return Ok(aggregate_function);
-                    }
-                }
-
-                return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
-                    raw_aggregate_function.udf,
-                    raw_aggregate_function.args,
-                    distinct,
-                    raw_aggregate_function.filter,
-                    raw_aggregate_function.order_by,
                     null_treatment,
                 )));
             }

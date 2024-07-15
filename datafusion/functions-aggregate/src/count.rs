@@ -44,7 +44,7 @@ use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     EmitTo, GroupsAccumulator, Signature, Volatility,
 };
-use datafusion_expr::{Expr, ReversedUDAF};
+use datafusion_expr::{Expr, ReversedUDAF, TypeSignature};
 use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
 use datafusion_physical_expr_common::{
     aggregate::count_distinct::{
@@ -95,7 +95,10 @@ impl Default for Count {
 impl Count {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::VariadicAny, TypeSignature::Any(0)],
+                Volatility::Immutable,
+            ),
         }
     }
 }

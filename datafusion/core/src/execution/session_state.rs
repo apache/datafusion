@@ -242,9 +242,6 @@ impl SessionState {
             Arc::new(functions::datetime::planner::ExtractPlanner),
             #[cfg(feature = "unicode_expressions")]
             Arc::new(functions::unicode::planner::PositionPlanner),
-            Arc::new(
-                functions_aggregate::aggregate_function_planner::AggregateFunctionPlanner,
-            ),
         ];
 
         let mut new_self = SessionState {

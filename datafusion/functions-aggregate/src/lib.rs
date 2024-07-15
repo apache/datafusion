@@ -84,8 +84,6 @@ use datafusion_expr::AggregateUDF;
 use log::debug;
 use std::sync::Arc;
 
-pub mod aggregate_function_planner;
-
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     pub use super::approx_distinct;

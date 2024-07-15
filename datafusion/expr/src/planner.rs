@@ -24,7 +24,6 @@ use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
-use sqlparser::ast::NullTreatment;
 
 use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
 
@@ -108,7 +107,7 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
 
     /// Plan the array literal, returns OriginalArray if not possible
     ///
-    /// Returns original expression arguments if not possible
+    /// Returns origin expression arguments if not possible
     fn plan_array_literal(
         &self,
         exprs: Vec<Expr>,
@@ -125,7 +124,7 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
 
     /// Plan the dictionary literal `{ key: value, ...}`
     ///
-    /// Returns original expression arguments if not possible
+    /// Returns origin expression arguments if not possible
     fn plan_dictionary_literal(
         &self,
         expr: RawDictionaryExpr,
@@ -136,19 +135,9 @@ pub trait UserDefinedSQLPlanner: Send + Sync {
 
     /// Plan an extract expression, e.g., `EXTRACT(month FROM foo)`
     ///
-    /// Returns original expression arguments if not possible
+    /// Returns origin expression arguments if not possible
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
-    }
-
-    /// Plan an aggregate function, e.g., `SUM(foo)`
-    ///
-    /// Returns original expression arguments if not possible
-    fn plan_aggregate_function(
-        &self,
-        aggregate_function: RawAggregateFunction,
-    ) -> Result<PlannerResult<RawAggregateFunction>> {
-        Ok(PlannerResult::Original(aggregate_function))
     }
 }
 
@@ -193,15 +182,4 @@ pub enum PlannerResult<T> {
     Planned(Expr),
     /// The raw expression could not be planned, and is returned unmodified
     Original(T),
-}
-
-// An aggregate function to plan.
-#[derive(Debug, Clone)]
-pub struct RawAggregateFunction {
-    pub udf: Arc<crate::AggregateUDF>,
-    pub args: Vec<Expr>,
-    pub distinct: bool,
-    pub filter: Option<Box<Expr>>,
-    pub order_by: Option<Vec<Expr>>,
-    pub null_treatment: Option<NullTreatment>,
 }
