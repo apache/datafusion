@@ -103,7 +103,6 @@ impl Dialect for MySqlDialect {
     fn interval_style(&self) -> IntervalStyle {
         IntervalStyle::MySQL
     }
-
 }
 
 pub struct SqliteDialect {}
@@ -158,7 +157,6 @@ impl Dialect for CustomDialect {
     fn interval_style(&self) -> IntervalStyle {
         self.interval_style
     }
-
 }
 
 // create a CustomDialectBuilder
