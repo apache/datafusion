@@ -167,6 +167,12 @@ pub struct CustomDialectBuilder {
     interval_style: IntervalStyle,
 }
 
+impl Default for CustomDialectBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CustomDialectBuilder {
     pub fn new() -> Self {
         Self {
