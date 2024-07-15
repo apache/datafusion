@@ -117,6 +117,7 @@ pub fn all_default_array_functions() -> Vec<Arc<ScalarUDF>> {
         extract::array_pop_front_udf(),
         extract::array_slice_udf(),
         make_array::make_array_udf(),
+        make_array::make_array_strict_udf(),
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
         array_has::array_has_any_udf(),

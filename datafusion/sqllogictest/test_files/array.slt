@@ -793,6 +793,16 @@ select make_array(1, 2, 3)[1 + 2 - 1], make_array(1.0, 2.0, 3.0)[2 * 1 * 0 - 2],
 ----
 2 2 o
 
+# test make_array_strict work
+query IRT
+select make_array_strict(1, 2, 3)[1], make_array_strict(1.0, 2.0, 3.0)[2], make_array_strict('h', 'e', 'l', 'l', 'o')[3];
+----
+1 2 l
+
+# test make_array_strict won't coerce type
+query error DataFusion error: Error during planning: All arguments must have the same type
+select make_array_strict(1, 'a', 3);
+
 # single index with columns #1 (positive index)
 query ?RT
 select column1[2], column2[3], column3[1] from arrays;
