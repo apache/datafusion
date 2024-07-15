@@ -338,7 +338,7 @@ mod tests {
         let streaming_table = streaming_table_exec(schema.clone())?;
         let repartition = repartition_exec(streaming_table)?;
         let filter = filter_exec(schema.clone(), repartition)?;
-        let coalesce_batches = coalesce_batches_exec(schema.clone(), filter);
+        let coalesce_batches = coalesce_batches_exec(filter);
         let local_limit = local_limit_exec(coalesce_batches, 5);
         let coalesce_partitions = coalesce_partitions_exec(local_limit);
         let global_limit = global_limit_exec(coalesce_partitions, 0, Some(5));
@@ -407,7 +407,7 @@ mod tests {
     fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version() -> Result<()> {
         let schema = create_schema();
         let streaming_table = streaming_table_exec(schema.clone()).unwrap();
-        let coalesce_batches = coalesce_batches_exec(schema.clone(), streaming_table);
+        let coalesce_batches = coalesce_batches_exec(streaming_table);
         let projection = projection_exec(schema.clone(), coalesce_batches)?;
         let global_limit = global_limit_exec(projection, 0, Some(5));
 
@@ -519,7 +519,7 @@ mod tests {
         )?))
     }
 
-    fn coalesce_batches_exec(schema: SchemaRef, input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
         Arc::new(CoalesceBatchesExec::new(input, 8192))
     }
 
