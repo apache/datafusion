@@ -85,6 +85,22 @@ pub(crate) fn rebase_expr(
         .data()
 }
 
+pub(crate) fn rebase_expr_by_name(
+    expr: &Expr,
+    base_expr_names: &[String],
+    plan: &LogicalPlan,
+) -> Result<Expr> {
+    expr.clone()
+        .transform_down(|nested_expr| {
+            if base_expr_names.contains(&nested_expr.display_name()?) {
+                Ok(Transformed::yes(expr_as_column_expr(&nested_expr, plan)?))
+            } else {
+                Ok(Transformed::no(nested_expr))
+            }
+        })
+        .data()
+}
+
 /// Determines if the set of `Expr`'s are a valid projection on the input
 /// `Expr::Column`'s.
 pub(crate) fn check_columns_satisfy_exprs(
