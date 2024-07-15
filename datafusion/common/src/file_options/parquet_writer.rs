@@ -404,6 +404,12 @@ mod tests {
 
         let global_options_defaults = ParquetOptions::default();
 
+        let column_specific_options = if configured_col_props.eq(&default_col_props) {
+            HashMap::default()
+        } else {
+            HashMap::from([(COL_NAME.into(), configured_col_props)])
+        };
+
         TableParquetOptions {
             global: ParquetOptions {
                 // global options
@@ -443,10 +449,7 @@ mod tests {
                     .maximum_buffered_record_batches_per_stream,
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
             },
-            column_specific_options: HashMap::from([(
-                COL_NAME.into(),
-                configured_col_props,
-            )]),
+            column_specific_options,
             key_value_metadata,
         }
     }
