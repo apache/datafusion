@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::RecordBatch;
 use std::any::Any;
+use std::fmt::Display;
+use std::hash::Hasher;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::vec;
@@ -38,7 +41,8 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
-use datafusion::physical_expr::expressions::{Max, NthValueAgg};
+use datafusion::physical_expr::aggregate::utils::down_cast_any_ref;
+use datafusion::physical_expr::expressions::Max;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -75,12 +79,13 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
     ScalarUDFImpl, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::StringAgg;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
@@ -362,15 +367,17 @@ fn rountrip_aggregate() -> Result<()> {
             false,
         )?],
         // NTH_VALUE
-        vec![Arc::new(NthValueAgg::new(
-            col("b", &schema)?,
-            1,
-            "NTH_VALUE(b, 1)".to_string(),
-            DataType::Int64,
+        vec![udaf::create_aggregate_expr(
+            &nth_value_udaf(),
+            &[col("b", &schema)?, lit(1u64)],
+            &[],
+            &[],
+            &[],
+            &schema,
+            "NTH_VALUE(b, 1)",
             false,
-            Vec::new(),
-            Vec::new(),
-        ))],
+            false,
+        )?],
         // STRING_AGG
         vec![udaf::create_aggregate_expr(
             &AggregateUDF::new_from_impl(StringAgg::new()),
@@ -656,6 +663,147 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
+    let scan_config = FileScanConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_schema: Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Utf8,
+            false,
+        )])),
+        file_groups: vec![vec![PartitionedFile::new(
+            "/path/to/file.parquet".to_string(),
+            1024,
+        )]],
+        statistics: Statistics {
+            num_rows: Precision::Inexact(100),
+            total_byte_size: Precision::Inexact(1024),
+            column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+                Field::new("col", DataType::Utf8, false),
+            ]))),
+        },
+        projection: None,
+        limit: None,
+        table_partition_cols: vec![],
+        output_ordering: vec![],
+    };
+
+    #[derive(Debug, Hash, Clone)]
+    struct CustomPredicateExpr {
+        inner: Arc<dyn PhysicalExpr>,
+    }
+    impl Display for CustomPredicateExpr {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "CustomPredicateExpr")
+        }
+    }
+    impl PartialEq<dyn Any> for CustomPredicateExpr {
+        fn eq(&self, other: &dyn Any) -> bool {
+            down_cast_any_ref(other)
+                .downcast_ref::<Self>()
+                .map(|x| self.inner.eq(&x.inner))
+                .unwrap_or(false)
+        }
+    }
+    impl PhysicalExpr for CustomPredicateExpr {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+            unreachable!()
+        }
+
+        fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+            unreachable!()
+        }
+
+        fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
+            unreachable!()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.inner]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            todo!()
+        }
+
+        fn dyn_hash(&self, _state: &mut dyn Hasher) {
+            unreachable!()
+        }
+    }
+
+    #[derive(Debug)]
+    struct CustomPhysicalExtensionCodec;
+    impl PhysicalExtensionCodec for CustomPhysicalExtensionCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[Arc<dyn ExecutionPlan>],
+            _registry: &dyn FunctionRegistry,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unreachable!()
+        }
+
+        fn try_encode(
+            &self,
+            _node: Arc<dyn ExecutionPlan>,
+            _buf: &mut Vec<u8>,
+        ) -> Result<()> {
+            unreachable!()
+        }
+
+        fn try_decode_expr(
+            &self,
+            buf: &[u8],
+            inputs: &[Arc<dyn PhysicalExpr>],
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            if buf == "CustomPredicateExpr".as_bytes() {
+                Ok(Arc::new(CustomPredicateExpr {
+                    inner: inputs[0].clone(),
+                }))
+            } else {
+                internal_err!("Not supported")
+            }
+        }
+
+        fn try_encode_expr(
+            &self,
+            node: Arc<dyn PhysicalExpr>,
+            buf: &mut Vec<u8>,
+        ) -> Result<()> {
+            if node
+                .as_ref()
+                .as_any()
+                .downcast_ref::<CustomPredicateExpr>()
+                .is_some()
+            {
+                buf.extend_from_slice("CustomPredicateExpr".as_bytes());
+                Ok(())
+            } else {
+                internal_err!("Not supported")
+            }
+        }
+    }
+
+    let custom_predicate_expr = Arc::new(CustomPredicateExpr {
+        inner: Arc::new(Column::new("col", 1)),
+    });
+    let exec_plan = ParquetExec::builder(scan_config)
+        .with_predicate(custom_predicate_expr)
+        .build_arc();
+
+    let ctx = SessionContext::new();
+    roundtrip_test_and_return(exec_plan, &ctx, &CustomPhysicalExtensionCodec {})?;
+    Ok(())
+}
+
+#[test]
 fn roundtrip_scalar_udf() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
@@ -899,6 +1047,7 @@ fn roundtrip_json_sink() -> Result<()> {
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         overwrite: true,
+        keep_partition_by_columns: true,
     };
     let data_sink = Arc::new(JsonSink::new(
         file_sink_config,
@@ -934,6 +1083,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         overwrite: true,
+        keep_partition_by_columns: true,
     };
     let data_sink = Arc::new(CsvSink::new(
         file_sink_config,
@@ -992,6 +1142,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         overwrite: true,
+        keep_partition_by_columns: true,
     };
     let data_sink = Arc::new(ParquetSink::new(
         file_sink_config,

@@ -483,7 +483,7 @@ enum AggregateFunction {
   // APPROX_PERCENTILE_CONT = 14;
   // APPROX_MEDIAN = 15;
   // APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
-  GROUPING = 17;
+  // GROUPING = 17;
   // MEDIAN = 18;
   // BIT_AND = 19;
   // BIT_OR = 20;
@@ -500,7 +500,7 @@ enum AggregateFunction {
   // REGR_SYY = 33;
   // REGR_SXY = 34;
   // STRING_AGG = 35;
-  NTH_VALUE_AGG = 36;
+  // NTH_VALUE_AGG = 36;
 }
 
 message AggregateExprNode {
@@ -669,9 +669,11 @@ message PlanType {
     datafusion_common.EmptyMessage FinalLogicalPlan = 3;
     datafusion_common.EmptyMessage InitialPhysicalPlan = 4;
     datafusion_common.EmptyMessage InitialPhysicalPlanWithStats = 9;
+    datafusion_common.EmptyMessage InitialPhysicalPlanWithSchema = 11;
     OptimizedPhysicalPlanType OptimizedPhysicalPlan = 5;
     datafusion_common.EmptyMessage FinalPhysicalPlan = 6;
     datafusion_common.EmptyMessage FinalPhysicalPlanWithStats = 10;
+    datafusion_common.EmptyMessage FinalPhysicalPlanWithSchema = 12;
   }
 }
 
@@ -754,6 +756,7 @@ message FileSinkConfig {
   datafusion_common.Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool overwrite = 8;
+  bool keep_partition_by_columns = 9;
 }
 
 message JsonSink {
@@ -833,6 +836,8 @@ message PhysicalExprNode {
     // was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
 
     PhysicalLikeExprNode like_expr = 18;
+
+    PhysicalExtensionExprNode extension = 19;
   }
 }
 
@@ -937,6 +942,11 @@ message PhysicalCastNode {
 
 message PhysicalNegativeNode {
   PhysicalExprNode expr = 1;
+}
+
+message PhysicalExtensionExprNode {
+  bytes expr = 1;
+  repeated PhysicalExprNode inputs = 2;
 }
 
 message FilterExecNode {

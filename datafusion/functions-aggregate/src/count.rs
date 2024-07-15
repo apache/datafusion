@@ -37,7 +37,7 @@ use arrow::{
     buffer::BooleanBuffer,
 };
 use datafusion_common::{
-    downcast_value, internal_err, DataFusionError, Result, ScalarValue,
+    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
@@ -62,17 +62,15 @@ make_udaf_expr_and_func!(
     count_udaf
 );
 
-pub fn count_distinct(expr: Expr) -> datafusion_expr::Expr {
-    datafusion_expr::Expr::AggregateFunction(
-        datafusion_expr::expr::AggregateFunction::new_udf(
-            count_udaf(),
-            vec![expr],
-            true,
-            None,
-            None,
-            None,
-        ),
-    )
+pub fn count_distinct(expr: Expr) -> Expr {
+    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+        count_udaf(),
+        vec![expr],
+        true,
+        None,
+        None,
+        None,
+    ))
 }
 
 pub struct Count {
@@ -138,6 +136,10 @@ impl AggregateUDFImpl for Count {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if !acc_args.is_distinct {
             return Ok(Box::new(CountAccumulator::new()));
+        }
+
+        if acc_args.input_exprs.len() > 1 {
+            return not_impl_err!("COUNT DISTINCT with multiple arguments");
         }
 
         let data_type = acc_args.input_type;

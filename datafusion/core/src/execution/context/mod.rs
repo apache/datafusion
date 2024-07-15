@@ -60,6 +60,7 @@ use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
+    planner::ExprPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
 
@@ -72,6 +73,7 @@ use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 
+use crate::execution::session_state::SessionStateBuilder;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -293,7 +295,11 @@ impl SessionContext {
     /// all `SessionContext`'s should be configured with the
     /// same `RuntimeEnv`.
     pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        let state = SessionState::new_with_config_rt(config, runtime);
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
         Self::new_with_state(state)
     }
 
@@ -314,7 +320,7 @@ impl SessionContext {
     }
 
     /// Creates a new `SessionContext` using the provided [`SessionState`]
-    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_state")]
+    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_state")]
     pub fn with_state(state: SessionState) -> Self {
         Self::new_with_state(state)
     }
@@ -1390,6 +1396,17 @@ impl FunctionRegistry for SessionContext {
     ) -> Result<()> {
         self.state.write().register_function_rewrite(rewrite)
     }
+
+    fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
+        self.state.read().expr_planners()
+    }
+
+    fn register_expr_planner(
+        &mut self,
+        expr_planner: Arc<dyn ExprPlanner>,
+    ) -> Result<()> {
+        self.state.write().register_expr_planner(expr_planner)
+    }
 }
 
 /// Create a new task context instance from SessionContext
@@ -1490,13 +1507,13 @@ impl SQLOptions {
         Default::default()
     }
 
-    /// Should DML data modification commands  (e.g. `INSERT and COPY`) be run? Defaults to `true`.
+    /// Should DDL data definition commands  (e.g. `CREATE TABLE`) be run? Defaults to `true`.
     pub fn with_allow_ddl(mut self, allow: bool) -> Self {
         self.allow_ddl = allow;
         self
     }
 
-    /// Should DML data modification commands (e.g. `INSERT and COPY`) be run? Defaults to `true`
+    /// Should DML data modification commands (e.g. `INSERT` and `COPY`) be run? Defaults to `true`
     pub fn with_allow_dml(mut self, allow: bool) -> Self {
         self.allow_dml = allow;
         self
@@ -1562,6 +1579,7 @@ mod tests {
     use datafusion_common_runtime::SpawnedTask;
 
     use crate::catalog::schema::SchemaProvider;
+    use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use tempfile::TempDir;
@@ -1695,7 +1713,11 @@ mod tests {
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")
             .set_str("datafusion.catalog.has_header", "true");
-        let session_state = SessionState::new_with_config_rt(cfg, runtime);
+        let session_state = SessionStateBuilder::new()
+            .with_config(cfg)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
         let ctx = SessionContext::new_with_state(session_state);
         ctx.refresh_catalogs().await?;
 
@@ -1721,9 +1743,12 @@ mod tests {
     #[tokio::test]
     async fn custom_query_planner() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
-        let session_state =
-            SessionState::new_with_config_rt(SessionConfig::new(), runtime)
-                .with_query_planner(Arc::new(MyQueryPlanner {}));
+        let session_state = SessionStateBuilder::new()
+            .with_config(SessionConfig::new())
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .with_query_planner(Arc::new(MyQueryPlanner {}))
+            .build();
         let ctx = SessionContext::new_with_state(session_state);
 
         let df = ctx.sql("SELECT 1").await?;

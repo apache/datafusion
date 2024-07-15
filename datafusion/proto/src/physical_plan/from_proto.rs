@@ -394,6 +394,14 @@ pub fn parse_physical_expr(
                 codec,
             )?,
         )),
+        ExprType::Extension(extension) => {
+            let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
+                .inputs
+                .iter()
+                .map(|e| parse_physical_expr(e, registry, input_schema, codec))
+                .collect::<Result<_>>()?;
+            (codec.try_decode_expr(extension.expr.as_slice(), &inputs)?) as _
+        }
     };
 
     Ok(pexpr)
@@ -649,6 +657,7 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
             overwrite: conf.overwrite,
+            keep_partition_by_columns: conf.keep_partition_by_columns,
         })
     }
 }

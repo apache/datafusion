@@ -59,7 +59,7 @@ the person. Here is an example:
 To: private@datafusion.apache.org
 Subject: [DISCUSS] $PERSONS_NAME for Committer
 
-$PERSONS_NAME has been an active contributor to the Datafusion community for the
+$PERSONS_NAME has been an active contributor to the DataFusion community for the
 last 6 months[1][2], helping others, answering questions, and improving the
 project's code.
 
@@ -294,7 +294,7 @@ Subject: [DISCUSS] $NEW_PMC_MEMBER for PMC
 
 I would like to propose adding $NEW_PMC_MEMBER[1] to the DataFusion PMC.
 
-$NEW_PMC_MEMBMER has been a committer since $COMMITER_MONTH [2], has a
+$NEW_PMC_MEMBMER has been a committer since $COMMITTER_MONTH [2], has a
 strong and sustained contribution record for more than a year, and focused on
 helping the community and the project grow[3].
 

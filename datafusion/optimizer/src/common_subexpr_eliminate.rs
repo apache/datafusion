@@ -33,12 +33,12 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     internal_datafusion_err, qualified_name, Column, DFSchema, DFSchemaRef, Result,
 };
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{col, Expr, ExprSchemable};
+use datafusion_expr::{col, BinaryExpr, Case, Expr, ExprSchemable, Operator};
 use indexmap::IndexMap;
 
 const CSE_PREFIX: &str = "__common_expr";
@@ -106,8 +106,9 @@ impl Hash for Identifier<'_> {
 /// ```
 type IdArray<'n> = Vec<(usize, Option<Identifier<'n>>)>;
 
-/// A map that contains the number of occurrences of expressions by their identifiers.
-type ExprStats<'n> = HashMap<Identifier<'n>, usize>;
+/// A map that contains the number of normal and conditional occurrences of expressions by
+/// their identifiers.
+type ExprStats<'n> = HashMap<Identifier<'n>, (usize, usize)>;
 
 /// A map that contains the common expressions and their alias extracted during the
 /// second, rewriting traversal.
@@ -187,24 +188,20 @@ impl CommonSubexprEliminate {
         id_array: &mut IdArray<'n>,
         expr_mask: ExprMask,
     ) -> Result<bool> {
-        // Don't consider volatile expressions for CSE.
-        Ok(if expr.is_volatile()? {
-            false
-        } else {
-            let mut visitor = ExprIdentifierVisitor {
-                expr_stats,
-                id_array,
-                visit_stack: vec![],
-                down_index: 0,
-                up_index: 0,
-                expr_mask,
-                random_state: &self.random_state,
-                found_common: false,
-            };
-            expr.visit(&mut visitor)?;
+        let mut visitor = ExprIdentifierVisitor {
+            expr_stats,
+            id_array,
+            visit_stack: vec![],
+            down_index: 0,
+            up_index: 0,
+            expr_mask,
+            random_state: &self.random_state,
+            found_common: false,
+            conditional: false,
+        };
+        expr.visit(&mut visitor)?;
 
-            visitor.found_common
-        })
+        Ok(visitor.found_common)
     }
 
     /// Rewrites `exprs_list` with common sub-expressions replaced with a new
@@ -343,13 +340,9 @@ impl CommonSubexprEliminate {
         let input = unwrap_arc(input);
         let expr = vec![predicate];
         self.try_unary_plan(expr, input, config)?
-            .transform_data(|(mut new_expr, new_input)| {
+            .map_data(|(mut new_expr, new_input)| {
                 assert_eq!(new_expr.len(), 1); // passed in vec![predicate]
                 let new_predicate = new_expr.pop().unwrap();
-                Ok(Filter::remove_aliases(new_predicate)?
-                    .update_data(|new_predicate| (new_predicate, new_input)))
-            })?
-            .map_data(|(new_predicate, new_input)| {
                 Filter::try_new(new_predicate, Arc::new(new_input))
                     .map(LogicalPlan::Filter)
             })
@@ -906,36 +899,69 @@ struct ExprIdentifierVisitor<'a, 'n> {
     random_state: &'a RandomState,
     // a flag to indicate that common expression found
     found_common: bool,
+    // if we are in a conditional branch. A conditional branch means that the expression
+    // might not be executed depending on the runtime values of other expressions, and
+    // thus can not be extracted as a common expression.
+    conditional: bool,
 }
 
-/// Record item that used when traversing a expression tree.
+/// Record item that used when traversing an expression tree.
 enum VisitRecord<'n> {
-    /// `usize` postorder index assigned in `f-down`(). Starts from 0.
+    /// Marks the beginning of expression. It contains:
+    /// - The post-order index assigned during the first, visiting traversal.
     EnterMark(usize),
-    /// the node's children were skipped => jump to f_up on same node
-    JumpMark,
-    /// Accumulated identifier of sub expression.
-    ExprItem(Identifier<'n>),
+
+    /// Marks an accumulated subexpression tree. It contains:
+    /// - The accumulated identifier of a subexpression.
+    /// - A boolean flag if the expression is valid for subexpression elimination.
+    ///   The flag is propagated up from children to parent. (E.g. volatile expressions
+    ///   are not valid and can't be extracted, but non-volatile children of volatile
+    ///   expressions can be extracted.)
+    ExprItem(Identifier<'n>, bool),
 }
 
 impl<'n> ExprIdentifierVisitor<'_, 'n> {
-    /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
-    /// before it.
-    fn pop_enter_mark(&mut self) -> Option<(usize, Option<Identifier<'n>>)> {
+    /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem` before
+    /// it. Returns a tuple that contains:
+    /// - The pre-order index of the expression we marked.
+    /// - The accumulated identifier of the children of the marked expression.
+    /// - An accumulated boolean flag from the children of the marked expression if all
+    ///   children are valid for subexpression elimination (i.e. it is safe to extract the
+    ///   expression as a common expression from its children POV).
+    ///   (E.g. if any of the children of the marked expression is not valid (e.g. is
+    ///   volatile) then the expression is also not valid, so we can propagate this
+    ///   information up from children to parents via `visit_stack` during the first,
+    ///   visiting traversal and no need to test the expression's validity beforehand with
+    ///   an extra traversal).
+    fn pop_enter_mark(&mut self) -> (usize, Option<Identifier<'n>>, bool) {
         let mut expr_id = None;
+        let mut is_valid = true;
 
         while let Some(item) = self.visit_stack.pop() {
             match item {
-                VisitRecord::EnterMark(idx) => {
-                    return Some((idx, expr_id));
+                VisitRecord::EnterMark(down_index) => {
+                    return (down_index, expr_id, is_valid);
                 }
-                VisitRecord::ExprItem(id) => {
-                    expr_id = Some(id.combine(expr_id));
+                VisitRecord::ExprItem(sub_expr_id, sub_expr_is_valid) => {
+                    expr_id = Some(sub_expr_id.combine(expr_id));
+                    is_valid &= sub_expr_is_valid;
                 }
-                VisitRecord::JumpMark => return None,
             }
         }
         unreachable!("Enter mark should paired with node number");
+    }
+
+    /// Save the current `conditional` status and run `f` with `conditional` set to true.
+    fn conditionally<F: FnMut(&mut Self) -> Result<()>>(
+        &mut self,
+        mut f: F,
+    ) -> Result<()> {
+        let conditional = self.conditional;
+        self.conditional = true;
+        f(self)?;
+        self.conditional = conditional;
+
+        Ok(())
     }
 }
 
@@ -943,42 +969,98 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_, 'n> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
-        // TODO: consider non-volatile sub-expressions for CSE
-        // TODO: consider surely executed children of "short circuited"s for CSE
-
-        // If an expression can short circuit its children then don't consider it for CSE
-        // (https://github.com/apache/arrow-datafusion/issues/8814).
-        if expr.short_circuits() {
-            self.visit_stack.push(VisitRecord::JumpMark);
-
-            return Ok(TreeNodeRecursion::Jump);
-        }
-
         self.id_array.push((0, None));
         self.visit_stack
             .push(VisitRecord::EnterMark(self.down_index));
         self.down_index += 1;
 
-        Ok(TreeNodeRecursion::Continue)
+        // If an expression can short-circuit then some of its children might not be
+        // executed so count the occurrence of subexpressions as conditional in all
+        // children.
+        Ok(match expr {
+            // If we are already in a conditionally evaluated subtree then continue
+            // traversal.
+            _ if self.conditional => TreeNodeRecursion::Continue,
+
+            // In case of `ScalarFunction`s we don't know which children are surely
+            // executed so start visiting all children conditionally and stop the
+            // recursion with `TreeNodeRecursion::Jump`.
+            Expr::ScalarFunction(ScalarFunction { func, args })
+                if func.short_circuits() =>
+            {
+                self.conditionally(|visitor| {
+                    args.iter().try_for_each(|e| e.visit(visitor).map(|_| ()))
+                })?;
+
+                TreeNodeRecursion::Jump
+            }
+
+            // In case of `And` and `Or` the first child is surely executed, but we
+            // account subexpressions as conditional in the second.
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::And | Operator::Or,
+                right,
+            }) => {
+                left.visit(self)?;
+                self.conditionally(|visitor| right.visit(visitor).map(|_| ()))?;
+
+                TreeNodeRecursion::Jump
+            }
+
+            // In case of `Case` the optional base expression and the first when
+            // expressions are surely executed, but we account subexpressions as
+            // conditional in the others.
+            Expr::Case(Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            }) => {
+                expr.iter().try_for_each(|e| e.visit(self).map(|_| ()))?;
+                when_then_expr.iter().take(1).try_for_each(|(when, then)| {
+                    when.visit(self)?;
+                    self.conditionally(|visitor| then.visit(visitor).map(|_| ()))
+                })?;
+                self.conditionally(|visitor| {
+                    when_then_expr.iter().skip(1).try_for_each(|(when, then)| {
+                        when.visit(visitor)?;
+                        then.visit(visitor).map(|_| ())
+                    })?;
+                    else_expr
+                        .iter()
+                        .try_for_each(|e| e.visit(visitor).map(|_| ()))
+                })?;
+
+                TreeNodeRecursion::Jump
+            }
+
+            // In case of non-short-circuit expressions continue the traversal.
+            _ => TreeNodeRecursion::Continue,
+        })
     }
 
     fn f_up(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
-        let Some((down_index, sub_expr_id)) = self.pop_enter_mark() else {
-            return Ok(TreeNodeRecursion::Continue);
-        };
+        let (down_index, sub_expr_id, sub_expr_is_valid) = self.pop_enter_mark();
 
         let expr_id = Identifier::new(expr, self.random_state).combine(sub_expr_id);
+        let is_valid = !expr.is_volatile_node() && sub_expr_is_valid;
 
         self.id_array[down_index].0 = self.up_index;
-        if !self.expr_mask.ignores(expr) {
+        if is_valid && !self.expr_mask.ignores(expr) {
             self.id_array[down_index].1 = Some(expr_id);
-            let count = self.expr_stats.entry(expr_id).or_insert(0);
-            *count += 1;
-            if *count > 1 {
+            let (count, conditional_count) =
+                self.expr_stats.entry(expr_id).or_insert((0, 0));
+            if self.conditional {
+                *conditional_count += 1;
+            } else {
+                *count += 1;
+            }
+            if *count > 1 || (*count == 1 && *conditional_count > 0) {
                 self.found_common = true;
             }
         }
-        self.visit_stack.push(VisitRecord::ExprItem(expr_id));
+        self.visit_stack
+            .push(VisitRecord::ExprItem(expr_id, is_valid));
         self.up_index += 1;
 
         Ok(TreeNodeRecursion::Continue)
@@ -1012,48 +1094,40 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_, '_> {
             self.alias_counter += 1;
         }
 
-        // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
-        // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
-        // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
-        if expr.short_circuits() {
-            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
-        }
-
         let (up_index, expr_id) = self.id_array[self.down_index];
         self.down_index += 1;
 
-        // skip `Expr`s without identifier (empty identifier).
-        let Some(expr_id) = expr_id else {
-            return Ok(Transformed::no(expr));
-        };
+        // Handle `Expr`s with identifiers only
+        if let Some(expr_id) = expr_id {
+            let (count, conditional_count) = self.expr_stats.get(&expr_id).unwrap();
+            if *count > 1 || *count == 1 && *conditional_count > 0 {
+                // step index to skip all sub-node (which has smaller series number).
+                while self.down_index < self.id_array.len()
+                    && self.id_array[self.down_index].0 < up_index
+                {
+                    self.down_index += 1;
+                }
 
-        let count = self.expr_stats.get(&expr_id).unwrap();
-        if *count > 1 {
-            // step index to skip all sub-node (which has smaller series number).
-            while self.down_index < self.id_array.len()
-                && self.id_array[self.down_index].0 < up_index
-            {
-                self.down_index += 1;
+                let expr_name = expr.display_name()?;
+                let (_, expr_alias) =
+                    self.common_exprs.entry(expr_id).or_insert_with(|| {
+                        let expr_alias = self.alias_generator.next(CSE_PREFIX);
+                        (expr, expr_alias)
+                    });
+
+                // alias the expressions without an `Alias` ancestor node
+                let rewritten = if self.alias_counter > 0 {
+                    col(expr_alias.clone())
+                } else {
+                    self.alias_counter += 1;
+                    col(expr_alias.clone()).alias(expr_name)
+                };
+
+                return Ok(Transformed::new(rewritten, true, TreeNodeRecursion::Jump));
             }
-
-            let expr_name = expr.display_name()?;
-            let (_, expr_alias) = self.common_exprs.entry(expr_id).or_insert_with(|| {
-                let expr_alias = self.alias_generator.next(CSE_PREFIX);
-                (expr, expr_alias)
-            });
-
-            // alias the expressions without an `Alias` ancestor node
-            let rewritten = if self.alias_counter > 0 {
-                col(expr_alias.clone())
-            } else {
-                self.alias_counter += 1;
-                col(expr_alias.clone()).alias(expr_name)
-            };
-
-            Ok(Transformed::new(rewritten, true, TreeNodeRecursion::Jump))
-        } else {
-            Ok(Transformed::no(expr))
         }
+
+        Ok(Transformed::no(expr))
     }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Self::Node>> {
@@ -1090,6 +1164,7 @@ fn replace_common_expr<'n>(
 
 #[cfg(test)]
 mod test {
+    use std::any::Any;
     use std::collections::HashSet;
     use std::iter;
 
@@ -1097,8 +1172,9 @@ mod test {
     use datafusion_expr::expr::AggregateFunction;
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
-        grouping_set, AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Signature,
-        SimpleAggregateUDF, Volatility,
+        grouping_set, AccumulatorFactoryFunction, AggregateUDF, BinaryExpr,
+        ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
+        Volatility,
     };
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
 
@@ -1353,7 +1429,7 @@ mod test {
                     "my_agg",
                     Signature::exact(vec![DataType::UInt32], Volatility::Stable),
                     return_type.clone(),
-                    accumulator.clone(),
+                    Arc::clone(&accumulator),
                     vec![Field::new("value", DataType::UInt32, true)],
                 ))),
                 vec![inner],
@@ -1653,7 +1729,7 @@ mod test {
             .unwrap();
         let rule = CommonSubexprEliminate::new();
         let optimized_plan = rule.rewrite(plan, &OptimizerContext::new()).unwrap();
-        assert!(!optimized_plan.transformed);
+        assert!(optimized_plan.transformed);
         let optimized_plan = optimized_plan.data;
 
         let schema = optimized_plan.schema();
@@ -1702,7 +1778,7 @@ mod test {
     fn test_extract_expressions_from_grouping_set() -> Result<()> {
         let mut result = Vec::with_capacity(3);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
-        let schema = DFSchema::from_unqualifed_fields(
+        let schema = DFSchema::from_unqualified_fields(
             vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
@@ -1721,7 +1797,7 @@ mod test {
     fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
         let mut result = Vec::with_capacity(2);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
-        let schema = DFSchema::from_unqualifed_fields(
+        let schema = DFSchema::from_unqualified_fields(
             vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
@@ -1790,7 +1866,7 @@ mod test {
     #[test]
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
-        let schema = DFSchema::from_unqualifed_fields(
+        let schema = DFSchema::from_unqualified_fields(
             vec![Field::new("a", DataType::Int32, false)].into(),
             HashMap::default(),
         )?;
@@ -1798,5 +1874,135 @@ mod test {
 
         assert!(result.len() == 1);
         Ok(())
+    }
+
+    #[test]
+    fn test_short_circuits() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let extracted_short_circuit = col("a").eq(lit(0)).or(col("b").eq(lit(0)));
+        let extracted_short_circuit_leg_1 = (col("a") + col("b")).eq(lit(0));
+        let not_extracted_short_circuit_leg_2 = (col("a") - col("b")).eq(lit(0));
+        let extracted_short_circuit_leg_3 = (col("a") * col("b")).eq(lit(0));
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![
+                extracted_short_circuit.clone().alias("c1"),
+                extracted_short_circuit.alias("c2"),
+                extracted_short_circuit_leg_1
+                    .clone()
+                    .or(not_extracted_short_circuit_leg_2.clone())
+                    .alias("c3"),
+                extracted_short_circuit_leg_1
+                    .and(not_extracted_short_circuit_leg_2)
+                    .alias("c4"),
+                extracted_short_circuit_leg_3
+                    .clone()
+                    .or(extracted_short_circuit_leg_3.clone())
+                    .alias("c5"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 OR test.a - test.b = Int32(0) AS c3, __common_expr_2 AND test.a - test.b = Int32(0) AS c4, __common_expr_3 OR __common_expr_3 AS c5\
+        \n  Projection: test.a = Int32(0) OR test.b = Int32(0) AS __common_expr_1, test.a + test.b = Int32(0) AS __common_expr_2, test.a * test.b = Int32(0) AS __common_expr_3, test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_volatile() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let extracted_child = col("a") + col("b");
+        let rand = rand_func().call(vec![]);
+        let not_extracted_volatile = extracted_child + rand;
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![
+                not_extracted_volatile.clone().alias("c1"),
+                not_extracted_volatile.alias("c2"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: __common_expr_1 + random() AS c1, __common_expr_1 + random() AS c2\
+        \n  Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_volatile_short_circuits() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let rand = rand_func().call(vec![]);
+        let extracted_short_circuit_leg_1 = col("a").eq(lit(0));
+        let not_extracted_volatile_short_circuit_1 =
+            extracted_short_circuit_leg_1.or(rand.clone().eq(lit(0)));
+        let not_extracted_short_circuit_leg_2 = col("b").eq(lit(0));
+        let not_extracted_volatile_short_circuit_2 =
+            rand.eq(lit(0)).or(not_extracted_short_circuit_leg_2);
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![
+                not_extracted_volatile_short_circuit_1.clone().alias("c1"),
+                not_extracted_volatile_short_circuit_1.alias("c2"),
+                not_extracted_volatile_short_circuit_2.clone().alias("c3"),
+                not_extracted_volatile_short_circuit_2.alias("c4"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: __common_expr_1 OR random() = Int32(0) AS c1, __common_expr_1 OR random() = Int32(0) AS c2, random() = Int32(0) OR test.b = Int32(0) AS c3, random() = Int32(0) OR test.b = Int32(0) AS c4\
+        \n  Projection: test.a = Int32(0) AS __common_expr_1, test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    /// returns a "random" function that is marked volatile (aka each invocation
+    /// returns a different value)
+    ///
+    /// Does not use datafusion_functions::rand to avoid introducing a
+    /// dependency on that crate.
+    fn rand_func() -> ScalarUDF {
+        ScalarUDF::new_from_impl(RandomStub::new())
+    }
+
+    #[derive(Debug)]
+    struct RandomStub {
+        signature: Signature,
+    }
+
+    impl RandomStub {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![], Volatility::Volatile),
+            }
+        }
+    }
+    impl ScalarUDFImpl for RandomStub {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "random"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Float64)
+        }
+
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
     }
 }

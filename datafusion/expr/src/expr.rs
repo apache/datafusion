@@ -17,7 +17,7 @@
 
 //! Logical Expressions: [`Expr`]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -357,6 +357,11 @@ impl Unnest {
         Self {
             expr: Box::new(expr),
         }
+    }
+
+    /// Create a new Unnest expression.
+    pub fn new_boxed(boxed: Box<Expr>) -> Self {
+        Self { expr: boxed }
     }
 }
 
@@ -1198,32 +1203,53 @@ impl Expr {
         }
     }
 
-    /// Recursively potentially multiple aliases from an expression.
+    /// Recursively removed potentially multiple aliases from an expression.
     ///
-    /// If the expression is not an alias, the expression is returned unchanged.
-    /// This method removes directly nested aliases, but not other nested
-    /// aliases.
+    /// This method removes nested aliases and returns [`Transformed`]
+    /// to signal if the expression was changed.
     ///
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
     /// // `foo as "bar"` is unaliased to `foo`
     /// let expr = col("foo").alias("bar");
-    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    /// assert_eq!(expr.unalias_nested().data, col("foo"));
     ///
-    /// // `foo as "bar" + baz` is not unaliased
+    /// // `foo as "bar" + baz` is  unaliased
     /// let expr = col("foo").alias("bar") + col("baz");
-    /// assert_eq!(expr.clone().unalias_nested(), expr);
+    /// assert_eq!(expr.clone().unalias_nested().data, col("foo") + col("baz"));
     ///
     /// // `foo as "bar" as "baz" is unalaised to foo
     /// let expr = col("foo").alias("bar").alias("baz");
-    /// assert_eq!(expr.unalias_nested(), col("foo"));
+    /// assert_eq!(expr.unalias_nested().data, col("foo"));
     /// ```
-    pub fn unalias_nested(self) -> Expr {
-        match self {
-            Expr::Alias(alias) => alias.expr.unalias_nested(),
-            _ => self,
-        }
+    pub fn unalias_nested(self) -> Transformed<Expr> {
+        self.transform_down_up(
+            |expr| {
+                // f_down: skip subqueries.  Check in f_down to avoid recursing into them
+                let recursion = if matches!(
+                    expr,
+                    Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_)
+                ) {
+                    // subqueries could contain aliases so don't recurse into those
+                    TreeNodeRecursion::Jump
+                } else {
+                    TreeNodeRecursion::Continue
+                };
+                Ok(Transformed::new(expr, false, recursion))
+            },
+            |expr| {
+                // f_up: unalias on up so we can remove nested aliases like
+                // `(x as foo) as bar`
+                if let Expr::Alias(Alias { expr, .. }) = expr {
+                    Ok(Transformed::yes(*expr))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            },
+        )
+        // unreachable code: internal closure doesn't return err
+        .unwrap()
     }
 
     /// Return `self IN <list>` if `negated` is false, otherwise
@@ -1354,7 +1380,7 @@ impl Expr {
     /// // refs contains "a" and "b"
     /// assert_eq!(refs.len(), 2);
     /// assert!(refs.contains(&Column::new_unqualified("a")));
-    ///  assert!(refs.contains(&Column::new_unqualified("b")));
+    /// assert!(refs.contains(&Column::new_unqualified("b")));
     /// ```
     pub fn column_refs(&self) -> HashSet<&Column> {
         let mut using_columns = HashSet::new();
@@ -1375,6 +1401,41 @@ impl Expr {
         .expect("traversal is infallable");
     }
 
+    /// Return all references to columns and their occurrence counts in the expression.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::collections::HashMap;
+    /// # use datafusion_common::Column;
+    /// # use datafusion_expr::col;
+    /// // For an expression `a + (b * a)`
+    /// let expr = col("a") + (col("b") * col("a"));
+    /// let mut refs = expr.column_refs_counts();
+    /// // refs contains "a" and "b"
+    /// assert_eq!(refs.len(), 2);
+    /// assert_eq!(*refs.get(&Column::new_unqualified("a")).unwrap(), 2);
+    /// assert_eq!(*refs.get(&Column::new_unqualified("b")).unwrap(), 1);
+    /// ```
+    pub fn column_refs_counts(&self) -> HashMap<&Column, usize> {
+        let mut map = HashMap::new();
+        self.add_column_ref_counts(&mut map);
+        map
+    }
+
+    /// Adds references to all columns and their occurrence counts in the expression to
+    /// the map.
+    ///
+    /// See [`Self::column_refs_counts`] for details
+    pub fn add_column_ref_counts<'a>(&'a self, map: &mut HashMap<&'a Column, usize>) {
+        self.apply(|expr| {
+            if let Expr::Column(col) = expr {
+                *map.entry(col).or_default() += 1;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("traversal is infallable");
+    }
+
     /// Returns true if there are any column references in this Expr
     pub fn any_column_refs(&self) -> bool {
         self.exists(|expr| Ok(matches!(expr, Expr::Column(_))))
@@ -1387,12 +1448,19 @@ impl Expr {
             .unwrap()
     }
 
+    /// Returns true if the expression node is volatile, i.e. whether it can return
+    /// different results when evaluated multiple times with the same input.
+    /// Note: unlike [`Self::is_volatile`], this function does not consider inputs:
+    /// - `rand()` returns `true`,
+    /// - `a + rand()` returns `false`
+    pub fn is_volatile_node(&self) -> bool {
+        matches!(self, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile)
+    }
+
     /// Returns true if the expression is volatile, i.e. whether it can return different
     /// results when evaluated multiple times with the same input.
     pub fn is_volatile(&self) -> Result<bool> {
-        self.exists(|expr| {
-            Ok(matches!(expr, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile ))
-        })
+        self.exists(|expr| Ok(expr.is_volatile_node()))
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and

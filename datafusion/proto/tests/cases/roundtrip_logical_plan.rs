@@ -21,7 +21,9 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 use std::vec;
 
-use arrow::array::{ArrayRef, FixedSizeListArray};
+use arrow::array::{
+    ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
+};
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
@@ -37,14 +39,13 @@ use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::SessionState;
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
     approx_median, approx_percentile_cont, approx_percentile_cont_with_weight, count,
-    count_distinct, covar_pop, covar_samp, first_value, median, stddev, stddev_pop, sum,
-    var_pop, var_sample,
+    count_distinct, covar_pop, covar_samp, first_value, grouping, median, stddev,
+    stddev_pop, sum, var_pop, var_sample,
 };
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -52,7 +53,7 @@ use datafusion_common::config::TableOptions;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -134,6 +135,9 @@ pub struct TestTableProto {
     /// URL of the table root
     #[prost(string, tag = "1")]
     pub url: String,
+    /// Qualified table name
+    #[prost(string, tag = "2")]
+    pub table_name: String,
 }
 
 #[derive(Debug)]
@@ -156,12 +160,14 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
     fn try_decode_table_provider(
         &self,
         buf: &[u8],
+        table_ref: &TableReference,
         schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
         let msg = TestTableProto::decode(buf).map_err(|_| {
             DataFusionError::Internal("Error decoding test table".to_string())
         })?;
+        assert_eq!(msg.table_name, table_ref.to_string());
         let provider = TestTableProvider {
             url: msg.url,
             schema,
@@ -171,6 +177,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
 
     fn try_encode_table_provider(
         &self,
+        table_ref: &TableReference,
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -181,6 +188,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             .expect("Can't encode non-test tables");
         let msg = TestTableProto {
             url: table.url.clone(),
+            table_name: table_ref.to_string(),
         };
         msg.encode(buf).map_err(|_| {
             DataFusionError::Internal("Error encoding test table".to_string())
@@ -193,10 +201,7 @@ async fn roundtrip_custom_tables() -> Result<()> {
     let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
         HashMap::new();
     table_factories.insert("TESTTABLE".to_string(), Arc::new(TestTableFactory {}));
-    let cfg = RuntimeConfig::new();
-    let env = RuntimeEnv::new(cfg).unwrap();
-    let ses = SessionConfig::new();
-    let mut state = SessionState::new_with_config_rt(ses, Arc::new(env));
+    let mut state = SessionStateBuilder::new().with_default_features().build();
     // replace factories
     *state.table_factories_mut() = table_factories;
     let ctx = SessionContext::new_with_state(state);
@@ -688,6 +693,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         approx_median(lit(2)),
         approx_percentile_cont(lit(2), lit(0.5)),
         approx_percentile_cont_with_weight(lit(2), lit(1), lit(0.5)),
+        grouping(lit(1)),
         bit_and(lit(2)),
         bit_or(lit(2)),
         bit_xor(lit(2)),
@@ -866,6 +872,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -874,6 +881,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -943,6 +951,7 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -951,6 +960,7 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -1235,6 +1245,31 @@ fn round_trip_scalar_values() {
             ),
         ])))
         .unwrap(),
+        ScalarValue::try_from(&DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int32, true),
+                    Field::new("value", DataType::Utf8, false),
+                ])),
+                false,
+            )),
+            false,
+        ))
+        .unwrap(),
+        ScalarValue::try_from(&DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int32, true),
+                    Field::new("value", DataType::Utf8, true),
+                ])),
+                false,
+            )),
+            true,
+        ))
+        .unwrap(),
+        ScalarValue::Map(Arc::new(create_map_array_test_case())),
         ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
         ScalarValue::FixedSizeBinary(0, None),
         ScalarValue::FixedSizeBinary(5, None),
@@ -1255,6 +1290,25 @@ fn round_trip_scalar_values() {
                         Input: {test_case:?}\n\nRoundtrip: {roundtrip:?}"
         );
     }
+}
+
+// create a map array [{joe:1}, {blogs:2, foo:4}, {}, null] for testing
+fn create_map_array_test_case() -> MapArray {
+    let string_builder = StringBuilder::new();
+    let int_builder = Int32Builder::with_capacity(4);
+    let mut builder = MapBuilder::new(None, string_builder, int_builder);
+    builder.keys().append_value("joe");
+    builder.values().append_value(1);
+    builder.append(true).unwrap();
+
+    builder.keys().append_value("blogs");
+    builder.values().append_value(2);
+    builder.keys().append_value("foo");
+    builder.values().append_value(4);
+    builder.append(true).unwrap();
+    builder.append(true).unwrap();
+    builder.append(false).unwrap();
+    builder.finish()
 }
 
 #[test]

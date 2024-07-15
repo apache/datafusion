@@ -30,10 +30,10 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
-use crate::expressions::{self, Literal};
+use crate::expressions::{self};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 
 /// Create a physical aggregation expression.
@@ -60,13 +60,8 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
-            input_phy_exprs[0].clone(),
-            name,
-            data_type,
-        )),
         (AggregateFunction::ArrayAgg, false) => {
-            let expr = input_phy_exprs[0].clone();
+            let expr = Arc::clone(&input_phy_exprs[0]);
             let nullable = expr.nullable(input_schema)?;
 
             if ordering_req.is_empty() {
@@ -88,7 +83,7 @@ pub fn create_aggregate_expr(
                     "ARRAY_AGG(DISTINCT ORDER BY a ASC) order-sensitive aggregations are not available"
                 );
             }
-            let expr = input_phy_exprs[0].clone();
+            let expr = Arc::clone(&input_phy_exprs[0]);
             let is_expr_nullable = expr.nullable(input_schema)?;
             Arc::new(expressions::DistinctArrayAgg::new(
                 expr,
@@ -98,35 +93,15 @@ pub fn create_aggregate_expr(
             ))
         }
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
-            input_phy_exprs[0].clone(),
+            Arc::clone(&input_phy_exprs[0]),
             name,
             data_type,
         )),
         (AggregateFunction::Max, _) => Arc::new(expressions::Max::new(
-            input_phy_exprs[0].clone(),
+            Arc::clone(&input_phy_exprs[0]),
             name,
             data_type,
         )),
-        (AggregateFunction::NthValue, _) => {
-            let expr = &input_phy_exprs[0];
-            let Some(n) = input_phy_exprs[1]
-                .as_any()
-                .downcast_ref::<Literal>()
-                .map(|literal| literal.value())
-            else {
-                return exec_err!("Second argument of NTH_VALUE needs to be a literal");
-            };
-            let nullable = expr.nullable(input_schema)?;
-            Arc::new(expressions::NthValueAgg::new(
-                expr.clone(),
-                n.clone().try_into()?,
-                name,
-                input_phy_types[0].clone(),
-                nullable,
-                ordering_types,
-                ordering_req.to_vec(),
-            ))
-        }
     })
 }
 
@@ -172,7 +147,7 @@ mod tests {
                         Field::new_list(
                             "c1",
                             Field::new("item", data_type.clone(), true),
-                            false,
+                            true,
                         ),
                         result_agg_phy_exprs.field().unwrap()
                     );
@@ -192,7 +167,7 @@ mod tests {
                         Field::new_list(
                             "c1",
                             Field::new("item", data_type.clone(), true),
-                            false,
+                            true,
                         ),
                         result_agg_phy_exprs.field().unwrap()
                     );
@@ -325,7 +300,7 @@ mod tests {
         input_exprs
             .iter()
             .zip(coerced_types)
-            .map(|(expr, coerced_type)| try_cast(expr.clone(), schema, coerced_type))
+            .map(|(expr, coerced_type)| try_cast(Arc::clone(expr), schema, coerced_type))
             .collect::<Result<Vec<_>>>()
     }
 }

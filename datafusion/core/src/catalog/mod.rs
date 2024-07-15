@@ -16,16 +16,30 @@
 // under the License.
 
 //! Interfaces and default implementations of catalogs and schemas.
+//!
+//! Traits:
+//! * [`CatalogProviderList`]: a collection of `CatalogProvider`s
+//! * [`CatalogProvider`]: a collection of [`SchemaProvider`]s (sometimes called a "database" in other systems)
+//! * [`SchemaProvider`]:  a collection of `TableProvider`s (often called a "schema" in other systems)
+//!
+//! Implementations
+//! * Simple memory based catalog: [`MemoryCatalogProviderList`], [`MemoryCatalogProvider`], [`MemorySchemaProvider`]
+//! * Information schema: [`information_schema`]
+//! * Listing schema: [`listing_schema`]
 
 pub mod information_schema;
 pub mod listing_schema;
+mod memory;
 pub mod schema;
+
+pub use memory::{
+    MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
+};
+pub use schema::SchemaProvider;
 
 pub use datafusion_sql::{ResolvedTableReference, TableReference};
 
-use crate::catalog::schema::SchemaProvider;
-use dashmap::DashMap;
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
@@ -58,49 +72,6 @@ pub trait CatalogProviderList: Sync + Send {
 /// See [`CatalogProviderList`]
 #[deprecated(since = "35.0.0", note = "use [`CatalogProviderList`] instead")]
 pub trait CatalogList: CatalogProviderList {}
-
-/// Simple in-memory list of catalogs
-pub struct MemoryCatalogProviderList {
-    /// Collection of catalogs containing schemas and ultimately TableProviders
-    pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
-}
-
-impl MemoryCatalogProviderList {
-    /// Instantiates a new `MemoryCatalogProviderList` with an empty collection of catalogs
-    pub fn new() -> Self {
-        Self {
-            catalogs: DashMap::new(),
-        }
-    }
-}
-
-impl Default for MemoryCatalogProviderList {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CatalogProviderList for MemoryCatalogProviderList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn register_catalog(
-        &self,
-        name: String,
-        catalog: Arc<dyn CatalogProvider>,
-    ) -> Option<Arc<dyn CatalogProvider>> {
-        self.catalogs.insert(name, catalog)
-    }
-
-    fn catalog_names(&self) -> Vec<String> {
-        self.catalogs.iter().map(|c| c.key().clone()).collect()
-    }
-
-    fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        self.catalogs.get(name).map(|c| c.value().clone())
-    }
-}
 
 /// Represents a catalog, comprising a number of named schemas.
 ///
@@ -229,71 +200,6 @@ pub trait CatalogProvider: Sync + Send {
         _cascade: bool,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         not_impl_err!("Deregistering new schemas is not supported")
-    }
-}
-
-/// Simple in-memory implementation of a catalog.
-pub struct MemoryCatalogProvider {
-    schemas: DashMap<String, Arc<dyn SchemaProvider>>,
-}
-
-impl MemoryCatalogProvider {
-    /// Instantiates a new MemoryCatalogProvider with an empty collection of schemas.
-    pub fn new() -> Self {
-        Self {
-            schemas: DashMap::new(),
-        }
-    }
-}
-
-impl Default for MemoryCatalogProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CatalogProvider for MemoryCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema_names(&self) -> Vec<String> {
-        self.schemas.iter().map(|s| s.key().clone()).collect()
-    }
-
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.schemas.get(name).map(|s| s.value().clone())
-    }
-
-    fn register_schema(
-        &self,
-        name: &str,
-        schema: Arc<dyn SchemaProvider>,
-    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        Ok(self.schemas.insert(name.into(), schema))
-    }
-
-    fn deregister_schema(
-        &self,
-        name: &str,
-        cascade: bool,
-    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        if let Some(schema) = self.schema(name) {
-            let table_names = schema.table_names();
-            match (table_names.is_empty(), cascade) {
-                (true, _) | (false, true) => {
-                    let (_, removed) = self.schemas.remove(name).unwrap();
-                    Ok(Some(removed))
-                }
-                (false, false) => exec_err!(
-                    "Cannot drop schema {} because other tables depend on it: {}",
-                    name,
-                    itertools::join(table_names.iter(), ", ")
-                ),
-            }
-        } else {
-            Ok(None)
-        }
     }
 }
 
@@ -476,71 +382,6 @@ pub fn resolve_table_references(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::schema::MemorySchemaProvider;
-    use crate::datasource::empty::EmptyTable;
-    use crate::datasource::TableProvider;
-    use arrow::datatypes::Schema;
-
-    #[test]
-    fn default_register_schema_not_supported() {
-        // mimic a new CatalogProvider and ensure it does not support registering schemas
-        struct TestProvider {}
-        impl CatalogProvider for TestProvider {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-
-            fn schema_names(&self) -> Vec<String> {
-                unimplemented!()
-            }
-
-            fn schema(&self, _name: &str) -> Option<Arc<dyn SchemaProvider>> {
-                unimplemented!()
-            }
-        }
-
-        let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
-        let catalog = Arc::new(TestProvider {});
-
-        match catalog.register_schema("foo", schema) {
-            Ok(_) => panic!("unexpected OK"),
-            Err(e) => assert_eq!(e.strip_backtrace(), "This feature is not implemented: Registering new schemas is not supported"),
-        };
-    }
-
-    #[test]
-    fn memory_catalog_dereg_nonempty_schema() {
-        let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
-
-        let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
-        let test_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
-            as Arc<dyn TableProvider>;
-        schema.register_table("t".into(), test_table).unwrap();
-
-        cat.register_schema("foo", schema.clone()).unwrap();
-
-        assert!(
-            cat.deregister_schema("foo", false).is_err(),
-            "dropping empty schema without cascade should error"
-        );
-        assert!(cat.deregister_schema("foo", true).unwrap().is_some());
-    }
-
-    #[test]
-    fn memory_catalog_dereg_empty_schema() {
-        let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
-
-        let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
-        cat.register_schema("foo", schema).unwrap();
-
-        assert!(cat.deregister_schema("foo", false).unwrap().is_some());
-    }
-
-    #[test]
-    fn memory_catalog_dereg_missing() {
-        let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
-        assert!(cat.deregister_schema("foo", false).unwrap().is_none());
-    }
 
     #[test]
     fn resolve_table_references_shadowed_cte() {

@@ -164,7 +164,7 @@ message Union{
   repeated int32 type_ids = 3;
 }
 
-// Used for List/FixedSizeList/LargeList/Struct
+// Used for List/FixedSizeList/LargeList/Struct/Map
 message ScalarNestedValue {
   message Dictionary {
     bytes ipc_message = 1;
@@ -266,6 +266,7 @@ message ScalarValue{
     ScalarNestedValue list_value = 17;
     ScalarNestedValue fixed_size_list_value = 18;
     ScalarNestedValue struct_value = 32;
+    ScalarNestedValue map_value = 41;
 
     Decimal128 decimal128_value = 20;
     Decimal256 decimal256_value = 39;

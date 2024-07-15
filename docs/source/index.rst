@@ -41,13 +41,16 @@ DataFusion offers SQL and Dataframe APIs, excellent
 CSV, Parquet, JSON, and Avro, extensive customization, and a great
 community.
 
-To get started with examples, see the `example usage`_ section of the user guide and the `datafusion-examples`_ directory.
+To get started, see
 
-See the `developer’s guide`_ for contributing and `communication`_ for getting in touch with us.
+* The `example usage`_ section of the user guide and the `datafusion-examples`_ directory.
+* The `library user guide`_ for examples of using DataFusion's extension APIs
+* The `developer’s guide`_ for contributing and `communication`_ for getting in touch with us.
 
 .. _example usage: user-guide/example-usage.html
 .. _datafusion-examples: https://github.com/apache/datafusion/tree/main/datafusion-examples
 .. _developer’s guide: contributor-guide/index.html#developer-s-guide
+.. _library user guide: library-user-guide/index.html
 .. _communication: contributor-guide/communication.html
 
 .. _toc.asf-links:
@@ -69,6 +72,7 @@ See the `developer’s guide`_ for contributing and `communication`_ for getting
    GitHub and Issue Tracker <https://github.com/apache/datafusion>
    crates.io <https://crates.io/crates/datafusion>
    API Docs <https://docs.rs/datafusion/latest/datafusion/>
+   Blog <https://datafusion.apache.org/blog/>
    Code of conduct <https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md>
    Download <download>
 
@@ -79,6 +83,7 @@ See the `developer’s guide`_ for contributing and `communication`_ for getting
 
    user-guide/introduction
    user-guide/example-usage
+   user-guide/crate-configuration
    user-guide/cli/index
    user-guide/dataframe
    user-guide/expressions
@@ -116,7 +121,6 @@ See the `developer’s guide`_ for contributing and `communication`_ for getting
    contributor-guide/testing
    contributor-guide/howtos
    contributor-guide/roadmap
-   contributor-guide/quarterly_roadmap
    contributor-guide/governance
    contributor-guide/inviting
    contributor-guide/specification/index

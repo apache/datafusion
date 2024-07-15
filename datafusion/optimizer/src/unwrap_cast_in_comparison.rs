@@ -832,14 +832,14 @@ mod tests {
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let mut expr_rewriter = UnwrapCastExprRewriter {
-            schema: schema.clone(),
+            schema: Arc::clone(schema),
         };
         expr.rewrite(&mut expr_rewriter).data().unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
         Arc::new(
-            DFSchema::from_unqualifed_fields(
+            DFSchema::from_unqualified_fields(
                 vec![
                     Field::new("c1", DataType::Int32, false),
                     Field::new("c2", DataType::Int64, false),
@@ -1080,7 +1080,7 @@ mod tests {
                 ),
             };
 
-            // Datafusion ignores timezones for comparisons of ScalarValue
+            // DataFusion ignores timezones for comparisons of ScalarValue
             // so double check it here
             assert_eq!(lit_tz_none, lit_tz_utc);
 

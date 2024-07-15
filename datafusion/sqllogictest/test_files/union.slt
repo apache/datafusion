@@ -135,6 +135,21 @@ SELECT SUM(d) FROM (
 ----
 5
 
+# three way union with aggregate and type coercion
+query II rowsort
+SELECT c1, SUM(c2) FROM (
+    SELECT 1 as c1, 1::int as c2
+    UNION
+    SELECT 2 as c1, 2::int as c2
+    UNION
+    SELECT 3 as c1, COALESCE(3::int, 0) as c2
+) as a
+GROUP BY c1
+----
+1 1
+2 2
+3 3
+
 # union_all_with_count
 statement ok
 CREATE table t as SELECT 1 as a
