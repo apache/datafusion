@@ -127,7 +127,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         Self { schema }
     }
 
-    /// Coerce join equality expressions
+    /// Coerce join equality expressions and join filter
     ///
     /// Joins must be treated specially as their equality expressions are stored
     /// as a parallel list of left and right expressions, rather than a single
@@ -146,23 +146,38 @@ impl<'a> TypeCoercionRewriter<'a> {
             .map(|(lhs, rhs)| {
                 // coerce the arguments as though they were a single binary equality
                 // expression
-                let (lhs, rhs) = self.coerce_binary_op(lhs, &Operator::Eq, rhs)?;
+                let (lhs, rhs) = self.coerce_binary_op(lhs, Operator::Eq, rhs)?;
                 Ok((lhs, rhs))
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // Join filter must be boolean
+        join.filter = join
+            .filter
+            .map(|expr| self.coerce_join_filter(expr))
+            .transpose()?;
+
         Ok(LogicalPlan::Join(join))
+    }
+
+    fn coerce_join_filter(&self, expr: Expr) -> Result<Expr> {
+        let expr_type = expr.get_type(self.schema)?;
+        match expr_type {
+            DataType::Boolean => Ok(expr),
+            DataType::Null => expr.cast_to(&DataType::Boolean, self.schema),
+            other => plan_err!("Join condition must be boolean type, but got {other:?}"),
+        }
     }
 
     fn coerce_binary_op(
         &self,
         left: Expr,
-        op: &Operator,
+        op: Operator,
         right: Expr,
     ) -> Result<(Expr, Expr)> {
         let (left_type, right_type) = get_input_types(
             &left.get_type(self.schema)?,
-            op,
+            &op,
             &right.get_type(self.schema)?,
         )?;
         Ok((
@@ -279,7 +294,7 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 ))))
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let (left, right) = self.coerce_binary_op(*left, &op, *right)?;
+                let (left, right) = self.coerce_binary_op(*left, op, *right)?;
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(left),
                     op,
@@ -656,7 +671,7 @@ fn coerce_arguments_for_fun(
             .map(|expr| {
                 let data_type = expr.get_type(schema).unwrap();
                 if let DataType::FixedSizeList(field, _) = data_type {
-                    let to_type = DataType::List(field.clone());
+                    let to_type = DataType::List(Arc::clone(&field));
                     expr.cast_to(&to_type, schema)
                 } else {
                     Ok(expr)
@@ -843,7 +858,7 @@ mod test {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(
-                DFSchema::from_unqualifed_fields(
+                DFSchema::from_unqualified_fields(
                     vec![Field::new("a", data_type, true)].into(),
                     std::collections::HashMap::new(),
                 )
@@ -1081,7 +1096,7 @@ mod test {
         let expr = col("a").in_list(vec![lit(1_i32), lit(4_i8), lit(8_i64)], false);
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::from_unqualifed_fields(
+            schema: Arc::new(DFSchema::from_unqualified_fields(
                 vec![Field::new("a", DataType::Decimal128(12, 4), true)].into(),
                 std::collections::HashMap::new(),
             )?),
@@ -1265,8 +1280,10 @@ mod test {
                 signature: Signature::variadic(vec![Utf8], Volatility::Immutable),
             })
             .call(args.to_vec());
-            let plan =
-                LogicalPlan::Projection(Projection::try_new(vec![expr], empty.clone())?);
+            let plan = LogicalPlan::Projection(Projection::try_new(
+                vec![expr],
+                Arc::clone(&empty),
+            )?);
             let expected =
                 "Projection: TestScalarUDF(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1278,7 +1295,7 @@ mod test {
     #[test]
     fn test_type_coercion_rewrite() -> Result<()> {
         // gt
-        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
@@ -1289,7 +1306,7 @@ mod test {
         assert_eq!(expected, result);
 
         // eq
-        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
@@ -1300,7 +1317,7 @@ mod test {
         assert_eq!(expected, result);
 
         // lt
-        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
@@ -1373,7 +1390,7 @@ mod test {
 
     #[test]
     fn test_case_expression_coercion() -> Result<()> {
-        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
                 Field::new("boolean", DataType::Boolean, true),
                 Field::new("integer", DataType::Int32, true),

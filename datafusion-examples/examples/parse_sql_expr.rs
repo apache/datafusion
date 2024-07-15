@@ -113,7 +113,7 @@ async fn query_parquet_demo() -> Result<()> {
             vec![df.parse_sql_expr("SUM(int_col) as sum_int_col")?],
         )?
         // Directly parsing the SQL text into a sort expression is not supported yet, so
-        // construct it programatically
+        // construct it programmatically
         .sort(vec![col("double_col").sort(false, false)])?
         .limit(0, Some(1))?;
 
@@ -152,6 +152,15 @@ async fn round_trip_parse_sql_expr_demo() -> Result<()> {
     let round_trip_sql = unparser.expr_to_sql(&parsed_expr)?.to_string();
 
     assert_eq!(sql, round_trip_sql);
+
+    // enable pretty-unparsing. This make the output more human-readable
+    // but can be problematic when passed to other SQL engines due to
+    // difference in precedence rules between DataFusion and target engines.
+    let unparser = Unparser::default().with_pretty(true);
+
+    let pretty = "int_col < 5 OR double_col = 8";
+    let pretty_round_trip_sql = unparser.expr_to_sql(&parsed_expr)?.to_string();
+    assert_eq!(pretty, pretty_round_trip_sql);
 
     Ok(())
 }

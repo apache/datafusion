@@ -253,7 +253,7 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
     Ok(())
 }
 
-/// Datafusion SQL Parser based on [`sqlparser`]
+/// DataFusion SQL Parser based on [`sqlparser`]
 ///
 /// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s [`Parser`].
 ///
@@ -1475,7 +1475,7 @@ mod tests {
     fn copy_to_multi_options() -> Result<(), ParserError> {
         // order of options is preserved
         let sql =
-            "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy)";
+            "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy, 'execution.keep_partition_by_columns' true)";
 
         let expected_options = vec![
             (
@@ -1485,6 +1485,10 @@ mod tests {
             (
                 "format.compression".to_string(),
                 Value::SingleQuotedString("snappy".to_string()),
+            ),
+            (
+                "execution.keep_partition_by_columns".to_string(),
+                Value::SingleQuotedString("true".to_string()),
             ),
         ];
 

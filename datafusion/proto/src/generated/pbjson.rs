@@ -535,8 +535,6 @@ impl serde::Serialize for AggregateFunction {
             Self::Min => "MIN",
             Self::Max => "MAX",
             Self::ArrayAgg => "ARRAY_AGG",
-            Self::Grouping => "GROUPING",
-            Self::NthValueAgg => "NTH_VALUE_AGG",
         };
         serializer.serialize_str(variant)
     }
@@ -551,8 +549,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "MIN",
             "MAX",
             "ARRAY_AGG",
-            "GROUPING",
-            "NTH_VALUE_AGG",
         ];
 
         struct GeneratedVisitor;
@@ -596,8 +592,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                     "MIN" => Ok(AggregateFunction::Min),
                     "MAX" => Ok(AggregateFunction::Max),
                     "ARRAY_AGG" => Ok(AggregateFunction::ArrayAgg),
-                    "GROUPING" => Ok(AggregateFunction::Grouping),
-                    "NTH_VALUE_AGG" => Ok(AggregateFunction::NthValueAgg),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -5562,6 +5556,9 @@ impl serde::Serialize for FileSinkConfig {
         if self.overwrite {
             len += 1;
         }
+        if self.keep_partition_by_columns {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileSinkConfig", len)?;
         if !self.object_store_url.is_empty() {
             struct_ser.serialize_field("objectStoreUrl", &self.object_store_url)?;
@@ -5580,6 +5577,9 @@ impl serde::Serialize for FileSinkConfig {
         }
         if self.overwrite {
             struct_ser.serialize_field("overwrite", &self.overwrite)?;
+        }
+        if self.keep_partition_by_columns {
+            struct_ser.serialize_field("keepPartitionByColumns", &self.keep_partition_by_columns)?;
         }
         struct_ser.end()
     }
@@ -5602,6 +5602,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             "table_partition_cols",
             "tablePartitionCols",
             "overwrite",
+            "keep_partition_by_columns",
+            "keepPartitionByColumns",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5612,6 +5614,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             OutputSchema,
             TablePartitionCols,
             Overwrite,
+            KeepPartitionByColumns,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5639,6 +5642,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             "outputSchema" | "output_schema" => Ok(GeneratedField::OutputSchema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "overwrite" => Ok(GeneratedField::Overwrite),
+                            "keepPartitionByColumns" | "keep_partition_by_columns" => Ok(GeneratedField::KeepPartitionByColumns),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5664,6 +5668,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                 let mut output_schema__ = None;
                 let mut table_partition_cols__ = None;
                 let mut overwrite__ = None;
+                let mut keep_partition_by_columns__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ObjectStoreUrl => {
@@ -5702,6 +5707,12 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             }
                             overwrite__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::KeepPartitionByColumns => {
+                            if keep_partition_by_columns__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("keepPartitionByColumns"));
+                            }
+                            keep_partition_by_columns__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(FileSinkConfig {
@@ -5711,6 +5722,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                     output_schema: output_schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     overwrite: overwrite__.unwrap_or_default(),
+                    keep_partition_by_columns: keep_partition_by_columns__.unwrap_or_default(),
                 })
             }
         }
@@ -13531,6 +13543,9 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::LikeExpr(v) => {
                     struct_ser.serialize_field("likeExpr", v)?;
                 }
+                physical_expr_node::ExprType::Extension(v) => {
+                    struct_ser.serialize_field("extension", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -13570,6 +13585,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "scalarUdf",
             "like_expr",
             "likeExpr",
+            "extension",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -13590,6 +13606,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             WindowExpr,
             ScalarUdf,
             LikeExpr,
+            Extension,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -13627,6 +13644,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
                             "scalarUdf" | "scalar_udf" => Ok(GeneratedField::ScalarUdf),
                             "likeExpr" | "like_expr" => Ok(GeneratedField::LikeExpr),
+                            "extension" => Ok(GeneratedField::Extension),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -13761,6 +13779,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::LikeExpr)
 ;
                         }
+                        GeneratedField::Extension => {
+                            if expr_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("extension"));
+                            }
+                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::Extension)
+;
+                        }
                     }
                 }
                 Ok(PhysicalExprNode {
@@ -13769,6 +13794,117 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             }
         }
         deserializer.deserialize_struct("datafusion.PhysicalExprNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PhysicalExtensionExprNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.expr.is_empty() {
+            len += 1;
+        }
+        if !self.inputs.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalExtensionExprNode", len)?;
+        if !self.expr.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("expr", pbjson::private::base64::encode(&self.expr).as_str())?;
+        }
+        if !self.inputs.is_empty() {
+            struct_ser.serialize_field("inputs", &self.inputs)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalExtensionExprNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "expr",
+            "inputs",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Expr,
+            Inputs,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "expr" => Ok(GeneratedField::Expr),
+                            "inputs" => Ok(GeneratedField::Inputs),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalExtensionExprNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalExtensionExprNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalExtensionExprNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut expr__ = None;
+                let mut inputs__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Expr => {
+                            if expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("expr"));
+                            }
+                            expr__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Inputs => {
+                            if inputs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inputs"));
+                            }
+                            inputs__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PhysicalExtensionExprNode {
+                    expr: expr__.unwrap_or_default(),
+                    inputs: inputs__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalExtensionExprNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PhysicalExtensionNode {
@@ -16122,6 +16258,9 @@ impl serde::Serialize for PlanType {
                 plan_type::PlanTypeEnum::InitialPhysicalPlanWithStats(v) => {
                     struct_ser.serialize_field("InitialPhysicalPlanWithStats", v)?;
                 }
+                plan_type::PlanTypeEnum::InitialPhysicalPlanWithSchema(v) => {
+                    struct_ser.serialize_field("InitialPhysicalPlanWithSchema", v)?;
+                }
                 plan_type::PlanTypeEnum::OptimizedPhysicalPlan(v) => {
                     struct_ser.serialize_field("OptimizedPhysicalPlan", v)?;
                 }
@@ -16130,6 +16269,9 @@ impl serde::Serialize for PlanType {
                 }
                 plan_type::PlanTypeEnum::FinalPhysicalPlanWithStats(v) => {
                     struct_ser.serialize_field("FinalPhysicalPlanWithStats", v)?;
+                }
+                plan_type::PlanTypeEnum::FinalPhysicalPlanWithSchema(v) => {
+                    struct_ser.serialize_field("FinalPhysicalPlanWithSchema", v)?;
                 }
             }
         }
@@ -16150,9 +16292,11 @@ impl<'de> serde::Deserialize<'de> for PlanType {
             "FinalLogicalPlan",
             "InitialPhysicalPlan",
             "InitialPhysicalPlanWithStats",
+            "InitialPhysicalPlanWithSchema",
             "OptimizedPhysicalPlan",
             "FinalPhysicalPlan",
             "FinalPhysicalPlanWithStats",
+            "FinalPhysicalPlanWithSchema",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16164,9 +16308,11 @@ impl<'de> serde::Deserialize<'de> for PlanType {
             FinalLogicalPlan,
             InitialPhysicalPlan,
             InitialPhysicalPlanWithStats,
+            InitialPhysicalPlanWithSchema,
             OptimizedPhysicalPlan,
             FinalPhysicalPlan,
             FinalPhysicalPlanWithStats,
+            FinalPhysicalPlanWithSchema,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16195,9 +16341,11 @@ impl<'de> serde::Deserialize<'de> for PlanType {
                             "FinalLogicalPlan" => Ok(GeneratedField::FinalLogicalPlan),
                             "InitialPhysicalPlan" => Ok(GeneratedField::InitialPhysicalPlan),
                             "InitialPhysicalPlanWithStats" => Ok(GeneratedField::InitialPhysicalPlanWithStats),
+                            "InitialPhysicalPlanWithSchema" => Ok(GeneratedField::InitialPhysicalPlanWithSchema),
                             "OptimizedPhysicalPlan" => Ok(GeneratedField::OptimizedPhysicalPlan),
                             "FinalPhysicalPlan" => Ok(GeneratedField::FinalPhysicalPlan),
                             "FinalPhysicalPlanWithStats" => Ok(GeneratedField::FinalPhysicalPlanWithStats),
+                            "FinalPhysicalPlanWithSchema" => Ok(GeneratedField::FinalPhysicalPlanWithSchema),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16269,6 +16417,13 @@ impl<'de> serde::Deserialize<'de> for PlanType {
                             plan_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::InitialPhysicalPlanWithStats)
 ;
                         }
+                        GeneratedField::InitialPhysicalPlanWithSchema => {
+                            if plan_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("InitialPhysicalPlanWithSchema"));
+                            }
+                            plan_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::InitialPhysicalPlanWithSchema)
+;
+                        }
                         GeneratedField::OptimizedPhysicalPlan => {
                             if plan_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("OptimizedPhysicalPlan"));
@@ -16288,6 +16443,13 @@ impl<'de> serde::Deserialize<'de> for PlanType {
                                 return Err(serde::de::Error::duplicate_field("FinalPhysicalPlanWithStats"));
                             }
                             plan_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::FinalPhysicalPlanWithStats)
+;
+                        }
+                        GeneratedField::FinalPhysicalPlanWithSchema => {
+                            if plan_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("FinalPhysicalPlanWithSchema"));
+                            }
+                            plan_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::FinalPhysicalPlanWithSchema)
 ;
                         }
                     }

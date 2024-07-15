@@ -86,7 +86,7 @@ impl OptimizerRule for EliminateCrossJoin {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let plan_schema = plan.schema().clone();
+        let plan_schema = Arc::clone(plan.schema());
         let mut possible_join_keys = JoinKeySet::new();
         let mut all_inputs: Vec<LogicalPlan> = vec![];
 
@@ -155,7 +155,7 @@ impl OptimizerRule for EliminateCrossJoin {
         if &plan_schema != left.schema() {
             left = LogicalPlan::Projection(Projection::new_from_schema(
                 Arc::new(left),
-                plan_schema.clone(),
+                Arc::clone(&plan_schema),
             ));
         }
 
@@ -420,7 +420,7 @@ mod tests {
     };
 
     fn assert_optimized_plan_eq(plan: LogicalPlan, expected: Vec<&str>) {
-        let starting_schema = plan.schema().clone();
+        let starting_schema = Arc::clone(plan.schema());
         let rule = EliminateCrossJoin::new();
         let transformed_plan = rule.rewrite(plan, &OptimizerContext::new()).unwrap();
         assert!(transformed_plan.transformed, "failed to optimize plan");

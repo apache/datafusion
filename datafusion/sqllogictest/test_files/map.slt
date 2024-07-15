@@ -100,3 +100,115 @@ physical_plan
 
 statement ok
 drop table table_with_map;
+
+query ?
+SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', 30, 'OPTION', 29, 'GET', 27, 'PUT', 25, 'DELETE', 24) AS method_count;
+----
+{POST: 41, HEAD: 33, PATCH: 30, OPTION: 29, GET: 27, PUT: 25, DELETE: 24}
+
+query I
+SELECT MAKE_MAP('POST', 41, 'HEAD', 33)['POST'];
+----
+41
+
+query ?
+SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', null);
+----
+{POST: 41, HEAD: 33, PATCH: }
+
+query ?
+SELECT MAKE_MAP('POST', null, 'HEAD', 33, 'PATCH', null);
+----
+{POST: , HEAD: 33, PATCH: }
+
+query ?
+SELECT MAKE_MAP(1, null, 2, 33, 3, null);
+----
+{1: , 2: 33, 3: }
+
+query ?
+SELECT MAKE_MAP([1,2], ['a', 'b'], [3,4], ['b']);
+----
+{[1, 2]: [a, b], [3, 4]: [b]}
+
+query error
+SELECT MAKE_MAP('POST', 41, 'HEAD', 'ab', 'PATCH', 30);
+
+query error
+SELECT MAKE_MAP('POST', 41, 'HEAD', 33, null, 30);
+
+query error
+SELECT MAKE_MAP('POST', 41, 123, 33,'PATCH', 30);
+
+query error
+SELECT MAKE_MAP()
+
+query error
+SELECT MAKE_MAP('POST', 41, 'HEAD');
+
+query ?
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, 30]);
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+
+query ?
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+----
+{POST: 41, HEAD: 33, PATCH: }
+
+query ?
+SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+----
+{[1, 2]: a, [3, 4]: b}
+
+query error
+SELECT MAP()
+
+query error DataFusion error: Execution error: map requires an even number of arguments, got 1 instead
+SELECT MAP(['POST', 'HEAD'])
+
+query error DataFusion error: Execution error: Expected list, large_list or fixed_size_list, got Null
+SELECT MAP(null, [41, 33, 30]);
+
+query error DataFusion error: Execution error: map requires key and value lists to have the same length
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33]);
+
+query error DataFusion error: Execution error: map key cannot be null
+SELECT MAP(['POST', 'HEAD', null], [41, 33, 30]);
+
+query ?
+SELECT MAP(make_array('POST', 'HEAD', 'PATCH'), make_array(41, 33, 30));
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+
+query ?
+SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'FixedSizeList(3, Utf8)'), arrow_cast(make_array(41, 33, 30), 'FixedSizeList(3, Int64)'));
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+
+query ?
+SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'LargeList(Utf8)'), arrow_cast(make_array(41, 33, 30), 'LargeList(Int64)'));
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+
+statement ok
+create table t as values
+('a', 1, 'k1', 10, ['k1', 'k2'], [1, 2]),
+('b', 2, 'k3', 30, ['k3'], [3]),
+('d', 4, 'k5', 50, ['k5'], [5]);
+
+query error
+SELECT make_map(column1, column2, column3, column4) FROM t;
+# TODO: support array value
+# ----
+# {a: 1, k1: 10}
+# {b: 2, k3: 30}
+# {d: 4, k5: 50}
+
+query error
+SELECT map(column5, column6) FROM t;
+# TODO: support array value
+# ----
+# {k1:1, k2:2}
+# {k3: 3}
+# {k5: 5}

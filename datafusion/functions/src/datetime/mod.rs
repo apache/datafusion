@@ -32,6 +32,7 @@ pub mod make_date;
 pub mod now;
 pub mod to_char;
 pub mod to_date;
+pub mod to_local_time;
 pub mod to_timestamp;
 pub mod to_unixtime;
 
@@ -50,6 +51,7 @@ make_udf_function!(
 make_udf_function!(now::NowFunc, NOW, now);
 make_udf_function!(to_char::ToCharFunc, TO_CHAR, to_char);
 make_udf_function!(to_date::ToDateFunc, TO_DATE, to_date);
+make_udf_function!(to_local_time::ToLocalTimeFunc, TO_LOCAL_TIME, to_local_time);
 make_udf_function!(to_unixtime::ToUnixtimeFunc, TO_UNIXTIME, to_unixtime);
 make_udf_function!(to_timestamp::ToTimestampFunc, TO_TIMESTAMP, to_timestamp);
 make_udf_function!(
@@ -108,7 +110,13 @@ pub mod expr_fn {
     ),(
         now,
         "returns the current timestamp in nanoseconds, using the same value for all instances of now() in same statement",
-    ),(
+    ),
+    (
+        to_local_time,
+        "converts a timezone-aware timestamp to local time (with no offset or timezone information), i.e. strips off the timezone from the timestamp",
+        args,
+    ),
+    (
         to_unixtime,
         "converts a string and optional formats to a Unixtime",
         args,
@@ -277,6 +285,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         now(),
         to_char(),
         to_date(),
+        to_local_time(),
         to_unixtime(),
         to_timestamp(),
         to_timestamp_seconds(),

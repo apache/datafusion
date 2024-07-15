@@ -31,12 +31,14 @@ use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use futures::StreamExt;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
+use tokio::fs::File;
 
 use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
@@ -323,6 +325,30 @@ async fn oom_recursive_cte() {
         .await
 }
 
+#[tokio::test]
+async fn oom_parquet_sink() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.into_path().join("test.parquet");
+    let _ = File::create(path.clone()).await.unwrap();
+
+    TestCase::new()
+        .with_query(format!(
+            "
+            COPY (select * from t)
+            TO '{}'
+            STORED AS PARQUET OPTIONS (compression 'uncompressed');
+        ",
+            path.to_string_lossy()
+        ))
+        .with_expected_errors(vec![
+            "Failed to allocate additional",
+            "for ParquetSink(ArrowColumnWriter)",
+        ])
+        .with_memory_limit(200_000)
+        .run()
+        .await
+}
+
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
@@ -434,13 +460,16 @@ impl TestCase {
         let runtime = RuntimeEnv::new(rt_config).unwrap();
 
         // Configure execution
-        let state = SessionState::new_with_config_rt(config, Arc::new(runtime));
-        let state = match scenario.rules() {
-            Some(rules) => state.with_physical_optimizer_rules(rules),
-            None => state,
+        let builder = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(Arc::new(runtime))
+            .with_default_features();
+        let builder = match scenario.rules() {
+            Some(rules) => builder.with_physical_optimizer_rules(rules),
+            None => builder,
         };
 
-        let ctx = SessionContext::new_with_state(state);
+        let ctx = SessionContext::new_with_state(builder.build());
         ctx.register_table("t", table).expect("registering table");
 
         let query = query.expect("Test error: query not specified");

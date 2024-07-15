@@ -29,8 +29,9 @@ use arrow::{
     },
     record_batch::RecordBatch,
 };
-use arrow_array::Float32Array;
-use arrow_schema::ArrowError;
+use arrow_array::{Array, Float32Array, Float64Array, UnionArray};
+use arrow_buffer::ScalarBuffer;
+use arrow_schema::{ArrowError, UnionFields, UnionMode};
 use datafusion_functions_aggregate::count::count_udaf;
 use object_store::local::LocalFileSystem;
 use std::fs;
@@ -41,7 +42,8 @@ use url::Url;
 use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::execution::context::{SessionContext, SessionState};
+use datafusion::execution::context::SessionContext;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::test_util::{parquet_test_data, populate_csv_partitions};
@@ -234,6 +236,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
 
     Ok(())
 }
+
 #[tokio::test]
 async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     let ctx = create_join_context()?;
@@ -1386,7 +1389,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     let expected = vec![
         "Projection: shapes.shape_id [shape_id:UInt32]",
         "  Unnest: lists[shape_id2] structs[] [shape_id:UInt32, shape_id2:UInt32;N]",
-        "    Aggregate: groupBy=[[shapes.shape_id]], aggr=[[ARRAY_AGG(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: \"item\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} })]",
+        "    Aggregate: groupBy=[[shapes.shape_id]], aggr=[[ARRAY_AGG(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: \"item\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} });N]",
         "      TableScan: shapes projection=[shape_id] [shape_id:UInt32]",
     ];
 
@@ -1542,7 +1545,11 @@ async fn unnest_non_nullable_list() -> Result<()> {
 async fn test_read_batches() -> Result<()> {
     let config = SessionConfig::new();
     let runtime = Arc::new(RuntimeEnv::default());
-    let state = SessionState::new_with_config_rt(config, runtime);
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
+        .build();
     let ctx = SessionContext::new_with_state(state);
 
     let schema = Arc::new(Schema::new(vec![
@@ -1592,7 +1599,11 @@ async fn test_read_batches() -> Result<()> {
 async fn test_read_batches_empty() -> Result<()> {
     let config = SessionConfig::new();
     let runtime = Arc::new(RuntimeEnv::default());
-    let state = SessionState::new_with_config_rt(config, runtime);
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
+        .build();
     let ctx = SessionContext::new_with_state(state);
 
     let batches = vec![];
@@ -1606,9 +1617,7 @@ async fn test_read_batches_empty() -> Result<()> {
 
 #[tokio::test]
 async fn consecutive_projection_same_schema() -> Result<()> {
-    let config = SessionConfig::new();
-    let runtime = Arc::new(RuntimeEnv::default());
-    let state = SessionState::new_with_config_rt(config, runtime);
+    let state = SessionStateBuilder::new().with_default_features().build();
     let ctx = SessionContext::new_with_state(state);
 
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
@@ -2193,4 +2202,164 @@ async fn write_parquet_results() -> Result<()> {
     assert_eq!(allparts_count, 40);
 
     Ok(())
+}
+
+fn union_fields() -> UnionFields {
+    [
+        (0, Arc::new(Field::new("A", DataType::Int32, true))),
+        (1, Arc::new(Field::new("B", DataType::Float64, true))),
+        (2, Arc::new(Field::new("C", DataType::Utf8, true))),
+    ]
+    .into_iter()
+    .collect()
+}
+
+#[tokio::test]
+async fn sparse_union_is_null() {
+    // union of [{A=1}, {A=}, {B=3.2}, {B=}, {C="a"}, {C=}]
+    let int_array = Int32Array::from(vec![Some(1), None, None, None, None, None]);
+    let float_array = Float64Array::from(vec![None, None, Some(3.2), None, None, None]);
+    let str_array = StringArray::from(vec![None, None, None, None, Some("a"), None]);
+    let type_ids = [0, 0, 1, 1, 2, 2].into_iter().collect::<ScalarBuffer<i8>>();
+
+    let children = vec![
+        Arc::new(int_array) as Arc<dyn Array>,
+        Arc::new(float_array),
+        Arc::new(str_array),
+    ];
+
+    let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
+
+    let field = Field::new(
+        "my_union",
+        DataType::Union(union_fields(), UnionMode::Sparse),
+        true,
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("union_batch", batch).unwrap();
+
+    let df = ctx.table("union_batch").await.unwrap();
+
+    // view_all
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=1}    |",
+        "| {A=}     |",
+        "| {B=3.2}  |",
+        "| {B=}     |",
+        "| {C=a}    |",
+        "| {C=}     |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &df.clone().collect().await.unwrap());
+
+    // filter where is null
+    let result_df = df.clone().filter(col("my_union").is_null()).unwrap();
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=}     |",
+        "| {B=}     |",
+        "| {C=}     |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
+
+    // filter where is not null
+    let result_df = df.filter(col("my_union").is_not_null()).unwrap();
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=1}    |",
+        "| {B=3.2}  |",
+        "| {C=a}    |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
+}
+
+#[tokio::test]
+async fn dense_union_is_null() {
+    // union of [{A=1}, null, {B=3.2}, {A=34}]
+    let int_array = Int32Array::from(vec![Some(1), None]);
+    let float_array = Float64Array::from(vec![Some(3.2), None]);
+    let str_array = StringArray::from(vec![Some("a"), None]);
+    let type_ids = [0, 0, 1, 1, 2, 2].into_iter().collect::<ScalarBuffer<i8>>();
+    let offsets = [0, 1, 0, 1, 0, 1]
+        .into_iter()
+        .collect::<ScalarBuffer<i32>>();
+
+    let children = vec![
+        Arc::new(int_array) as Arc<dyn Array>,
+        Arc::new(float_array),
+        Arc::new(str_array),
+    ];
+
+    let array =
+        UnionArray::try_new(union_fields(), type_ids, Some(offsets), children).unwrap();
+
+    let field = Field::new(
+        "my_union",
+        DataType::Union(union_fields(), UnionMode::Dense),
+        true,
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("union_batch", batch).unwrap();
+
+    let df = ctx.table("union_batch").await.unwrap();
+
+    // view_all
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=1}    |",
+        "| {A=}     |",
+        "| {B=3.2}  |",
+        "| {B=}     |",
+        "| {C=a}    |",
+        "| {C=}     |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &df.clone().collect().await.unwrap());
+
+    // filter where is null
+    let result_df = df.clone().filter(col("my_union").is_null()).unwrap();
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=}     |",
+        "| {B=}     |",
+        "| {C=}     |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
+
+    // filter where is not null
+    let result_df = df.filter(col("my_union").is_not_null()).unwrap();
+    let expected = [
+        "+----------+",
+        "| my_union |",
+        "+----------+",
+        "| {A=1}    |",
+        "| {B=3.2}  |",
+        "| {C=a}    |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
 }

@@ -19,13 +19,16 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
+use arrow::array::{
+    BooleanBuilder, FixedSizeBinaryBuilder, LargeStringBuilder, StringBuilder,
+};
 use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::{
-    new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
-    StringArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    new_empty_array, new_null_array, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
     Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
     UInt64Array, UInt8Array,
@@ -392,51 +395,73 @@ macro_rules! get_statistics {
                 })
             },
             DataType::Binary => Ok(Arc::new(BinaryArray::from_iter(
-                [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator).map(|x| x.map(|x| x.to_vec())),
+                [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator)
             ))),
             DataType::LargeBinary => Ok(Arc::new(LargeBinaryArray::from_iter(
-                [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator).map(|x| x.map(|x|x.to_vec())),
+                [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator)
             ))),
-            DataType::Utf8 => Ok(Arc::new(StringArray::from_iter(
-                [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator).map(|x| {
-                    x.and_then(|x| {
-                        let res = std::str::from_utf8(x).map(|s| s.to_string()).ok();
-                        if res.is_none() {
-                            log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
-                        }
-                        res
-                    })
-                }),
-            ))),
+            DataType::Utf8 => {
+                let iterator = [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator);
+                let mut builder = StringBuilder::new();
+                for x in iterator {
+                    let Some(x) = x else {
+                        builder.append_null(); // no statistics value
+                        continue;
+                    };
+
+                    let Ok(x) = std::str::from_utf8(x) else {
+                        log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                        builder.append_null();
+                        continue;
+                    };
+
+                    builder.append_value(x);
+                }
+                Ok(Arc::new(builder.finish()))
+            },
             DataType::LargeUtf8 => {
-                Ok(Arc::new(LargeStringArray::from_iter(
-                    [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator).map(|x| {
-                        x.and_then(|x| {
-                            let res = std::str::from_utf8(x).map(|s| s.to_string()).ok();
-                            if res.is_none() {
-                                log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
-                            }
-                            res
-                        })
-                    }),
-                )))
-            }
-            DataType::FixedSizeBinary(size) => Ok(Arc::new(FixedSizeBinaryArray::from(
-                [<$stat_type_prefix FixedLenByteArrayStatsIterator>]::new($iterator).map(|x| {
-                    x.and_then(|x| {
-                        if x.len().try_into() == Ok(*size) {
-                            Some(x)
-                        } else {
-                            log::debug!(
-                                "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
-                                size,
-                                x.len(),
-                            );
-                            None
-                        }
-                    })
-                }).collect::<Vec<_>>(),
-            ))),
+                let iterator = [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator);
+                let mut builder = LargeStringBuilder::new();
+                for x in iterator {
+                    let Some(x) = x else {
+                        builder.append_null(); // no statistics value
+                        continue;
+                    };
+
+                    let Ok(x) = std::str::from_utf8(x) else {
+                        log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                        builder.append_null();
+                        continue;
+                    };
+
+                    builder.append_value(x);
+                }
+                Ok(Arc::new(builder.finish()))
+            },
+            DataType::FixedSizeBinary(size) => {
+                let iterator = [<$stat_type_prefix FixedLenByteArrayStatsIterator>]::new($iterator);
+                let mut builder = FixedSizeBinaryBuilder::new(*size);
+                for x in iterator {
+                    let Some(x) = x else {
+                        builder.append_null(); // no statistics value
+                        continue;
+                    };
+
+                    // ignore invalid values
+                    if x.len().try_into() != Ok(*size){
+                        log::debug!(
+                            "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+                            size,
+                            x.len(),
+                        );
+                        builder.append_null();
+                        continue;
+                    }
+
+                    builder.append_value(x).expect("ensure to append successfully here, because size have been checked before");
+                }
+                Ok(Arc::new(builder.finish()))
+            },
             DataType::Decimal128(precision, scale) => {
                 let arr = Decimal128Array::from_iter(
                     [<$stat_type_prefix Decimal128StatsIterator>]::new($iterator)
@@ -600,6 +625,31 @@ make_data_page_stats_iterator!(
     Index::DOUBLE,
     f64
 );
+make_data_page_stats_iterator!(
+    MinByteArrayDataPageStatsIterator,
+    |x: &PageIndex<ByteArray>| { x.min.clone() },
+    Index::BYTE_ARRAY,
+    ByteArray
+);
+make_data_page_stats_iterator!(
+    MaxByteArrayDataPageStatsIterator,
+    |x: &PageIndex<ByteArray>| { x.max.clone() },
+    Index::BYTE_ARRAY,
+    ByteArray
+);
+make_data_page_stats_iterator!(
+    MaxFixedLenByteArrayDataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
+
+make_data_page_stats_iterator!(
+    MinFixedLenByteArrayDataPageStatsIterator,
+    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
+    Index::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray
+);
 
 macro_rules! get_decimal_page_stats_iterator {
     ($iterator_type: ident, $func: ident, $stat_value_type: ident, $convert_func: ident) => {
@@ -634,9 +684,7 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($stat_value_type::from(
-                                        x.$func.unwrap_or_default(),
-                                    ))
+                                    x.$func.and_then(|x| Some($stat_value_type::from(x)))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -645,9 +693,7 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($stat_value_type::from(
-                                        x.$func.unwrap_or_default(),
-                                    ))
+                                    x.$func.and_then(|x| Some($stat_value_type::from(x)))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -656,9 +702,9 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($convert_func(
-                                        x.clone().$func.unwrap_or_default().data(),
-                                    ))
+                                    x.clone()
+                                        .$func
+                                        .and_then(|x| Some($convert_func(x.data())))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -667,9 +713,9 @@ macro_rules! get_decimal_page_stats_iterator {
                                 .indexes
                                 .iter()
                                 .map(|x| {
-                                    Some($convert_func(
-                                        x.clone().$func.unwrap_or_default().data(),
-                                    ))
+                                    x.clone()
+                                        .$func
+                                        .and_then(|x| Some($convert_func(x.data())))
                                 })
                                 .collect::<Vec<_>>(),
                         ),
@@ -713,37 +759,30 @@ get_decimal_page_stats_iterator!(
     i256,
     from_bytes_to_i256
 );
-make_data_page_stats_iterator!(
-    MinByteArrayDataPageStatsIterator,
-    |x: &PageIndex<ByteArray>| { x.min.clone() },
-    Index::BYTE_ARRAY,
-    ByteArray
-);
-make_data_page_stats_iterator!(
-    MaxByteArrayDataPageStatsIterator,
-    |x: &PageIndex<ByteArray>| { x.max.clone() },
-    Index::BYTE_ARRAY,
-    ByteArray
-);
 
 macro_rules! get_data_page_statistics {
     ($stat_type_prefix: ident, $data_type: ident, $iterator: ident) => {
         paste! {
             match $data_type {
-                Some(DataType::Boolean) => Ok(Arc::new(
-                    BooleanArray::from_iter(
-                        [<$stat_type_prefix BooleanDataPageStatsIterator>]::new($iterator)
-                            .flatten()
-                            // BooleanArray::from_iter required a sized iterator, so collect into Vec first
-                            .collect::<Vec<_>>()
-                            .into_iter()
-                    )
-                )),
+                Some(DataType::Boolean) => {
+                    let iterator = [<$stat_type_prefix BooleanDataPageStatsIterator>]::new($iterator);
+                    let mut builder = BooleanBuilder::new();
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+                            builder.append_value(x);
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
                 Some(DataType::UInt8) => Ok(Arc::new(
                     UInt8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| u8::try_from(x).ok())
                                 })
                             })
@@ -754,7 +793,7 @@ macro_rules! get_data_page_statistics {
                     UInt16Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| u16::try_from(x).ok())
                                 })
                             })
@@ -765,8 +804,8 @@ macro_rules! get_data_page_statistics {
                     UInt32Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
-                                    x.and_then(|x| u32::try_from(x).ok())
+                                x.into_iter().map(|x| {
+                                    x.and_then(|x| Some(x as u32))
                                 })
                             })
                             .flatten()
@@ -775,8 +814,8 @@ macro_rules! get_data_page_statistics {
                     UInt64Array::from_iter(
                         [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
-                                    x.and_then(|x| u64::try_from(x).ok())
+                                x.into_iter().map(|x| {
+                                    x.and_then(|x| Some(x as u64))
                                 })
                             })
                             .flatten()
@@ -785,7 +824,7 @@ macro_rules! get_data_page_statistics {
                     Int8Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| i8::try_from(x).ok())
                                 })
                             })
@@ -796,7 +835,7 @@ macro_rules! get_data_page_statistics {
                     Int16Array::from_iter(
                         [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
+                                x.into_iter().map(|x| {
                                     x.and_then(|x| i16::try_from(x).ok())
                                 })
                             })
@@ -809,8 +848,8 @@ macro_rules! get_data_page_statistics {
                     Float16Array::from_iter(
                         [<$stat_type_prefix Float16DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
-                                x.into_iter().filter_map(|x| {
-                                    x.and_then(|x| Some(from_bytes_to_f16(x.data())))
+                                x.into_iter().map(|x| {
+                                    x.and_then(|x| from_bytes_to_f16(x.data()))
                                 })
                             })
                             .flatten()
@@ -820,32 +859,51 @@ macro_rules! get_data_page_statistics {
                 Some(DataType::Float64) => Ok(Arc::new(Float64Array::from_iter([<$stat_type_prefix Float64DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Binary) => Ok(Arc::new(BinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::LargeBinary) => Ok(Arc::new(LargeBinaryArray::from_iter([<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).flatten()))),
-                Some(DataType::Utf8) => Ok(Arc::new(StringArray::from(
-                    [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                        x.into_iter().filter_map(|x| {
-                        x.and_then(|x| {
-                            let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
-                            if res.is_none() {
+                Some(DataType::Utf8) => {
+                    let mut builder = StringBuilder::new();
+                    let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            let Ok(x) = std::str::from_utf8(x.data()) else {
                                 log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
-                            }
-                            res
-                        })
-                    })
-                    }).flatten().collect::<Vec<_>>(),
-                ))),
-                Some(DataType::LargeUtf8) => Ok(Arc::new(LargeStringArray::from(
-                    [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator).map(|x| {
-                        x.into_iter().filter_map(|x| {
-                            x.and_then(|x| {
-                                let res = std::str::from_utf8(x.data()).map(|s| s.to_string()).ok();
-                                if res.is_none() {
-                                    log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
-                                }
-                                res
-                            })
-                    })
-                    }).flatten().collect::<Vec<_>>(),
-                ))),
+                                builder.append_null();
+                                continue;
+                            };
+
+                            builder.append_value(x);
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
+                Some(DataType::LargeUtf8) => {
+                    let mut builder = LargeStringBuilder::new();
+                    let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            let Ok(x) = std::str::from_utf8(x.data()) else {
+                                log::debug!("LargeUtf8 statistics is a non-UTF8 value, ignoring it.");
+                                builder.append_null();
+                                continue;
+                            };
+
+                            builder.append_value(x);
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
+                Some(DataType::Dictionary(_, value_type)) => {
+                    [<$stat_type_prefix:lower _ page_statistics>](Some(value_type), $iterator)
+                },
                 Some(DataType::Timestamp(unit, timezone)) => {
                     let iter = [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten();
                     Ok(match unit {
@@ -858,14 +916,14 @@ macro_rules! get_data_page_statistics {
                 Some(DataType::Date32) => Ok(Arc::new(Date32Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten()))),
                 Some(DataType::Date64) => Ok(
                     Arc::new(
-                        Date64Array::from([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
+                        Date64Array::from_iter([<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator)
                             .map(|x| {
                                 x.into_iter()
-                                .filter_map(|x| {
+                                .map(|x| {
                                     x.and_then(|x| i64::try_from(x).ok())
                                 })
-                                .map(|x| x * 24 * 60 * 60 * 1000)
-                            }).flatten().collect::<Vec<_>>()
+                                .map(|x| x.map(|x| x * 24 * 60 * 60 * 1000))
+                            }).flatten()
                         )
                     )
                 ),
@@ -873,6 +931,58 @@ macro_rules! get_data_page_statistics {
                     Decimal128Array::from_iter([<$stat_type_prefix Decimal128DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
                 Some(DataType::Decimal256(precision, scale)) => Ok(Arc::new(
                     Decimal256Array::from_iter([<$stat_type_prefix Decimal256DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
+                Some(DataType::Time32(unit)) => {
+                    Ok(match unit {
+                        TimeUnit::Second =>  Arc::new(Time32SecondArray::from_iter(
+                            [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        TimeUnit::Millisecond => Arc::new(Time32MillisecondArray::from_iter(
+                            [<$stat_type_prefix Int32DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        _ => {
+                            // don't know how to extract statistics, so return an empty array
+                            new_empty_array(&DataType::Time32(unit.clone()))
+                        }
+                    })
+                }
+                Some(DataType::Time64(unit)) => {
+                    Ok(match unit {
+                        TimeUnit::Microsecond =>  Arc::new(Time64MicrosecondArray::from_iter(
+                            [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        TimeUnit::Nanosecond => Arc::new(Time64NanosecondArray::from_iter(
+                            [<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten(),
+                        )),
+                        _ => {
+                            // don't know how to extract statistics, so return an empty array
+                            new_empty_array(&DataType::Time64(unit.clone()))
+                        }
+                    })
+                },
+               Some(DataType::FixedSizeBinary(size)) => {
+                    let mut builder = FixedSizeBinaryBuilder::new(*size);
+                    let iterator = [<$stat_type_prefix FixedLenByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            if x.len() == *size as usize {
+                                let _ = builder.append_value(x.data());
+                            } else {
+                                log::debug!(
+                                    "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+                                    size,
+                                    x.len(),
+                                );
+                                builder.append_null();
+                            }
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
                 _ => unimplemented!()
             }
         }

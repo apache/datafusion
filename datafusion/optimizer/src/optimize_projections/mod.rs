@@ -19,7 +19,7 @@
 
 mod required_indices;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
@@ -42,7 +42,6 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
-use hashbrown::HashMap;
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
 /// inside the [`LogicalPlan`]. This rule:
@@ -205,7 +204,7 @@ fn optimize_projections(
             });
         }
         LogicalPlan::Window(window) => {
-            let input_schema = window.input.schema().clone();
+            let input_schema = Arc::clone(window.input.schema());
             // Split parent requirements to child and window expression sections:
             let n_input_fields = input_schema.fields().len();
             // Offset window expression indices so that they point to valid
@@ -472,11 +471,8 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
     // Count usages (referrals) of each projection expression in its input fields:
     let mut column_referral_map = HashMap::<&Column, usize>::new();
-    for columns in expr.iter().map(|expr| expr.column_refs()) {
-        for col in columns.into_iter() {
-            *column_referral_map.entry(col).or_default() += 1;
-        }
-    }
+    expr.iter()
+        .for_each(|expr| expr.add_column_ref_counts(&mut column_referral_map));
 
     // If an expression is non-trivial and appears more than once, do not merge
     // them as consecutive projections will benefit from a compute-once approach.
@@ -600,7 +596,7 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 // * the current column is an expression "f"
                 //
                 // return the expression `d + e` (not `d + e` as f)
-                let input_expr = input.expr[idx].clone().unalias_nested();
+                let input_expr = input.expr[idx].clone().unalias_nested().data;
                 Ok(Transformed::yes(input_expr))
             }
             // Unsupported type for consecutive projection merge analysis.
@@ -881,7 +877,7 @@ mod tests {
             Ok(Self {
                 exprs,
                 input: Arc::new(inputs.swap_remove(0)),
-                schema: self.schema.clone(),
+                schema: Arc::clone(&self.schema),
             })
         }
 
@@ -949,7 +945,7 @@ mod tests {
                 exprs,
                 left_child: Arc::new(inputs.remove(0)),
                 right_child: Arc::new(inputs.remove(0)),
-                schema: self.schema.clone(),
+                schema: Arc::clone(&self.schema),
             })
         }
 
@@ -1256,7 +1252,7 @@ mod tests {
         let table_scan = test_table_scan()?;
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoOpUserDefined::new(
-                table_scan.schema().clone(),
+                Arc::clone(table_scan.schema()),
                 Arc::new(table_scan.clone()),
             )),
         });
@@ -1281,7 +1277,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(
                 NoOpUserDefined::new(
-                    table_scan.schema().clone(),
+                    Arc::clone(table_scan.schema()),
                     Arc::new(table_scan.clone()),
                 )
                 .with_exprs(exprs),
@@ -1316,7 +1312,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(
                 NoOpUserDefined::new(
-                    table_scan.schema().clone(),
+                    Arc::clone(table_scan.schema()),
                     Arc::new(table_scan.clone()),
                 )
                 .with_exprs(exprs),
