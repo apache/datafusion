@@ -288,26 +288,13 @@ mod tests {
     #[test]
     fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limit() -> Result<()> {
         let schema = create_schema();
-
         let streaming_table = streaming_table_exec(schema.clone())?;
-
-        let repartition = Arc::new(RepartitionExec::try_new(
-            streaming_table,
-            Partitioning::RoundRobinBatch(8),
-        )?);
-
-        let coalesce_batches = Arc::new(CoalesceBatchesExec::new(
-            filter_exec(schema.clone(), repartition)?,
-            8192,
-        ));
-
+        let repartition = repartition_exec(streaming_table)?;
+        let filter = filter_exec(schema.clone(), repartition)?;
+        let coalesce_batches = coalesce_batches_exec(schema.clone(), filter);
         let local_limit = local_limit_exec(coalesce_batches, 5);
-
-        let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(
-            local_limit
-        ));
-
-        let global_limit= global_limit_exec(coalesce_partitions, 0, Some(5));
+        let coalesce_partitions = coalesce_partitions_exec(local_limit);
+        let global_limit = global_limit_exec(coalesce_partitions, 0, Some(5));
 
         let initial = get_plan_string(&global_limit);
         let expected_initial = [
@@ -342,16 +329,7 @@ mod tests {
         let schema = create_schema();
         let streaming_table = streaming_table_exec(schema.clone())?;
         let filter = filter_exec(schema.clone(), streaming_table)?;
-
-        let projection = Arc::new(ProjectionExec::try_new(
-            vec![
-                (col("c1", schema.as_ref()).unwrap(), "c1".to_string()),
-                (col("c2", schema.as_ref()).unwrap(), "c2".to_string()),
-                (col("c3", schema.as_ref()).unwrap(), "c3".to_string()),
-            ],
-            filter,
-        )?);
-
+        let projection = projection_exec(schema.clone(), filter)?;
         let global_limit = global_limit_exec(projection, 0, Some(5));
 
         let initial = get_plan_string(&global_limit);
@@ -361,7 +339,6 @@ mod tests {
             "    FilterExec: c3@2 > 0",
             "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
         ];
-
         assert_eq!(initial, expected_initial);
 
         let after_optimize =
@@ -407,13 +384,41 @@ mod tests {
         Arc::new(LocalLimitExec::new(input, fetch))
     }
 
-    fn filter_exec(schema: SchemaRef, input: Arc<dyn ExecutionPlan>) -> Result<Arc<FilterExec>> {
+    fn projection_exec(schema: SchemaRef, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(ProjectionExec::try_new(
+            vec![
+                (col("c1", schema.as_ref()).unwrap(), "c1".to_string()),
+                (col("c2", schema.as_ref()).unwrap(), "c2".to_string()),
+                (col("c3", schema.as_ref()).unwrap(), "c3".to_string()),
+            ],
+            input,
+        )?))
+    }
+
+    fn filter_exec(schema: SchemaRef, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(FilterExec::try_new(
             Arc::new(BinaryExpr::new(
                 col("c3", schema.as_ref()).unwrap(),
                 Operator::Gt,
                 lit(0))),
             input,
+        )?))
+    }
+
+    fn coalesce_batches_exec(schema: SchemaRef, input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(CoalesceBatchesExec::new(input, 8192))
+    }
+
+    fn coalesce_partitions_exec(local_limit: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(CoalescePartitionsExec::new(
+            local_limit
+        ))
+    }
+
+    fn repartition_exec(streaming_table: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(RepartitionExec::try_new(
+            streaming_table,
+            Partitioning::RoundRobinBatch(8),
         )?))
     }
 }
