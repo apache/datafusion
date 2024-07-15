@@ -41,7 +41,27 @@ pub trait Dialect {
     fn use_timestamp_for_date64(&self) -> bool {
         false
     }
+
+    fn interval_style(&self) -> IntervalStyle {
+        IntervalStyle::PostgresVerbose
+    }
 }
+
+/// `IntervalStyle` to use for unparsing
+///
+/// https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-INTERVAL-INPUT
+/// different DBMS follows different standards, popular ones are:
+/// postgres_verbose: '2 years 15 months 100 weeks 99 hours 123456789 milliseconds' which is
+/// compatible with arrow display format, as well as duckdb
+/// sql standard format is '1-2' for year-month, or '1 10:10:10.123456' for day-time
+/// https://www.contrib.andrew.cmu.edu/~shadow/sql/sql1992.txt
+#[derive(Clone, Copy)]
+pub enum IntervalStyle {
+    PostgresVerbose,
+    SQLStandard,
+    MySQL,
+}
+
 pub struct DefaultDialect {}
 
 impl Dialect for DefaultDialect {
@@ -63,6 +83,10 @@ impl Dialect for PostgreSqlDialect {
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('"')
     }
+
+    fn interval_style(&self) -> IntervalStyle {
+        IntervalStyle::PostgresVerbose
+    }
 }
 
 pub struct MySqlDialect {}
@@ -75,6 +99,11 @@ impl Dialect for MySqlDialect {
     fn supports_nulls_first_in_sort(&self) -> bool {
         false
     }
+
+    fn interval_style(&self) -> IntervalStyle {
+        IntervalStyle::MySQL
+    }
+
 }
 
 pub struct SqliteDialect {}
@@ -89,6 +118,7 @@ pub struct CustomDialect {
     identifier_quote_style: Option<char>,
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
+    interval_style: IntervalStyle,
 }
 
 impl Default for CustomDialect {
@@ -97,6 +127,7 @@ impl Default for CustomDialect {
             identifier_quote_style: None,
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
+            interval_style: IntervalStyle::SQLStandard,
         }
     }
 }
@@ -123,6 +154,11 @@ impl Dialect for CustomDialect {
     fn use_timestamp_for_date64(&self) -> bool {
         self.use_timestamp_for_date64
     }
+
+    fn interval_style(&self) -> IntervalStyle {
+        self.interval_style
+    }
+
 }
 
 // create a CustomDialectBuilder
@@ -130,6 +166,7 @@ pub struct CustomDialectBuilder {
     identifier_quote_style: Option<char>,
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
+    interval_style: IntervalStyle,
 }
 
 impl CustomDialectBuilder {
@@ -138,6 +175,7 @@ impl CustomDialectBuilder {
             identifier_quote_style: None,
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
+            interval_style: IntervalStyle::PostgresVerbose,
         }
     }
 
@@ -146,6 +184,7 @@ impl CustomDialectBuilder {
             identifier_quote_style: self.identifier_quote_style,
             supports_nulls_first_in_sort: self.supports_nulls_first_in_sort,
             use_timestamp_for_date64: self.use_timestamp_for_date64,
+            interval_style: self.interval_style,
         }
     }
 
@@ -167,6 +206,11 @@ impl CustomDialectBuilder {
         use_timestamp_for_date64: bool,
     ) -> Self {
         self.use_timestamp_for_date64 = use_timestamp_for_date64;
+        self
+    }
+
+    pub fn with_interval_style(mut self, interval_style: IntervalStyle) -> Self {
+        self.interval_style = interval_style;
         self
     }
 }
