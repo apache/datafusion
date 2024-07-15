@@ -1302,23 +1302,20 @@ impl<'a> StatisticsConverter<'a> {
     ) -> Vec<u64> {
         if let DataType::Struct(fields) = data_type {
             let num_row_groups = metadata.len();
-            let mut null_counts = vec![0; num_row_groups];
+            fields
+                .iter()
+                .fold(vec![0; num_row_groups], |mut acc, field| {
+                    let field_null = Self::get_null_counts_recursive(
+                        metadata,
+                        index + 1,
+                        field.data_type(),
+                    );
 
-            fields.iter().for_each(|field| {
-                let field_null_counts = Self::get_null_counts_recursive(
-                    metadata,
-                    index + 1,
-                    field.data_type(),
-                );
-                null_counts
-                    .iter_mut()
-                    .zip(field_null_counts)
-                    .for_each(|(acc, count)| {
-                        *acc += count;
-                    });
-            });
-
-            null_counts
+                    acc.iter_mut()
+                        .zip(field_null.iter())
+                        .for_each(|(a, b)| *a += b);
+                    acc
+                })
         } else {
             metadata
                 .iter()
