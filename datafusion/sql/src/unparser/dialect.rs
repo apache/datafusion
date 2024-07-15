@@ -49,12 +49,12 @@ pub trait Dialect {
 
 /// `IntervalStyle` to use for unparsing
 ///
-/// https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-INTERVAL-INPUT
+/// <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-INTERVAL-INPUT>
 /// different DBMS follows different standards, popular ones are:
 /// postgres_verbose: '2 years 15 months 100 weeks 99 hours 123456789 milliseconds' which is
 /// compatible with arrow display format, as well as duckdb
 /// sql standard format is '1-2' for year-month, or '1 10:10:10.123456' for day-time
-/// https://www.contrib.andrew.cmu.edu/~shadow/sql/sql1992.txt
+/// <https://www.contrib.andrew.cmu.edu/~shadow/sql/sql1992.txt>
 #[derive(Clone, Copy)]
 pub enum IntervalStyle {
     PostgresVerbose,
