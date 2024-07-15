@@ -355,6 +355,73 @@ mod tests {
         Ok(())
     }
 
+
+    #[test]
+    fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version() -> Result<()> {
+        let schema = create_schema();
+        let streaming_table = streaming_table_exec(schema.clone()).unwrap();
+        let coalesce_batches = coalesce_batches_exec(schema.clone(), streaming_table);
+        let projection = projection_exec(schema.clone(), coalesce_batches)?;
+        let global_limit = global_limit_exec(projection, 0, Some(5));
+
+        let initial = get_plan_string(&global_limit);
+        let expected_initial = [
+            "GlobalLimitExec: skip=0, fetch=5",
+            "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+            "    CoalesceBatchesExec: target_batch_size=8192, fetch=None",
+            "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+        ];
+
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+        let expected = [
+            "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+            "  CoalesceBatchesExec: target_batch_size=8192, fetch=5",
+            "    StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+        ];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions() -> Result<()> {
+        let schema = create_schema();
+        let streaming_table = streaming_table_exec(schema.clone())?;
+        let repartition = repartition_exec(streaming_table)?;
+        let filter = filter_exec(schema.clone(), repartition)?;
+        let coalesce_partitions = coalesce_partitions_exec(filter);
+        let global_limit = global_limit_exec(coalesce_partitions, 0, Some(5));
+
+        let initial = get_plan_string(&global_limit);
+        let expected_initial = [
+            "GlobalLimitExec: skip=0, fetch=5",
+            "  CoalescePartitionsExec",
+            "    FilterExec: c3@2 > 0",
+            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+        ];
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+        let expected = [
+            "GlobalLimitExec: skip=0, fetch=5",
+            "  CoalescePartitionsExec",
+            "    LocalLimitExec: fetch=5",
+            "      FilterExec: c3@2 > 0",
+            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+        ];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+
+        Ok(())
+    }
+
     fn create_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, true),
