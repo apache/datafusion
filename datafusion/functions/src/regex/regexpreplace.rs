@@ -282,13 +282,13 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
 fn _regexp_replace_early_abort<T: OffsetSizeTrait>(
     input_array: &GenericStringArray<T>,
-    sz: &usize,
+    sz: usize,
 ) -> Result<ArrayRef> {
     // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
     // are actually null, then the result will be an array of the same size as the first argument with all nulls.
     //
     // Also acts like an early abort mechanism when the input array is empty.
-    Ok(new_null_array(input_array.data_type(), *sz))
+    Ok(new_null_array(input_array.data_type(), sz))
 }
 /// Get the first argument from the given string array.
 ///
@@ -314,7 +314,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
-    let array_size = &string_array.len();
+    let array_size = string_array.len();
     let pattern = fetch_string_arg!(
         &args[1],
         "pattern",
