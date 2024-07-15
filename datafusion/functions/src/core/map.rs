@@ -93,9 +93,9 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
     match columnar_value {
         ColumnarValue::Scalar(value) => match value {
-            ScalarValue::List(array) => Ok(array.value(0).clone()),
-            ScalarValue::LargeList(array) => Ok(array.value(0).clone()),
-            ScalarValue::FixedSizeList(array) => Ok(array.value(0).clone()),
+            ScalarValue::List(array) => Ok(array.value(0)),
+            ScalarValue::LargeList(array) => Ok(array.value(0)),
+            ScalarValue::FixedSizeList(array) => Ok(array.value(0)),
             _ => exec_err!("Expected array, got {:?}", value),
         },
         ColumnarValue::Array(array) => exec_err!("Expected scalar, got {:?}", array),
