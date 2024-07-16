@@ -34,7 +34,7 @@ use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
@@ -354,9 +354,14 @@ pub(crate) fn batch_filter(
         .evaluate(batch)
         .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
-            Ok(as_boolean_array(&array)?)
-                // apply filter array to record batch
-                .and_then(|filter_array| Ok(filter_record_batch(batch, filter_array)?))
+            Ok(match as_boolean_array(&array) {
+                Ok(filter_array) => filter_record_batch(batch, filter_array)?,
+                Err(_) => {
+                    return internal_err!(
+                        "Cannot create filter_array from non-boolean predicates"
+                    );
+                }
+            }) // apply filter array to record batch
         })
 }
 
