@@ -467,9 +467,33 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#forks-vs-extension-apis">
+   Forks vs Extension APIs
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#datafusion-contrib">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     datafusion-contrib
+    </span>
+   </code>
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#creating-new-extension-apis">
+   Creating new Extension APIs
+  </a>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -519,6 +543,70 @@
 <p>DataFusion’s code structure and organization is described in the
 <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html#architecture">crates.io documentation</a>, to keep it as close to the source as
 possible. You can find the most up to date version in the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs">source code</a>.</p>
+<section id="forks-vs-extension-apis">
+<h2>Forks vs Extension APIs<a class="headerlink" href="#forks-vs-extension-apis" title="Link to this heading">¶</a></h2>
+<p>DataFusion is a fast moving project, which results in frequent internal changes.
+This benefits DataFusion by allowing it to evolve and respond quickly to
+requests, but also means that maintaining a fork with major modifications
+sometimes requires non trivial work.</p>
+<p>The public API (what is accessible if you use the DataFusion releases from
+crates.io) is typically much more stable (though it does change from release to
+release as well).</p>
+<p>Thus, rather than forks, we recommend using one of the many extension APIs (such
+as <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>, <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code>, or <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>) to customize
+DataFusion. If you can not do what you want with the existing APIs, we would
+welcome you working with us to add new APIs to enable your use case, as
+described in the next section.</p>
+</section>
+<section id="datafusion-contrib">
+<h2><code class="docutils literal notranslate"><span class="pre">datafusion-contrib</span></code><a class="headerlink" href="#datafusion-contrib" title="Link to this heading">¶</a></h2>
+<p>While DataFusions comes with enough features “out of the box” to quickly start
+with a working system, it can’t include everything useful feature (e.g.
+<code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>s for all data formats). The <a class="reference external" href="https://github.com/datafusion-contrib"><code class="docutils literal notranslate"><span class="pre">datafusion-contrib</span></code></a> project
+contains a collection of community maintained extensions that are not part of
+the core DataFusion project, and not under Apache Software Foundation governance
+but may be useful to others in the community. If you are interested adding a
+feature to DataFusion, a new extension in <code class="docutils literal notranslate"><span class="pre">datafusion-contrib</span></code> is likely a good
+place to start. Please <a class="reference internal" href="communication.html"><span class="std std-doc">contact</span></a> us via github issue, slack, or Discord and
+we’ll gladly set up a new repository for your extension.</p>
+</section>
+<section id="creating-new-extension-apis">
+<h2>Creating new Extension APIs<a class="headerlink" href="#creating-new-extension-apis" title="Link to this heading">¶</a></h2>
+<p>DataFusion aims to be a general-purpose query engine, and thus the core crates
+contain features that are useful for a wide range of use cases. Use case specific
+functionality (such as very specific time series or stream processing features)
+are typically implemented using the extension APIs.</p>
+<p>If have a use case that is not covered by the existing APIs, we would love to
+work with you to design a new general purpose API. There are often others who are
+interested in similar extensions and the act of defining the API often improves
+the code overall for everyone.</p>
+<p>Extension APIs that provide “safe” default behaviors are more likely to be
+suitable for inclusion in DataFusion, while APIs that require major changes to
+built-in operators are less likely. For example, it might make less sense
+to add an API to support a stream processing feature if that would result in
+slower performance for built-in operators. It may still make sense to add
+extension APIs for such features, but leave implementation of such operators in
+downstream projects.</p>
+<p>The process to create a new extension API is typically:</p>
+<ul class="simple">
+<li><p>Look for an existing issue describing what you want to do, and file one if it
+doesn’t yet exist.</p></li>
+<li><p>Discuss what the API would look like. Feel free to ask contributors (via <code class="docutils literal notranslate"><span class="pre">&#64;</span></code>
+mentions) for feedback (you can find such people by looking at the most
+recently changed PRs and issues)</p></li>
+<li><p>Prototype the new API, typically by adding an example (in
+<code class="docutils literal notranslate"><span class="pre">datafusion-examples</span></code> or refactoring existing code) to show how it would work</p></li>
+<li><p>Create a PR with the new API, and work with the community to get it merged</p></li>
+</ul>
+<p>Some benefits of using an example based approach are</p>
+<ul class="simple">
+<li><p>Any future API changes will also keep your example going ensuring no
+regression in functionality</p></li>
+<li><p>There will be a blue print of any needed changes to your code if the APIs do change
+(just look at what changed in your example)</p></li>
+</ul>
+<p>An example of this process was <a class="reference external" href="https://github.com/apache/datafusion/issues/11207">creating a SQL Extension Planning API</a>.</p>
+</section>
 </section>
 
 
@@ -563,7 +651,7 @@ possible. You can find the most up to date version in the <a class="reference ex
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.3.7.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.4.4.<br>
 </p>
     </div>
     
