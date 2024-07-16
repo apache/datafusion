@@ -2091,8 +2091,7 @@ impl Filter {
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            // Interpret NULL as a missing boolean value.
-            if predicate_type != DataType::Boolean && predicate_type != DataType::Null {
+            if predicate_type != DataType::Boolean {
                 return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 );
