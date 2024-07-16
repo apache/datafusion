@@ -169,6 +169,7 @@ impl Dialect for CustomDialect {
 /// but with `use_timestamp_for_date64` overridden to `true`
 ///
 /// ```
+/// use datafusion_sql::unparser::dialect::CustomDialectBuilder;
 /// let dialect = CustomDialectBuilder::new()
 ///     .with_use_timestamp_for_date64(true)
 ///     .build();
