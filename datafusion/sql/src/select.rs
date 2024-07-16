@@ -370,9 +370,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .build()
             }
             LogicalPlan::Filter(mut filter) => {
-                filter.input = Arc::new(self.try_process_aggregate_unnest(unwrap_arc(filter.input))?);
+                filter.input = Arc::new(
+                    self.try_process_aggregate_unnest(unwrap_arc(filter.input))?,
+                );
                 Ok(LogicalPlan::Filter(filter))
-            },
+            }
             _ => Ok(input),
         }
     }
@@ -387,8 +389,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let Aggregate {
             input,
-            group_expr: group_by_exprs,
-            aggr_expr: aggr_exprs,
+            group_expr,
+            aggr_expr,
             ..
         } = agg;
 
@@ -409,7 +411,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         //       TableScan: tab
         // ```
         let mut intermediate_plan = unwrap_arc(input);
-        let mut intermediate_select_exprs = group_by_exprs;
+        let mut intermediate_select_exprs = group_expr;
 
         loop {
             let mut unnest_columns = vec![];
@@ -440,7 +442,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Some(exprs) => (*exprs).clone(),
                     None => {
                         let mut columns = HashSet::new();
-                        for expr in &aggr_exprs {
+                        for expr in &aggr_expr {
                             expr.apply(|expr| {
                                 if let Expr::Column(c) = expr {
                                     columns.insert(Expr::Column(c.clone()));
