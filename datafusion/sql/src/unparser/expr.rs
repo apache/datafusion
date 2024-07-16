@@ -1237,7 +1237,11 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
             DataType::Float32 => Ok(ast::DataType::Float(None)),
-            DataType::Float64 => Ok(ast::DataType::Double),
+            DataType::Float64 => Ok(if self.dialect.use_double_precision_for_float64() {
+                ast::DataType::DoublePrecision
+            } else {
+                ast::DataType::Double
+            }),
             DataType::Timestamp(_, tz) => {
                 let tz_info = match tz {
                     Some(_) => TimezoneInfo::WithTimeZone,
@@ -1808,6 +1812,30 @@ mod tests {
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
                 data_type: DataType::Date64,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_use_double_precision_for_float64() -> Result<()> {
+        for (use_double_precision_for_float64, identifier) in
+            [(false, "DOUBLE"), (true, "DOUBLE PRECISION")]
+        {
+            let dialect = CustomDialectBuilder::new()
+                .with_use_double_precision_for_float64(use_double_precision_for_float64)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type: DataType::Float64,
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
