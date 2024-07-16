@@ -1237,11 +1237,7 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
             DataType::Float32 => Ok(ast::DataType::Float(None)),
-            DataType::Float64 => Ok(if self.dialect.use_double_precision_for_float64() {
-                ast::DataType::DoublePrecision
-            } else {
-                ast::DataType::Double
-            }),
+            DataType::Float64 => Ok(self.dialect.float64_ast_dtype()),
             DataType::Timestamp(_, tz) => {
                 let tz_info = match tz {
                     Some(_) => TimezoneInfo::WithTimeZone,
@@ -1824,12 +1820,16 @@ mod tests {
     }
 
     #[test]
-    fn custom_dialect_use_double_precision_for_float64() -> Result<()> {
-        for (use_double_precision_for_float64, identifier) in
-            [(false, "DOUBLE"), (true, "DOUBLE PRECISION")]
-        {
+    fn custom_dialect_float64_ast_dtype() -> Result<()> {
+        for (float64_ast_dtype, identifier) in [
+            (sqlparser::ast::DataType::Double, "DOUBLE"),
+            (
+                sqlparser::ast::DataType::DoublePrecision,
+                "DOUBLE PRECISION",
+            ),
+        ] {
             let dialect = CustomDialectBuilder::new()
-                .with_use_double_precision_for_float64(use_double_precision_for_float64)
+                .with_float64_ast_dtype(float64_ast_dtype)
                 .build();
             let unparser = Unparser::new(&dialect);
 

@@ -48,8 +48,8 @@ pub trait Dialect {
 
     // Does the dialect use DOUBLE PRECISION to represent Float64 rather than DOUBLE?
     // E.g. Postgres uses DOUBLE PRECISION instead of DOUBLE
-    fn use_double_precision_for_float64(&self) -> bool {
-        false
+    fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
+        sqlparser::ast::DataType::Double
     }
 }
 
@@ -93,6 +93,10 @@ impl Dialect for PostgreSqlDialect {
     fn interval_style(&self) -> IntervalStyle {
         IntervalStyle::PostgresVerbose
     }
+
+    fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
+        sqlparser::ast::DataType::DoublePrecision
+    }
 }
 
 pub struct MySqlDialect {}
@@ -124,7 +128,7 @@ pub struct CustomDialect {
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
-    use_double_precision_for_float64: bool,
+    float64_ast_dtype: sqlparser::ast::DataType,
 }
 
 impl Default for CustomDialect {
@@ -134,7 +138,7 @@ impl Default for CustomDialect {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::SQLStandard,
-            use_double_precision_for_float64: false,
+            float64_ast_dtype: sqlparser::ast::DataType::Double,
         }
     }
 }
@@ -167,8 +171,8 @@ impl Dialect for CustomDialect {
         self.interval_style
     }
 
-    fn use_double_precision_for_float64(&self) -> bool {
-        self.use_double_precision_for_float64
+    fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
+        self.float64_ast_dtype.clone()
     }
 }
 
@@ -191,7 +195,7 @@ pub struct CustomDialectBuilder {
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
-    use_double_precision_for_float64: bool,
+    float64_ast_dtype: sqlparser::ast::DataType,
 }
 
 impl Default for CustomDialectBuilder {
@@ -207,7 +211,7 @@ impl CustomDialectBuilder {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::PostgresVerbose,
-            use_double_precision_for_float64: false,
+            float64_ast_dtype: sqlparser::ast::DataType::Double,
         }
     }
 
@@ -217,7 +221,7 @@ impl CustomDialectBuilder {
             supports_nulls_first_in_sort: self.supports_nulls_first_in_sort,
             use_timestamp_for_date64: self.use_timestamp_for_date64,
             interval_style: self.interval_style,
-            use_double_precision_for_float64: self.use_double_precision_for_float64,
+            float64_ast_dtype: self.float64_ast_dtype,
         }
     }
 
@@ -251,11 +255,11 @@ impl CustomDialectBuilder {
         self
     }
 
-    pub fn with_use_double_precision_for_float64(
+    pub fn with_float64_ast_dtype(
         mut self,
-        use_double_precision_for_float64: bool,
+        float64_ast_dtype: sqlparser::ast::DataType,
     ) -> Self {
-        self.use_double_precision_for_float64 = use_double_precision_for_float64;
+        self.float64_ast_dtype = float64_ast_dtype;
         self
     }
 }
