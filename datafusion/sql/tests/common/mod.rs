@@ -76,6 +76,10 @@ impl MockContextProvider {
 }
 
 impl ContextProvider for MockContextProvider {
+    fn get_expr_planners(&self) -> Vec<Arc<dyn datafusion_expr::planner::ExprPlanner>> {
+        vec![]
+    }
+
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let schema = match name.table() {
             "test" => Ok(Schema::new(vec![

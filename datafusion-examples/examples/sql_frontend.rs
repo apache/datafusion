@@ -136,6 +136,10 @@ struct MyContextProvider {
 }
 
 impl ContextProvider for MyContextProvider {
+    fn get_expr_planners(&self) -> Vec<Arc<dyn datafusion_expr::planner::ExprPlanner>> {
+        vec![]
+    }
+
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         if name.table() == "person" {
             Ok(Arc::new(MyTableSource {
