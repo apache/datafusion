@@ -361,7 +361,7 @@ drop table test
 statement ok
 CREATE TABLE test(
   c1 BIGINT,
-  c2 BIGINT,
+  c2 BIGINT
 ) as VALUES
 (1, 2),
 (NULL, 2),

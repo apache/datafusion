@@ -176,6 +176,7 @@ impl Unparser<'_> {
                     null_treatment: None,
                     over: None,
                     within_group: vec![],
+                    parameters: ast::FunctionArguments::None,
                 }))
             }
             Expr::Between(Between {
@@ -306,6 +307,7 @@ impl Unparser<'_> {
                     null_treatment: None,
                     over,
                     within_group: vec![],
+                    parameters: ast::FunctionArguments::None,
                 }))
             }
             Expr::SimilarTo(Like {
@@ -351,6 +353,7 @@ impl Unparser<'_> {
                     null_treatment: None,
                     over: None,
                     within_group: vec![],
+                    parameters: ast::FunctionArguments::None,
                 }))
             }
             Expr::ScalarSubquery(subq) => {

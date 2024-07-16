@@ -468,6 +468,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Float64
             | SQLDataType::JSONB
             | SQLDataType::Unspecified
+            // Clickhouse datatypes
+            | SQLDataType::Int16
+            | SQLDataType::Int32
+            | SQLDataType::Int128
+            | SQLDataType::Int256
+            | SQLDataType::UInt8
+            | SQLDataType::UInt16
+            | SQLDataType::UInt32
+            | SQLDataType::UInt64
+            | SQLDataType::UInt128
+            | SQLDataType::UInt256
+            | SQLDataType::Float32
+            | SQLDataType::Date32
+            | SQLDataType::Datetime64(_, _)
+            | SQLDataType::FixedString(_)
+            | SQLDataType::Map(_, _)
+            | SQLDataType::Tuple(_)
+            | SQLDataType::Nested(_)
+            | SQLDataType::Union(_)
+            | SQLDataType::Nullable(_)
+            | SQLDataType::LowCardinality(_)
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),
