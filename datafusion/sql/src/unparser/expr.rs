@@ -1706,6 +1706,7 @@ mod tests {
             ),
             (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
             (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
+            // See test_interval_scalar_to_expr for interval literals
             (
                 (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal128(
                     Some(100123),
