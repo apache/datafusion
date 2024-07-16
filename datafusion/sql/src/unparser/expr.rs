@@ -43,6 +43,7 @@ use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
 
+use super::dialect::IntervalStyle;
 use super::Unparser;
 
 /// DataFusion's Exprs can represent either an `Expr` or an `OrderByExpr`
@@ -541,6 +542,14 @@ impl Unparser<'_> {
         }
     }
 
+    fn ast_type_for_date64_in_cast(&self) -> ast::DataType {
+        if self.dialect.use_timestamp_for_date64() {
+            ast::DataType::Timestamp(None, ast::TimezoneInfo::None)
+        } else {
+            ast::DataType::Datetime(None)
+        }
+    }
+
     fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
         if let Some(table_ref) = &col.relation {
             let mut id = table_ref.to_vec();
@@ -1003,7 +1012,7 @@ impl Unparser<'_> {
                     expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
                         datetime.to_string(),
                     ))),
-                    data_type: ast::DataType::Datetime(None),
+                    data_type: self.ast_type_for_date64_in_cast(),
                     format: None,
                 })
             }
@@ -1055,22 +1064,7 @@ impl Unparser<'_> {
             ScalarValue::IntervalYearMonth(Some(_))
             | ScalarValue::IntervalDayTime(Some(_))
             | ScalarValue::IntervalMonthDayNano(Some(_)) => {
-                let wrap_array = v.to_array()?;
-                let Some(result) = array_value_to_string(&wrap_array, 0).ok() else {
-                    return internal_err!(
-                        "Unable to convert interval scalar value to string"
-                    );
-                };
-                let interval = Interval {
-                    value: Box::new(ast::Expr::Value(SingleQuotedString(
-                        result.to_uppercase(),
-                    ))),
-                    leading_field: None,
-                    leading_precision: None,
-                    last_field: None,
-                    fractional_seconds_precision: None,
-                };
-                Ok(ast::Expr::Interval(interval))
+                self.interval_scalar_to_sql(v)
             }
             ScalarValue::IntervalYearMonth(None) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
@@ -1108,6 +1102,123 @@ impl Unparser<'_> {
         }
     }
 
+    fn interval_scalar_to_sql(&self, v: &ScalarValue) -> Result<ast::Expr> {
+        match self.dialect.interval_style() {
+            IntervalStyle::PostgresVerbose => {
+                let wrap_array = v.to_array()?;
+                let Some(result) = array_value_to_string(&wrap_array, 0).ok() else {
+                    return internal_err!(
+                        "Unable to convert interval scalar value to string"
+                    );
+                };
+                let interval = Interval {
+                    value: Box::new(ast::Expr::Value(SingleQuotedString(
+                        result.to_uppercase(),
+                    ))),
+                    leading_field: None,
+                    leading_precision: None,
+                    last_field: None,
+                    fractional_seconds_precision: None,
+                };
+                Ok(ast::Expr::Interval(interval))
+            }
+            // If the interval standard is SQLStandard, implement a simple unparse logic
+            IntervalStyle::SQLStandard => match v {
+                ScalarValue::IntervalYearMonth(v) => {
+                    let Some(v) = v else {
+                        return Ok(ast::Expr::Value(ast::Value::Null));
+                    };
+                    let interval = Interval {
+                        value: Box::new(ast::Expr::Value(
+                            ast::Value::SingleQuotedString(v.to_string()),
+                        )),
+                        leading_field: Some(ast::DateTimeField::Month),
+                        leading_precision: None,
+                        last_field: None,
+                        fractional_seconds_precision: None,
+                    };
+                    Ok(ast::Expr::Interval(interval))
+                }
+                ScalarValue::IntervalDayTime(v) => {
+                    let Some(v) = v else {
+                        return Ok(ast::Expr::Value(ast::Value::Null));
+                    };
+                    let days = v.days;
+                    let secs = v.milliseconds / 1_000;
+                    let mins = secs / 60;
+                    let hours = mins / 60;
+
+                    let secs = secs - (mins * 60);
+                    let mins = mins - (hours * 60);
+
+                    let millis = v.milliseconds % 1_000;
+                    let interval = Interval {
+                        value: Box::new(ast::Expr::Value(
+                            ast::Value::SingleQuotedString(format!(
+                                "{days} {hours}:{mins}:{secs}.{millis:3}"
+                            )),
+                        )),
+                        leading_field: Some(ast::DateTimeField::Day),
+                        leading_precision: None,
+                        last_field: Some(ast::DateTimeField::Second),
+                        fractional_seconds_precision: None,
+                    };
+                    Ok(ast::Expr::Interval(interval))
+                }
+                ScalarValue::IntervalMonthDayNano(v) => {
+                    let Some(v) = v else {
+                        return Ok(ast::Expr::Value(ast::Value::Null));
+                    };
+
+                    if v.months >= 0 && v.days == 0 && v.nanoseconds == 0 {
+                        let interval = Interval {
+                            value: Box::new(ast::Expr::Value(
+                                ast::Value::SingleQuotedString(v.months.to_string()),
+                            )),
+                            leading_field: Some(ast::DateTimeField::Month),
+                            leading_precision: None,
+                            last_field: None,
+                            fractional_seconds_precision: None,
+                        };
+                        Ok(ast::Expr::Interval(interval))
+                    } else if v.months == 0
+                        && v.days >= 0
+                        && v.nanoseconds % 1_000_000 == 0
+                    {
+                        let days = v.days;
+                        let secs = v.nanoseconds / 1_000_000_000;
+                        let mins = secs / 60;
+                        let hours = mins / 60;
+
+                        let secs = secs - (mins * 60);
+                        let mins = mins - (hours * 60);
+
+                        let millis = (v.nanoseconds % 1_000_000_000) / 1_000_000;
+
+                        let interval = Interval {
+                            value: Box::new(ast::Expr::Value(
+                                ast::Value::SingleQuotedString(format!(
+                                    "{days} {hours}:{mins}:{secs}.{millis:03}"
+                                )),
+                            )),
+                            leading_field: Some(ast::DateTimeField::Day),
+                            leading_precision: None,
+                            last_field: Some(ast::DateTimeField::Second),
+                            fractional_seconds_precision: None,
+                        };
+                        Ok(ast::Expr::Interval(interval))
+                    } else {
+                        not_impl_err!("Unsupported IntervalMonthDayNano scalar with both Month and DayTime for IntervalStyle::SQLStandard")
+                    }
+                }
+                _ => Ok(ast::Expr::Value(ast::Value::Null)),
+            },
+            IntervalStyle::MySQL => {
+                not_impl_err!("Unsupported interval scalar for IntervalStyle::MySQL")
+            }
+        }
+    }
+
     fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
         match data_type {
             DataType::Null => {
@@ -1136,7 +1247,7 @@ impl Unparser<'_> {
                 Ok(ast::DataType::Timestamp(None, tz_info))
             }
             DataType::Date32 => Ok(ast::DataType::Date),
-            DataType::Date64 => Ok(ast::DataType::Datetime(None)),
+            DataType::Date64 => Ok(self.ast_type_for_date64_in_cast()),
             DataType::Time32(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1232,7 +1343,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
 
-    use crate::unparser::dialect::CustomDialect;
+    use crate::unparser::dialect::{CustomDialect, CustomDialectBuilder};
 
     use super::*;
 
@@ -1595,46 +1706,7 @@ mod tests {
             ),
             (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
             (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
-            (
-                interval_month_day_nano_lit(
-                    "1 YEAR 1 MONTH 1 DAY 3 HOUR 10 MINUTE 20 SECOND",
-                ),
-                r#"INTERVAL '0 YEARS 13 MONS 1 DAYS 3 HOURS 10 MINS 20.000000000 SECS'"#,
-            ),
-            (
-                interval_month_day_nano_lit("1.5 MONTH"),
-                r#"INTERVAL '0 YEARS 1 MONS 15 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
-            ),
-            (
-                interval_month_day_nano_lit("-3 MONTH"),
-                r#"INTERVAL '0 YEARS -3 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
-            ),
-            (
-                interval_month_day_nano_lit("1 MONTH")
-                    .add(interval_month_day_nano_lit("1 DAY")),
-                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' + INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
-            ),
-            (
-                interval_month_day_nano_lit("1 MONTH")
-                    .sub(interval_month_day_nano_lit("1 DAY")),
-                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
-            ),
-            (
-                interval_datetime_lit("10 DAY 1 HOUR 10 MINUTE 20 SECOND"),
-                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 10 MINS 20.000 SECS'"#,
-            ),
-            (
-                interval_datetime_lit("10 DAY 1.5 HOUR 10 MINUTE 20 SECOND"),
-                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 40 MINS 20.000 SECS'"#,
-            ),
-            (
-                interval_year_month_lit("1 YEAR 1 MONTH"),
-                r#"INTERVAL '1 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
-            ),
-            (
-                interval_year_month_lit("1.5 YEAR 1 MONTH"),
-                r#"INTERVAL '1 YEARS 7 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
-            ),
+            // See test_interval_scalar_to_expr for interval literals
             (
                 (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal128(
                     Some(100123),
@@ -1690,8 +1762,10 @@ mod tests {
     }
 
     #[test]
-    fn custom_dialect() -> Result<()> {
-        let dialect = CustomDialect::new(Some('\''));
+    fn custom_dialect_with_identifier_quote_style() -> Result<()> {
+        let dialect = CustomDialectBuilder::new()
+            .with_identifier_quote_style('\'')
+            .build();
         let unparser = Unparser::new(&dialect);
 
         let expr = col("a").gt(lit(4));
@@ -1706,8 +1780,8 @@ mod tests {
     }
 
     #[test]
-    fn custom_dialect_none() -> Result<()> {
-        let dialect = CustomDialect::new(None);
+    fn custom_dialect_without_identifier_quote_style() -> Result<()> {
+        let dialect = CustomDialect::default();
         let unparser = Unparser::new(&dialect);
 
         let expr = col("a").gt(lit(4));
@@ -1719,5 +1793,144 @@ mod tests {
         assert_eq!(actual, expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_use_timestamp_for_date64() -> Result<()> {
+        for (use_timestamp_for_date64, identifier) in
+            [(false, "DATETIME"), (true, "TIMESTAMP")]
+        {
+            let dialect = CustomDialectBuilder::new()
+                .with_use_timestamp_for_date64(use_timestamp_for_date64)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type: DataType::Date64,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn customer_dialect_support_nulls_first_in_ort() -> Result<()> {
+        let tests: Vec<(Expr, &str, bool)> = vec![
+            (col("a").sort(true, true), r#"a ASC NULLS FIRST"#, true),
+            (col("a").sort(true, true), r#"a ASC"#, false),
+        ];
+
+        for (expr, expected, supports_nulls_first_in_sort) in tests {
+            let dialect = CustomDialectBuilder::new()
+                .with_supports_nulls_first_in_sort(supports_nulls_first_in_sort)
+                .build();
+            let unparser = Unparser::new(&dialect);
+            let ast = unparser.expr_to_unparsed(&expr)?;
+
+            let actual = format!("{}", ast);
+
+            assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_scalar_to_expr() {
+        let tests = [
+            (
+                interval_month_day_nano_lit("1 MONTH"),
+                IntervalStyle::SQLStandard,
+                "INTERVAL '1' MONTH",
+            ),
+            (
+                interval_month_day_nano_lit("1.5 DAY"),
+                IntervalStyle::SQLStandard,
+                "INTERVAL '1 12:0:0.000' DAY TO SECOND",
+            ),
+            (
+                interval_month_day_nano_lit("1.51234 DAY"),
+                IntervalStyle::SQLStandard,
+                "INTERVAL '1 12:17:46.176' DAY TO SECOND",
+            ),
+            (
+                interval_datetime_lit("1.51234 DAY"),
+                IntervalStyle::SQLStandard,
+                "INTERVAL '1 12:17:46.176' DAY TO SECOND",
+            ),
+            (
+                interval_year_month_lit("1 YEAR"),
+                IntervalStyle::SQLStandard,
+                "INTERVAL '12' MONTH",
+            ),
+            (
+                interval_month_day_nano_lit(
+                    "1 YEAR 1 MONTH 1 DAY 3 HOUR 10 MINUTE 20 SECOND",
+                ),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '0 YEARS 13 MONS 1 DAYS 3 HOURS 10 MINS 20.000000000 SECS'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1.5 MONTH"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '0 YEARS 1 MONS 15 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
+            ),
+            (
+                interval_month_day_nano_lit("-3 MONTH"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '0 YEARS -3 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1 MONTH")
+                    .add(interval_month_day_nano_lit("1 DAY")),
+                IntervalStyle::PostgresVerbose,
+                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' + INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
+            ),
+            (
+                interval_month_day_nano_lit("1 MONTH")
+                    .sub(interval_month_day_nano_lit("1 DAY")),
+                IntervalStyle::PostgresVerbose,
+                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
+            ),
+            (
+                interval_datetime_lit("10 DAY 1 HOUR 10 MINUTE 20 SECOND"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 10 MINS 20.000 SECS'"#,
+            ),
+            (
+                interval_datetime_lit("10 DAY 1.5 HOUR 10 MINUTE 20 SECOND"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 40 MINS 20.000 SECS'"#,
+            ),
+            (
+                interval_year_month_lit("1 YEAR 1 MONTH"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '1 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
+            ),
+            (
+                interval_year_month_lit("1.5 YEAR 1 MONTH"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '1 YEARS 7 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
+            ),
+        ];
+
+        for (value, style, expected) in tests {
+            let dialect = CustomDialectBuilder::new()
+                .with_interval_style(style)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
     }
 }
