@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{Array, RecordBatch},
+    array::{Array, ArrayRef, RecordBatch},
     datatypes::{Field, Schema, SchemaRef},
 };
 use arrow_udf::{function, sig::REGISTRY};
@@ -50,12 +50,18 @@ fn eq<T: Eq>(lhs: T, rhs: T) -> bool {
 //     Predicate::like(rhs).unwrap().matches(lhs);
 // }
 
+#[function("concat(string, string) -> string")]
+#[function("concat(largestring, largestring) -> largestring")]
+fn concat(lhs: &str, rhs: &str) -> String {
+    format!("{}{}", lhs, rhs)
+}
+
 pub fn apply_udf(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
     return_field: &Field,
     udf_name: &str,
-) -> Result<ColumnarValue> {
+) -> Result<ArrayRef> {
     let (record_batch, schema) = match (lhs, rhs) {
         (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
             let schema = Arc::new(Schema::new(vec![
@@ -109,7 +115,7 @@ fn apply_udf_inner(
     record_batch: &RecordBatch,
     return_field: &Field,
     udf_name: &str,
-) -> Result<ColumnarValue> {
+) -> Result<ArrayRef> {
     println!("schema: {:?}", schema);
 
     let Some(eval) = REGISTRY
@@ -132,5 +138,5 @@ fn apply_udf_inner(
 
     let result_array = result.column_by_name(udf_name).unwrap();
 
-    Ok(ColumnarValue::Array(Arc::clone(result_array)))
+    Ok(result_array.to_owned())
 }

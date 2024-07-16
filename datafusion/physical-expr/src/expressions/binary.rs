@@ -30,7 +30,6 @@ use arrow::compute::kernels::cmp::*;
 use arrow::compute::kernels::comparison::{
     regexp_is_match_utf8, regexp_is_match_utf8_scalar,
 };
-use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use datafusion_common::cast::as_boolean_array;
@@ -130,34 +129,6 @@ impl std::fmt::Display for BinaryExpr {
         write!(f, " {} ", self.op)?;
         write_child(f, self.right.as_ref(), precedence)
     }
-}
-
-/// Invoke a compute kernel on a pair of binary data arrays
-macro_rules! compute_utf8_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast left side array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast right side array");
-        Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
-    }};
-}
-
-macro_rules! binary_string_array_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        match $LEFT.data_type() {
-            DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
-            DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
-            other => internal_err!(
-                "Data type {:?} not supported for binary operation '{}' on string arrays",
-                other, stringify!($OP)
-            ),
-        }
-    }};
 }
 
 /// Invoke a boolean kernel on a pair of arrays
@@ -303,12 +274,12 @@ impl PhysicalExpr for BinaryExpr {
                 #[cfg(not(feature = "arrow_udf"))]
                 return apply_cmp(&lhs, &rhs, eq);
                 #[cfg(feature = "arrow_udf")]
-                return apply_udf(
+                return Ok(ColumnarValue::Array(apply_udf(
                     &lhs,
                     &rhs,
                     &Field::new("", DataType::Boolean, true),
                     "eq",
-                );
+                )?));
             }
             Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
             Operator::Lt => return apply_cmp(&lhs, &rhs, lt),
@@ -669,7 +640,21 @@ impl BinaryExpr {
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => binary_string_array_op!(left, right, concat_elements),
+            StringConcat => {
+                #[cfg(not(feature = "arrow_udf"))]
+                {
+                    binary_string_array_op!(left, right, concat_elements)
+                }
+                #[cfg(feature = "arrow_udf")]
+                {
+                    apply_udf(
+                        &ColumnarValue::Array(left),
+                        &ColumnarValue::Array(right),
+                        &Field::new("", DataType::Utf8, true),
+                        "concat",
+                    )
+                }
+            }
             AtArrow | ArrowAt => {
                 unreachable!("ArrowAt and AtArrow should be rewritten to function")
             }
