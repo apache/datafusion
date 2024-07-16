@@ -584,7 +584,7 @@ DROP TABLE data_index_bloom_encoding_stats;
 # String coercion
 ########
 
-statement error DataFusion error: SQL error: ParserError\("Expected a data type name, found: ,"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: a data type name, found: ,"\)
 CREATE TABLE t(vendor_id_utf8, vendor_id_dict)
 AS VALUES
 (arrow_cast('124', 'Utf8'), arrow_cast('124', 'Dictionary(Int16, Utf8)')),
@@ -692,7 +692,7 @@ CREATE TABLE IF NOT EXISTS partsupp (
     ps_suppkey BIGINT,
     ps_availqty INTEGER,
     ps_supplycost DECIMAL(15, 2),
-    ps_comment VARCHAR,
+    ps_comment VARCHAR
 ) AS VALUES
 (63700, 7311, 100, 993.49, 'ven ideas. quickly even packages print. pending multipliers must have to are fluff');
 

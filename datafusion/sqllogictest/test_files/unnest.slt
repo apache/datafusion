@@ -267,7 +267,7 @@ query error DataFusion error: Error during planning: unnest\(\) requires exactly
 select unnest();
 
 ## Unnest empty expression in from clause
-query error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+query error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
 select * from unnest();
 
 
@@ -555,7 +555,6 @@ physical_plan
 06)----------UnnestExec
 07)------------ProjectionExec: expr=[column3@0 as unnest(recursive_unnest_table.column3), column3@0 as column3]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
-
 
 ## group by unnest
 

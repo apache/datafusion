@@ -151,7 +151,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let aggr_exprs = find_aggregate_exprs(&aggr_expr_haystack);
 
         // All of the group by expressions
-        let group_by_exprs = if let GroupByExpr::Expressions(exprs) = select.group_by {
+        let group_by_exprs = if let GroupByExpr::Expressions(exprs, _) = select.group_by {
             exprs
                 .into_iter()
                 .map(|e| {
