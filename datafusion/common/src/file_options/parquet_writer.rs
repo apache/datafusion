@@ -282,9 +282,16 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
     }
 }
 
+#[cfg(feature = "parquet")]
 #[cfg(test)]
 mod tests {
-    use parquet::{basic::Compression, file::properties::EnabledStatistics};
+    use parquet::{
+        basic::Compression,
+        file::properties::{
+            BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
+            DEFAULT_BLOOM_FILTER_NDV,
+        },
+    };
     use std::collections::HashMap;
 
     use crate::config::{ColumnOptions, ParquetOptions};
@@ -560,14 +567,18 @@ mod tests {
             "datafusion's default is None"
         );
 
-        // TODO: does not match
+        // TODO: matches once create WriterProps, but only due to parquet's override
         assert!(
             default_writer_props.dictionary_enabled(&"default".into()),
             "extern parquet's default is true"
         );
+        assert_eq!(
+            default_table_writer_opts.global.dictionary_enabled, None,
+            "datafusion's has no default"
+        );
         assert!(
-            !from_datafusion_defaults.dictionary_enabled(&"default".into()),
-            "datafusion's default is false"
+            from_datafusion_defaults.dictionary_enabled(&"default".into()),
+            "should see the extern parquet's default over-riding datafusion's None",
         );
 
         // TODO: matches once create WriterProps, but only due to parquet's override
@@ -619,6 +630,115 @@ mod tests {
             default_table_writer_opts,
             from_extern_parquet,
             "the writer_props should have the same configuration as the session's TableParquetOptions",
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_defaults() {
+        // the TableParquetOptions::default, with only the bloom filter turned on
+        let mut default_table_writer_opts = TableParquetOptions::default();
+        default_table_writer_opts.global.bloom_filter_on_write = true;
+
+        // the WriterProperties::default, with only the bloom filter turned on
+        let default_writer_props = WriterProperties::new();
+        let from_datafusion_defaults =
+            WriterPropertiesBuilder::try_from(&default_table_writer_opts)
+                .unwrap()
+                .set_bloom_filter_enabled(true)
+                .build();
+
+        // TODO: should have same behavior in either.
+        // refer to https://github.com/apache/datafusion/issues/11367
+        assert_ne!(
+            default_writer_props.bloom_filter_properties(&"default".into()),
+            from_datafusion_defaults.bloom_filter_properties(&"default".into()),
+            "parquet and datafusion props, will not have the same bloom filter props",
+        );
+        assert_eq!(
+            default_writer_props.bloom_filter_properties(&"default".into()),
+            None,
+            "extern parquet's default remains None"
+        );
+        assert_eq!(
+            from_datafusion_defaults.bloom_filter_properties(&"default".into()),
+            Some(&BloomFilterProperties::default()),
+            "datafusion's has BloomFilterProperties::default",
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_set_fpp_only() {
+        // the TableParquetOptions::default, with only fpp set
+        let mut default_table_writer_opts = TableParquetOptions::default();
+        default_table_writer_opts.global.bloom_filter_on_write = true;
+        default_table_writer_opts.global.bloom_filter_fpp = Some(0.42);
+
+        // the WriterProperties::default, with only fpp set
+        let default_writer_props = WriterProperties::new();
+        let from_datafusion_defaults =
+            WriterPropertiesBuilder::try_from(&default_table_writer_opts)
+                .unwrap()
+                .set_bloom_filter_enabled(true)
+                .set_bloom_filter_fpp(0.42)
+                .build();
+
+        // TODO: should have same behavior in either.
+        // refer to https://github.com/apache/datafusion/issues/11367
+        assert_ne!(
+            default_writer_props.bloom_filter_properties(&"default".into()),
+            from_datafusion_defaults.bloom_filter_properties(&"default".into()),
+            "parquet and datafusion props, will not have the same bloom filter props",
+        );
+        assert_eq!(
+            default_writer_props.bloom_filter_properties(&"default".into()),
+            None,
+            "extern parquet's default remains None"
+        );
+        assert_eq!(
+            from_datafusion_defaults.bloom_filter_properties(&"default".into()),
+            Some(&BloomFilterProperties {
+                fpp: 0.42,
+                ndv: DEFAULT_BLOOM_FILTER_NDV
+            }),
+            "datafusion's has BloomFilterProperties",
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_set_ndv_only() {
+        // the TableParquetOptions::default, with only ndv set
+        let mut default_table_writer_opts = TableParquetOptions::default();
+        default_table_writer_opts.global.bloom_filter_on_write = true;
+        default_table_writer_opts.global.bloom_filter_ndv = Some(42);
+
+        // the WriterProperties::default, with only ndv set
+        let default_writer_props = WriterProperties::new();
+        let from_datafusion_defaults =
+            WriterPropertiesBuilder::try_from(&default_table_writer_opts)
+                .unwrap()
+                .set_bloom_filter_enabled(true)
+                .set_bloom_filter_ndv(42)
+                .build();
+
+        // TODO: should have same behavior in either.
+        // refer to https://github.com/apache/datafusion/issues/11367
+        assert_ne!(
+            default_writer_props.bloom_filter_properties(&"default".into()),
+            from_datafusion_defaults.bloom_filter_properties(&"default".into()),
+            "parquet and datafusion props, will not have the same bloom filter props",
+        );
+        assert_eq!(
+            default_writer_props.bloom_filter_properties(&"default".into()),
+            None,
+            "extern parquet's default remains None"
+        );
+        assert_eq!(
+            from_datafusion_defaults.bloom_filter_properties(&"default".into()),
+            Some(&BloomFilterProperties {
+                fpp: DEFAULT_BLOOM_FILTER_FPP,
+                ndv: 42
+            }),
+            "datafusion's has BloomFilterProperties",
         );
     }
 }
