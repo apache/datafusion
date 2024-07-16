@@ -1583,6 +1583,10 @@ impl SessionStateDefaults {
     }
 }
 
+/// Adapter that implements the [`ContextProvider`] trait for a [`SessionState`]
+///
+/// This is used so the SQL planner can access the state of the session without
+/// having a direct dependency on the [`SessionState`] struct (and core crate)
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
     tables: HashMap<String, Arc<dyn TableSource>>,
