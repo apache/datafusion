@@ -18,7 +18,7 @@
 //! [`ParquetOpener`] for opening Parquet files
 
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
-use crate::datasource::physical_plan::parquet::row_groups::RowGroupAccessPlanFilter;
+use crate::datasource::physical_plan::parquet::row_group_filter::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
     row_filter, should_enable_page_index, ParquetAccessPlan,
 };
