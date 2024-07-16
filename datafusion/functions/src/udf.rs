@@ -15,102 +15,122 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_udf::function;
+use std::sync::Arc;
+
+use arrow::{
+    array::{Array, RecordBatch},
+    datatypes::{Field, Schema, SchemaRef},
+};
+use arrow_udf::{function, sig::REGISTRY};
+use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
+// use arrow_string::predicate::Predicate;
 
 #[function("eq(boolean, boolean) -> boolean")]
-fn eq(lhs: bool, rhs: bool) -> bool {
+#[function("eq(int8, int8) -> boolean")]
+#[function("eq(int16, int16) -> boolean")]
+#[function("eq(int32, int32) -> boolean")]
+#[function("eq(int64, int64) -> boolean")]
+#[function("eq(uint8, uint8) -> boolean")]
+#[function("eq(uint16, uint16) -> boolean")]
+#[function("eq(uint32, uint32) -> boolean")]
+#[function("eq(uint64, uint64) -> boolean")]
+#[function("eq(string, string) -> boolean")]
+#[function("eq(binary, binary) -> boolean")]
+#[function("eq(largestring, largestring) -> boolean")]
+#[function("eq(largebinary, largebinary) -> boolean")]
+#[function("eq(date32, date32) -> boolean")]
+// #[function("eq(struct Dictionary, struct Dictionary) -> boolean")]
+fn eq<T: Eq>(lhs: T, rhs: T) -> bool {
     lhs == rhs
 }
 
-#[function("gcd(int, int) -> int", output = "eval_gcd")]
-fn gcd(mut a: i32, mut b: i32) -> i32 {
-    while b != 0 {
-        (a, b) = (b, a % b);
-    }
-    a
+// Bad, we could not use the non-public API
+// fn like(lhs: &str, rhs: &str) -> bool {
+//     Predicate::like(rhs).unwrap().matches(lhs);
+// }
+
+pub fn apply_udf(
+    lhs: &ColumnarValue,
+    rhs: &ColumnarValue,
+    return_field: &Field,
+    udf_name: &str,
+) -> Result<ColumnarValue> {
+    let (record_batch, schema) = match (lhs, rhs) {
+        (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("", left.data_type().clone(), left.is_nullable()),
+                Field::new("", right.data_type().clone(), right.is_nullable()),
+            ]));
+            let record_batch =
+                RecordBatch::try_new(schema.clone(), vec![left.clone(), right.clone()])?;
+            Ok::<(RecordBatch, SchemaRef), DataFusionError>((record_batch, schema))
+        }
+        (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("", left.data_type().clone(), false),
+                Field::new("", right.data_type().clone(), right.is_nullable()),
+            ]));
+            let record_batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![left.to_array_of_size(right.len())?, right.clone()],
+            )?;
+            Ok((record_batch, schema))
+        }
+        (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("", left.data_type().clone(), left.is_nullable()),
+                Field::new("", right.data_type().clone(), false),
+            ]));
+            let record_batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![left.clone(), right.to_array_of_size(left.len())?],
+            )?;
+            Ok((record_batch, schema))
+        }
+        (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("", left.data_type().clone(), false),
+                Field::new("", right.data_type().clone(), false),
+            ]));
+            let record_batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![left.to_array()?, right.to_array()?],
+            )?;
+            Ok((record_batch, schema))
+        }
+    }?;
+
+    apply_udf_inner(schema, &record_batch, return_field, udf_name)
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{sync::Arc, vec};
+fn apply_udf_inner(
+    schema: SchemaRef,
+    record_batch: &RecordBatch,
+    return_field: &Field,
+    udf_name: &str,
+) -> Result<ColumnarValue> {
+    println!("schema: {:?}", schema);
 
-    use arrow::{
-        array::{BooleanArray, RecordBatch},
-        datatypes::{Field, Schema},
+    let Some(eval) = REGISTRY
+        .get(
+            udf_name,
+            schema
+                .all_fields()
+                .into_iter()
+                .map(|f| f.to_owned())
+                .collect::<Vec<_>>()
+                .as_slice(),
+            return_field,
+        )
+        .and_then(|f| f.function.as_scalar())
+    else {
+        return internal_err!("UDF {} not found for schema {}", udf_name, schema);
     };
-    use arrow_udf::sig::REGISTRY;
 
-    #[test]
-    fn test_eq() {
-        let bool_field = Field::new("", arrow::datatypes::DataType::Boolean, false);
-        let schema = Schema::new(vec![bool_field.clone()]);
-        let record_batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![Arc::new(BooleanArray::from(vec![true, false, true]))],
-        )
-        .unwrap();
+    let result = eval(record_batch)?;
 
-        println!("Function signatures:");
-        REGISTRY.iter().for_each(|sig| {
-            println!("{:?}", sig.name);
-            println!("{:?}", sig.arg_types);
-            println!("{:?}", sig.return_type);
-        });
+    let result_array = result.column_by_name(udf_name).unwrap();
 
-        let eval_eq_boolean = REGISTRY
-            .get("eq", &[bool_field.clone(), bool_field.clone()], &bool_field)
-            .unwrap()
-            .function
-            .as_scalar()
-            .unwrap();
-
-        let result = eval_eq_boolean(&record_batch).unwrap();
-
-        assert!(result
-            .column(0)
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .unwrap()
-            .value(0));
-    }
-
-    #[test]
-    fn test_gcd() {
-        let int_field = Field::new("", arrow::datatypes::DataType::Int32, false);
-        let schema = Schema::new(vec![int_field.clone(), int_field.clone()]);
-        let record_batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![
-                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
-                Arc::new(arrow::array::Int32Array::from(vec![20, 30, 40])),
-            ],
-        )
-        .unwrap();
-
-        println!("Function signatures:");
-        REGISTRY.iter().for_each(|sig| {
-            println!("{:?}", sig.name);
-            println!("{:?}", sig.arg_types);
-            println!("{:?}", sig.return_type);
-        });
-
-        let eval_gcd_int = REGISTRY
-            .get("gcd", &[int_field.clone(), int_field.clone()], &int_field)
-            .unwrap()
-            .function
-            .as_scalar()
-            .unwrap();
-
-        let result = eval_gcd_int(&record_batch).unwrap();
-
-        assert_eq!(
-            result
-                .column(0)
-                .as_any()
-                .downcast_ref::<arrow::array::Int32Array>()
-                .unwrap()
-                .value(0),
-            10
-        );
-    }
+    Ok(ColumnarValue::Array(Arc::clone(result_array)))
 }

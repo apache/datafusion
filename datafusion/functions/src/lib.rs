@@ -133,6 +133,7 @@ make_stub_package!(unicode, "unicode_expressions");
 #[cfg(any(feature = "datetime_expressions", feature = "unicode_expressions"))]
 pub mod planner;
 
+#[cfg(feature = "arrow_udf")]
 pub mod udf;
 
 mod utils;

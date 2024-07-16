@@ -31,18 +31,6 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
-[profile.dev]
-codegen-units = 1
-
-[profile.release]
-codegen-units = 1
-
-[profile.bench]
-codegen-units = 1
-
-[profile.test]
-codegen-units = 1
-
 [features]
 # enable core functions
 core_expressions = []
@@ -58,6 +46,7 @@ default = [
     "regex_expressions",
     "string_expressions",
     "unicode_expressions",
+    "arrow_udf",
 ]
 # enable encode/decode functions
 encoding_expressions = ["base64", "hex"]
@@ -70,6 +59,15 @@ string_expressions = ["uuid"]
 # enable unicode functions
 unicode_expressions = ["hashbrown", "unicode-segmentation"]
 
+arrow_udf = [
+    "global_registry",
+    "arrow-string",
+]
+
+global_registry = [
+    "arrow-udf",
+]
+
 [lib]
 name = "datafusion_functions"
 path = "src/lib.rs"
@@ -79,8 +77,8 @@ path = "src/lib.rs"
 [dependencies]
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
-arrow-udf = { version="0.3.0", features = ["global_registry"] }
-linkme = { version = "0.3.27"}
+arrow-udf = { workspace = true, optional = true, features = ["global_registry"] }
+arrow-string = { workspace = true, optional = true }
 base64 = { version = "0.22", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
@@ -91,6 +89,7 @@ datafusion-expr = { workspace = true }
 hashbrown = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
+linkme = { version = "0.3.27" }
 log = { workspace = true }
 md-5 = { version = "^0.10.0", optional = true }
 rand = { workspace = true }

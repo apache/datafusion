@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
-use arrow_udf::function;
 
 use datafusion_common::{cast::as_generic_string_array, internal_err, Result};
 use datafusion_expr::ColumnarValue;
@@ -28,11 +27,6 @@ use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
 use crate::utils::make_scalar_function;
-
-#[function("starts_with(string, string) -> bool")]
-fn starts_with_udf(left: &str, right: &str) -> bool {
-    left.starts_with(right)
-}
 
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
