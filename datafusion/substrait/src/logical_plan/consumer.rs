@@ -1183,10 +1183,10 @@ pub async fn from_substrait_rex(
             let fn_name = substrait_fun_name(fn_name);
 
             // check udwf first, then udaf, then built-in window and aggregate functions
-            let fun = if let Ok(udaf) = ctx.udaf(fn_name) {
-                Ok(WindowFunctionDefinition::AggregateUDF(udaf))
-            } else if let Ok(udwf) = ctx.udwf(fn_name) {
+            let fun = if let Ok(udwf) = ctx.udwf(fn_name) {
                 Ok(WindowFunctionDefinition::WindowUDF(udwf))
+            } else if let Ok(udaf) = ctx.udaf(fn_name) {
+                Ok(WindowFunctionDefinition::AggregateUDF(udaf))
             } else if let Some(fun) = find_df_window_func(fn_name) {
                 Ok(fun)
             } else {
