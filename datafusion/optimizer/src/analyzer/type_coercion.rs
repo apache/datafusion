@@ -47,8 +47,9 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprSchemable, LogicalPlan,
-    Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprSchemable, Filter,
+    LogicalPlan, Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -86,6 +87,18 @@ fn analyze_internal(
     external_schema: &DFSchema,
     plan: LogicalPlan,
 ) -> Result<Transformed<LogicalPlan>> {
+    if let LogicalPlan::Filter(Filter {
+        predicate, input, ..
+    }) = &plan
+    {
+        if predicate == &Expr::Literal(ScalarValue::Null) {
+            return Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
+                Expr::Literal(ScalarValue::Boolean(Some(false))),
+                Arc::clone(input),
+            )?)));
+        }
+    }
+
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
     let mut schema = merge_schema(plan.inputs());
