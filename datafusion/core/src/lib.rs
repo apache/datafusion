@@ -174,7 +174,7 @@
 //!
 //! DataFusion is designed to be highly extensible, so you can
 //! start with a working, full featured engine, and then
-//! specialize any behavior for their usecase. For example,
+//! specialize any behavior for your usecase. For example,
 //! some projects may add custom [`ExecutionPlan`] operators, or create their own
 //! query language that directly creates [`LogicalPlan`] rather than using the
 //! built in SQL planner, [`SqlToRel`].
