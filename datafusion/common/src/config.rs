@@ -29,8 +29,8 @@ use crate::file_options::parquet_writer::{
 };
 #[cfg(feature = "parquet")]
 use parquet::file::properties::{
-    WriterProperties, WriterPropertiesBuilder, DEFAULT_BLOOM_FILTER_FPP,
-    DEFAULT_BLOOM_FILTER_NDV, DEFAULT_MAX_STATISTICS_SIZE, DEFAULT_STATISTICS_ENABLED,
+    WriterProperties, WriterPropertiesBuilder, DEFAULT_MAX_STATISTICS_SIZE,
+    DEFAULT_STATISTICS_ENABLED,
 };
 
 use crate::error::_config_err;
@@ -507,7 +507,6 @@ impl ParquetOptions {
             .set_data_page_size_limit(*data_pagesize_limit)
             .set_write_batch_size(*write_batch_size)
             .set_writer_version(parse_version_string(writer_version.as_str())?)
-            .set_dictionary_enabled(dictionary_enabled.unwrap_or(false))
             .set_dictionary_page_size_limit(*dictionary_page_size_limit)
             .set_statistics_enabled(
                 statistics_enabled
@@ -522,9 +521,17 @@ impl ParquetOptions {
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
-            .set_bloom_filter_enabled(*bloom_filter_on_write)
-            .set_bloom_filter_fpp(bloom_filter_fpp.unwrap_or(DEFAULT_BLOOM_FILTER_FPP))
-            .set_bloom_filter_ndv(bloom_filter_ndv.unwrap_or(DEFAULT_BLOOM_FILTER_NDV));
+            .set_bloom_filter_enabled(*bloom_filter_on_write);
+
+        if let Some(bloom_filter_fpp) = bloom_filter_fpp {
+            builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
+        };
+        if let Some(bloom_filter_ndv) = bloom_filter_ndv {
+            builder = builder.set_bloom_filter_ndv(*bloom_filter_ndv);
+        };
+        if let Some(dictionary_enabled) = dictionary_enabled {
+            builder = builder.set_dictionary_enabled(*dictionary_enabled);
+        };
 
         // We do not have access to default ColumnProperties set in Arrow.
         // Therefore, only overwrite if these settings exist.
