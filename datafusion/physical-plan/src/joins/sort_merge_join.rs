@@ -583,7 +583,7 @@ impl StreamedBatch {
 #[derive(Debug)]
 struct BufferedBatch {
     /// The buffered record batch
-    pub batch: RecordBatch,
+    pub batch: Option<RecordBatch>,
     /// The range in which the rows share the same join key
     pub range: Range<usize>,
     /// Array refs of the join key
@@ -595,7 +595,11 @@ struct BufferedBatch {
     /// The indices of buffered batch that failed the join filter.
     /// When dequeuing the buffered batch, we need to produce null joined rows for these indices.
     pub join_filter_failed_idxs: HashSet<u64>,
+    /// Current buffered batch number of rows. Equal to batch.num_rows()
+    /// but if batch is spilled to disk this property is preferable
+    /// and less expensive
     pub num_rows: usize,
+    /// A temp spill file name on the disk if the batch spilled
     pub spill_file: Option<RefCountedTempFile>,
 }
 
@@ -624,7 +628,7 @@ impl BufferedBatch {
 
         let num_rows = batch.num_rows();
         BufferedBatch {
-            batch,
+            batch: Some(batch),
             range,
             join_arrays,
             null_joined: vec![],
@@ -633,26 +637,6 @@ impl BufferedBatch {
             num_rows,
             spill_file: None,
         }
-    }
-
-    fn spill_to_disk(
-        &mut self,
-        path: RefCountedTempFile,
-        buffered_schema: SchemaRef,
-        batch_size: usize,
-    ) -> Result<()> {
-        let batch = std::mem::replace(
-            &mut self.batch,
-            RecordBatch::new_empty(Arc::clone(&buffered_schema)),
-        );
-        let _ = spill_record_batch_by_size(
-            batch,
-            path.path().into(),
-            buffered_schema,
-            batch_size,
-        );
-        self.spill_file = Some(path);
-        Ok(())
     }
 }
 
@@ -905,7 +889,17 @@ impl SMJStream {
         }
     }
 
-    fn mem_allocate_batch(&mut self, mut buffered_batch: BufferedBatch) -> Result<()> {
+    fn free_reservation(&mut self, buffered_batch: BufferedBatch) -> Result<()> {
+        // Shrink memory usage for in memory batches only
+        if buffered_batch.spill_file.is_none() && buffered_batch.batch.is_some() {
+            self.reservation
+                .try_shrink(buffered_batch.size_estimation)?;
+        }
+
+        Ok(())
+    }
+
+    fn allocate_reservation(&mut self, mut buffered_batch: BufferedBatch) -> Result<()> {
         match self.reservation.try_grow(buffered_batch.size_estimation) {
             Ok(_) => {
                 self.join_metrics
@@ -920,18 +914,23 @@ impl SMJStream {
                     .disk_manager
                     .create_tmp_file("SortMergeJoinBuffered")?;
 
-                buffered_batch.spill_to_disk(
-                    spill_file,
-                    Arc::clone(&self.buffered_schema),
-                    self.batch_size,
-                )?;
+                if let Some(batch) = &buffered_batch.batch {
+                    spill_record_batch_by_size(
+                        batch,
+                        spill_file.path().into(),
+                        Arc::clone(&self.buffered_schema),
+                        self.batch_size,
+                    )?;
+                    buffered_batch.spill_file = Some(spill_file);
+                    buffered_batch.batch = None;
 
-                // update metrics to display spill
-                self.join_metrics.spill_count.add(1);
-                self.join_metrics
-                    .spilled_bytes
-                    .add(buffered_batch.size_estimation);
-                self.join_metrics.spilled_rows.add(buffered_batch.num_rows);
+                    // update metrics to register spill
+                    self.join_metrics.spill_count.add(1);
+                    self.join_metrics
+                        .spilled_bytes
+                        .add(buffered_batch.size_estimation);
+                    self.join_metrics.spilled_rows.add(buffered_batch.num_rows);
+                }
 
                 Ok(())
             }
@@ -956,11 +955,7 @@ impl SMJStream {
                             if let Some(buffered_batch) =
                                 self.buffered_data.batches.pop_front()
                             {
-                                // Shrink mem usage for non spilled batches only
-                                if buffered_batch.spill_file.is_none() {
-                                    self.reservation
-                                        .shrink(buffered_batch.size_estimation);
-                                }
+                                self.free_reservation(buffered_batch)?;
                             }
                         } else {
                             // If the head batch is not fully processed, break the loop.
@@ -988,11 +983,12 @@ impl SMJStream {
                     Poll::Ready(Some(batch)) => {
                         self.join_metrics.input_batches.add(1);
                         self.join_metrics.input_rows.add(batch.num_rows());
+
                         if batch.num_rows() > 0 {
                             let buffered_batch =
                                 BufferedBatch::new(batch, 0..1, &self.on_buffered);
 
-                            self.mem_allocate_batch(buffered_batch)?;
+                            self.allocate_reservation(buffered_batch)?;
                             self.buffered_state = BufferedState::PollingRest;
                         }
                     }
@@ -1034,7 +1030,7 @@ impl SMJStream {
                                         0..0,
                                         &self.on_buffered,
                                     );
-                                    self.mem_allocate_batch(buffered_batch)?;
+                                    self.allocate_reservation(buffered_batch)?;
                                 }
                             }
                         }
@@ -1554,8 +1550,7 @@ fn produce_buffered_null_batch(
 
     // Take buffered (right) columns
     let buffered_columns =
-        get_buffered_columns_from_batch(buffered_batch, buffered_indices)
-            .map_err(Into::<DataFusionError>::into)?;
+        get_buffered_columns_from_batch(buffered_batch, buffered_indices)?;
 
     // Create null streamed (left) columns
     let mut streamed_columns = streamed_schema
@@ -1578,7 +1573,7 @@ fn get_buffered_columns(
     buffered_data: &BufferedData,
     buffered_batch_idx: usize,
     buffered_indices: &UInt64Array,
-) -> Result<Vec<ArrayRef>, ArrowError> {
+) -> Result<Vec<ArrayRef>> {
     get_buffered_columns_from_batch(
         &buffered_data.batches[buffered_batch_idx],
         buffered_indices,
@@ -1589,28 +1584,33 @@ fn get_buffered_columns(
 fn get_buffered_columns_from_batch(
     buffered_batch: &BufferedBatch,
     buffered_indices: &UInt64Array,
-) -> Result<Vec<ArrayRef>, ArrowError> {
-    if let Some(spill_file) = &buffered_batch.spill_file {
-        // if spilled read from disk in smaller sub batches
-        let mut buffered_cols: Vec<ArrayRef> = Vec::with_capacity(buffered_indices.len());
-
-        let file = BufReader::new(File::open(spill_file.path())?);
-        let reader = FileReader::try_new(file, None)?;
-
-        for batch in reader {
-            batch?.columns().iter().for_each(|column| {
-                buffered_cols.extend(take(column, &buffered_indices, None))
-            });
-        }
-
-        Ok(buffered_cols)
-    } else {
-        buffered_batch
-            .batch
+) -> Result<Vec<ArrayRef>> {
+    match (&buffered_batch.spill_file, &buffered_batch.batch) {
+        // In memory batch
+        (None, Some(batch)) => Ok(batch
             .columns()
             .iter()
             .map(|column| take(column, &buffered_indices, None))
             .collect::<Result<Vec<_>, ArrowError>>()
+            .map_err(Into::<DataFusionError>::into)?),
+        // If the batch was spilled to disk, less likely
+        (Some(spill_file), None) => {
+            let mut buffered_cols: Vec<ArrayRef> =
+                Vec::with_capacity(buffered_indices.len());
+
+            let file = BufReader::new(File::open(spill_file.path())?);
+            let reader = FileReader::try_new(file, None)?;
+
+            for batch in reader {
+                batch?.columns().iter().for_each(|column| {
+                    buffered_cols.extend(take(column, &buffered_indices, None))
+                });
+            }
+
+            Ok(buffered_cols)
+        }
+        // Invalid combination
+        _ => internal_err!("Buffered batch spill status is in the inconsistent state."),
     }
 }
 
@@ -3055,12 +3055,35 @@ mod tests {
             )?;
 
             let stream = join.execute(0, task_ctx)?;
-            let _ = common::collect(stream).await.unwrap();
+            let spilled_join_result = common::collect(stream).await.unwrap();
 
             assert!(join.metrics().is_some());
             assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
             assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
             assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
+
+            // Run the test with no spill configuration as
+            let task_ctx_no_spill =
+                TaskContext::default().with_session_config(session_config.clone());
+            let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
+
+            let join = join_with_options(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                join_type,
+                sort_options.clone(),
+                false,
+            )?;
+            let stream = join.execute(0, task_ctx_no_spill)?;
+            let no_spilled_join_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
+            assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
+            assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+            // Compare spilled and non spilled data to check spill logic doesn't corrupt the data
+            assert_eq!(spilled_join_result, no_spilled_join_result);
         }
 
         Ok(())
@@ -3136,11 +3159,34 @@ mod tests {
             )?;
 
             let stream = join.execute(0, task_ctx)?;
-            let _ = common::collect(stream).await.unwrap();
+            let spilled_join_result = common::collect(stream).await.unwrap();
             assert!(join.metrics().is_some());
             assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
             assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
             assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
+
+            // Run the test with no spill configuration as
+            let task_ctx_no_spill =
+                TaskContext::default().with_session_config(session_config.clone());
+            let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
+
+            let join = join_with_options(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                join_type,
+                sort_options.clone(),
+                false,
+            )?;
+            let stream = join.execute(0, task_ctx_no_spill)?;
+            let no_spilled_join_result = common::collect(stream).await.unwrap();
+
+            assert!(join.metrics().is_some());
+            assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
+            assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
+            assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+            // Compare spilled and non spilled data to check spill logic doesn't corrupt the data
+            assert_eq!(spilled_join_result, no_spilled_join_result);
         }
 
         Ok(())

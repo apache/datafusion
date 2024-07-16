@@ -222,11 +222,13 @@ impl MemoryReservation {
 
     /// Tries to free `capacity` bytes from this reservation
     /// if `capacity` does not exceed [`Self::size`]
-    pub fn try_shrink(&mut self, capacity: usize) -> Result<()> {
+    /// Returns new reservation size
+    /// or error if shrinking capacity is more than allocated size
+    pub fn try_shrink(&mut self, capacity: usize) -> Result<usize> {
         if let Some(new_size) = self.size.checked_sub(capacity) {
             self.registration.pool.shrink(self, capacity);
             self.size = new_size;
-            Ok(())
+            Ok(new_size)
         } else {
             internal_err!(
                 "Cannot free the capacity {capacity} out of allocated size {}",
