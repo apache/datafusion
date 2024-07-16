@@ -169,8 +169,9 @@ pub trait ExprPlanner: Send + Sync {
         Ok(PlannerResult::Original(args))
     }
 
-    /// Plans a field expression.
-    /// FIXME: Add documentation
+    /// Plans expression to get an index field. Indexed field is only valid for `List`, `Struct`, `Map` or `Null`.
+    /// eg `expr["name"]`
+    ///
     /// Returns origin expression arguments if not possible
     fn plan_get_field(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
