@@ -172,6 +172,7 @@ impl Unparser<'_> {
                         .iter()
                         .map(|expr| self.expr_to_sql(expr))
                         .collect::<Result<Vec<_>>>()?,
+                    vec![],
                 ));
             }
             Some(AggVariant::Window(window)) => {

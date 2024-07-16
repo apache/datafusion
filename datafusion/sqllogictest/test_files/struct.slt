@@ -24,7 +24,7 @@ CREATE TABLE values(
     a INT,
     b FLOAT,
     c VARCHAR,
-    n VARCHAR,
+    n VARCHAR
 ) AS VALUES
   (1, 1.1, 'a', NULL),
   (2, 2.2, 'b', NULL),

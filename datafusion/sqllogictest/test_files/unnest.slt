@@ -267,7 +267,7 @@ query error DataFusion error: Error during planning: unnest\(\) requires exactly
 select unnest();
 
 ## Unnest empty expression in from clause
-query error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+query error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
 select * from unnest();
 
 
@@ -496,7 +496,7 @@ select unnest(column1) from (select * from (values([1,2,3]), ([4,5,6])) limit 1 
 5
 6
 
-## FIXME: https://github.com/apache/datafusion/issues/11198 
+## FIXME: https://github.com/apache/datafusion/issues/11198
 query error DataFusion error: Error during planning: Projections require unique expression names but the expression "UNNEST\(Column\(Column \{ relation: Some\(Bare \{ table: "unnest_table" \}\), name: "column1" \}\)\)" at position 0 and "UNNEST\(Column\(Column \{ relation: Some\(Bare \{ table: "unnest_table" \}\), name: "column1" \}\)\)" at position 1 have the same name. Consider aliasing \("AS"\) one of them.
 select unnest(column1), unnest(column1) from unnest_table;
 
