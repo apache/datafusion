@@ -23,8 +23,8 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::common::plan_err;
 use datafusion::common::{
-    not_impl_datafusion_err, not_impl_err, plan_datafusion_err, substrait_datafusion_err,
-    substrait_err, DFSchema, DFSchemaRef,
+    not_impl_err, plan_datafusion_err, substrait_datafusion_err, substrait_err, DFSchema,
+    DFSchemaRef,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
@@ -1182,16 +1182,19 @@ pub async fn from_substrait_rex(
             };
             let fn_name = substrait_fun_name(fn_name);
 
-            // check udaf first, then built-in functions
-            let fun = match ctx.udaf(fn_name) {
-                Ok(udaf) => Ok(WindowFunctionDefinition::AggregateUDF(udaf)),
-                Err(_) => find_df_window_func(fn_name).ok_or_else(|| {
-                    not_impl_datafusion_err!(
-                        "Window function {} is not supported: function anchor = {:?}",
-                        fn_name,
-                        window.function_reference
-                    )
-                }),
+            // check udwf first, then udaf, then built-in window and aggregate functions
+            let fun = if let Ok(udwf) = ctx.udwf(fn_name) {
+                Ok(WindowFunctionDefinition::WindowUDF(udwf))
+            } else if let Ok(udaf) = ctx.udaf(fn_name) {
+                Ok(WindowFunctionDefinition::AggregateUDF(udaf))
+            } else if let Some(fun) = find_df_window_func(fn_name) {
+                Ok(fun)
+            } else {
+                not_impl_err!(
+                    "Window function {} is not supported: function anchor = {:?}",
+                    fn_name,
+                    window.function_reference
+                )
             }?;
 
             let order_by =
