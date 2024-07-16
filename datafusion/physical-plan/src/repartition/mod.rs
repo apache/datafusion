@@ -261,6 +261,7 @@ impl BatchPartitioner {
                     num_partitions: partitions,
                     hash_buffer,
                 } => {
+                    // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
                     let arrays = exprs
@@ -282,6 +283,11 @@ impl BatchPartitioner {
                             .append_value(index as u64);
                     }
 
+                    // Finished building index-arrays for output partitions
+                    timer.done();
+
+                    // Borrowing partitioner timer to prevent moving `self` to closure
+                    let partitioner_timer = &self.timer;
                     let it = indices
                         .into_iter()
                         .enumerate()
@@ -290,6 +296,9 @@ impl BatchPartitioner {
                             (!indices.is_empty()).then_some((partition, indices))
                         })
                         .map(move |(partition, indices)| {
+                            // Tracking time required for repartitioned batches construction
+                            let _timer = partitioner_timer.timer();
+
                             // Produce batches based on indices
                             let columns = batch
                                 .columns()
@@ -302,9 +311,6 @@ impl BatchPartitioner {
 
                             let batch =
                                 RecordBatch::try_new(batch.schema(), columns).unwrap();
-
-                            // bind timer so it drops w/ this iterator
-                            let _ = &timer;
 
                             Ok((partition, batch))
                         });

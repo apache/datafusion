@@ -656,12 +656,35 @@ impl<'a> ConstEvaluator<'a> {
                 } else {
                     // Non-ListArray
                     match ScalarValue::try_from_array(&a, 0) {
-                        Ok(s) => ConstSimplifyResult::Simplified(s),
+                        Ok(s) => {
+                            // TODO: support the optimization for `Map` type after support impl hash for it
+                            if matches!(&s, ScalarValue::Map(_)) {
+                                ConstSimplifyResult::SimplifyRuntimeError(
+                                    DataFusionError::NotImplemented("Const evaluate for Map type is still not supported".to_string()),
+                                    expr,
+                                )
+                            } else {
+                                ConstSimplifyResult::Simplified(s)
+                            }
+                        }
                         Err(err) => ConstSimplifyResult::SimplifyRuntimeError(err, expr),
                     }
                 }
             }
-            ColumnarValue::Scalar(s) => ConstSimplifyResult::Simplified(s),
+            ColumnarValue::Scalar(s) => {
+                // TODO: support the optimization for `Map` type after support impl hash for it
+                if matches!(&s, ScalarValue::Map(_)) {
+                    ConstSimplifyResult::SimplifyRuntimeError(
+                        DataFusionError::NotImplemented(
+                            "Const evaluate for Map type is still not supported"
+                                .to_string(),
+                        ),
+                        expr,
+                    )
+                } else {
+                    ConstSimplifyResult::Simplified(s)
+                }
+            }
         }
     }
 }
