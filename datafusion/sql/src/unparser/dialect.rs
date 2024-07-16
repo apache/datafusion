@@ -132,6 +132,7 @@ impl Default for CustomDialect {
 }
 
 impl CustomDialect {
+    // create a CustomDialect
     #[deprecated(note = "please use `CustomDialectBuilder` instead")]
     pub fn new(identifier_quote_style: Option<char>) -> Self {
         Self {
@@ -159,7 +160,19 @@ impl Dialect for CustomDialect {
     }
 }
 
-// create a CustomDialectBuilder
+/// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
+///
+///
+/// # Examples
+///
+/// Building a custom dialect with all default options set in CustomDialectBuilder::new()
+/// but with `use_timestamp_for_date64` overridden to `true`
+///
+/// ```
+/// let dialect = CustomDialectBuilder::new()
+///     .with_use_timestamp_for_date64(true)
+///     .build();
+/// ```
 pub struct CustomDialectBuilder {
     identifier_quote_style: Option<char>,
     supports_nulls_first_in_sort: bool,
@@ -192,11 +205,13 @@ impl CustomDialectBuilder {
         }
     }
 
+    /// Customize the dialect with a specific identifier quote style, e.g. '`', '"'
     pub fn with_identifier_quote_style(mut self, identifier_quote_style: char) -> Self {
         self.identifier_quote_style = Some(identifier_quote_style);
         self
     }
 
+    /// Customize the dialect to supports `NULLS FIRST` in `ORDER BY` clauses
     pub fn with_supports_nulls_first_in_sort(
         mut self,
         supports_nulls_first_in_sort: bool,
@@ -205,6 +220,7 @@ impl CustomDialectBuilder {
         self
     }
 
+    /// Customize the dialect to uses TIMESTAMP when casting Date64 rather than DATETIME
     pub fn with_use_timestamp_for_date64(
         mut self,
         use_timestamp_for_date64: bool,
@@ -213,6 +229,7 @@ impl CustomDialectBuilder {
         self
     }
 
+    /// Customize the dialect with a specific interval style listed in `IntervalStyle`
     pub fn with_interval_style(mut self, interval_style: IntervalStyle) -> Self {
         self.interval_style = interval_style;
         self
