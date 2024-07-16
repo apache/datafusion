@@ -54,7 +54,7 @@ pub struct BinaryExpr {
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
-    /// Only used when evaluating literal regex expressions. Example regex expression: c1 ~ '^a' 
+    /// Only used when evaluating literal regex expressions. Example regex expression: c1 ~ '^a'
     /// It's helpful saving time of compiling literal pattern string for each execution.
     precompiled_regexp: Option<regex::Regex>,
 }
@@ -102,37 +102,32 @@ impl BinaryExpr {
         &self.op
     }
 
-    /// Get pre-compiled regexp 
-    fn precompile_regexp_pattern(op: &Operator, lit: &Arc<dyn PhysicalExpr>) -> Option<regex::Regex> {
+    /// Get pre-compiled regexp
+    fn precompile_regexp_pattern(
+        op: &Operator,
+        lit: &Arc<dyn PhysicalExpr>,
+    ) -> Option<regex::Regex> {
         match op {
-            Operator::RegexMatch | 
-            Operator::RegexNotMatch |
-            Operator::RegexIMatch | 
-            Operator::RegexNotIMatch => {
-                lit
+            Operator::RegexMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotIMatch => lit
                 .as_any()
                 .downcast_ref::<Literal>()
-                .and_then(|pattern| {
-                    match pattern.value() {
-                        ScalarValue::Utf8(pattern)|
-                        ScalarValue::LargeUtf8(pattern)=> {
-                            pattern
-                            .as_ref()
-                            .and_then(|p| {
-                                let string_value = match op {
-                                    Operator::RegexIMatch|
-                                    Operator::RegexNotIMatch => {
+                .and_then(|pattern| match pattern.value() {
+                    ScalarValue::Utf8(pattern) | ScalarValue::LargeUtf8(pattern) => {
+                        pattern.as_ref().and_then(|p| {
+                            let string_value = match op {
+                                Operator::RegexIMatch | Operator::RegexNotIMatch => {
                                     vec!["(?i)", p.as_str()].join("")
-                                    },
-                                    _ => p.clone(),
-                                };
-                                Some(regex::Regex::new(string_value.as_str()).unwrap())
-                            })
-                        },
-                        _ => None
+                                }
+                                _ => p.clone(),
+                            };
+                            Some(regex::Regex::new(string_value.as_str()).unwrap())
+                        })
                     }
-                })
-            },
+                    _ => None,
+                }),
             _ => None,
         }
     }
@@ -4191,13 +4186,13 @@ mod tests {
 
     macro_rules! test_regex_match_scalar {
         (
-            $A_ARRAY:ident, 
-            $A_TYPE:expr, 
-            $A_VEC:expr, 
-            $B_SCALAR:expr, 
-            $OP:expr, 
-            $C_ARRAY:ident, 
-            $C_TYPE:expr, 
+            $A_ARRAY:ident,
+            $A_TYPE:expr,
+            $A_VEC:expr,
+            $B_SCALAR:expr,
+            $OP:expr,
+            $C_ARRAY:ident,
+            $C_TYPE:expr,
             $VEC:expr,
         ) => {{
             let schema = Schema::new(vec![
