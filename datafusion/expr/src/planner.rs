@@ -168,6 +168,13 @@ pub trait ExprPlanner: Send + Sync {
     fn plan_overlay(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
+
+    /// Plans a  multi-part identifier, e.g. `table_alias.column` or `schema.table.col`
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_get_field(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
 }
 
 /// An operator with two arguments to plan

@@ -15,14 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::Field;
+use sqlparser::ast::{Expr as SQLExpr, Ident};
+
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, Column, DFSchema, DataFusionError,
+    Column, DataFusionError, DFSchema, internal_err, not_impl_err, plan_datafusion_err,
     Result, ScalarValue, TableReference,
 };
-use datafusion_expr::{expr::ScalarFunction, lit, Case, Expr};
-use sqlparser::ast::{Expr as SQLExpr, Ident};
+use datafusion_expr::{Case, Expr, lit};
+use datafusion_expr::planner::PlannerResult;
+
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_identifier_to_expr(
@@ -135,16 +138,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let nested_name = nested_names[0].to_string();
 
                     let col = Expr::Column(Column::from((qualifier, field)));
-                    if let Some(udf) =
-                        self.context_provider.get_function_meta("get_field")
-                    {
-                        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                            udf,
-                            vec![col, lit(ScalarValue::from(nested_name))],
-                        )))
-                    } else {
-                        internal_err!("get_field not found")
+                    let mut get_field_args =
+                        vec![col, lit(ScalarValue::from(nested_name))];
+                    for planner in self.planners.iter() {
+                        match planner.plan_get_field(get_field_args)? {
+                            PlannerResult::Planned(expr) => return Ok(expr),
+                            PlannerResult::Original(args) => get_field_args = args,
+                        }
                     }
+                    not_impl_err!(
+                        "GetField not supported by ExprPlanner: {get_field_args:?}"
+                    )
                 }
                 // found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {

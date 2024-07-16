@@ -62,4 +62,10 @@ impl ExprPlanner for CoreFunctionPlanner {
             ScalarFunction::new_udf(crate::string::overlay(), args),
         )))
     }
+
+    fn plan_get_field(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::core::get_field(), args),
+        )))
+    }
 }
