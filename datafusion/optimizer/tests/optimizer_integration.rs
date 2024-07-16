@@ -25,6 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
+use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_optimizer::analyzer::Analyzer;
@@ -344,7 +345,8 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         .with_udaf(sum_udaf())
         .with_udaf(count_udaf())
         .with_udaf(avg_udaf());
-    let sql_to_rel = SqlToRel::new(&context_provider);
+    let sql_to_rel = SqlToRel::new(&context_provider)
+        .with_user_defined_planner(Arc::new(CoreFunctionPlanner::default()));
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     let config = OptimizerContext::new().with_skip_failing_rules(false);

@@ -18,6 +18,7 @@
 use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::TimeUnit::Nanosecond;
@@ -37,6 +38,7 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
+use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf,
 };
@@ -2696,7 +2698,8 @@ fn logical_plan_with_dialect_and_options(
         .with_udaf(avg_udaf())
         .with_udaf(grouping_udaf());
 
-    let planner = SqlToRel::new_with_options(&context, options);
+    let planner = SqlToRel::new_with_options(&context, options)
+        .with_user_defined_planner(Arc::new(CoreFunctionPlanner::default()));
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
     planner.statement_to_plan(ast.pop_front().unwrap())

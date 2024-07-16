@@ -20,10 +20,10 @@ use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, Column, DFSchema, DataFusionError,
-    Result, ScalarValue, TableReference,
+    Result, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::{lit, Case, Expr};
+use datafusion_expr::{Case, Expr};
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
@@ -127,32 +127,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let search_result = search_dfschema(&ids, schema);
             match search_result {
                 // found matching field with spare identifier(s) for nested field(s) in structure
-                Some((field, qualifier, nested_names)) if !nested_names.is_empty() => {
-                    // TODO: remove when can support multiple nested identifiers
-                    if nested_names.len() > 1 {
-                        return not_impl_err!(
-                            "Nested identifiers not yet supported for column {}",
-                            Column::from((qualifier, field)).quoted_flat_name()
-                        );
-                    }
-                    let nested_name = nested_names[0].to_string();
-
-                    let col = Expr::Column(Column::from((qualifier, field)));
-                    let mut get_field_args =
-                        vec![col, lit(ScalarValue::from(nested_name))];
+                Some((field, qualifier, nested_names)) => {
                     for planner in self.planners.iter() {
-                        match planner.plan_get_field(get_field_args)? {
+                        match planner.plan_compound_identifier(
+                            field,
+                            qualifier,
+                            nested_names,
+                        )? {
                             PlannerResult::Planned(expr) => return Ok(expr),
-                            PlannerResult::Original(args) => get_field_args = args,
+                            PlannerResult::Original(_args) => {}
                         }
                     }
-                    not_impl_err!(
-                        "GetField not supported by ExprPlanner: {get_field_args:?}"
-                    )
-                }
-                // found matching field with no spare identifier(s)
-                Some((field, qualifier, _nested_names)) => {
-                    Ok(Expr::Column(Column::from((qualifier, field))))
+                    not_impl_err!("GetField not supported by ExprPlanner")
                 }
                 None => {
                     // return default where use all identifiers to not have a nested field

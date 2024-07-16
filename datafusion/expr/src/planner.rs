@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
@@ -169,12 +169,19 @@ pub trait ExprPlanner: Send + Sync {
         Ok(PlannerResult::Original(args))
     }
 
-    /// Plans expression to get an index field. Indexed field is only valid for `List`, `Struct`, `Map` or `Null`.
-    /// eg `expr["name"]`
-    ///
-    /// Returns origin expression arguments if not possible
     fn plan_get_field(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
+    }
+    /// Plans compound identifier
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_compound_identifier(
+        &self,
+        _filed: &Field,
+        _qualifier: Option<&TableReference>,
+        _nested_names: &[String],
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(vec![]))
     }
 }
 

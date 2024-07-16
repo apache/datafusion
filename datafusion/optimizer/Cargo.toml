@@ -45,6 +45,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
