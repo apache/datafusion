@@ -19,11 +19,11 @@ use arrow_schema::Field;
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 use datafusion_common::{
-    Column, DataFusionError, DFSchema, internal_err, not_impl_err, plan_datafusion_err,
+    internal_err, not_impl_err, plan_datafusion_err, Column, DFSchema, DataFusionError,
     Result, ScalarValue, TableReference,
 };
-use datafusion_expr::{Case, Expr, lit};
 use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::{lit, Case, Expr};
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
