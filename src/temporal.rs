@@ -38,19 +38,19 @@ use crate::kernels::temporal::{
 };
 
 #[derive(Debug, Hash)]
-pub struct HourExec {
+pub struct HourExpr {
     /// An array with DataType::Timestamp(TimeUnit::Microsecond, None)
     child: Arc<dyn PhysicalExpr>,
     timezone: String,
 }
 
-impl HourExec {
+impl HourExpr {
     pub fn new(child: Arc<dyn PhysicalExpr>, timezone: String) -> Self {
-        HourExec { child, timezone }
+        HourExpr { child, timezone }
     }
 }
 
-impl Display for HourExec {
+impl Display for HourExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -60,7 +60,7 @@ impl Display for HourExec {
     }
 }
 
-impl PartialEq<dyn Any> for HourExec {
+impl PartialEq<dyn Any> for HourExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
@@ -69,7 +69,7 @@ impl PartialEq<dyn Any> for HourExec {
     }
 }
 
-impl PhysicalExpr for HourExec {
+impl PhysicalExpr for HourExpr {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -117,7 +117,7 @@ impl PhysicalExpr for HourExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-        Ok(Arc::new(HourExec::new(
+        Ok(Arc::new(HourExpr::new(
             children[0].clone(),
             self.timezone.clone(),
         )))
@@ -132,19 +132,19 @@ impl PhysicalExpr for HourExec {
 }
 
 #[derive(Debug, Hash)]
-pub struct MinuteExec {
+pub struct MinuteExpr {
     /// An array with DataType::Timestamp(TimeUnit::Microsecond, None)
     child: Arc<dyn PhysicalExpr>,
     timezone: String,
 }
 
-impl MinuteExec {
+impl MinuteExpr {
     pub fn new(child: Arc<dyn PhysicalExpr>, timezone: String) -> Self {
-        MinuteExec { child, timezone }
+        MinuteExpr { child, timezone }
     }
 }
 
-impl Display for MinuteExec {
+impl Display for MinuteExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -154,7 +154,7 @@ impl Display for MinuteExec {
     }
 }
 
-impl PartialEq<dyn Any> for MinuteExec {
+impl PartialEq<dyn Any> for MinuteExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
@@ -163,7 +163,7 @@ impl PartialEq<dyn Any> for MinuteExec {
     }
 }
 
-impl PhysicalExpr for MinuteExec {
+impl PhysicalExpr for MinuteExpr {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -211,7 +211,7 @@ impl PhysicalExpr for MinuteExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-        Ok(Arc::new(MinuteExec::new(
+        Ok(Arc::new(MinuteExpr::new(
             children[0].clone(),
             self.timezone.clone(),
         )))
@@ -226,19 +226,19 @@ impl PhysicalExpr for MinuteExec {
 }
 
 #[derive(Debug, Hash)]
-pub struct SecondExec {
+pub struct SecondExpr {
     /// An array with DataType::Timestamp(TimeUnit::Microsecond, None)
     child: Arc<dyn PhysicalExpr>,
     timezone: String,
 }
 
-impl SecondExec {
+impl SecondExpr {
     pub fn new(child: Arc<dyn PhysicalExpr>, timezone: String) -> Self {
-        SecondExec { child, timezone }
+        SecondExpr { child, timezone }
     }
 }
 
-impl Display for SecondExec {
+impl Display for SecondExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -248,7 +248,7 @@ impl Display for SecondExec {
     }
 }
 
-impl PartialEq<dyn Any> for SecondExec {
+impl PartialEq<dyn Any> for SecondExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
@@ -257,7 +257,7 @@ impl PartialEq<dyn Any> for SecondExec {
     }
 }
 
-impl PhysicalExpr for SecondExec {
+impl PhysicalExpr for SecondExpr {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -305,7 +305,7 @@ impl PhysicalExpr for SecondExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-        Ok(Arc::new(SecondExec::new(
+        Ok(Arc::new(SecondExpr::new(
             children[0].clone(),
             self.timezone.clone(),
         )))
@@ -320,20 +320,20 @@ impl PhysicalExpr for SecondExec {
 }
 
 #[derive(Debug, Hash)]
-pub struct DateTruncExec {
+pub struct DateTruncExpr {
     /// An array with DataType::Date32
     child: Arc<dyn PhysicalExpr>,
     /// Scalar UTF8 string matching the valid values in Spark SQL: https://spark.apache.org/docs/latest/api/sql/index.html#trunc
     format: Arc<dyn PhysicalExpr>,
 }
 
-impl DateTruncExec {
+impl DateTruncExpr {
     pub fn new(child: Arc<dyn PhysicalExpr>, format: Arc<dyn PhysicalExpr>) -> Self {
-        DateTruncExec { child, format }
+        DateTruncExpr { child, format }
     }
 }
 
-impl Display for DateTruncExec {
+impl Display for DateTruncExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -343,7 +343,7 @@ impl Display for DateTruncExec {
     }
 }
 
-impl PartialEq<dyn Any> for DateTruncExec {
+impl PartialEq<dyn Any> for DateTruncExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
@@ -352,7 +352,7 @@ impl PartialEq<dyn Any> for DateTruncExec {
     }
 }
 
-impl PhysicalExpr for DateTruncExec {
+impl PhysicalExpr for DateTruncExpr {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -392,7 +392,7 @@ impl PhysicalExpr for DateTruncExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-        Ok(Arc::new(DateTruncExec::new(
+        Ok(Arc::new(DateTruncExpr::new(
             children[0].clone(),
             self.format.clone(),
         )))
@@ -407,7 +407,7 @@ impl PhysicalExpr for DateTruncExec {
 }
 
 #[derive(Debug, Hash)]
-pub struct TimestampTruncExec {
+pub struct TimestampTruncExpr {
     /// An array with DataType::Timestamp(TimeUnit::Microsecond, None)
     child: Arc<dyn PhysicalExpr>,
     /// Scalar UTF8 string matching the valid values in Spark SQL: https://spark.apache.org/docs/latest/api/sql/index.html#date_trunc
@@ -421,13 +421,13 @@ pub struct TimestampTruncExec {
     timezone: String,
 }
 
-impl TimestampTruncExec {
+impl TimestampTruncExpr {
     pub fn new(
         child: Arc<dyn PhysicalExpr>,
         format: Arc<dyn PhysicalExpr>,
         timezone: String,
     ) -> Self {
-        TimestampTruncExec {
+        TimestampTruncExpr {
             child,
             format,
             timezone,
@@ -435,7 +435,7 @@ impl TimestampTruncExec {
     }
 }
 
-impl Display for TimestampTruncExec {
+impl Display for TimestampTruncExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -445,7 +445,7 @@ impl Display for TimestampTruncExec {
     }
 }
 
-impl PartialEq<dyn Any> for TimestampTruncExec {
+impl PartialEq<dyn Any> for TimestampTruncExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
@@ -458,7 +458,7 @@ impl PartialEq<dyn Any> for TimestampTruncExec {
     }
 }
 
-impl PhysicalExpr for TimestampTruncExec {
+impl PhysicalExpr for TimestampTruncExpr {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -517,7 +517,7 @@ impl PhysicalExpr for TimestampTruncExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-        Ok(Arc::new(TimestampTruncExec::new(
+        Ok(Arc::new(TimestampTruncExpr::new(
             children[0].clone(),
             self.format.clone(),
             self.timezone.clone(),
