@@ -283,6 +283,11 @@ impl AggregateFunctionExpr {
     pub fn is_distinct(&self) -> bool {
         self.is_distinct
     }
+
+    /// Return if the aggregation ignores nulls
+    pub fn ignore_nulls(&self) -> bool {
+        self.ignore_nulls
+    }
 }
 
 impl AggregateExpr for AggregateFunctionExpr {

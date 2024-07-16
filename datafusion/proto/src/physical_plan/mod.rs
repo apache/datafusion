@@ -61,7 +61,7 @@ use datafusion::physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_expr::ScalarUDF;
+use datafusion_expr::{AggregateUDF, ScalarUDF};
 
 use crate::common::{byte_to_string, str_to_byte};
 use crate::convert_required;
@@ -491,19 +491,22 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                                 &ordering_req,
                                                 &physical_schema,
                                                 name.to_string(),
-                                                false,
+                                                agg_node.ignore_nulls,
                                             )
                                         }
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
-                                            let agg_udf = registry.udaf(udaf_name)?;
+                                            let agg_udf = match &agg_node.fun_definition {
+                                                Some(buf) => extension_codec.try_decode_udaf(udaf_name, buf)?,
+                                                None => registry.udaf(udaf_name)?
+                                            };
+
                                             // TODO: 'logical_exprs' is not supported for UDAF yet.
                                             // approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
                                             let logical_exprs = &[];
                                             // TODO: `order by` is not supported for UDAF yet
                                             let sort_exprs = &[];
                                             let ordering_req = &[];
-                                            let ignore_nulls = false;
-                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, logical_exprs, sort_exprs, ordering_req, &physical_schema, name, ignore_nulls, false)
+                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, logical_exprs, sort_exprs, ordering_req, &physical_schema, name, agg_node.ignore_nulls, agg_node.distinct)
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {
@@ -2033,6 +2036,16 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
+    }
+
+    fn try_decode_udaf(&self, name: &str, _buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        not_impl_err!(
+            "PhysicalExtensionCodec is not provided for aggregate function {name}"
+        )
+    }
+
+    fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
     }
 }
 
