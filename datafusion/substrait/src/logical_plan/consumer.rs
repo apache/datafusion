@@ -65,7 +65,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
 use substrait::proto::expression::literal::user_defined::Val;
-use substrait::proto::expression::literal::IntervalDayToSecond;
+use substrait::proto::expression::literal::{IntervalDayToSecond, IntervalYearToMonth};
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
@@ -1414,7 +1414,7 @@ fn from_substrait_type(
                 })?;
                 let field = Arc::new(Field::new_list_field(
                     from_substrait_type(inner_type, dfs_names, name_idx)?,
-                    // We ignore Substrait's nullability here to match to_substrait_literal 
+                    // We ignore Substrait's nullability here to match to_substrait_literal
                     // which always creates nullable lists
                     true,
                 ));
@@ -1445,12 +1445,15 @@ fn from_substrait_type(
                 ));
                 match map.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
-                        Ok(DataType::Map(Arc::new(Field::new_struct(
-                            "entries",
-                            [key_field, value_field],
-                            false, // The inner map field is always non-nullable (Arrow #1697),
-                        )), false))
-                    },
+                        Ok(DataType::Map(
+                            Arc::new(Field::new_struct(
+                                "entries",
+                                [key_field, value_field],
+                                false, // The inner map field is always non-nullable (Arrow #1697),
+                            )),
+                            false,
+                        ))
+                    }
                     v => not_impl_err!(
                         "Unsupported Substrait type variation {v} of type {s_kind:?}"
                     )?,
@@ -1467,14 +1470,33 @@ fn from_substrait_type(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
+            r#type::Kind::IntervalYear(i) => match i.type_variation_reference {
+                DEFAULT_TYPE_VARIATION_REF => {
+                    Ok(DataType::Interval(IntervalUnit::YearMonth))
+                }
+                v => not_impl_err!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ),
+            },
+            r#type::Kind::IntervalDay(i) => match i.type_variation_reference {
+                DEFAULT_TYPE_VARIATION_REF => {
+                    Ok(DataType::Interval(IntervalUnit::DayTime))
+                }
+                v => not_impl_err!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ),
+            },
             r#type::Kind::UserDefined(u) => {
                 match u.type_reference {
+                    // Kept for backwards compatibility, use IntervalYear instead
                     INTERVAL_YEAR_MONTH_TYPE_REF => {
                         Ok(DataType::Interval(IntervalUnit::YearMonth))
                     }
+                    // Kept for backwards compatibility, use IntervalDay instead
                     INTERVAL_DAY_TIME_TYPE_REF => {
                         Ok(DataType::Interval(IntervalUnit::DayTime))
                     }
+                    // Not supported yet by Substrait
                     INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
                         Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                     }
@@ -1484,7 +1506,7 @@ fn from_substrait_type(
                         u.type_variation_reference
                     ),
                 }
-            },
+            }
             r#type::Kind::Struct(s) => Ok(DataType::Struct(from_substrait_struct_type(
                 s, dfs_names, name_idx,
             )?)),
@@ -1753,11 +1775,16 @@ fn from_substrait_literal(
             seconds,
             microseconds,
         })) => {
+            // DF only supports millisecond precision, so we lose the micros here
             ScalarValue::new_interval_dt(*days, (seconds * 1000) + (microseconds / 1000))
+        }
+        Some(LiteralType::IntervalYearToMonth(IntervalYearToMonth { years, months })) => {
+            ScalarValue::new_interval_ym(*years, *months)
         }
         Some(LiteralType::FixedChar(c)) => ScalarValue::Utf8(Some(c.clone())),
         Some(LiteralType::UserDefined(user_defined)) => {
             match user_defined.type_reference {
+                // Kept for backwards compatibility, use IntervalYearToMonth instead
                 INTERVAL_YEAR_MONTH_TYPE_REF => {
                     let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
                         return substrait_err!("Interval year month value is empty");
@@ -1770,6 +1797,7 @@ fn from_substrait_literal(
                         })?;
                     ScalarValue::IntervalYearMonth(Some(i32::from_le_bytes(value_slice)))
                 }
+                // Kept for backwards compatibility, use IntervalDayToSecond instead
                 INTERVAL_DAY_TIME_TYPE_REF => {
                     let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
                         return substrait_err!("Interval day time value is empty");
