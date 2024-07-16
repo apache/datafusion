@@ -40,8 +40,8 @@ use super::metrics::ParquetFileMetrics;
 
 /// Filters a [`ParquetAccessPlan`] based on the [Parquet PageIndex], if present
 ///
-/// It does so by evaluating statistics from the ColumnIndex (stored in
-/// [`Index`]) and converting them to [`RowSelection`].
+/// It does so by evaluating statistics from the [`ParquetColumnIndex`] and
+/// [`ParquetOffsetIndex`] and converting them to [`RowSelection`].
 ///
 /// [Parquet PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 ///
