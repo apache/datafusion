@@ -169,8 +169,8 @@ pub trait ExprPlanner: Send + Sync {
         Ok(PlannerResult::Original(args))
     }
 
-    /// Plans a  multi-part identifier, e.g. `table_alias.column` or `schema.table.col`
-    ///
+    /// Plans a field expression.
+    /// FIXME: Add documentation
     /// Returns origin expression arguments if not possible
     fn plan_get_field(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
