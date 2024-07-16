@@ -648,6 +648,17 @@ NULL 12 3 0 3
 NULL 42 NULL 0 NULL
 NULL NULL NULL 0 NULL
 
+query II
+select unnest(column1), count(*) from unnest_table group by unnest(column1) order by unnest(column1) desc;
+----
+12 1
+6 1
+5 1
+4 1
+3 1
+2 1
+1 1
+
 ### group by recursive unnest list
 
 query ?

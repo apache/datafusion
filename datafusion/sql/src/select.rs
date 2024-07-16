@@ -382,6 +382,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    /// Try converting Unnest(Expr) of group by to Unnest/Projection
+    /// Return the new input and group_by_exprs of Aggregate.
     fn try_process_group_by_unnest(
         &self,
         agg: &Aggregate,
@@ -392,7 +394,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let group_by_exprs = &agg.group_expr;
         let aggr_exprs = &agg.aggr_expr;
 
-        // rewrite group_by_exprs
+        // process unnest of group_by_exprs, and input of agg will be rewritten
+        // for example:
+        //
+        // ```
+        // Aggregate: groupBy=[[UNNEST(Column(Column { relation: Some(Bare { table: "tab" }), name: "array_col" }))]], aggr=[[]]
+        //   TableScan: tab
+        // ```
+        //
+        // will be transformed into
+        //
+        // ```
+        // Aggregate: groupBy=[[unnest(tab.array_col)]], aggr=[[]]
+        //   Unnest: lists[unnest(tab.array_col)] structs[]
+        //     Projection: tab.array_col AS unnest(tab.array_col)
+        //       TableScan: tab
+        // ```
         let mut intermediate_plan = input.clone();
         let mut intermediate_select_exprs = group_by_exprs.to_vec();
 
@@ -441,12 +458,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
                 projection_exprs.extend(inner_projection_exprs);
 
-                let plan = LogicalPlanBuilder::from(intermediate_plan.clone())
+                intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(projection_exprs)?
                     .unnest_columns_with_options(columns, unnest_options)?
                     .build()?;
 
-                intermediate_plan = plan;
                 intermediate_select_exprs = outer_projection_exprs;
             }
         }
