@@ -979,12 +979,6 @@ mod tests {
     }
 
     impl ContextProvider for TestContextProvider {
-        fn get_expr_planners(
-            &self,
-        ) -> Vec<Arc<dyn datafusion_expr::planner::ExprPlanner>> {
-            vec![]
-        }
-
         fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
             match self.tables.get(name.table()) {
                 Some(table) => Ok(Arc::clone(table)),

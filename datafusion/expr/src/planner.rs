@@ -61,7 +61,9 @@ pub trait ContextProvider {
     }
 
     /// Getter for expr planners
-    fn get_expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>>;
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &[]
+    }
 
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
