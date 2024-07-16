@@ -210,7 +210,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             context_provider,
             options,
             normalizer: IdentNormalizer::new(normalize),
-            planners: vec![],
+            planners: context_provider.get_expr_planners(),
         }
     }
 

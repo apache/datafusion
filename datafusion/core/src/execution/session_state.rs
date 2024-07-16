@@ -516,7 +516,7 @@ impl SessionState {
             }
         }
 
-        let query = self.build_sql_query_planner(&provider);
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.statement_to_plan(statement)
     }
 
@@ -569,7 +569,7 @@ impl SessionState {
             tables: HashMap::new(),
         };
 
-        let query = self.build_sql_query_planner(&provider);
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
@@ -853,20 +853,6 @@ impl SessionState {
     ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
         let udtf = self.table_functions.remove(name);
         Ok(udtf.map(|x| x.function().clone()))
-    }
-
-    fn build_sql_query_planner<'a, S>(&self, provider: &'a S) -> SqlToRel<'a, S>
-    where
-        S: ContextProvider,
-    {
-        let mut query = SqlToRel::new_with_options(provider, self.get_parser_options());
-
-        // custom planners are registered first, so they're run first and take precedence over built-in planners
-        for planner in self.expr_planners.iter() {
-            query = query.with_user_defined_planner(planner.clone());
-        }
-
-        query
     }
 }
 
@@ -1603,6 +1589,10 @@ struct SessionContextProvider<'a> {
 }
 
 impl<'a> ContextProvider for SessionContextProvider<'a> {
+    fn get_expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
+        self.state.expr_planners()
+    }
+
     fn get_table_source(
         &self,
         name: TableReference,
