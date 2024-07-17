@@ -154,7 +154,7 @@ fn calculate_union_eq_properties(
         .iter()
         .flat_map(|child_eq| child_eq.oeq_class().iter().map(|item| item.to_vec()))
         .collect::<Vec<_>>();
-    let empty_ordering = vec![vec![]];
+    let empty_ordering = [vec![]];
     // Iterate over all the children:
     for child_eqs in &children_eqs[1..] {
         // Compute meet orderings of the current meets and the new ordering
@@ -165,6 +165,8 @@ fn calculate_union_eq_properties(
             let valid_meets = child_eqs
                 .oeq_class()
                 .iter()
+                // Consider empty ordering during the analysis. Since even if there is no ordering,
+                // if there are constant expression, we may still have a meet ordering for the output.
                 .chain(empty_ordering.iter())
                 .filter_map(|ordering| {
                     get_meet_ordering_union((*child_eqs).clone(), ordering, &meets[idx])
