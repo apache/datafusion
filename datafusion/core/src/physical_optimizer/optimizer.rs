@@ -28,11 +28,11 @@ use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAgg
 use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
 use crate::physical_optimizer::enforce_sorting::EnforceSorting;
 use crate::physical_optimizer::join_selection::JoinSelection;
+use crate::physical_optimizer::limit_pushdown::LimitPushdown;
 use crate::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::physical_optimizer::output_requirements::OutputRequirements;
 use crate::physical_optimizer::sanity_checker::SanityCheckPlan;
 use crate::physical_optimizer::topk_aggregation::TopKAggregation;
-use crate::physical_optimizer::limit_pushdown::LimitPushdown;
 use crate::{error::Result, physical_plan::ExecutionPlan};
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
@@ -137,7 +137,7 @@ impl PhysicalOptimizer {
             // message for invalid plans. It makes no changes to the
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
-            Arc::new(SanityCheckPlan::new())
+            Arc::new(SanityCheckPlan::new()),
         ];
 
         Self::with_rules(rules)

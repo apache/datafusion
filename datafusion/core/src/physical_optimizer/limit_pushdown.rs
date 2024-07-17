@@ -17,16 +17,16 @@
 
 //! This rule optimizes the amount of data transferred by pushing down limits
 
-use std::fmt::Debug;
-use std::sync::Arc;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::plan_datafusion_err;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_plan::ExecutionPlanProperties;
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::ExecutionPlan;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::plan_datafusion_err;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::ExecutionPlanProperties;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
@@ -89,15 +89,23 @@ impl GlobalOrLocal {
 
     fn with_child(&self, child: Arc<dyn ExecutionPlan>) -> Self {
         match self {
-            Self::Global(global) => Self::Global(GlobalLimitExec::new(child, global.skip(), global.fetch())),
+            Self::Global(global) => {
+                Self::Global(GlobalLimitExec::new(child, global.skip(), global.fetch()))
+            }
             Self::Local(local) => Self::Local(LocalLimitExec::new(child, local.fetch())),
         }
     }
 
     fn with_fetch(&self, fetch: usize) -> Self {
         match self {
-            Self::Global(global) => Self::Global(GlobalLimitExec::new(global.input().clone(), global.skip(), Some(fetch))),
-            Self::Local(local) => Self::Local(LocalLimitExec::new(local.input().clone(), fetch)),
+            Self::Global(global) => Self::Global(GlobalLimitExec::new(
+                global.input().clone(),
+                global.skip(),
+                Some(fetch),
+            )),
+            Self::Local(local) => {
+                Self::Local(LocalLimitExec::new(local.input().clone(), fetch))
+            }
         }
     }
 }
@@ -167,9 +175,7 @@ fn try_merge_limits(
     if let Some(parent_max) = parent_max {
         if child_fetch >= parent_max {
             // Child fetch is larger than or equal to parent max, so we can remove the child
-            Ok(global_or_local
-                .with_child(limit.input().clone())
-                .into())
+            Ok(global_or_local.with_child(limit.input().clone()).into())
         } else if child_fetch > parent_skip {
             // Child fetch is larger than parent skip, so we can trim the parent fetch
             Ok(global_or_local
@@ -182,9 +188,7 @@ fn try_merge_limits(
         }
     } else {
         // Parent's fetch is infinite, use child's
-        Ok(global_or_local
-            .with_fetch(child_fetch)
-            .into())
+        Ok(global_or_local.with_fetch(child_fetch).into())
     }
 }
 
@@ -207,9 +211,7 @@ fn try_push_down_limit(
                     fetch + global_or_local.skip(),
                 ));
                 let new_child = child.clone().with_new_children(vec![new_local_limit])?;
-                Ok(Some(global_or_local
-                    .with_child(new_child)
-                    .into()))
+                Ok(Some(global_or_local.with_child(new_child).into()))
             } else {
                 Ok(None)
             }
@@ -225,7 +227,10 @@ fn try_push_down_limit(
         }
     } else {
         // The LimitExec would not have an input, which should be impossible
-        Err(plan_datafusion_err!("{:#?} does not have a grandchild", global_or_local))
+        Err(plan_datafusion_err!(
+            "{:#?} does not have a grandchild",
+            global_or_local
+        ))
     }
 }
 
@@ -242,9 +247,7 @@ fn add_fetch_to_child(
 
     if let Some(child_with_fetch) = child.with_fetch(child_fetch) {
         if skip > 0 {
-            Some(global_or_local
-                .with_child(child_with_fetch)
-                .into())
+            Some(global_or_local.with_child(child_with_fetch).into())
         } else {
             Some(child_with_fetch)
         }
@@ -255,6 +258,7 @@ fn add_fetch_to_child(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_expr::Operator;
@@ -270,7 +274,6 @@ mod tests {
     use datafusion_physical_plan::projection::ProjectionExec;
     use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-    use super::*;
     struct DummyStreamPartition {
         schema: SchemaRef,
     }
@@ -284,7 +287,8 @@ mod tests {
     }
 
     #[test]
-    fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> Result<()> {
+    fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero(
+    ) -> Result<()> {
         let schema = create_schema();
         let streaming_table = streaming_table_exec(schema.clone())?;
         let global_limit = global_limit_exec(streaming_table, 0, Some(5));
@@ -308,7 +312,8 @@ mod tests {
     }
 
     #[test]
-    fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_limit_when_skip_is_nonzero() -> Result<()> {
+    fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_limit_when_skip_is_nonzero(
+    ) -> Result<()> {
         let schema = create_schema();
         let streaming_table = streaming_table_exec(schema.clone())?;
         let global_limit = global_limit_exec(streaming_table, 2, Some(5));
@@ -333,7 +338,8 @@ mod tests {
     }
 
     #[test]
-    fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limit() -> Result<()> {
+    fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limit(
+    ) -> Result<()> {
         let schema = create_schema();
         let streaming_table = streaming_table_exec(schema.clone())?;
         let repartition = repartition_exec(streaming_table)?;
@@ -402,9 +408,9 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
-    fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version() -> Result<()> {
+    fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version(
+    ) -> Result<()> {
         let schema = create_schema();
         let streaming_table = streaming_table_exec(schema.clone()).unwrap();
         let coalesce_batches = coalesce_batches_exec(streaming_table);
@@ -435,7 +441,8 @@ mod tests {
     }
 
     #[test]
-    fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions() -> Result<()> {
+    fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions(
+    ) -> Result<()> {
         let schema = create_schema();
         let streaming_table = streaming_table_exec(schema.clone())?;
         let repartition = repartition_exec(streaming_table)?;
@@ -490,15 +497,25 @@ mod tests {
         )?))
     }
 
-    fn global_limit_exec(input: Arc<dyn ExecutionPlan>, skip: usize, fetch: Option<usize>) -> Arc<dyn ExecutionPlan> {
+    fn global_limit_exec(
+        input: Arc<dyn ExecutionPlan>,
+        skip: usize,
+        fetch: Option<usize>,
+    ) -> Arc<dyn ExecutionPlan> {
         Arc::new(GlobalLimitExec::new(input, skip, fetch))
     }
 
-    fn local_limit_exec(input: Arc<dyn ExecutionPlan>, fetch: usize) -> Arc<dyn ExecutionPlan> {
+    fn local_limit_exec(
+        input: Arc<dyn ExecutionPlan>,
+        fetch: usize,
+    ) -> Arc<dyn ExecutionPlan> {
         Arc::new(LocalLimitExec::new(input, fetch))
     }
 
-    fn projection_exec(schema: SchemaRef, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    fn projection_exec(
+        schema: SchemaRef,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(ProjectionExec::try_new(
             vec![
                 (col("c1", schema.as_ref()).unwrap(), "c1".to_string()),
@@ -509,12 +526,16 @@ mod tests {
         )?))
     }
 
-    fn filter_exec(schema: SchemaRef, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    fn filter_exec(
+        schema: SchemaRef,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(FilterExec::try_new(
             Arc::new(BinaryExpr::new(
                 col("c3", schema.as_ref()).unwrap(),
                 Operator::Gt,
-                lit(0))),
+                lit(0),
+            )),
             input,
         )?))
     }
@@ -523,13 +544,15 @@ mod tests {
         Arc::new(CoalesceBatchesExec::new(input, 8192))
     }
 
-    fn coalesce_partitions_exec(local_limit: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(CoalescePartitionsExec::new(
-            local_limit
-        ))
+    fn coalesce_partitions_exec(
+        local_limit: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(CoalescePartitionsExec::new(local_limit))
     }
 
-    fn repartition_exec(streaming_table: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    fn repartition_exec(
+        streaming_table: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(RepartitionExec::try_new(
             streaming_table,
             Partitioning::RoundRobinBatch(8),

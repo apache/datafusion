@@ -68,7 +68,11 @@ impl CoalesceBatchesExec {
     }
 
     /// Create a new CoalesceBatchesExec with fetch
-    pub fn new_with_fetch(input: Arc<dyn ExecutionPlan>, target_batch_size: usize, fetch: Option<usize>) -> Self {
+    pub fn new_with_fetch(
+        input: Arc<dyn ExecutionPlan>,
+        target_batch_size: usize,
+        fetch: Option<usize>,
+    ) -> Self {
         let cache = Self::compute_properties(&input);
         Self {
             input,
@@ -113,8 +117,7 @@ impl DisplayAs for CoalesceBatchesExec {
                     write!(
                         f,
                         "CoalesceBatchesExec: target_batch_size={}, fetch={}",
-                        self.target_batch_size,
-                        fetch
+                        self.target_batch_size, fetch
                     )
                 } else {
                     write!(
@@ -403,7 +406,8 @@ mod tests {
         let partition = create_vec_batches(&schema, 10);
         let partitions = vec![partition];
 
-        let output_partitions = coalesce_batches(&schema, partitions, 21, Some(100)).await?;
+        let output_partitions =
+            coalesce_batches(&schema, partitions, 21, Some(100)).await?;
         assert_eq!(1, output_partitions.len());
 
         // input is 10 batches x 8 rows (80 rows) with fetch limit of 100
@@ -424,7 +428,8 @@ mod tests {
         let partition = create_vec_batches(&schema, 10);
         let partitions = vec![partition];
 
-        let output_partitions = coalesce_batches(&schema, partitions, 21, Some(50)).await?;
+        let output_partitions =
+            coalesce_batches(&schema, partitions, 21, Some(50)).await?;
         assert_eq!(1, output_partitions.len());
 
         // input is 10 batches x 8 rows (80 rows) with fetch limit of 50
@@ -438,12 +443,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_concat_batches_with_fetch_less_than_target_and_no_remaining_rows() -> Result<()> {
+    async fn test_concat_batches_with_fetch_less_than_target_and_no_remaining_rows(
+    ) -> Result<()> {
         let schema = test_schema();
         let partition = create_vec_batches(&schema, 10);
         let partitions = vec![partition];
 
-        let output_partitions = coalesce_batches(&schema, partitions, 21, Some(48)).await?;
+        let output_partitions =
+            coalesce_batches(&schema, partitions, 21, Some(48)).await?;
         assert_eq!(1, output_partitions.len());
 
         // input is 10 batches x 8 rows (80 rows) with fetch limit of 48
@@ -456,12 +463,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_concat_batches_with_fetch_smaller_less_target_batch_size() -> Result<()> {
+    async fn test_concat_batches_with_fetch_smaller_less_target_batch_size() -> Result<()>
+    {
         let schema = test_schema();
         let partition = create_vec_batches(&schema, 10);
         let partitions = vec![partition];
 
-        let output_partitions = coalesce_batches(&schema, partitions, 21, Some(10)).await?;
+        let output_partitions =
+            coalesce_batches(&schema, partitions, 21, Some(10)).await?;
         assert_eq!(1, output_partitions.len());
 
         // input is 10 batches x 8 rows (80 rows) with fetch limit of 10
@@ -486,8 +495,11 @@ mod tests {
         let exec = MemoryExec::try_new(&input_partitions, Arc::clone(schema), None)?;
         let exec =
             RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(1))?;
-        let exec: Arc<dyn ExecutionPlan> =
-            Arc::new(CoalesceBatchesExec::new_with_fetch(Arc::new(exec), target_batch_size, fetch));
+        let exec: Arc<dyn ExecutionPlan> = Arc::new(CoalesceBatchesExec::new_with_fetch(
+            Arc::new(exec),
+            target_batch_size,
+            fetch,
+        ));
 
         // execute and collect results
         let output_partition_count = exec.output_partitioning().partition_count();

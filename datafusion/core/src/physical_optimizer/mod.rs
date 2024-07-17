@@ -27,6 +27,7 @@ pub mod combine_partial_final_agg;
 pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod join_selection;
+pub mod limit_pushdown;
 pub mod limited_distinct_aggregation;
 pub mod optimizer;
 pub mod output_requirements;
@@ -37,7 +38,6 @@ pub mod sanity_checker;
 mod sort_pushdown;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;
-pub mod limit_pushdown;
 mod utils;
 
 #[cfg(test)]

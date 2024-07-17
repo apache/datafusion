@@ -266,7 +266,7 @@ impl ExecutionPlan for StreamingTableExec {
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(Arc::new(StreamingTableExec{
+        Some(Arc::new(StreamingTableExec {
             partitions: self.partitions.clone(),
             projection: self.projection.clone(),
             projected_schema: Arc::clone(&self.projected_schema),
