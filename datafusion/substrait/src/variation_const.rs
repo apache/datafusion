@@ -55,6 +55,7 @@ pub const DECIMAL_256_TYPE_VARIATION_REF: u32 = 1;
 /// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
 /// [`IntervalUnit::YearMonth`]: datafusion::arrow::datatypes::IntervalUnit::YearMonth
 /// [`ScalarValue::IntervalYearMonth`]: datafusion::common::ScalarValue::IntervalYearMonth
+#[deprecated]
 pub const INTERVAL_YEAR_MONTH_TYPE_REF: u32 = 1;
 
 /// For [`DataType::Interval`] with [`IntervalUnit::DayTime`].
@@ -68,6 +69,7 @@ pub const INTERVAL_YEAR_MONTH_TYPE_REF: u32 = 1;
 /// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
 /// [`IntervalUnit::DayTime`]: datafusion::arrow::datatypes::IntervalUnit::DayTime
 /// [`ScalarValue::IntervalDayTime`]: datafusion::common::ScalarValue::IntervalDayTime
+#[deprecated]
 pub const INTERVAL_DAY_TIME_TYPE_REF: u32 = 2;
 
 /// For [`DataType::Interval`] with [`IntervalUnit::MonthDayNano`].
@@ -82,21 +84,13 @@ pub const INTERVAL_DAY_TIME_TYPE_REF: u32 = 2;
 /// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
 /// [`IntervalUnit::MonthDayNano`]: datafusion::arrow::datatypes::IntervalUnit::MonthDayNano
 /// [`ScalarValue::IntervalMonthDayNano`]: datafusion::common::ScalarValue::IntervalMonthDayNano
+///
+///
+#[deprecated]
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;
 
-// For User Defined URLs
-/// For [`DataType::Interval`] with [`IntervalUnit::YearMonth`].
-///
-/// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
-/// [`IntervalUnit::YearMonth`]: datafusion::arrow::datatypes::IntervalUnit::YearMonth
-pub const INTERVAL_YEAR_MONTH_TYPE_URL: &str = "interval-year-month";
-/// For [`DataType::Interval`] with [`IntervalUnit::DayTime`].
-///
-/// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
-/// [`IntervalUnit::DayTime`]: datafusion::arrow::datatypes::IntervalUnit::DayTime
-pub const INTERVAL_DAY_TIME_TYPE_URL: &str = "interval-day-time";
 /// For [`DataType::Interval`] with [`IntervalUnit::MonthDayNano`].
 ///
 /// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
 /// [`IntervalUnit::MonthDayNano`]: datafusion::arrow::datatypes::IntervalUnit::MonthDayNano
-pub const INTERVAL_MONTH_DAY_NANO_TYPE_URL: &str = "interval-month-day-nano";
+pub const INTERVAL_MONTH_DAY_NANO_TYPE_NAME: &str = "interval-month-day-nano";

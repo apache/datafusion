@@ -21,11 +21,11 @@ use datafusion::arrow::array::GenericListArray;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
+use datafusion::common::plan_err;
 use datafusion::common::{
     not_impl_err, plan_datafusion_err, substrait_datafusion_err, substrait_err, DFSchema,
     DFSchemaRef,
 };
-use datafusion::common::{plan_err, DataFusionError};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
@@ -41,11 +41,15 @@ use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
+    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+};
+#[allow(deprecated)]
+use crate::variation_const::{
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
-    INTERVAL_MONTH_DAY_NANO_TYPE_URL, INTERVAL_YEAR_MONTH_TYPE_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
-    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    INTERVAL_YEAR_MONTH_TYPE_REF,
 };
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::logical_expr::expr::InList;
@@ -71,7 +75,6 @@ use substrait::proto::expression::literal::{
 };
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
-use substrait::proto::extensions::SimpleExtensionDeclaration;
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
@@ -82,7 +85,6 @@ use substrait::proto::{
         window_function::bound::Kind as BoundKind, window_function::Bound,
         window_function::BoundsType, MaskExpression, RexType,
     },
-    extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
     join_rel, plan_rel, r#type,
     read_rel::ReadType,
@@ -1492,8 +1494,8 @@ fn from_substrait_type(
             },
             r#type::Kind::UserDefined(u) => {
                 if let Some(name) = extensions.types.get(&u.type_reference) {
-                    match name {
-                        INTERVAL_MONTH_DAY_NANO_TYPE_URL => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+                    match name.as_ref() {
+                        INTERVAL_MONTH_DAY_NANO_TYPE_NAME => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
                             _ => not_impl_err!(
                                 "Unsupported Substrait user defined type with ref {} and variation {}",
                                 u.type_reference,
@@ -1502,6 +1504,7 @@ fn from_substrait_type(
                     }
                 } else {
                     // Kept for backwards compatibility, new plans should include the extension instead
+                    #[allow(deprecated)]
                     match u.type_reference {
                         // Kept for backwards compatibility, use IntervalYear instead
                         INTERVAL_YEAR_MONTH_TYPE_REF => {
@@ -1836,8 +1839,8 @@ fn from_substrait_literal(
                 };
 
             if let Some(name) = extensions.types.get(&user_defined.type_reference) {
-                match name {
-                    INTERVAL_MONTH_DAY_NANO_TYPE_URL => {
+                match name.as_ref() {
+                    INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
                         interval_month_day_nano(user_defined)?
                     }
                     _ => {
@@ -1850,6 +1853,7 @@ fn from_substrait_literal(
                 }
             } else {
                 // Kept for backwards compatibility - new plans should include extension instead
+                #[allow(deprecated)]
                 match user_defined.type_reference {
                     // Kept for backwards compatibility, use IntervalYearToMonth instead
                     INTERVAL_YEAR_MONTH_TYPE_REF => {

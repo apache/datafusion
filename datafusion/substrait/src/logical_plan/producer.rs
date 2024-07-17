@@ -16,7 +16,6 @@
 // under the License.
 
 use itertools::Itertools;
-use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -38,10 +37,10 @@ use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_URL,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
-    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
+    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::common::{
@@ -63,8 +62,6 @@ use substrait::proto::expression::literal::{
 };
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
-use substrait::proto::extensions::simple_extension_declaration::ExtensionType;
-use substrait::proto::extensions::SimpleExtensionDeclaration;
 use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::{CrossRel, ExchangeRel};
 use substrait::{
@@ -84,10 +81,6 @@ use substrait::{
             ScalarFunction, SingularOrList, Subquery,
             WindowFunction as SubstraitWindowFunction,
         },
-        extensions::{
-            self,
-            simple_extension_declaration::{ExtensionFunction, MappingType},
-        },
         function_argument::ArgType,
         join_rel, plan_rel, r#type,
         read_rel::{NamedTable, ReadType},
@@ -104,7 +97,7 @@ use substrait::{
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
 pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box<Plan>> {
-    let mut extensions = Extensions::new();
+    let mut extensions = Extensions::default();
     // Parse relation nodes
     // Generate PlanRel(s)
     // Note: Only 1 relation tree is currently supported
@@ -1464,7 +1457,7 @@ fn to_substrait_type(
                     Ok(substrait::proto::Type {
                         kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
                             type_reference: extensions.register_type(
-                                INTERVAL_MONTH_DAY_NANO_TYPE_URL.to_string(),
+                                INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string(),
                             ),
                             type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                             nullability,
@@ -1875,10 +1868,10 @@ fn to_substrait_literal(
             (
                 LiteralType::UserDefined(UserDefined {
                     type_reference: extensions
-                        .register_type(INTERVAL_MONTH_DAY_NANO_TYPE_URL.to_string()),
+                        .register_type(INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string()),
                     type_parameters: vec![],
                     val: Some(user_defined::Val::Value(ProtoAny {
-                        type_url: INTERVAL_MONTH_DAY_NANO_TYPE_URL.to_string(),
+                        type_url: INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string(),
                         value: bytes.to_vec().into(),
                     })),
                 }),
@@ -2193,7 +2186,7 @@ mod test {
     fn round_trip_literal(scalar: ScalarValue) -> Result<()> {
         println!("Checking round trip of {scalar:?}");
 
-        let mut extensions = Extensions::new();
+        let mut extensions = Extensions::default();
         let substrait_literal = to_substrait_literal(&scalar, &mut extensions)?;
         let roundtrip_scalar =
             from_substrait_literal_without_names(&substrait_literal, &extensions)?;
@@ -2266,7 +2259,7 @@ mod test {
     fn round_trip_type(dt: DataType) -> Result<()> {
         println!("Checking round trip of {dt:?}");
 
-        let mut extensions = Extensions::new();
+        let mut extensions = Extensions::default();
 
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
