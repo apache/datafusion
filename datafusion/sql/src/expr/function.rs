@@ -231,7 +231,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if name.eq("make_map") {
             let mut fn_args =
                 self.function_args_to_expr(args.clone(), schema, planner_context)?;
-            for planner in self.planners.iter() {
+            for planner in self.context_provider.get_expr_planners().iter() {
                 match planner.plan_make_map(fn_args)? {
                     PlannerResult::Planned(expr) => return Ok(expr),
                     PlannerResult::Original(args) => fn_args = args,
