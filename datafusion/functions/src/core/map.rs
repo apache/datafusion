@@ -27,6 +27,18 @@ use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
+/// Check if we can evaluate the expr to constant directly.
+///
+/// # Example
+/// ```sql
+/// SELECT make_map('type', 'test') from test
+/// ```
+/// We can evaluate the result of `make_map` directly.
+fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
+    args.iter()
+        .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
+}
+
 fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return exec_err!(
@@ -34,24 +46,31 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             args.len()
         );
     }
+
+    let can_evaluate_to_const = can_evaluate_to_const(args);
+
     let key = get_first_array_ref(&args[0])?;
     let value = get_first_array_ref(&args[1])?;
-    make_map_batch_internal(key, value)
+    make_map_batch_internal(key, value, can_evaluate_to_const)
 }
 
 fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
     match columnar_value {
         ColumnarValue::Scalar(value) => match value {
-            ScalarValue::List(array) => Ok(array.value(0).clone()),
-            ScalarValue::LargeList(array) => Ok(array.value(0).clone()),
-            ScalarValue::FixedSizeList(array) => Ok(array.value(0).clone()),
+            ScalarValue::List(array) => Ok(array.value(0)),
+            ScalarValue::LargeList(array) => Ok(array.value(0)),
+            ScalarValue::FixedSizeList(array) => Ok(array.value(0)),
             _ => exec_err!("Expected array, got {:?}", value),
         },
         ColumnarValue::Array(array) => exec_err!("Expected scalar, got {:?}", array),
     }
 }
 
-fn make_map_batch_internal(keys: ArrayRef, values: ArrayRef) -> Result<ColumnarValue> {
+fn make_map_batch_internal(
+    keys: ArrayRef,
+    values: ArrayRef,
+    can_evaluate_to_const: bool,
+) -> Result<ColumnarValue> {
     if keys.null_count() > 0 {
         return exec_err!("map key cannot be null");
     }
@@ -90,8 +109,13 @@ fn make_map_batch_internal(keys: ArrayRef, values: ArrayRef) -> Result<ColumnarV
         .add_buffer(entry_offsets_buffer)
         .add_child_data(entry_struct.to_data())
         .build()?;
+    let map_array = Arc::new(MapArray::from(map_data));
 
-    Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
+    Ok(if can_evaluate_to_const {
+        ColumnarValue::Scalar(ScalarValue::try_from_array(map_array.as_ref(), 0)?)
+    } else {
+        ColumnarValue::Array(map_array)
+    })
 }
 
 #[derive(Debug)]

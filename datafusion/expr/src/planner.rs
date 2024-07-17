@@ -60,6 +60,11 @@ pub trait ContextProvider {
         not_impl_err!("Recursive CTE is not implemented")
     }
 
+    /// Getter for expr planners
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &[]
+    }
+
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description

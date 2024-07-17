@@ -38,6 +38,7 @@ use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
@@ -459,13 +460,16 @@ impl TestCase {
         let runtime = RuntimeEnv::new(rt_config).unwrap();
 
         // Configure execution
-        let state = SessionState::new_with_config_rt(config, Arc::new(runtime));
-        let state = match scenario.rules() {
-            Some(rules) => state.with_physical_optimizer_rules(rules),
-            None => state,
+        let builder = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(Arc::new(runtime))
+            .with_default_features();
+        let builder = match scenario.rules() {
+            Some(rules) => builder.with_physical_optimizer_rules(rules),
+            None => builder,
         };
 
-        let ctx = SessionContext::new_with_state(state);
+        let ctx = SessionContext::new_with_state(builder.build());
         ctx.register_table("t", table).expect("registering table");
 
         let query = query.expect("Test error: query not specified");

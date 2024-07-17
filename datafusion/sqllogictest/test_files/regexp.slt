@@ -309,6 +309,16 @@ SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'x
 ----
 fooxx
 
+query TTT
+select
+    regexp_replace(col, NULL, 'c'),
+    regexp_replace(col, 'a', NULL),
+    regexp_replace(col, 'a', 'c', NULL)
+from (values ('a'), ('b')) as tbl(col);
+----
+NULL NULL NULL
+NULL NULL NULL
+
 # multiline string
 query B
 SELECT 'foo\nbar\nbaz' ~ 'bar';

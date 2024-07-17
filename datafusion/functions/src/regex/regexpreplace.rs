@@ -282,22 +282,23 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
 fn _regexp_replace_early_abort<T: OffsetSizeTrait>(
     input_array: &GenericStringArray<T>,
+    sz: usize,
 ) -> Result<ArrayRef> {
     // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
-    // are actually null, then the result will be an array of the same size but with nulls.
+    // are actually null, then the result will be an array of the same size as the first argument with all nulls.
     //
     // Also acts like an early abort mechanism when the input array is empty.
-    Ok(new_null_array(input_array.data_type(), input_array.len()))
+    Ok(new_null_array(input_array.data_type(), sz))
 }
 /// Get the first argument from the given string array.
 ///
 /// Note: If the array is empty or the first argument is null,
 /// then calls the given early abort function.
 macro_rules! fetch_string_arg {
-    ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident) => {{
+    ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident, $ARRAY_SIZE:expr) => {{
         let array = as_generic_string_array::<T>($ARG)?;
         if array.len() == 0 || array.is_null(0) {
-            return $EARLY_ABORT(array);
+            return $EARLY_ABORT(array, $ARRAY_SIZE);
         } else {
             array.value(0)
         }
@@ -313,12 +314,24 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
-    let pattern = fetch_string_arg!(&args[1], "pattern", T, _regexp_replace_early_abort);
-    let replacement =
-        fetch_string_arg!(&args[2], "replacement", T, _regexp_replace_early_abort);
+    let array_size = string_array.len();
+    let pattern = fetch_string_arg!(
+        &args[1],
+        "pattern",
+        T,
+        _regexp_replace_early_abort,
+        array_size
+    );
+    let replacement = fetch_string_arg!(
+        &args[2],
+        "replacement",
+        T,
+        _regexp_replace_early_abort,
+        array_size
+    );
     let flags = match args.len() {
         3 => None,
-        4 => Some(fetch_string_arg!(&args[3], "flags", T, _regexp_replace_early_abort)),
+        4 => Some(fetch_string_arg!(&args[3], "flags", T, _regexp_replace_early_abort, array_size)),
         other => {
             return exec_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
@@ -351,7 +364,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         let offsets = string_array.value_offsets();
         (offsets[string_array.len()] - offsets[0])
             .to_usize()
-            .unwrap()
+            .expect("Failed to convert usize")
     });
     let mut new_offsets = BufferBuilder::<T>::new(string_array.len() + 1);
     new_offsets.append(T::zero());

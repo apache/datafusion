@@ -214,3 +214,87 @@ SELECT map(column5, column6) FROM t;
 # {k1:1, k2:2}
 # {k3: 3}
 # {k5: 5}
+
+query ?
+SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', 30, 'OPTION', 29, 'GET', 27, 'PUT', 25, 'DELETE', 24) AS method_count from t;
+----
+{POST: 41, HEAD: 33, PATCH: 30, OPTION: 29, GET: 27, PUT: 25, DELETE: 24}
+{POST: 41, HEAD: 33, PATCH: 30, OPTION: 29, GET: 27, PUT: 25, DELETE: 24}
+{POST: 41, HEAD: 33, PATCH: 30, OPTION: 29, GET: 27, PUT: 25, DELETE: 24}
+
+query I
+SELECT MAKE_MAP('POST', 41, 'HEAD', 33)['POST']  from t;
+----
+41
+41
+41
+
+query ?
+SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', null) from t;
+----
+{POST: 41, HEAD: 33, PATCH: }
+{POST: 41, HEAD: 33, PATCH: }
+{POST: 41, HEAD: 33, PATCH: }
+
+query ?
+SELECT MAKE_MAP('POST', null, 'HEAD', 33, 'PATCH', null) from t;
+----
+{POST: , HEAD: 33, PATCH: }
+{POST: , HEAD: 33, PATCH: }
+{POST: , HEAD: 33, PATCH: }
+
+query ?
+SELECT MAKE_MAP(1, null, 2, 33, 3, null) from t;
+----
+{1: , 2: 33, 3: }
+{1: , 2: 33, 3: }
+{1: , 2: 33, 3: }
+
+query ?
+SELECT MAKE_MAP([1,2], ['a', 'b'], [3,4], ['b']) from t;
+----
+{[1, 2]: [a, b], [3, 4]: [b]}
+{[1, 2]: [a, b], [3, 4]: [b]}
+{[1, 2]: [a, b], [3, 4]: [b]}
+
+query ?
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, 30]) from t;
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+{POST: 41, HEAD: 33, PATCH: 30}
+{POST: 41, HEAD: 33, PATCH: 30}
+
+query ?
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]) from t;
+----
+{POST: 41, HEAD: 33, PATCH: }
+{POST: 41, HEAD: 33, PATCH: }
+{POST: 41, HEAD: 33, PATCH: }
+
+query ?
+SELECT MAP([[1,2], [3,4]], ['a', 'b']) from t;
+----
+{[1, 2]: a, [3, 4]: b}
+{[1, 2]: a, [3, 4]: b}
+{[1, 2]: a, [3, 4]: b}
+
+query ?
+SELECT MAP(make_array('POST', 'HEAD', 'PATCH'), make_array(41, 33, 30)) from t;
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+{POST: 41, HEAD: 33, PATCH: 30}
+{POST: 41, HEAD: 33, PATCH: 30}
+
+query ?
+SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'FixedSizeList(3, Utf8)'), arrow_cast(make_array(41, 33, 30), 'FixedSizeList(3, Int64)'))  from t;
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+{POST: 41, HEAD: 33, PATCH: 30}
+{POST: 41, HEAD: 33, PATCH: 30}
+
+query ?
+SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'LargeList(Utf8)'), arrow_cast(make_array(41, 33, 30), 'LargeList(Int64)')) from t;
+----
+{POST: 41, HEAD: 33, PATCH: 30}
+{POST: 41, HEAD: 33, PATCH: 30}
+{POST: 41, HEAD: 33, PATCH: 30}

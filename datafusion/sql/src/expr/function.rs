@@ -110,6 +110,7 @@ impl FunctionArgs {
             filter,
             mut null_treatment,
             within_group,
+            ..
         } = function;
 
         // Handle no argument form (aka `current_time`  as opposed to `current_time()`)

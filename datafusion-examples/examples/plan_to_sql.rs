@@ -19,7 +19,7 @@ use datafusion::error::Result;
 
 use datafusion::prelude::*;
 use datafusion::sql::unparser::expr_to_sql;
-use datafusion_sql::unparser::dialect::CustomDialect;
+use datafusion_sql::unparser::dialect::CustomDialectBuilder;
 use datafusion_sql::unparser::{plan_to_sql, Unparser};
 
 /// This example demonstrates the programmatic construction of SQL strings using
@@ -80,7 +80,9 @@ fn simple_expr_to_pretty_sql_demo() -> Result<()> {
 /// using a custom dialect and an explicit unparser
 fn simple_expr_to_sql_demo_escape_mysql_style() -> Result<()> {
     let expr = col("a").lt(lit(5)).or(col("a").eq(lit(8)));
-    let dialect = CustomDialect::new(Some('`'));
+    let dialect = CustomDialectBuilder::new()
+        .with_identifier_quote_style('`')
+        .build();
     let unparser = Unparser::new(&dialect);
     let sql = unparser.expr_to_sql(&expr)?.to_string();
     assert_eq!(sql, r#"((`a` < 5) OR (`a` = 8))"#);

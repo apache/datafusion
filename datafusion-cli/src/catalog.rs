@@ -29,6 +29,7 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+use datafusion::execution::session_state::SessionStateBuilder;
 
 use async_trait::async_trait;
 use dirs::home_dir;
@@ -162,6 +163,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
             .read()
             .clone();
+        let mut builder = SessionStateBuilder::from(state.clone());
         let optimized_name = substitute_tilde(name.to_owned());
         let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
         let scheme = table_url.scheme();
@@ -178,13 +180,18 @@ impl SchemaProvider for DynamicFileSchemaProvider {
                 // to any command options so the only choice is to use an empty collection
                 match scheme {
                     "s3" | "oss" | "cos" => {
-                        state = state.add_table_options_extension(AwsOptions::default());
+                        if let Some(table_options) = builder.table_options() {
+                            table_options.extensions.insert(AwsOptions::default())
+                        }
                     }
                     "gs" | "gcs" => {
-                        state = state.add_table_options_extension(GcpOptions::default())
+                        if let Some(table_options) = builder.table_options() {
+                            table_options.extensions.insert(GcpOptions::default())
+                        }
                     }
                     _ => {}
                 };
+                state = builder.build();
                 let store = get_object_store(
                     &state,
                     table_url.scheme(),
