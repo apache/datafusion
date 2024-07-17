@@ -21,11 +21,11 @@ use datafusion::arrow::array::GenericListArray;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
-use datafusion::common::plan_err;
 use datafusion::common::{
     not_impl_err, plan_datafusion_err, substrait_datafusion_err, substrait_err, DFSchema,
     DFSchemaRef,
 };
+use datafusion::common::{plan_err, DataFusionError};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
@@ -41,10 +41,10 @@ use crate::variation_const::{
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
-    INTERVAL_YEAR_MONTH_TYPE_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    INTERVAL_MONTH_DAY_NANO_TYPE_URL, INTERVAL_YEAR_MONTH_TYPE_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
 };
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::logical_expr::expr::InList;
@@ -65,7 +65,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
 use substrait::proto::expression::literal::user_defined::Val;
-use substrait::proto::expression::literal::{IntervalDayToSecond, IntervalYearToMonth};
+use substrait::proto::expression::literal::{
+    IntervalDayToSecond, IntervalYearToMonth, UserDefined,
+};
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
 use substrait::proto::extensions::SimpleExtensionDeclaration;
@@ -186,32 +188,36 @@ struct Extensions {
     pub type_variations: HashMap<u32, String>,
 }
 
-fn unpack_extensions(extensions: &Vec<SimpleExtensionDeclaration>) -> Result<Extensions> {
-    let mut functions = HashMap::new();
-    let mut types = HashMap::new();
-    let mut type_variations = HashMap::new();
+impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
+    type Error = DataFusionError;
 
-    for ext in extensions {
-        match &ext.mapping_type {
-            Some(MappingType::ExtensionFunction(ext_f)) => {
-                functions.insert(ext_f.function_anchor, ext_f.name.to_owned());
+    fn try_from(value: &Vec<SimpleExtensionDeclaration>) -> Result<Self> {
+        let mut functions = HashMap::new();
+        let mut types = HashMap::new();
+        let mut type_variations = HashMap::new();
+
+        for ext in value {
+            match &ext.mapping_type {
+                Some(MappingType::ExtensionFunction(ext_f)) => {
+                    functions.insert(ext_f.function_anchor, ext_f.name.to_owned());
+                }
+                Some(MappingType::ExtensionType(ext_t)) => {
+                    types.insert(ext_t.type_anchor, ext_t.name.to_owned());
+                }
+                Some(MappingType::ExtensionTypeVariation(ext_v)) => {
+                    type_variations
+                        .insert(ext_v.type_variation_anchor, ext_v.name.to_owned());
+                }
+                None => return plan_err!("Cannot parse empty extension"),
             }
-            Some(MappingType::ExtensionType(ext_t)) => {
-                types.insert(ext_t.type_anchor, ext_t.name.to_owned());
-            }
-            Some(MappingType::ExtensionTypeVariation(ext_v)) => {
-                type_variations
-                    .insert(ext_v.type_variation_anchor, ext_v.name.to_owned());
-            }
-            None => return plan_err!("Cannot parse empty extension"),
         }
-    }
 
-    Ok(Extensions {
-        functions,
-        types,
-        type_variations,
-    })
+        Ok(Extensions {
+            functions,
+            types,
+            type_variations,
+        })
+    }
 }
 
 /// Convert Substrait Plan to DataFusion LogicalPlan
@@ -220,7 +226,7 @@ pub async fn from_substrait_plan(
     plan: &Plan,
 ) -> Result<LogicalPlan> {
     // Register function extension
-    let extensions = unpack_extensions(&plan.extensions)?;
+    let extensions = Extensions::try_from(&plan.extensions)?;
     if !extensions.type_variations.is_empty() {
         return not_impl_err!("Type variation extensions are not supported");
     }
@@ -686,7 +692,7 @@ pub async fn from_substrait_rel(
                     substrait_datafusion_err!("No base schema provided for Virtual Table")
                 })?;
 
-                let schema = from_substrait_named_struct(base_schema)?;
+                let schema = from_substrait_named_struct(base_schema, extensions)?;
 
                 if vt.values.is_empty() {
                     return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -707,6 +713,7 @@ pub async fn from_substrait_rel(
                                 name_idx += 1; // top-level names are provided through schema
                                 Ok(Expr::Literal(from_substrait_literal(
                                     lit,
+                                    extensions,
                                     &base_schema.names,
                                     &mut name_idx,
                                 )?))
@@ -1181,7 +1188,7 @@ pub async fn from_substrait_rex(
             }
         }
         Some(RexType::Literal(lit)) => {
-            let scalar_value = from_substrait_literal_without_names(lit)?;
+            let scalar_value = from_substrait_literal_without_names(lit, extensions)?;
             Ok(Expr::Literal(scalar_value))
         }
         Some(RexType::Cast(cast)) => match cast.as_ref().r#type.as_ref() {
@@ -1195,7 +1202,7 @@ pub async fn from_substrait_rex(
                     )
                     .await?,
                 ),
-                from_substrait_type_without_names(output_type)?,
+                from_substrait_type_without_names(output_type, extensions)?,
             ))),
             None => substrait_err!("Cast expression without output type is not allowed"),
         },
@@ -1355,12 +1362,16 @@ pub async fn from_substrait_rex(
     }
 }
 
-pub(crate) fn from_substrait_type_without_names(dt: &Type) -> Result<DataType> {
-    from_substrait_type(dt, &[], &mut 0)
+pub(crate) fn from_substrait_type_without_names(
+    dt: &Type,
+    extensions: &Extensions,
+) -> Result<DataType> {
+    from_substrait_type(dt, extensions, &[], &mut 0)
 }
 
 fn from_substrait_type(
     dt: &Type,
+    extensions: &Extensions,
     dfs_names: &[String],
     name_idx: &mut usize,
 ) -> Result<DataType> {
@@ -1443,7 +1454,7 @@ fn from_substrait_type(
                     substrait_datafusion_err!("List type must have inner type")
                 })?;
                 let field = Arc::new(Field::new_list_field(
-                    from_substrait_type(inner_type, dfs_names, name_idx)?,
+                    from_substrait_type(inner_type, extensions, dfs_names, name_idx)?,
                     // We ignore Substrait's nullability here to match to_substrait_literal
                     // which always creates nullable lists
                     true,
@@ -1465,12 +1476,12 @@ fn from_substrait_type(
                 })?;
                 let key_field = Arc::new(Field::new(
                     "key",
-                    from_substrait_type(key_type, dfs_names, name_idx)?,
+                    from_substrait_type(key_type, extensions, dfs_names, name_idx)?,
                     false,
                 ));
                 let value_field = Arc::new(Field::new(
                     "value",
-                    from_substrait_type(value_type, dfs_names, name_idx)?,
+                    from_substrait_type(value_type, extensions, dfs_names, name_idx)?,
                     true,
                 ));
                 match map.type_variation_reference {
@@ -1517,28 +1528,40 @@ fn from_substrait_type(
                 ),
             },
             r#type::Kind::UserDefined(u) => {
-                match u.type_reference {
-                    // Kept for backwards compatibility, use IntervalYear instead
-                    INTERVAL_YEAR_MONTH_TYPE_REF => {
-                        Ok(DataType::Interval(IntervalUnit::YearMonth))
+                if let Some(name) = extensions.types.get(&u.type_reference) {
+                    match name {
+                        INTERVAL_MONTH_DAY_NANO_TYPE_URL => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+                            _ => not_impl_err!(
+                                "Unsupported Substrait user defined type with ref {} and variation {}",
+                                u.type_reference,
+                                u.type_variation_reference
+                            ),
                     }
-                    // Kept for backwards compatibility, use IntervalDay instead
-                    INTERVAL_DAY_TIME_TYPE_REF => {
-                        Ok(DataType::Interval(IntervalUnit::DayTime))
-                    }
-                    // Not supported yet by Substrait
-                    INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
-                        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
-                    }
-                    _ => not_impl_err!(
+                } else {
+                    // Kept for backwards compatibility, new plans should include the extension instead
+                    match u.type_reference {
+                        // Kept for backwards compatibility, use IntervalYear instead
+                        INTERVAL_YEAR_MONTH_TYPE_REF => {
+                            Ok(DataType::Interval(IntervalUnit::YearMonth))
+                        }
+                        // Kept for backwards compatibility, use IntervalDay instead
+                        INTERVAL_DAY_TIME_TYPE_REF => {
+                            Ok(DataType::Interval(IntervalUnit::DayTime))
+                        }
+                        // Not supported yet by Substrait
+                        INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
+                            Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+                        }
+                        _ => not_impl_err!(
                         "Unsupported Substrait user defined type with ref {} and variation {}",
                         u.type_reference,
                         u.type_variation_reference
                     ),
+                    }
                 }
             }
             r#type::Kind::Struct(s) => Ok(DataType::Struct(from_substrait_struct_type(
-                s, dfs_names, name_idx,
+                s, extensions, dfs_names, name_idx,
             )?)),
             r#type::Kind::Varchar(_) => Ok(DataType::Utf8),
             r#type::Kind::FixedChar(_) => Ok(DataType::Utf8),
@@ -1550,6 +1573,7 @@ fn from_substrait_type(
 
 fn from_substrait_struct_type(
     s: &r#type::Struct,
+    extensions: &Extensions,
     dfs_names: &[String],
     name_idx: &mut usize,
 ) -> Result<Fields> {
@@ -1557,7 +1581,7 @@ fn from_substrait_struct_type(
     for (i, f) in s.types.iter().enumerate() {
         let field = Field::new(
             next_struct_field_name(i, dfs_names, name_idx)?,
-            from_substrait_type(f, dfs_names, name_idx)?,
+            from_substrait_type(f, extensions, dfs_names, name_idx)?,
             true, // We assume everything to be nullable since that's easier than ensuring it matches
         );
         fields.push(field);
@@ -1583,12 +1607,16 @@ fn next_struct_field_name(
     }
 }
 
-fn from_substrait_named_struct(base_schema: &NamedStruct) -> Result<DFSchemaRef> {
+fn from_substrait_named_struct(
+    base_schema: &NamedStruct,
+    extensions: &Extensions,
+) -> Result<DFSchemaRef> {
     let mut name_idx = 0;
     let fields = from_substrait_struct_type(
         base_schema.r#struct.as_ref().ok_or_else(|| {
             substrait_datafusion_err!("Named struct must contain a struct")
         })?,
+        extensions,
         &base_schema.names,
         &mut name_idx,
     );
@@ -1648,12 +1676,16 @@ fn from_substrait_bound(
     }
 }
 
-pub(crate) fn from_substrait_literal_without_names(lit: &Literal) -> Result<ScalarValue> {
-    from_substrait_literal(lit, &vec![], &mut 0)
+pub(crate) fn from_substrait_literal_without_names(
+    lit: &Literal,
+    extensions: &Extensions,
+) -> Result<ScalarValue> {
+    from_substrait_literal(lit, extensions, &vec![], &mut 0)
 }
 
 fn from_substrait_literal(
     lit: &Literal,
+    extensions: &Extensions,
     dfs_names: &Vec<String>,
     name_idx: &mut usize,
 ) -> Result<ScalarValue> {
@@ -1748,7 +1780,7 @@ fn from_substrait_literal(
             let elements = l
                 .values
                 .iter()
-                .map(|el| from_substrait_literal(el, dfs_names, name_idx))
+                .map(|el| from_substrait_literal(el, extensions, dfs_names, name_idx))
                 .collect::<Result<Vec<_>>>()?;
             if elements.is_empty() {
                 return substrait_err!(
@@ -1771,6 +1803,7 @@ fn from_substrait_literal(
         Some(LiteralType::EmptyList(l)) => {
             let element_type = from_substrait_type(
                 l.r#type.clone().unwrap().as_ref(),
+                extensions,
                 dfs_names,
                 name_idx,
             )?;
@@ -1790,7 +1823,7 @@ fn from_substrait_literal(
             let mut builder = ScalarStructBuilder::new();
             for (i, field) in s.fields.iter().enumerate() {
                 let name = next_struct_field_name(i, dfs_names, name_idx)?;
-                let sv = from_substrait_literal(field, dfs_names, name_idx)?;
+                let sv = from_substrait_literal(field, extensions, dfs_names, name_idx)?;
                 // We assume everything to be nullable, since Arrow's strict about things matching
                 // and it's hard to match otherwise.
                 builder = builder.with_scalar(Field::new(name, sv.data_type(), true), sv);
@@ -1798,7 +1831,7 @@ fn from_substrait_literal(
             builder.build()?
         }
         Some(LiteralType::Null(ntype)) => {
-            from_substrait_null(ntype, dfs_names, name_idx)?
+            from_substrait_null(ntype, extensions, dfs_names, name_idx)?
         }
         Some(LiteralType::IntervalDayToSecond(IntervalDayToSecond {
             days,
@@ -1813,40 +1846,9 @@ fn from_substrait_literal(
         }
         Some(LiteralType::FixedChar(c)) => ScalarValue::Utf8(Some(c.clone())),
         Some(LiteralType::UserDefined(user_defined)) => {
-            match user_defined.type_reference {
-                // Kept for backwards compatibility, use IntervalYearToMonth instead
-                INTERVAL_YEAR_MONTH_TYPE_REF => {
-                    let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
-                        return substrait_err!("Interval year month value is empty");
-                    };
-                    let value_slice: [u8; 4] =
-                        (*raw_val.value).try_into().map_err(|_| {
-                            substrait_datafusion_err!(
-                                "Failed to parse interval year month value"
-                            )
-                        })?;
-                    ScalarValue::IntervalYearMonth(Some(i32::from_le_bytes(value_slice)))
-                }
-                // Kept for backwards compatibility, use IntervalDayToSecond instead
-                INTERVAL_DAY_TIME_TYPE_REF => {
-                    let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
-                        return substrait_err!("Interval day time value is empty");
-                    };
-                    let value_slice: [u8; 8] =
-                        (*raw_val.value).try_into().map_err(|_| {
-                            substrait_datafusion_err!(
-                                "Failed to parse interval day time value"
-                            )
-                        })?;
-                    let days = i32::from_le_bytes(value_slice[0..4].try_into().unwrap());
-                    let milliseconds =
-                        i32::from_le_bytes(value_slice[4..8].try_into().unwrap());
-                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                        days,
-                        milliseconds,
-                    }))
-                }
-                INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
+            // Helper function to prevent duplicating this code - can be inlined once the non-extension path is removed
+            let interval_month_day_nano =
+                |user_defined: &UserDefined| -> Result<ScalarValue> {
                     let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
                         return substrait_err!("Interval month day nano value is empty");
                     };
@@ -1861,17 +1863,75 @@ fn from_substrait_literal(
                     let days = i32::from_le_bytes(value_slice[4..8].try_into().unwrap());
                     let nanoseconds =
                         i64::from_le_bytes(value_slice[8..16].try_into().unwrap());
-                    ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
-                        months,
-                        days,
-                        nanoseconds,
-                    }))
-                }
-                _ => {
-                    return not_impl_err!(
-                        "Unsupported Substrait user defined type with ref {}",
-                        user_defined.type_reference
+                    Ok(ScalarValue::IntervalMonthDayNano(Some(
+                        IntervalMonthDayNano {
+                            months,
+                            days,
+                            nanoseconds,
+                        },
+                    )))
+                };
+
+            if let Some(name) = extensions.types.get(&user_defined.type_reference) {
+                match name {
+                    INTERVAL_MONTH_DAY_NANO_TYPE_URL => {
+                        interval_month_day_nano(user_defined)?
+                    }
+                    _ => {
+                        return not_impl_err!(
+                        "Unsupported Substrait user defined type with ref {} and name {}",
+                        user_defined.type_reference,
+                        name
                     )
+                    }
+                }
+            } else {
+                // Kept for backwards compatibility - new plans should include extension instead
+                match user_defined.type_reference {
+                    // Kept for backwards compatibility, use IntervalYearToMonth instead
+                    INTERVAL_YEAR_MONTH_TYPE_REF => {
+                        let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
+                            return substrait_err!("Interval year month value is empty");
+                        };
+                        let value_slice: [u8; 4] =
+                            (*raw_val.value).try_into().map_err(|_| {
+                                substrait_datafusion_err!(
+                                    "Failed to parse interval year month value"
+                                )
+                            })?;
+                        ScalarValue::IntervalYearMonth(Some(i32::from_le_bytes(
+                            value_slice,
+                        )))
+                    }
+                    // Kept for backwards compatibility, use IntervalDayToSecond instead
+                    INTERVAL_DAY_TIME_TYPE_REF => {
+                        let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
+                            return substrait_err!("Interval day time value is empty");
+                        };
+                        let value_slice: [u8; 8] =
+                            (*raw_val.value).try_into().map_err(|_| {
+                                substrait_datafusion_err!(
+                                    "Failed to parse interval day time value"
+                                )
+                            })?;
+                        let days =
+                            i32::from_le_bytes(value_slice[0..4].try_into().unwrap());
+                        let milliseconds =
+                            i32::from_le_bytes(value_slice[4..8].try_into().unwrap());
+                        ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                            days,
+                            milliseconds,
+                        }))
+                    }
+                    INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
+                        interval_month_day_nano(user_defined)?
+                    }
+                    _ => {
+                        return not_impl_err!(
+                            "Unsupported Substrait user defined type with ref {}",
+                            user_defined.type_reference
+                        )
+                    }
                 }
             }
         }
@@ -1883,6 +1943,7 @@ fn from_substrait_literal(
 
 fn from_substrait_null(
     null_type: &Type,
+    extensions: &Extensions,
     dfs_names: &[String],
     name_idx: &mut usize,
 ) -> Result<ScalarValue> {
@@ -1967,6 +2028,7 @@ fn from_substrait_null(
                 let field = Field::new_list_field(
                     from_substrait_type(
                         l.r#type.clone().unwrap().as_ref(),
+                        extensions,
                         dfs_names,
                         name_idx,
                     )?,
@@ -1985,7 +2047,8 @@ fn from_substrait_null(
                 }
             }
             r#type::Kind::Struct(s) => {
-                let fields = from_substrait_struct_type(s, dfs_names, name_idx)?;
+                let fields =
+                    from_substrait_struct_type(s, extensions, dfs_names, name_idx)?;
                 Ok(ScalarStructBuilder::new_null(fields))
             }
             _ => not_impl_err!("Unsupported Substrait type for null: {kind:?}"),
