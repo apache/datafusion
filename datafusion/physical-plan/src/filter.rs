@@ -78,7 +78,7 @@ impl FilterExec {
                     Self::compute_properties(&input, &predicate, default_selectivity)?;
                 Ok(Self {
                     predicate,
-                    input: input.clone(),
+                    input: Arc::clone(&input),
                     metrics: ExecutionPlanMetricsSet::new(),
                     default_selectivity,
                     cache,
@@ -263,7 +263,7 @@ impl ExecutionPlan for FilterExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        FilterExec::try_new(self.predicate.clone(), children.swap_remove(0))
+        FilterExec::try_new(Arc::clone(&self.predicate), children.swap_remove(0))
             .and_then(|e| {
                 let selectivity = e.default_selectivity();
                 e.with_default_selectivity(selectivity)
@@ -280,7 +280,7 @@ impl ExecutionPlan for FilterExec {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.input.schema(),
-            predicate: self.predicate.clone(),
+            predicate: Arc::clone(&self.predicate),
             input: self.input.execute(partition, context)?,
             baseline_metrics,
         }))
@@ -405,7 +405,7 @@ impl Stream for FilterExecStream {
 
 impl RecordBatchStream for FilterExecStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -1124,7 +1124,7 @@ mod tests {
                 binary(col("c1", &schema)?, Operator::LtEq, lit(4i32), &schema)?,
                 &schema,
             )?,
-            Arc::new(EmptyExec::new(schema.clone())),
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
         )?;
 
         exec.statistics().unwrap();

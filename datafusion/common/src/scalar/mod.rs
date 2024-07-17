@@ -1459,7 +1459,10 @@ impl ScalarValue {
             ScalarValue::DurationMillisecond(v) => v.is_none(),
             ScalarValue::DurationMicrosecond(v) => v.is_none(),
             ScalarValue::DurationNanosecond(v) => v.is_none(),
-            ScalarValue::Union(v, _, _) => v.is_none(),
+            ScalarValue::Union(v, _, _) => match v {
+                Some((_, s)) => s.is_null(),
+                None => true,
+            },
             ScalarValue::Dictionary(_, v) => v.is_null(),
         }
     }
@@ -6513,5 +6516,34 @@ mod tests {
             }
         }
         intervals
+    }
+
+    fn union_fields() -> UnionFields {
+        [
+            (0, Arc::new(Field::new("A", DataType::Int32, true))),
+            (1, Arc::new(Field::new("B", DataType::Float64, true))),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    #[test]
+    fn sparse_scalar_union_is_null() {
+        let sparse_scalar = ScalarValue::Union(
+            Some((0_i8, Box::new(ScalarValue::Int32(None)))),
+            union_fields(),
+            UnionMode::Sparse,
+        );
+        assert!(sparse_scalar.is_null());
+    }
+
+    #[test]
+    fn dense_scalar_union_is_null() {
+        let dense_scalar = ScalarValue::Union(
+            Some((0_i8, Box::new(ScalarValue::Int32(None)))),
+            union_fields(),
+            UnionMode::Dense,
+        );
+        assert!(dense_scalar.is_null());
     }
 }

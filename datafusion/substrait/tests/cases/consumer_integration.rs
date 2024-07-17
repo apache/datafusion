@@ -90,6 +90,40 @@ mod tests {
         Ok(ctx)
     }
 
+    async fn create_context_tpch4() -> Result<SessionContext> {
+        let ctx = SessionContext::new();
+
+        let registrations = vec![
+            ("FILENAME_PLACEHOLDER_0", "tests/testdata/tpch/orders.csv"),
+            ("FILENAME_PLACEHOLDER_1", "tests/testdata/tpch/lineitem.csv"),
+        ];
+
+        for (table_name, file_path) in registrations {
+            register_csv(&ctx, table_name, file_path).await?;
+        }
+
+        Ok(ctx)
+    }
+
+    async fn create_context_tpch5() -> Result<SessionContext> {
+        let ctx = SessionContext::new();
+
+        let registrations = vec![
+            ("FILENAME_PLACEHOLDER_0", "tests/testdata/tpch/customer.csv"),
+            ("FILENAME_PLACEHOLDER_1", "tests/testdata/tpch/orders.csv"),
+            ("FILENAME_PLACEHOLDER_2", "tests/testdata/tpch/lineitem.csv"),
+            ("FILENAME_PLACEHOLDER_3", "tests/testdata/tpch/supplier.csv"),
+            ("NATION", "tests/testdata/tpch/nation.csv"),
+            ("REGION", "tests/testdata/tpch/region.csv"),
+        ];
+
+        for (table_name, file_path) in registrations {
+            register_csv(&ctx, table_name, file_path).await?;
+        }
+
+        Ok(ctx)
+    }
+
     #[tokio::test]
     async fn tpch_test_1() -> Result<()> {
         let ctx = create_context_tpch1().await?;
@@ -178,6 +212,58 @@ mod tests {
         \n                Inner Join:  Filter: Boolean(true)\
         \n                  TableScan: FILENAME_PLACEHOLDER_0 projection=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment]\
         \n                  TableScan: FILENAME_PLACEHOLDER_1 projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]\n                TableScan: FILENAME_PLACEHOLDER_2 projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment]");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tpch_test_4() -> Result<()> {
+        let ctx = create_context_tpch4().await?;
+        let path = "tests/testdata/tpch_substrait_plans/query_4.json";
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+        let plan = from_substrait_plan(&ctx, &proto).await?;
+        let plan_str = format!("{:?}", plan);
+        assert_eq!(plan_str, "Projection: FILENAME_PLACEHOLDER_0.o_orderpriority AS O_ORDERPRIORITY, count(Int64(1)) AS ORDER_COUNT\
+        \n  Sort: FILENAME_PLACEHOLDER_0.o_orderpriority ASC NULLS LAST\
+        \n    Aggregate: groupBy=[[FILENAME_PLACEHOLDER_0.o_orderpriority]], aggr=[[count(Int64(1))]]\
+        \n      Projection: FILENAME_PLACEHOLDER_0.o_orderpriority\
+        \n        Filter: FILENAME_PLACEHOLDER_0.o_orderdate >= CAST(Utf8(\"1993-07-01\") AS Date32) AND FILENAME_PLACEHOLDER_0.o_orderdate < CAST(Utf8(\"1993-10-01\") AS Date32) AND EXISTS (<subquery>)\
+        \n          Subquery:\
+        \n            Filter: FILENAME_PLACEHOLDER_1.l_orderkey = FILENAME_PLACEHOLDER_1.l_orderkey AND FILENAME_PLACEHOLDER_1.l_commitdate < FILENAME_PLACEHOLDER_1.l_receiptdate\
+        \n              TableScan: FILENAME_PLACEHOLDER_1 projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment]\
+        \n          TableScan: FILENAME_PLACEHOLDER_0 projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tpch_test_5() -> Result<()> {
+        let ctx = create_context_tpch5().await?;
+        let path = "tests/testdata/tpch_substrait_plans/query_5.json";
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+
+        let plan = from_substrait_plan(&ctx, &proto).await?;
+        let plan_str = format!("{:?}", plan);
+        assert_eq!(plan_str, "Projection: NATION.n_name AS N_NAME, sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount) AS REVENUE\
+        \n  Sort: sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount) DESC NULLS FIRST\
+        \n    Aggregate: groupBy=[[NATION.n_name]], aggr=[[sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount)]]\
+        \n      Projection: NATION.n_name, FILENAME_PLACEHOLDER_2.l_extendedprice * (CAST(Int32(1) AS Decimal128(19, 0)) - FILENAME_PLACEHOLDER_2.l_discount)\
+        \n        Filter: FILENAME_PLACEHOLDER_0.c_custkey = FILENAME_PLACEHOLDER_1.o_custkey AND FILENAME_PLACEHOLDER_2.l_orderkey = FILENAME_PLACEHOLDER_1.o_orderkey AND FILENAME_PLACEHOLDER_2.l_suppkey = FILENAME_PLACEHOLDER_3.s_suppkey AND FILENAME_PLACEHOLDER_0.c_nationkey = FILENAME_PLACEHOLDER_3.s_nationkey AND FILENAME_PLACEHOLDER_3.s_nationkey = NATION.n_nationkey AND NATION.n_regionkey = REGION.r_regionkey AND REGION.r_name = CAST(Utf8(\"ASIA\") AS Utf8) AND FILENAME_PLACEHOLDER_1.o_orderdate >= CAST(Utf8(\"1994-01-01\") AS Date32) AND FILENAME_PLACEHOLDER_1.o_orderdate < CAST(Utf8(\"1995-01-01\") AS Date32)\
+        \n          Inner Join:  Filter: Boolean(true)\
+        \n            Inner Join:  Filter: Boolean(true)\
+        \n              Inner Join:  Filter: Boolean(true)\
+        \n                Inner Join:  Filter: Boolean(true)\
+        \n                  Inner Join:  Filter: Boolean(true)\
+        \n                    TableScan: FILENAME_PLACEHOLDER_0 projection=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment]\
+        \n                    TableScan: FILENAME_PLACEHOLDER_1 projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]\
+        \n                  TableScan: FILENAME_PLACEHOLDER_2 projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment]\
+        \n                TableScan: FILENAME_PLACEHOLDER_3 projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]\
+        \n              TableScan: NATION projection=[n_nationkey, n_name, n_regionkey, n_comment]\
+        \n            TableScan: REGION projection=[r_regionkey, r_name, r_comment]");
         Ok(())
     }
 }
