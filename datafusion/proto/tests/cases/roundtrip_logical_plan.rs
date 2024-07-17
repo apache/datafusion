@@ -703,7 +703,6 @@ async fn roundtrip_expr_api() -> Result<()> {
         bool_and(lit(true)),
         bool_or(lit(true)),
         array_agg(lit(1)),
-        array_agg(lit(1)),
     ];
 
     // ensure expressions created with the expr api can be round tripped

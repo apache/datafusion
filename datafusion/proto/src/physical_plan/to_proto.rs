@@ -259,7 +259,6 @@ struct AggrFn {
 
 fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     let aggr_expr = expr.as_any();
-    let mut distinct = false;
 
     // TODO: remove
     let inner = if aggr_expr.downcast_ref::<OrderSensitiveArrayAgg>().is_some() {
@@ -272,7 +271,10 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         return not_impl_err!("Aggregate function not supported: {expr:?}");
     };
 
-    Ok(AggrFn { inner, distinct })
+    Ok(AggrFn {
+        inner,
+        distinct: false,
+    })
 }
 
 pub fn serialize_physical_sort_exprs<I>(
