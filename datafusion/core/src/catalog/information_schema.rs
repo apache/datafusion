@@ -314,7 +314,7 @@ impl InformationSchemaTablesBuilder {
         table_name: impl AsRef<str>,
         table_type: TableType,
     ) {
-        // Note: append_value is actually infallable.
+        // Note: append_value is actually infallible.
         self.catalog_names.append_value(catalog_name.as_ref());
         self.schema_names.append_value(schema_name.as_ref());
         self.table_names.append_value(table_name.as_ref());
@@ -405,7 +405,7 @@ impl InformationSchemaViewBuilder {
         table_name: impl AsRef<str>,
         definition: Option<impl AsRef<str>>,
     ) {
-        // Note: append_value is actually infallable.
+        // Note: append_value is actually infallible.
         self.catalog_names.append_value(catalog_name.as_ref());
         self.schema_names.append_value(schema_name.as_ref());
         self.table_names.append_value(table_name.as_ref());

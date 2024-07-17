@@ -1019,7 +1019,7 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Set tje [`PhysicalOptimizerRule`]s used to optimize plans.
+    /// Set the [`PhysicalOptimizerRule`]s used to optimize plans.
     pub fn with_physical_optimizer_rules(
         mut self,
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,

@@ -128,7 +128,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
 /// # Returns
 ///
 /// Returns `Ok(converted_aggr_exprs)` if the conversion process completes
-/// successfully. Any errors occuring during the conversion process are
+/// successfully. Any errors occurring during the conversion process are
 /// passed through.
 fn try_convert_aggregate_if_better(
     aggr_exprs: Vec<Arc<dyn AggregateExpr>>,

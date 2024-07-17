@@ -214,7 +214,7 @@ impl Column {
                     for using_col in using_columns {
                         let all_matched = columns.iter().all(|f| using_col.contains(f));
                         // All matched fields belong to the same using column set, in orther words
-                        // the same join clause. We simply pick the qualifer from the first match.
+                        // the same join clause. We simply pick the qualifier from the first match.
                         if all_matched {
                             return Ok(columns[0].clone());
                         }
@@ -303,7 +303,7 @@ impl Column {
                     for using_col in using_columns {
                         let all_matched = columns.iter().all(|c| using_col.contains(c));
                         // All matched fields belong to the same using column set, in orther words
-                        // the same join clause. We simply pick the qualifer from the first match.
+                        // the same join clause. We simply pick the qualifier from the first match.
                         if all_matched {
                             return Ok(columns[0].clone());
                         }

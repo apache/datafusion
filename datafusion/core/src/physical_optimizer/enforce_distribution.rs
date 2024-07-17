@@ -392,7 +392,7 @@ fn adjust_input_keys_ordering(
         let expr = proj.expr();
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
-        // Construct a mapping from new name to the orginal Column
+        // Construct a mapping from new name to the original Column
         let new_required = map_columns_before_projection(&requirements.data, expr);
         if new_required.len() == requirements.data.len() {
             requirements.children[0].data = new_required;
@@ -566,7 +566,7 @@ fn shift_right_required(
         })
         .collect::<Vec<_>>();
 
-    // if the parent required are all comming from the right side, the requirements can be pushdown
+    // if the parent required are all coming from the right side, the requirements can be pushdown
     (new_right_required.len() == parent_required.len()).then_some(new_right_required)
 }
 

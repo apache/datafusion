@@ -623,7 +623,7 @@ impl PruningPredicate {
     ///
     /// This is useful to avoid fetching statistics for columns that will not be
     /// used in the predicate. For example, it can be used to avoid reading
-    /// uneeded bloom filters (a non trivial operation).
+    /// unneeded bloom filters (a non trivial operation).
     pub fn literal_columns(&self) -> Vec<String> {
         let mut seen = HashSet::new();
         self.literal_guarantees
