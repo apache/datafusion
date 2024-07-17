@@ -360,8 +360,6 @@ pub fn create_hashes<'a>(
     random_state: &RandomState,
     hashes_buffer: &'a mut Vec<u64>,
 ) -> Result<&'a mut Vec<u64>> {
-    use crate::cast::{as_binary_view_array, as_string_view_array};
-
     for (i, col) in arrays.iter().enumerate() {
         let array = col.as_ref();
         // combine hashes with `combine_hashes` for all columns besides the first
@@ -373,11 +371,9 @@ pub fn create_hashes<'a>(
             DataType::Utf8 => hash_array(as_string_array(array)?, random_state, hashes_buffer, rehash),
             DataType::Utf8View => hash_array(as_string_view_array(array)?, random_state, hashes_buffer, rehash),
             DataType::LargeUtf8 => hash_array(as_largestring_array(array), random_state, hashes_buffer, rehash),
-            DataType::Utf8View => hash_array(as_string_view_array(array)?, random_state, hashes_buffer, rehash),
             DataType::Binary => hash_array(as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, rehash),
             DataType::BinaryView => hash_array(as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
             DataType::LargeBinary => hash_array(as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, rehash),
-            DataType::BinaryView => hash_array(as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
             DataType::FixedSizeBinary(_) => {
                 let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
                 hash_array(array, random_state, hashes_buffer, rehash)
