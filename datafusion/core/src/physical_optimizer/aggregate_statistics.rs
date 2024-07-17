@@ -18,7 +18,6 @@
 //! Utilizing exact statistics from sources to avoid scanning data
 use std::sync::Arc;
 
-use super::optimizer::PhysicalOptimizerRule;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_plan::aggregates::AggregateExec;
@@ -29,6 +28,7 @@ use crate::scalar::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 
