@@ -929,7 +929,7 @@ impl ExecutionPlan for SortExec {
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         Some(Arc::new(SortExec {
-            input: self.input.clone(),
+            input: Arc::clone(&self.input),
             expr: self.expr.clone(),
             metrics_set: self.metrics_set.clone(),
             preserve_partitioning: self.preserve_partitioning,

@@ -169,7 +169,7 @@ fn try_merge_limits(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let parent_skip = global_or_local.skip();
     let parent_fetch = global_or_local.fetch();
-    let parent_max = parent_fetch.and_then(|f| Some(f + parent_skip));
+    let parent_max = parent_fetch.map(|f| f + parent_skip);
     let child_fetch = limit.fetch();
 
     if let Some(parent_max) = parent_max {
@@ -243,7 +243,7 @@ fn add_fetch_to_child(
     let fetch = global_or_local.fetch();
     let skip = global_or_local.skip();
 
-    let child_fetch = fetch.and_then(|f| Some(f + skip));
+    let child_fetch = fetch.map(|f| f + skip);
 
     if let Some(child_with_fetch) = child.with_fetch(child_fetch) {
         if skip > 0 {

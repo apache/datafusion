@@ -196,7 +196,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         Some(Arc::new(CoalesceBatchesExec {
-            input: self.input.clone(),
+            input: Arc::clone(&self.input),
             target_batch_size: self.target_batch_size,
             fetch: limit,
             metrics: self.metrics.clone(),
