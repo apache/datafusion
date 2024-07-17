@@ -19,7 +19,7 @@ use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, R
 use datafusion_expr::{
     expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
-use sqlparser::ast::{self, SetExpr};
+use sqlparser::ast::{self, Ident, SetExpr};
 
 use crate::unparser::utils::unproject_agg_exprs;
 
@@ -457,15 +457,11 @@ impl Unparser<'_> {
             }
             LogicalPlan::SubqueryAlias(plan_alias) => {
                 // Handle bottom-up to allocate relation
-                self.select_to_sql_recursively(
-                    plan_alias.input.as_ref(),
-                    query,
-                    select,
-                    relation,
-                )?;
+                let (plan, columns) = subquery_alias_inner_query_and_columns(plan_alias);
 
+                self.select_to_sql_recursively(plan, query, select, relation)?;
                 relation.alias(Some(
-                    self.new_table_alias(plan_alias.alias.table().to_string()),
+                    self.new_table_alias(plan_alias.alias.table().to_string(), columns),
                 ));
 
                 Ok(())
@@ -599,16 +595,77 @@ impl Unparser<'_> {
         self.binary_op_to_sql(lhs, rhs, ast::BinaryOperator::And)
     }
 
-    fn new_table_alias(&self, alias: String) -> ast::TableAlias {
+    fn new_table_alias(&self, alias: String, columns: Vec<Ident>) -> ast::TableAlias {
         ast::TableAlias {
             name: self.new_ident_quoted_if_needs(alias),
-            columns: Vec::new(),
+            columns,
         }
     }
 
     fn dml_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         not_impl_err!("Unsupported plan: {plan:?}")
     }
+}
+
+// This logic is to work out the columns and inner query for SubqueryAlias plan for both types of
+// subquery
+// - `(SELECT column_a as a from table) AS A`
+// - `(SELECT column_a from table) AS A (a)`
+//
+// A roundtrip example for table alias with columns
+//
+// query: SELECT id FROM (SELECT j1_id from j1) AS c (id)
+//
+// LogicPlan:
+// Projection: c.id
+//   SubqueryAlias: c
+//     Projection: j1.j1_id AS id
+//       Projection: j1.j1_id
+//         TableScan: j1
+//
+// Before introducing this logic, the unparsed query would be `SELECT c.id FROM (SELECT j1.j1_id AS
+// id FROM (SELECT j1.j1_id FROM j1)) AS c`.
+// The query is invalid as `j1.j1_id` is not a valid identifier in the derived table
+// `(SELECT j1.j1_id FROM j1)`
+//
+// With this logic, the unparsed query will be:
+// `SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)`
+//
+// Caveat: this won't handle the case like `select * from (select 1, 2) AS a (b, c)`
+// as the parser gives a wrong plan which has mismatch `Int(1)` types: Literal and
+// Column in the Projections. Once the parser side is fixed, this logic should work
+fn subquery_alias_inner_query_and_columns(
+    subquery_alias: &datafusion_expr::SubqueryAlias,
+) -> (&LogicalPlan, Vec<Ident>) {
+    let plan: &LogicalPlan = subquery_alias.input.as_ref();
+
+    let LogicalPlan::Projection(outer_projections) = plan else {
+        return (plan, vec![]);
+    };
+
+    // check if it's projection inside projection
+    let LogicalPlan::Projection(inner_projection) = outer_projections.input.as_ref()
+    else {
+        return (plan, vec![]);
+    };
+
+    let mut columns: Vec<Ident> = vec![];
+    // check if the inner projection and outer projection have a matching pattern like
+    //     Projection: j1.j1_id AS id
+    //       Projection: j1.j1_id
+    for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
+        let Expr::Alias(ref outer_alias) = &outer_projections.expr[i] else {
+            return (plan, vec![]);
+        };
+
+        if outer_alias.expr.as_ref() != inner_expr {
+            return (plan, vec![]);
+        };
+
+        columns.push(outer_alias.name.as_str().into());
+    }
+
+    (outer_projections.input.as_ref(), columns)
 }
 
 impl From<BuilderError> for DataFusionError {
