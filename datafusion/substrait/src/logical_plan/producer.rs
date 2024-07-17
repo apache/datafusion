@@ -110,7 +110,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
             input: Some(*to_substrait_rel(plan, ctx, &mut extensions)?),
-            names: to_substrait_named_struct(plan.schema())?.names,
+            names: to_substrait_named_struct(plan.schema(), &mut extensions)?.names,
         })),
     }];
 
@@ -180,7 +180,7 @@ pub fn to_substrait_rel(
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(to_substrait_named_struct(&e.schema)?),
+                    base_schema: Some(to_substrait_named_struct(&e.schema, extensions)?),
                     filter: None,
                     best_effort_filter: None,
                     projection: None,
@@ -199,10 +199,10 @@ pub fn to_substrait_rel(
                     let fields = row
                         .iter()
                         .map(|v| match v {
-                            Expr::Literal(sv) => to_substrait_literal(sv),
+                            Expr::Literal(sv) => to_substrait_literal(sv, extensions),
                             Expr::Alias(alias) => match alias.expr.as_ref() {
                                 // The schema gives us the names, so we can skip aliases
-                                Expr::Literal(sv) => to_substrait_literal(sv),
+                                Expr::Literal(sv) => to_substrait_literal(sv, extensions),
                                 _ => Err(substrait_datafusion_err!(
                                     "Only literal types can be aliased in Virtual Tables, got: {}", alias.expr.variant_name()
                                 )),
@@ -218,7 +218,7 @@ pub fn to_substrait_rel(
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(to_substrait_named_struct(&v.schema)?),
+                    base_schema: Some(to_substrait_named_struct(&v.schema, extensions)?),
                     filter: None,
                     best_effort_filter: None,
                     projection: None,
@@ -567,7 +567,10 @@ pub fn to_substrait_rel(
     }
 }
 
-fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
+fn to_substrait_named_struct(
+    schema: &DFSchemaRef,
+    extensions: &mut Extensions,
+) -> Result<NamedStruct> {
     // Substrait wants a list of all field names, including nested fields from structs,
     // also from within e.g. lists and maps. However, it does not want the list and map field names
     // themselves - only proper structs fields are considered to have useful names.
@@ -612,7 +615,7 @@ fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
         types: schema
             .fields()
             .iter()
-            .map(|f| to_substrait_type(f.data_type(), f.is_nullable()))
+            .map(|f| to_substrait_type(f.data_type(), f.is_nullable(), extensions))
             .collect::<Result<_>>()?,
         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
         nullability: r#type::Nullability::Unspecified as i32,
@@ -1210,7 +1213,7 @@ pub fn to_substrait_rex(
             Ok(Expression {
                 rex_type: Some(RexType::Cast(Box::new(
                     substrait::proto::expression::Cast {
-                        r#type: Some(to_substrait_type(data_type, true)?),
+                        r#type: Some(to_substrait_type(data_type, true, extensions)?),
                         input: Some(Box::new(to_substrait_rex(
                             ctx,
                             expr,
@@ -1223,7 +1226,7 @@ pub fn to_substrait_rex(
                 ))),
             })
         }
-        Expr::Literal(value) => to_substrait_literal_expr(value),
+        Expr::Literal(value) => to_substrait_literal_expr(value, extensions),
         Expr::Alias(Alias { expr, .. }) => {
             to_substrait_rex(ctx, expr, schema, col_ref_offset, extensions)
         }
@@ -1416,7 +1419,11 @@ pub fn to_substrait_rex(
     }
 }
 
-fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::Type> {
+fn to_substrait_type(
+    dt: &DataType,
+    nullable: bool,
+    extensions: &mut Extensions,
+) -> Result<substrait::proto::Type> {
     let nullability = if nullable {
         r#type::Nullability::Nullable as i32
     } else {
@@ -1536,7 +1543,9 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                     // Substrait doesn't currently support this type, so we represent it as a UDT
                     Ok(substrait::proto::Type {
                         kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
-                            type_reference: INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+                            type_reference: extensions.register_type(
+                                INTERVAL_MONTH_DAY_NANO_TYPE_URL.to_string(),
+                            ),
                             type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                             nullability,
                             type_parameters: vec![],
@@ -1577,7 +1586,8 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
             })),
         }),
         DataType::List(inner) => {
-            let inner_type = to_substrait_type(inner.data_type(), inner.is_nullable())?;
+            let inner_type =
+                to_substrait_type(inner.data_type(), inner.is_nullable(), extensions)?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
                     r#type: Some(Box::new(inner_type)),
@@ -1587,7 +1597,8 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
             })
         }
         DataType::LargeList(inner) => {
-            let inner_type = to_substrait_type(inner.data_type(), inner.is_nullable())?;
+            let inner_type =
+                to_substrait_type(inner.data_type(), inner.is_nullable(), extensions)?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
                     r#type: Some(Box::new(inner_type)),
@@ -1601,10 +1612,12 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
                 let key_type = to_substrait_type(
                     key_and_value[0].data_type(),
                     key_and_value[0].is_nullable(),
+                    extensions,
                 )?;
                 let value_type = to_substrait_type(
                     key_and_value[1].data_type(),
                     key_and_value[1].is_nullable(),
+                    extensions,
                 )?;
                 Ok(substrait::proto::Type {
                     kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
@@ -1620,7 +1633,9 @@ fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
-                .map(|field| to_substrait_type(field.data_type(), field.is_nullable()))
+                .map(|field| {
+                    to_substrait_type(field.data_type(), field.is_nullable(), extensions)
+                })
                 .collect::<Result<Vec<_>>>()?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Struct(r#type::Struct {
@@ -1697,9 +1712,10 @@ fn make_substrait_like_expr(
     };
     let expr = to_substrait_rex(ctx, expr, schema, col_ref_offset, extensions)?;
     let pattern = to_substrait_rex(ctx, pattern, schema, col_ref_offset, extensions)?;
-    let escape_char = to_substrait_literal_expr(&ScalarValue::Utf8(
-        escape_char.map(|c| c.to_string()),
-    ))?;
+    let escape_char = to_substrait_literal_expr(
+        &ScalarValue::Utf8(escape_char.map(|c| c.to_string())),
+        extensions,
+    )?;
     let arguments = vec![
         FunctionArgument {
             arg_type: Some(ArgType::Value(expr)),
@@ -1855,7 +1871,10 @@ fn to_substrait_bounds(window_frame: &WindowFrame) -> Result<(Bound, Bound)> {
     ))
 }
 
-fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
+fn to_substrait_literal(
+    value: &ScalarValue,
+    extensions: &mut Extensions,
+) -> Result<Literal> {
     if value.is_null() {
         return Ok(Literal {
             nullable: true,
@@ -1863,6 +1882,7 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
             literal_type: Some(LiteralType::Null(to_substrait_type(
                 &value.data_type(),
                 true,
+                extensions,
             )?)),
         });
     }
@@ -1934,14 +1954,15 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
             let bytes = i.to_byte_slice();
             (
                 LiteralType::UserDefined(UserDefined {
-                    type_reference: INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+                    type_reference: extensions
+                        .register_type(INTERVAL_MONTH_DAY_NANO_TYPE_URL.to_string()),
                     type_parameters: vec![],
                     val: Some(user_defined::Val::Value(ProtoAny {
                         type_url: INTERVAL_MONTH_DAY_NANO_TYPE_URL.to_string(),
                         value: bytes.to_vec().into(),
                     })),
                 }),
-                INTERVAL_MONTH_DAY_NANO_TYPE_REF,
+                DEFAULT_TYPE_VARIATION_REF,
             )
         }
         ScalarValue::IntervalDayTime(Some(i)) => (
@@ -1981,11 +2002,11 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
             DECIMAL_128_TYPE_VARIATION_REF,
         ),
         ScalarValue::List(l) => (
-            convert_array_to_literal_list(l)?,
+            convert_array_to_literal_list(l, extensions)?,
             DEFAULT_CONTAINER_TYPE_VARIATION_REF,
         ),
         ScalarValue::LargeList(l) => (
-            convert_array_to_literal_list(l)?,
+            convert_array_to_literal_list(l, extensions)?,
             LARGE_CONTAINER_TYPE_VARIATION_REF,
         ),
         ScalarValue::Struct(s) => (
@@ -1994,7 +2015,10 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
                     .columns()
                     .iter()
                     .map(|col| {
-                        to_substrait_literal(&ScalarValue::try_from_array(col, 0)?)
+                        to_substrait_literal(
+                            &ScalarValue::try_from_array(col, 0)?,
+                            extensions,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?,
             }),
@@ -2015,16 +2039,26 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Literal> {
 
 fn convert_array_to_literal_list<T: OffsetSizeTrait>(
     array: &GenericListArray<T>,
+    extensions: &mut Extensions,
 ) -> Result<LiteralType> {
     assert_eq!(array.len(), 1);
     let nested_array = array.value(0);
 
     let values = (0..nested_array.len())
-        .map(|i| to_substrait_literal(&ScalarValue::try_from_array(&nested_array, i)?))
+        .map(|i| {
+            to_substrait_literal(
+                &ScalarValue::try_from_array(&nested_array, i)?,
+                extensions,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
 
     if values.is_empty() {
-        let et = match to_substrait_type(array.data_type(), array.is_nullable())? {
+        let et = match to_substrait_type(
+            array.data_type(),
+            array.is_nullable(),
+            extensions,
+        )? {
             substrait::proto::Type {
                 kind: Some(r#type::Kind::List(lt)),
             } => lt.as_ref().to_owned(),
@@ -2036,8 +2070,11 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
     }
 }
 
-fn to_substrait_literal_expr(value: &ScalarValue) -> Result<Expression> {
-    let literal = to_substrait_literal(value)?;
+fn to_substrait_literal_expr(
+    value: &ScalarValue,
+    extensions: &mut Extensions,
+) -> Result<Expression> {
+    let literal = to_substrait_literal(value, extensions)?;
     Ok(Expression {
         rex_type: Some(RexType::Literal(literal)),
     })
