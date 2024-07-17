@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::field::LogicalPhysicalField;
 use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
     ScalarValue, TableReference,
@@ -280,7 +280,7 @@ fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
 ) -> Option<(
-    &'schema LogicalField,
+    &'schema LogicalPhysicalField,
     Option<&'schema TableReference>,
     &'ids [String],
 )> {

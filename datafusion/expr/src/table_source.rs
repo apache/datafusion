@@ -19,7 +19,7 @@
 
 use crate::{Expr, LogicalPlan};
 
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use datafusion_common::{Constraints, Result};
 
 use std::any::Any;
@@ -86,7 +86,7 @@ pub trait TableSource: Sync + Send {
     fn as_any(&self) -> &dyn Any;
 
     /// Get a reference to the schema for this table
-    fn schema(&self) -> LogicalSchemaRef;
+    fn schema(&self) -> LogicalPhysicalSchemaRef;
 
     /// Get primary key indices, if one exists.
     fn constraints(&self) -> Option<&Constraints> {

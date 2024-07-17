@@ -29,7 +29,7 @@ use arrow::{
 
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
-    logical_type::ExtensionType,
+    logical_type::TypeRelation,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
@@ -1776,8 +1776,8 @@ fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
 mod tests {
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
-    use datafusion_common::logical_type::field::LogicalField;
-    use datafusion_common::logical_type::schema::LogicalSchema;
+    use datafusion_common::logical_type::field::LogicalPhysicalField;
+    use datafusion_common::logical_type::schema::LogicalPhysicalSchema;
     use datafusion_common::{
         assert_contains, logical_type::signature::LogicalType, DFSchemaRef, ToDFSchema,
     };
@@ -1830,9 +1830,9 @@ mod tests {
     }
 
     fn test_schema() -> DFSchemaRef {
-        LogicalSchema::new(vec![
-            LogicalField::new("i", DataType::Int64, false),
-            LogicalField::new("b", DataType::Boolean, true),
+        LogicalPhysicalSchema::new(vec![
+            LogicalPhysicalField::new("i", DataType::Int64, false),
+            LogicalPhysicalField::new("b", DataType::Boolean, true),
         ])
         .to_dfschema_ref()
         .unwrap()
@@ -3015,14 +3015,14 @@ mod tests {
         Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![
-                    LogicalField::new("c1", DataType::Utf8, true),
-                    LogicalField::new("c2", DataType::Boolean, true),
-                    LogicalField::new("c3", DataType::Int64, true),
-                    LogicalField::new("c4", DataType::UInt32, true),
-                    LogicalField::new("c1_non_null", DataType::Utf8, false),
-                    LogicalField::new("c2_non_null", DataType::Boolean, false),
-                    LogicalField::new("c3_non_null", DataType::Int64, false),
-                    LogicalField::new("c4_non_null", DataType::UInt32, false),
+                    LogicalPhysicalField::new("c1", DataType::Utf8, true),
+                    LogicalPhysicalField::new("c2", DataType::Boolean, true),
+                    LogicalPhysicalField::new("c3", DataType::Int64, true),
+                    LogicalPhysicalField::new("c4", DataType::UInt32, true),
+                    LogicalPhysicalField::new("c1_non_null", DataType::Utf8, false),
+                    LogicalPhysicalField::new("c2_non_null", DataType::Boolean, false),
+                    LogicalPhysicalField::new("c3_non_null", DataType::Int64, false),
+                    LogicalPhysicalField::new("c4_non_null", DataType::UInt32, false),
                 ]
                 .into(),
                 HashMap::new(),

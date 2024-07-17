@@ -23,10 +23,10 @@ use arrow_buffer::IntervalDayTime;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::cast::as_int32_array;
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchema;
 use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
@@ -72,7 +72,7 @@ impl SimplifyInfo for MyInfo {
         &self.execution_props
     }
 
-    fn get_data_type(&self, expr: &Expr) -> Result<TypeRelation> {
+    fn get_data_type(&self, expr: &Expr) -> Result<LogicalPhysicalType> {
         expr.get_type(self.schema.as_ref())
     }
 }
@@ -92,10 +92,10 @@ impl From<DFSchemaRef> for MyInfo {
 /// b: Int32
 /// s: Utf8
 fn schema() -> DFSchemaRef {
-    LogicalSchema::new(vec![
-        LogicalField::new("a", DataType::Int32, true),
-        LogicalField::new("b", DataType::Int32, false),
-        LogicalField::new("s", DataType::Utf8, false),
+    LogicalPhysicalSchema::new(vec![
+        LogicalPhysicalField::new("a", DataType::Int32, true),
+        LogicalPhysicalField::new("b", DataType::Int32, false),
+        LogicalPhysicalField::new("s", DataType::Utf8, false),
     ])
     .to_dfschema_ref()
     .unwrap()
@@ -487,15 +487,15 @@ fn multiple_now() -> Result<()> {
 // ------------------------------
 
 fn expr_test_schema() -> DFSchemaRef {
-    LogicalSchema::new(vec![
-        LogicalField::new("c1", DataType::Utf8, true),
-        LogicalField::new("c2", DataType::Boolean, true),
-        LogicalField::new("c3", DataType::Int64, true),
-        LogicalField::new("c4", DataType::UInt32, true),
-        LogicalField::new("c1_non_null", DataType::Utf8, false),
-        LogicalField::new("c2_non_null", DataType::Boolean, false),
-        LogicalField::new("c3_non_null", DataType::Int64, false),
-        LogicalField::new("c4_non_null", DataType::UInt32, false),
+    LogicalPhysicalSchema::new(vec![
+        LogicalPhysicalField::new("c1", DataType::Utf8, true),
+        LogicalPhysicalField::new("c2", DataType::Boolean, true),
+        LogicalPhysicalField::new("c3", DataType::Int64, true),
+        LogicalPhysicalField::new("c4", DataType::UInt32, true),
+        LogicalPhysicalField::new("c1_non_null", DataType::Utf8, false),
+        LogicalPhysicalField::new("c2_non_null", DataType::Boolean, false),
+        LogicalPhysicalField::new("c3_non_null", DataType::Int64, false),
+        LogicalPhysicalField::new("c4_non_null", DataType::UInt32, false),
     ])
     .to_dfschema_ref()
     .unwrap()

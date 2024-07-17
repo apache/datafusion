@@ -25,7 +25,7 @@ use sqlparser::ast::{
     Value,
 };
 
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
     ScalarValue,
@@ -336,7 +336,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     {
                         Expr::Cast(Cast::new(
                             Box::new(expr),
-                            TypeRelation::from(DataType::Timestamp(
+                            LogicalPhysicalType::from(DataType::Timestamp(
                                 TimeUnit::Second,
                                 tz.clone(),
                             )),
@@ -617,7 +617,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     planner_context,
                 )?),
                 match *time_zone {
-                    SQLExpr::Value(Value::SingleQuotedString(s)) => TypeRelation::from(
+                    SQLExpr::Value(Value::SingleQuotedString(s)) => LogicalPhysicalType::from(
                         DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
                     ),
                     _ => {
@@ -1005,7 +1005,7 @@ mod tests {
             None
         }
 
-        fn get_variable_type(&self, _variable_names: &[String]) -> Option<TypeRelation> {
+        fn get_variable_type(&self, _variable_names: &[String]) -> Option<LogicalPhysicalType> {
             None
         }
 

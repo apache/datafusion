@@ -19,7 +19,7 @@
 
 use arrow::datatypes::{ArrowNativeTypeOp, DataType};
 
-use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{
     arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
     DataFusionError, Result, ScalarValue,

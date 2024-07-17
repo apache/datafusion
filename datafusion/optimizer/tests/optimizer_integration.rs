@@ -22,8 +22,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
@@ -416,7 +416,7 @@ impl ContextProvider for MyContextProvider {
         self.udafs.get(name).cloned()
     }
 
-    fn get_variable_type(&self, _variable_names: &[String]) -> Option<TypeRelation> {
+    fn get_variable_type(&self, _variable_names: &[String]) -> Option<LogicalPhysicalType> {
         None
     }
 
@@ -450,7 +450,7 @@ impl TableSource for MyTableSource {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.schema.clone().into())
     }
 }

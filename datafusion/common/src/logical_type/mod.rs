@@ -19,8 +19,8 @@ use std::{fmt::Display, sync::Arc};
 
 use arrow_schema::DataType;
 
-use field::{LogicalField, LogicalFieldRef};
-use fields::LogicalFields;
+use field::{LogicalPhysicalField, LogicalPhysicalFieldRef};
+use fields::LogicalPhysicalFields;
 use signature::LogicalType;
 
 pub mod field;
@@ -28,22 +28,22 @@ pub mod fields;
 pub mod schema;
 pub mod signature;
 
-pub type ExtensionTypeRef = Arc<dyn ExtensionType + Send + Sync>;
+pub type TypeRelationRef = Arc<dyn TypeRelation + Send + Sync>;
 
-pub trait ExtensionType: std::fmt::Debug {
+pub trait TypeRelation: std::fmt::Debug {
     fn logical(&self) -> &LogicalType;
     fn physical(&self) -> &DataType;
 }
 
 #[derive(Clone, Debug)]
-pub struct TypeRelation(ExtensionTypeRef);
+pub struct LogicalPhysicalType(TypeRelationRef);
 
-impl TypeRelation {
-    pub fn new_list(inner: TypeRelation, nullable: bool) -> Self {
+impl LogicalPhysicalType {
+    pub fn new_list(inner: LogicalPhysicalType, nullable: bool) -> Self {
         Self(Arc::new(NativeType::new_list(inner, nullable)))
     }
 
-    pub fn new_struct(fields: LogicalFields) -> Self {
+    pub fn new_struct(fields: LogicalPhysicalFields) -> Self {
         Self(Arc::new(NativeType::new_struct(fields)))
     }
 }
@@ -56,7 +56,7 @@ pub struct NativeType {
     physical: DataType,
 }
 
-impl ExtensionType for NativeType {
+impl TypeRelation for NativeType {
     fn logical(&self) -> &LogicalType {
         &self.logical
     }
@@ -67,16 +67,16 @@ impl ExtensionType for NativeType {
 }
 
 impl NativeType {
-    pub fn new_list(inner: TypeRelation, nullable: bool) -> Self {
+    pub fn new_list(inner: LogicalPhysicalType, nullable: bool) -> Self {
         Self {
             physical: DataType::new_list(inner.physical().clone(), nullable),
-            logical: LogicalType::List(LogicalFieldRef::new(
-                LogicalField::new_list_field(inner, nullable),
+            logical: LogicalType::List(LogicalPhysicalFieldRef::new(
+                LogicalPhysicalField::new_list_field(inner, nullable),
             )),
         }
     }
 
-    pub fn new_struct(fields: LogicalFields) -> Self {
+    pub fn new_struct(fields: LogicalPhysicalFields) -> Self {
         Self {
             physical: DataType::Struct(fields.clone().into()),
             logical: LogicalType::Struct(fields),
@@ -84,7 +84,7 @@ impl NativeType {
     }
 }
 
-impl ExtensionType for TypeRelation {
+impl TypeRelation for LogicalPhysicalType {
     fn logical(&self) -> &LogicalType {
         self.0.logical()
     }
@@ -94,21 +94,21 @@ impl ExtensionType for TypeRelation {
     }
 }
 
-impl PartialEq for TypeRelation {
+impl PartialEq for LogicalPhysicalType {
     fn eq(&self, other: &Self) -> bool {
         self.logical() == other.logical()
     }
 }
 
-impl Eq for TypeRelation {}
+impl Eq for LogicalPhysicalType {}
 
-impl std::hash::Hash for TypeRelation {
+impl std::hash::Hash for LogicalPhysicalType {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.logical().hash(state)
     }
 }
 
-impl Display for TypeRelation {
+impl Display for LogicalPhysicalType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
     }
@@ -123,19 +123,19 @@ impl From<DataType> for NativeType {
     }
 }
 
-impl From<ExtensionTypeRef> for TypeRelation {
-    fn from(value: ExtensionTypeRef) -> Self {
+impl From<TypeRelationRef> for LogicalPhysicalType {
+    fn from(value: TypeRelationRef) -> Self {
         Self(value)
     }
 }
 
-impl From<&DataType> for TypeRelation {
+impl From<&DataType> for LogicalPhysicalType {
     fn from(value: &DataType) -> Self {
         value.clone().into()
     }
 }
 
-impl From<DataType> for TypeRelation {
+impl From<DataType> for LogicalPhysicalType {
     fn from(value: DataType) -> Self {
         Self(NativeTypeRef::new(value.into()))
     }
@@ -181,7 +181,7 @@ impl From<&DataType> for LogicalType {
             | DataType::FixedSizeList(f, _)
             | DataType::LargeList(f)
             | DataType::LargeListView(f) => {
-                LogicalType::List(LogicalFieldRef::new(f.as_ref().clone().into()))
+                LogicalType::List(LogicalPhysicalFieldRef::new(f.as_ref().clone().into()))
             }
             DataType::Struct(f) => LogicalType::Struct(f.clone().into()),
             DataType::Dictionary(_, t) => t.as_ref().into(),
@@ -192,7 +192,7 @@ impl From<&DataType> for LogicalType {
                 LogicalType::Decimal256(precision.clone(), scale.clone())
             }
             DataType::Map(f, sorted) => LogicalType::Map(
-                LogicalFieldRef::new(f.as_ref().clone().into()),
+                LogicalPhysicalFieldRef::new(f.as_ref().clone().into()),
                 sorted.clone(),
             ),
             DataType::RunEndEncoded(_, f) => f.data_type().into(),

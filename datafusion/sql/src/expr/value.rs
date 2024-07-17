@@ -18,7 +18,7 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -34,7 +34,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn parse_value(
         &self,
         value: Value,
-        param_data_types: &[TypeRelation],
+        param_data_types: &[LogicalPhysicalType],
     ) -> Result<Expr> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
@@ -97,7 +97,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// number 1, 2, ... etc. For example, `$1` is the first placeholder; $2 is the second one and so on.
     fn create_placeholder_expr(
         param: String,
-        param_data_types: &[TypeRelation],
+        param_data_types: &[LogicalPhysicalType],
     ) -> Result<Expr> {
         // Parse the placeholder as a number because it is the only support from sqlparser and postgres
         let index = param[1..].parse::<usize>();

@@ -36,7 +36,7 @@ use datafusion_common::{project_schema, stats::Precision};
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -80,8 +80,8 @@ impl TableProvider for StatisticsValidation {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.schema.clone().into())
     }
 
     fn table_type(&self) -> TableType {

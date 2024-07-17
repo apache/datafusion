@@ -20,35 +20,35 @@ use std::sync::Arc;
 
 use arrow_schema::{Field, FieldRef, Fields, UnionFields};
 
-use super::field::{LogicalField, LogicalFieldRef};
+use super::field::{LogicalPhysicalField, LogicalPhysicalFieldRef};
 
 #[derive(Clone, Eq, PartialEq, Hash)]
-pub struct LogicalFields(Arc<[LogicalFieldRef]>);
+pub struct LogicalPhysicalFields(Arc<[LogicalPhysicalFieldRef]>);
 
-impl std::fmt::Debug for LogicalFields {
+impl std::fmt::Debug for LogicalPhysicalFields {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.as_ref().fmt(f)
     }
 }
 
-impl From<&Fields> for LogicalFields {
+impl From<&Fields> for LogicalPhysicalFields {
     fn from(value: &Fields) -> Self {
         Self(
             value
                 .iter()
-                .map(|v| LogicalFieldRef::new(v.into()))
+                .map(|v| LogicalPhysicalFieldRef::new(v.into()))
                 .collect(),
         )
     }
 }
 
-impl From<Fields> for LogicalFields {
+impl From<Fields> for LogicalPhysicalFields {
     fn from(value: Fields) -> Self {
         Self::from(&value)
     }
 }
 
-impl Into<Fields> for LogicalFields {
+impl Into<Fields> for LogicalPhysicalFields {
     fn into(self) -> Fields {
         Fields::from(
             self.iter()
@@ -58,73 +58,73 @@ impl Into<Fields> for LogicalFields {
     }
 }
 
-impl Default for LogicalFields {
+impl Default for LogicalPhysicalFields {
     fn default() -> Self {
         Self::empty()
     }
 }
 
-impl FromIterator<LogicalField> for LogicalFields {
-    fn from_iter<T: IntoIterator<Item = LogicalField>>(iter: T) -> Self {
+impl FromIterator<LogicalPhysicalField> for LogicalPhysicalFields {
+    fn from_iter<T: IntoIterator<Item =LogicalPhysicalField>>(iter: T) -> Self {
         iter.into_iter().map(Arc::new).collect()
     }
 }
 
-impl FromIterator<LogicalFieldRef> for LogicalFields {
-    fn from_iter<T: IntoIterator<Item = LogicalFieldRef>>(iter: T) -> Self {
+impl FromIterator<LogicalPhysicalFieldRef> for LogicalPhysicalFields {
+    fn from_iter<T: IntoIterator<Item =LogicalPhysicalFieldRef>>(iter: T) -> Self {
         Self(iter.into_iter().collect())
     }
 }
 
-impl From<Vec<LogicalField>> for LogicalFields {
-    fn from(value: Vec<LogicalField>) -> Self {
+impl From<Vec<LogicalPhysicalField>> for LogicalPhysicalFields {
+    fn from(value: Vec<LogicalPhysicalField>) -> Self {
         value.into_iter().collect()
     }
 }
 
-impl From<Vec<LogicalFieldRef>> for LogicalFields {
-    fn from(value: Vec<LogicalFieldRef>) -> Self {
+impl From<Vec<LogicalPhysicalFieldRef>> for LogicalPhysicalFields {
+    fn from(value: Vec<LogicalPhysicalFieldRef>) -> Self {
         Self(value.into())
     }
 }
 
-impl From<&[LogicalFieldRef]> for LogicalFields {
-    fn from(value: &[LogicalFieldRef]) -> Self {
+impl From<&[LogicalPhysicalFieldRef]> for LogicalPhysicalFields {
+    fn from(value: &[LogicalPhysicalFieldRef]) -> Self {
         Self(value.into())
     }
 }
 
-impl<const N: usize> From<[LogicalFieldRef; N]> for LogicalFields {
-    fn from(value: [LogicalFieldRef; N]) -> Self {
+impl<const N: usize> From<[LogicalPhysicalFieldRef; N]> for LogicalPhysicalFields {
+    fn from(value: [LogicalPhysicalFieldRef; N]) -> Self {
         Self(Arc::new(value))
     }
 }
 
-impl Deref for LogicalFields {
-    type Target = [LogicalFieldRef];
+impl Deref for LogicalPhysicalFields {
+    type Target = [LogicalPhysicalFieldRef];
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
 
-impl<'a> IntoIterator for &'a LogicalFields {
-    type Item = &'a LogicalFieldRef;
-    type IntoIter = std::slice::Iter<'a, LogicalFieldRef>;
+impl<'a> IntoIterator for &'a LogicalPhysicalFields {
+    type Item = &'a LogicalPhysicalFieldRef;
+    type IntoIter = std::slice::Iter<'a, LogicalPhysicalFieldRef>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
     }
 }
 
-impl LogicalFields {
+impl LogicalPhysicalFields {
     pub fn empty() -> Self {
         Self(Arc::new([]))
     }
 }
 
 #[derive(Clone, Eq, PartialEq, Hash)]
-pub struct LogicalUnionFields(Arc<[(i8, LogicalFieldRef)]>);
+pub struct LogicalUnionFields(Arc<[(i8, LogicalPhysicalFieldRef)]>);
 
 impl std::fmt::Debug for LogicalUnionFields {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -132,8 +132,8 @@ impl std::fmt::Debug for LogicalUnionFields {
     }
 }
 
-impl FromIterator<(i8, LogicalFieldRef)> for LogicalUnionFields {
-    fn from_iter<T: IntoIterator<Item = (i8, LogicalFieldRef)>>(iter: T) -> Self {
+impl FromIterator<(i8, LogicalPhysicalFieldRef)> for LogicalUnionFields {
+    fn from_iter<T: IntoIterator<Item = (i8, LogicalPhysicalFieldRef)>>(iter: T) -> Self {
         Self(iter.into_iter().collect())
     }
 }
@@ -143,7 +143,7 @@ impl From<&UnionFields> for LogicalUnionFields {
         Self::from_iter(
             value
                 .iter()
-                .map(|(i, f)| (i, LogicalFieldRef::new(f.into()))),
+                .map(|(i, f)| (i, LogicalPhysicalFieldRef::new(f.into()))),
         )
     }
 }

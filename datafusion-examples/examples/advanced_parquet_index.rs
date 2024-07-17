@@ -42,7 +42,7 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -454,8 +454,8 @@ impl TableProvider for IndexTableProvider {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.indexed_file.schema.as_ref().clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.indexed_file.schema.as_ref().clone().into())
     }
 
     fn table_type(&self) -> TableType {

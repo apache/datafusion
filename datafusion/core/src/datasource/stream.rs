@@ -42,7 +42,7 @@ use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use futures::StreamExt;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
@@ -309,8 +309,8 @@ impl TableProvider for StreamTable {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.0.source.schema().clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.0.source.schema().clone().into())
     }
 
     fn constraints(&self) -> Option<&Constraints> {

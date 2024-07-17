@@ -21,7 +21,7 @@ use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::Schema;
 
-use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::sort_properties::ExprProperties;

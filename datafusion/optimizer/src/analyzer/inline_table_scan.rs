@@ -106,8 +106,8 @@ mod tests {
     use crate::test::assert_analyzed_plan_eq;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::logical_type::field::LogicalField;
-    use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+    use datafusion_common::logical_type::field::LogicalPhysicalField;
+    use datafusion_common::logical_type::schema::{LogicalPhysicalSchema, LogicalPhysicalSchemaRef};
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, TableSource};
 
     pub struct RawTableSource {}
@@ -117,10 +117,10 @@ mod tests {
             self
         }
 
-        fn schema(&self) -> LogicalSchemaRef {
-            Arc::new(LogicalSchema::new(vec![
-                LogicalField::new("a", DataType::Int64, false),
-                LogicalField::new("b", DataType::Int64, false),
+        fn schema(&self) -> LogicalPhysicalSchemaRef {
+            Arc::new(LogicalPhysicalSchema::new(vec![
+                LogicalPhysicalField::new("a", DataType::Int64, false),
+                LogicalPhysicalField::new("b", DataType::Int64, false),
             ]))
         }
 
@@ -161,7 +161,7 @@ mod tests {
             Ok(datafusion_expr::TableProviderFilterPushDown::Exact)
         }
 
-        fn schema(&self) -> LogicalSchemaRef {
+        fn schema(&self) -> LogicalPhysicalSchemaRef {
             Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]).into())
         }
 

@@ -21,9 +21,9 @@ use datafusion::arrow::array::GenericListArray;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
-use datafusion::common::logical_type::field::LogicalField;
-use datafusion::common::logical_type::schema::LogicalSchema;
-use datafusion::common::logical_type::{ExtensionType, TypeRelation};
+use datafusion::common::logical_type::field::LogicalPhysicalField;
+use datafusion::common::logical_type::schema::LogicalPhysicalSchema;
+use datafusion::common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion::common::plan_err;
 use datafusion::common::{
     not_impl_datafusion_err, not_impl_err, plan_datafusion_err, substrait_datafusion_err,
@@ -361,7 +361,7 @@ fn make_renamed_schema(
 
     let mut name_idx = 0;
 
-    let (qualifiers, fields): (_, Vec<LogicalField>) = schema
+    let (qualifiers, fields): (_, Vec<LogicalPhysicalField>) = schema
         .iter()
         .map(|(q, f)| {
             let name = next_struct_field_name(0, dfs_names, &mut name_idx)?;
@@ -390,7 +390,7 @@ fn make_renamed_schema(
 
     DFSchema::from_field_specific_qualified_schema(
         qualifiers,
-        &Arc::new(LogicalSchema::new(fields)),
+        &Arc::new(LogicalPhysicalSchema::new(fields)),
     )
 }
 
@@ -1347,7 +1347,7 @@ pub async fn from_substrait_rex(
     }
 }
 
-pub(crate) fn from_substrait_type_without_names(dt: &Type) -> Result<TypeRelation> {
+pub(crate) fn from_substrait_type_without_names(dt: &Type) -> Result<LogicalPhysicalType> {
     from_substrait_type(dt, &[], &mut 0)
 }
 
@@ -1355,7 +1355,7 @@ fn from_substrait_type(
     dt: &Type,
     dfs_names: &[String],
     name_idx: &mut usize,
-) -> Result<TypeRelation> {
+) -> Result<LogicalPhysicalType> {
     match &dt.kind {
         Some(s_kind) => match s_kind {
             r#type::Kind::Bool(_) => Ok(DataType::Boolean.into()),
@@ -1930,7 +1930,7 @@ fn from_substrait_null(
                 d.scale as i8,
             )),
             r#type::Kind::List(l) => {
-                let field = LogicalField::new_list_field(
+                let field = LogicalPhysicalField::new_list_field(
                     from_substrait_type(
                         l.r#type.clone().unwrap().as_ref(),
                         dfs_names,

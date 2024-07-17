@@ -5,10 +5,10 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::schema::{LogicalPhysicalSchema, LogicalPhysicalSchemaRef};
 use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::logical_type::{ExtensionType, ExtensionTypeRef};
+use datafusion_common::logical_type::{TypeRelation, TypeRelationRef};
 use datafusion_expr::{Expr, TableType};
 use std::any::Any;
 use std::sync::Arc;
@@ -41,7 +41,7 @@ impl Default for CustomMagicalType {
     }
 }
 
-impl ExtensionType for CustomMagicalType {
+impl TypeRelation for CustomMagicalType {
     fn logical(&self) -> &LogicalType {
         &self.logical
     }
@@ -62,17 +62,17 @@ impl TableProvider for ExampleTableSource {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
         // TODO: ugly?
-        let custom_magical_type: ExtensionTypeRef =
+        let custom_magical_type: TypeRelationRef =
             Arc::new(CustomMagicalType::default());
 
         // This schema will be equivalent to:
         // a -> Timestamp(Microsecond, None)
         // b -> Utf8
         // c -> Int64
-        Arc::new(LogicalSchema::new(vec![
-            LogicalField::new(
+        Arc::new(LogicalPhysicalSchema::new(vec![
+            LogicalPhysicalField::new(
                 "a",
                 DataType::RunEndEncoded(
                     Arc::new(Field::new("run_ends", DataType::Int64, false)),
@@ -84,8 +84,8 @@ impl TableProvider for ExampleTableSource {
                 ),
                 false,
             ),
-            LogicalField::new("b", custom_magical_type, false),
-            LogicalField::new("c", DataType::Int64, true),
+            LogicalPhysicalField::new("b", custom_magical_type, false),
+            LogicalPhysicalField::new("c", DataType::Int64, true),
         ]))
     }
 

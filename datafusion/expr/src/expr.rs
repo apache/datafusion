@@ -34,8 +34,8 @@ use crate::{
 use crate::{window_frame, Volatility};
 
 use arrow::datatypes::DataType;
-use datafusion_common::logical_type::field::LogicalFieldRef;
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::field::LogicalPhysicalFieldRef;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -225,7 +225,7 @@ pub enum Expr {
     /// A named reference to a qualified filed in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
-    ScalarVariable(TypeRelation, Vec<String>),
+    ScalarVariable(LogicalPhysicalType, Vec<String>),
     /// A constant value.
     Literal(ScalarValue),
     /// A binary expression such as "age > 21"
@@ -319,7 +319,7 @@ pub enum Expr {
     Placeholder(Placeholder),
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(TypeRelation, Column),
+    OuterReferenceColumn(LogicalPhysicalType, Column),
     /// Unnest expression
     Unnest(Unnest),
 }
@@ -341,8 +341,8 @@ impl From<Column> for Expr {
 /// useful for creating [`Expr`] from a [`DFSchema`].
 ///
 /// See example on [`Expr`]
-impl<'a> From<(Option<&'a TableReference>, &'a LogicalFieldRef)> for Expr {
-    fn from(value: (Option<&'a TableReference>, &'a LogicalFieldRef)) -> Self {
+impl<'a> From<(Option<&'a TableReference>, &'a LogicalPhysicalFieldRef)> for Expr {
+    fn from(value: (Option<&'a TableReference>, &'a LogicalPhysicalFieldRef)) -> Self {
         Expr::from(Column::from(value))
     }
 }
@@ -566,12 +566,12 @@ pub struct Cast {
     /// The expression being cast
     pub expr: Box<Expr>,
     /// The `LogicalType` the expression will yield
-    pub data_type: TypeRelation,
+    pub data_type: LogicalPhysicalType,
 }
 
 impl Cast {
     /// Create a new Cast expression
-    pub fn new(expr: Box<Expr>, data_type: impl Into<TypeRelation>) -> Self {
+    pub fn new(expr: Box<Expr>, data_type: impl Into<LogicalPhysicalType>) -> Self {
         Self {
             expr,
             data_type: data_type.into(),
@@ -585,12 +585,12 @@ pub struct TryCast {
     /// The expression being cast
     pub expr: Box<Expr>,
     /// The `LogicalType` the expression will yield
-    pub data_type: TypeRelation,
+    pub data_type: LogicalPhysicalType,
 }
 
 impl TryCast {
     /// Create a new TryCast expression
-    pub fn new(expr: Box<Expr>, data_type: impl Into<TypeRelation>) -> Self {
+    pub fn new(expr: Box<Expr>, data_type: impl Into<LogicalPhysicalType>) -> Self {
         Self {
             expr,
             data_type: data_type.into(),
@@ -939,12 +939,12 @@ pub struct Placeholder {
     /// The identifier of the parameter, including the leading `$` (e.g, `"$1"` or `"$foo"`)
     pub id: String,
     /// The type the parameter will be filled in with
-    pub data_type: Option<TypeRelation>,
+    pub data_type: Option<LogicalPhysicalType>,
 }
 
 impl Placeholder {
     /// Create a new Placeholder expression
-    pub fn new(id: String, data_type: Option<TypeRelation>) -> Self {
+    pub fn new(id: String, data_type: Option<LogicalPhysicalType>) -> Self {
         Self { id, data_type }
     }
 }

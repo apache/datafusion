@@ -43,7 +43,7 @@ use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion_common::{assert_contains, Result};
 
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use datafusion_execution::TaskContext;
 use test_utils::AccessLogGenerator;
 
@@ -733,8 +733,8 @@ impl TableProvider for SortedTableProvider {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.schema.clone().into())
     }
 
     fn table_type(&self) -> TableType {

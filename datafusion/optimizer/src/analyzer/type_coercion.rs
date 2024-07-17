@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, IntervalUnit};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
@@ -484,7 +484,7 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
 
 /// Casts the given `value` to `target_type`. Note that this function
 /// only considers `Null` or `Utf8` values.
-fn coerce_scalar(target_type: &TypeRelation, value: &ScalarValue) -> Result<ScalarValue> {
+fn coerce_scalar(target_type: &LogicalPhysicalType, value: &ScalarValue) -> Result<ScalarValue> {
     match value {
         // Coerce Utf8 values:
         ScalarValue::Utf8(Some(val)) => {
@@ -511,7 +511,7 @@ fn coerce_scalar(target_type: &TypeRelation, value: &ScalarValue) -> Result<Scal
 /// family), we return a `Null` value of this type to signal this situation.
 /// Downstream code uses this signal to treat these values as *unbounded*.
 fn coerce_scalar_range_aware(
-    target_type: &TypeRelation,
+    target_type: &LogicalPhysicalType,
     value: ScalarValue,
 ) -> Result<ScalarValue> {
     coerce_scalar(target_type, &value).or_else(|err| {
@@ -530,7 +530,7 @@ fn coerce_scalar_range_aware(
 /// This function returns the widest type in the family of `given_type`.
 /// If the given type is already the widest type, it returns `None`.
 /// For example, if `given_type` is `Int8`, it returns `Int64`.
-fn get_widest_type_in_family(given_type: &TypeRelation) -> Option<TypeRelation> {
+fn get_widest_type_in_family(given_type: &LogicalPhysicalType) -> Option<LogicalPhysicalType> {
     use LogicalType::*;
     match given_type.logical() {
         UInt8 | UInt16 | UInt32 => Some(DataType::UInt64.into()),
@@ -542,7 +542,7 @@ fn get_widest_type_in_family(given_type: &TypeRelation) -> Option<TypeRelation> 
 
 /// Coerces the given (window frame) `bound` to `target_type`.
 fn coerce_frame_bound(
-    target_type: &TypeRelation,
+    target_type: &LogicalPhysicalType,
     bound: WindowFrameBound,
 ) -> Result<WindowFrameBound> {
     match bound {
@@ -811,8 +811,8 @@ mod test {
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
-    use datafusion_common::logical_type::field::LogicalField;
-    use datafusion_common::logical_type::TypeRelation;
+    use datafusion_common::logical_type::field::LogicalPhysicalField;
+    use datafusion_common::logical_type::LogicalPhysicalType;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
@@ -838,12 +838,12 @@ mod test {
         }))
     }
 
-    fn empty_with_type(data_type: impl Into<TypeRelation>) -> Arc<LogicalPlan> {
+    fn empty_with_type(data_type: impl Into<LogicalPhysicalType>) -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(
                 DFSchema::from_unqualified_fields(
-                    vec![LogicalField::new("a", data_type, true)].into(),
+                    vec![LogicalPhysicalField::new("a", data_type, true)].into(),
                     std::collections::HashMap::new(),
                 )
                 .unwrap(),
@@ -1081,7 +1081,7 @@ mod test {
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::from_unqualified_fields(
-                vec![LogicalField::new("a", DataType::Decimal128(12, 4), true)].into(),
+                vec![LogicalPhysicalField::new("a", DataType::Decimal128(12, 4), true)].into(),
                 std::collections::HashMap::new(),
             )?),
         }));
@@ -1279,7 +1279,7 @@ mod test {
     fn test_type_coercion_rewrite() -> Result<()> {
         // gt
         let schema = Arc::new(DFSchema::from_unqualified_fields(
-            vec![LogicalField::new("a", DataType::Int64, true)].into(),
+            vec![LogicalPhysicalField::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
         let mut rewriter = TypeCoercionRewriter { schema: &schema };
@@ -1290,7 +1290,7 @@ mod test {
 
         // eq
         let schema = Arc::new(DFSchema::from_unqualified_fields(
-            vec![LogicalField::new("a", DataType::Int64, true)].into(),
+            vec![LogicalPhysicalField::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
         let mut rewriter = TypeCoercionRewriter { schema: &schema };
@@ -1301,7 +1301,7 @@ mod test {
 
         // lt
         let schema = Arc::new(DFSchema::from_unqualified_fields(
-            vec![LogicalField::new("a", DataType::Int64, true)].into(),
+            vec![LogicalPhysicalField::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
         let mut rewriter = TypeCoercionRewriter { schema: &schema };
@@ -1331,7 +1331,7 @@ mod test {
 
     fn cast_if_not_same_type(
         expr: Box<Expr>,
-        data_type: &TypeRelation,
+        data_type: &LogicalPhysicalType,
         schema: &DFSchemaRef,
     ) -> Box<Expr> {
         if &expr.get_type(schema).unwrap() != data_type {
@@ -1343,8 +1343,8 @@ mod test {
 
     fn cast_helper(
         case: Case,
-        case_when_type: TypeRelation,
-        then_else_type: TypeRelation,
+        case_when_type: LogicalPhysicalType,
+        then_else_type: LogicalPhysicalType,
         schema: &DFSchemaRef,
     ) -> Case {
         let expr = case
@@ -1375,23 +1375,23 @@ mod test {
     fn test_case_expression_coercion() -> Result<()> {
         let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
-                LogicalField::new("boolean", DataType::Boolean, true),
-                LogicalField::new("integer", DataType::Int32, true),
-                LogicalField::new("float", DataType::Float32, true),
-                LogicalField::new(
+                LogicalPhysicalField::new("boolean", DataType::Boolean, true),
+                LogicalPhysicalField::new("integer", DataType::Int32, true),
+                LogicalPhysicalField::new("float", DataType::Float32, true),
+                LogicalPhysicalField::new(
                     "timestamp",
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
                     true,
                 ),
-                LogicalField::new("date", DataType::Date32, true),
-                LogicalField::new(
+                LogicalPhysicalField::new("date", DataType::Date32, true),
+                LogicalPhysicalField::new(
                     "interval",
                     DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
                     true,
                 ),
-                LogicalField::new("binary", DataType::Binary, true),
-                LogicalField::new("string", DataType::Utf8, true),
-                LogicalField::new("decimal", DataType::Decimal128(10, 10), true),
+                LogicalPhysicalField::new("binary", DataType::Binary, true),
+                LogicalPhysicalField::new("string", DataType::Utf8, true),
+                LogicalPhysicalField::new("decimal", DataType::Decimal128(10, 10), true),
             ]
             .into(),
             std::collections::HashMap::new(),

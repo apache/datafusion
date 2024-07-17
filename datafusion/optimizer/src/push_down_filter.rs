@@ -1199,8 +1199,8 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use async_trait::async_trait;
-    use datafusion_common::logical_type::field::LogicalField;
-    use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+    use datafusion_common::logical_type::field::LogicalPhysicalField;
+    use datafusion_common::logical_type::schema::{LogicalPhysicalSchema, LogicalPhysicalSchemaRef};
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
@@ -2406,10 +2406,10 @@ mod tests {
 
     #[async_trait]
     impl TableSource for PushDownProvider {
-        fn schema(&self) -> LogicalSchemaRef {
-            Arc::new(LogicalSchema::new(vec![
-                LogicalField::new("a", DataType::Int32, true),
-                LogicalField::new("b", DataType::Int32, true),
+        fn schema(&self) -> LogicalPhysicalSchemaRef {
+            Arc::new(LogicalPhysicalSchema::new(vec![
+                LogicalPhysicalField::new("a", DataType::Int32, true),
+                LogicalPhysicalField::new("b", DataType::Int32, true),
             ]))
         }
 
@@ -2437,7 +2437,7 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from(LogicalSchema::from(
+            projected_schema: Arc::new(DFSchema::try_from(LogicalPhysicalSchema::from(
                 (*test_provider.schema()).clone(),
             ))?),
             projection: None,
@@ -2509,7 +2509,7 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
-            projected_schema: Arc::new(DFSchema::try_from(LogicalSchema::from(
+            projected_schema: Arc::new(DFSchema::try_from(LogicalPhysicalSchema::from(
                 (*test_provider.schema()).clone(),
             ))?),
             projection: Some(vec![0]),
@@ -2538,7 +2538,7 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from(LogicalSchema::from(
+            projected_schema: Arc::new(DFSchema::try_from(LogicalPhysicalSchema::from(
                 (*test_provider.schema()).clone(),
             ))?),
             projection: Some(vec![0]),

@@ -23,8 +23,8 @@ use std::sync::Arc;
 use crate::LogicalPlan;
 use arrow::datatypes::DataType;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchema;
 use datafusion_common::{DFSchemaRef, TableReference};
 
 /// Operator that copies the contents of a database to file(s)
@@ -131,7 +131,7 @@ impl Display for WriteOp {
 
 fn make_count_schema() -> DFSchemaRef {
     Arc::new(
-        LogicalSchema::new(vec![LogicalField::new("count", DataType::UInt64, false)])
+        LogicalPhysicalSchema::new(vec![LogicalPhysicalField::new("count", DataType::UInt64, false)])
             .try_into()
             .unwrap(),
     )

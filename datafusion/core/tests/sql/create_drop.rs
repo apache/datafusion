@@ -19,7 +19,7 @@ use super::*;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::test_util::TestTableFactory;
-use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::TypeRelation;
 
 #[tokio::test]
 async fn create_custom_table() -> Result<()> {

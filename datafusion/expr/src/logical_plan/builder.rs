@@ -51,11 +51,11 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::fields::LogicalFields;
-use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::fields::LogicalPhysicalFields;
+use datafusion_common::logical_type::schema::{LogicalPhysicalSchema, LogicalPhysicalSchemaRef};
 use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion_common::{
     get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -187,9 +187,9 @@ impl LogicalPlanBuilder {
         }
 
         let empty_schema = DFSchema::empty();
-        let mut field_types: Vec<TypeRelation> = Vec::with_capacity(n_cols);
+        let mut field_types: Vec<LogicalPhysicalType> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
-            let mut common_type: Option<TypeRelation> = None;
+            let mut common_type: Option<LogicalPhysicalType> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
                 let data_type = value.get_type(&empty_schema)?;
@@ -227,7 +227,7 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                LogicalField::new(name, data_type.clone(), true)
+                LogicalPhysicalField::new(name, data_type.clone(), true)
             })
             .collect::<Vec<_>>();
         let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
@@ -296,7 +296,7 @@ impl LogicalPlanBuilder {
     pub fn insert_into(
         input: LogicalPlan,
         table_name: impl Into<TableReference>,
-        table_schema: &LogicalSchema,
+        table_schema: &LogicalPhysicalSchema,
         overwrite: bool,
     ) -> Result<Self> {
         let table_schema = table_schema.clone().to_dfschema_ref()?;
@@ -390,7 +390,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Make a builder for a prepare logical plan from the builder's plan
-    pub fn prepare(self, name: String, data_types: Vec<TypeRelation>) -> Result<Self> {
+    pub fn prepare(self, name: String, data_types: Vec<LogicalPhysicalType>) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Prepare(Prepare {
             name,
             data_types,
@@ -1188,7 +1188,7 @@ impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
     }
 }
 
-pub fn change_redundant_column(fields: &LogicalFields) -> Vec<LogicalField> {
+pub fn change_redundant_column(fields: &LogicalPhysicalFields) -> Vec<LogicalPhysicalField> {
     let mut name_map = HashMap::new();
     fields
         .into_iter()
@@ -1197,7 +1197,7 @@ pub fn change_redundant_column(fields: &LogicalFields) -> Vec<LogicalField> {
             *counter += 1;
             if *counter > 1 {
                 let new_name = format!("{}:{}", field.name(), *counter - 1);
-                LogicalField::new(
+                LogicalPhysicalField::new(
                     new_name,
                     field.data_type().clone(),
                     field.is_nullable(),
@@ -1216,8 +1216,8 @@ pub fn build_join_schema(
     join_type: &JoinType,
 ) -> Result<DFSchema> {
     fn nullify_fields<'a>(
-        fields: impl Iterator<Item = (Option<&'a TableReference>, &'a Arc<LogicalField>)>,
-    ) -> Vec<(Option<TableReference>, Arc<LogicalField>)> {
+        fields: impl Iterator<Item = (Option<&'a TableReference>, &'a Arc<LogicalPhysicalField>)>,
+    ) -> Vec<(Option<TableReference>, Arc<LogicalPhysicalField>)> {
         fields
             .map(|(q, f)| {
                 // TODO: find a good way to do that
@@ -1230,7 +1230,7 @@ pub fn build_join_schema(
     let right_fields = right.iter();
     let left_fields = left.iter();
 
-    let qualified_fields: Vec<(Option<TableReference>, Arc<LogicalField>)> =
+    let qualified_fields: Vec<(Option<TableReference>, Arc<LogicalPhysicalField>)> =
         match join_type {
             JoinType::Inner => {
                 // left then right
@@ -1409,7 +1409,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     })?;
                     Ok((
                         left_qualifier.cloned(),
-                        Arc::new(LogicalField::new(
+                        Arc::new(LogicalPhysicalField::new(
                             left_field.name(),
                             data_type,
                             nullable,
@@ -1597,8 +1597,8 @@ impl TableSource for LogicalTableSource {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.table_schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.table_schema.clone().into())
     }
 
     fn supports_filters_pushdown(
@@ -1622,13 +1622,13 @@ pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
 // - Struct(field1, field2) returns ["a.field1","a.field2"]
 pub fn get_unnested_columns(
     col_name: &String,
-    data_type: &TypeRelation,
-) -> Result<Vec<(Column, Arc<LogicalField>)>> {
+    data_type: &LogicalPhysicalType,
+) -> Result<Vec<(Column, Arc<LogicalPhysicalField>)>> {
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type.logical() {
         LogicalType::List(field) => {
-            let new_field = Arc::new(LogicalField::new(
+            let new_field = Arc::new(LogicalPhysicalField::new(
                 col_name.clone(),
                 field.data_type().clone(),
                 // Unnesting may produce NULLs even if the list is not null.
@@ -1701,7 +1701,7 @@ pub fn unnest_with_options(
                         .extend(std::iter::repeat(index).take(flatten_columns.len()));
                     Ok(flatten_columns
                         .iter()
-                        .map(|col: &(Column, Arc<LogicalField>)| {
+                        .map(|col: &(Column, Arc<LogicalPhysicalField>)| {
                             (col.0.relation.to_owned(), col.1.to_owned())
                         })
                         .collect())
@@ -1743,7 +1743,7 @@ mod tests {
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
     use arrow::datatypes::{DataType, Field, Fields};
-    use datafusion_common::logical_type::ExtensionType;
+    use datafusion_common::logical_type::TypeRelation;
 
     use datafusion_common::SchemaError;
 
@@ -2244,23 +2244,23 @@ mod tests {
 
     #[test]
     fn test_change_redundant_column() -> Result<()> {
-        let t1_field_1 = LogicalField::new("a", DataType::Int32, false);
-        let t2_field_1 = LogicalField::new("a", DataType::Int32, false);
-        let t2_field_3 = LogicalField::new("a", DataType::Int32, false);
-        let t1_field_2 = LogicalField::new("b", DataType::Int32, false);
-        let t2_field_2 = LogicalField::new("b", DataType::Int32, false);
+        let t1_field_1 = LogicalPhysicalField::new("a", DataType::Int32, false);
+        let t2_field_1 = LogicalPhysicalField::new("a", DataType::Int32, false);
+        let t2_field_3 = LogicalPhysicalField::new("a", DataType::Int32, false);
+        let t1_field_2 = LogicalPhysicalField::new("b", DataType::Int32, false);
+        let t2_field_2 = LogicalPhysicalField::new("b", DataType::Int32, false);
 
         let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3];
-        let remove_redundant = change_redundant_column(&LogicalFields::from(field_vec));
+        let remove_redundant = change_redundant_column(&LogicalPhysicalFields::from(field_vec));
 
         assert_eq!(
             remove_redundant,
             vec![
-                LogicalField::new("a", DataType::Int32, false),
-                LogicalField::new("a:1", DataType::Int32, false),
-                LogicalField::new("b", DataType::Int32, false),
-                LogicalField::new("b:1", DataType::Int32, false),
-                LogicalField::new("a:2", DataType::Int32, false),
+                LogicalPhysicalField::new("a", DataType::Int32, false),
+                LogicalPhysicalField::new("a:1", DataType::Int32, false),
+                LogicalPhysicalField::new("b", DataType::Int32, false),
+                LogicalPhysicalField::new("b:1", DataType::Int32, false),
+                LogicalPhysicalField::new("a:2", DataType::Int32, false),
             ]
         );
         Ok(())

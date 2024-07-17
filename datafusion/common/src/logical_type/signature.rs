@@ -21,8 +21,8 @@ use std::sync::Arc;
 use arrow_schema::{DataType, FieldRef, IntervalUnit, TimeUnit, UnionMode};
 
 use super::{
-    field::LogicalFieldRef,
-    fields::{LogicalFields, LogicalUnionFields},
+    field::LogicalPhysicalFieldRef,
+    fields::{LogicalPhysicalFields, LogicalUnionFields},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -48,9 +48,9 @@ pub enum LogicalType {
     Timestamp(TimeUnit, Option<Arc<str>>),
     Duration(TimeUnit),
     Interval(IntervalUnit),
-    List(LogicalFieldRef),
-    Struct(LogicalFields),
-    Map(LogicalFieldRef, bool),
+    List(LogicalPhysicalFieldRef),
+    Struct(LogicalPhysicalFields),
+    Map(LogicalPhysicalFieldRef, bool),
     Decimal128(u8, i8),
     Decimal256(u8, i8),
     Union(LogicalUnionFields, UnionMode), // TODO: extension signatures?

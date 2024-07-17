@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::datasource::TableProvider;
 
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use datafusion_common::{internal_err, Constraints};
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
 
@@ -52,7 +52,7 @@ impl TableSource for DefaultTableSource {
     }
 
     /// Get a reference to the schema for this table
-    fn schema(&self) -> LogicalSchemaRef {
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
         self.table_provider.schema()
     }
 

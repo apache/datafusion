@@ -55,9 +55,9 @@ use datafusion_common::{
 use crate::display::PgJsonVisitor;
 use crate::logical_plan::tree_node::unwrap_arc;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::schema::{LogicalPhysicalSchema, LogicalPhysicalSchemaRef};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
 /// A `LogicalPlan` is a node in a tree of relational operators (such as
@@ -355,8 +355,8 @@ impl LogicalPlan {
     }
 
     /// Returns the (fixed) output schema for explain plans
-    pub fn explain_schema() -> LogicalSchemaRef {
-        LogicalSchemaRef::new(
+    pub fn explain_schema() -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(
             Schema::new(vec![
                 Field::new("plan_type", DataType::Utf8, false),
                 Field::new("plan", DataType::Utf8, false),
@@ -366,7 +366,7 @@ impl LogicalPlan {
     }
 
     /// Returns the (fixed) output schema for `DESCRIBE` plans
-    pub fn describe_schema() -> LogicalSchema {
+    pub fn describe_schema() -> LogicalPhysicalSchema {
         Schema::new(vec![
             Field::new("column_name", DataType::Utf8, false),
             Field::new("data_type", DataType::Utf8, false),
@@ -1395,8 +1395,8 @@ impl LogicalPlan {
     /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
     pub fn get_parameter_types(
         &self,
-    ) -> Result<HashMap<String, Option<TypeRelation>>, DataFusionError> {
-        let mut param_types: HashMap<String, Option<TypeRelation>> = HashMap::new();
+    ) -> Result<HashMap<String, Option<LogicalPhysicalType>>, DataFusionError> {
+        let mut param_types: HashMap<String, Option<LogicalPhysicalType>> = HashMap::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
@@ -2226,7 +2226,7 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let fields: Vec<(Option<TableReference>, Arc<LogicalField>)> = input
+        let fields: Vec<(Option<TableReference>, Arc<LogicalPhysicalField>)> = input
             .schema()
             .iter()
             .map(|(q, f)| (q.cloned(), Arc::clone(f)))
@@ -2440,7 +2440,7 @@ pub struct Prepare {
     /// The name of the statement
     pub name: String,
     /// Data types of the parameters ([`Expr::Placeholder`])
-    pub data_types: Vec<TypeRelation>,
+    pub data_types: Vec<LogicalPhysicalType>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,
 }

@@ -24,8 +24,8 @@ use std::{sync::Arc, vec};
 use arrow_schema::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::{plan_err, GetExt, Result, TableReference};
 use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 use datafusion_sql::planner::ContextProvider;
@@ -204,7 +204,7 @@ impl ContextProvider for MockContextProvider {
         self.udafs.get(name).cloned()
     }
 
-    fn get_variable_type(&self, _: &[String]) -> Option<TypeRelation> {
+    fn get_variable_type(&self, _: &[String]) -> Option<LogicalPhysicalType> {
         unimplemented!()
     }
 
@@ -259,7 +259,7 @@ impl TableSource for EmptyTable {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.table_schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.table_schema.clone().into())
     }
 }

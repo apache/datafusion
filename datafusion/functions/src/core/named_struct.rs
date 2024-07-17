@@ -17,7 +17,7 @@
 
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};

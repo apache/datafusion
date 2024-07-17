@@ -2271,7 +2271,7 @@ mod tests {
 
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
-    use datafusion_common::logical_type::field::LogicalField;
+    use datafusion_common::logical_type::field::LogicalPhysicalField;
     use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
@@ -2777,7 +2777,7 @@ mod tests {
             Self {
                 schema: DFSchemaRef::new(
                     DFSchema::from_unqualified_fields(
-                        vec![LogicalField::new("a", DataType::Int32, false)].into(),
+                        vec![LogicalPhysicalField::new("a", DataType::Int32, false)].into(),
                         HashMap::new(),
                     )
                     .unwrap(),

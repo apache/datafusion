@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use datafusion::execution::registry::FunctionRegistry;
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::{
     internal_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
     TableReference, UnnestOptions,
@@ -552,7 +552,7 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?);
-            let data_type: TypeRelation =
+            let data_type: LogicalPhysicalType =
                 cast.arrow_type.as_ref().required("arrow_type")?;
             Ok(Expr::Cast(Cast::new(expr, data_type)))
         }
@@ -563,7 +563,7 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?);
-            let data_type: TypeRelation =
+            let data_type: LogicalPhysicalType =
                 cast.arrow_type.as_ref().required("arrow_type")?;
             Ok(Expr::TryCast(TryCast::new(expr, data_type)))
         }

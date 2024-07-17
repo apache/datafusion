@@ -17,9 +17,9 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::schema::{LogicalPhysicalSchema, LogicalPhysicalSchemaRef};
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{
     AggregateUDF, Expr, LogicalPlan, ScalarUDF, TableProviderFilterPushDown, TableSource,
@@ -142,9 +142,9 @@ impl ContextProvider for MyContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         if name.table() == "person" {
             Ok(Arc::new(MyTableSource {
-                schema: Arc::new(LogicalSchema::new(vec![
-                    LogicalField::new("name", DataType::Utf8, false),
-                    LogicalField::new("age", DataType::UInt8, false),
+                schema: Arc::new(LogicalPhysicalSchema::new(vec![
+                    LogicalPhysicalField::new("name", DataType::Utf8, false),
+                    LogicalPhysicalField::new("age", DataType::UInt8, false),
                 ])),
             }))
         } else {
@@ -160,7 +160,7 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
-    fn get_variable_type(&self, _variable_names: &[String]) -> Option<TypeRelation> {
+    fn get_variable_type(&self, _variable_names: &[String]) -> Option<LogicalPhysicalType> {
         None
     }
 
@@ -187,7 +187,7 @@ impl ContextProvider for MyContextProvider {
 
 /// TableSource is the part of TableProvider needed for creating a LogicalPlan.
 struct MyTableSource {
-    schema: LogicalSchemaRef,
+    schema: LogicalPhysicalSchemaRef,
 }
 
 impl TableSource for MyTableSource {
@@ -195,7 +195,7 @@ impl TableSource for MyTableSource {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
         self.schema.clone()
     }
 

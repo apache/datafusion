@@ -23,7 +23,7 @@ use arrow_schema::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -230,7 +230,7 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
 pub(crate) fn make_decimal_type(
     precision: Option<u64>,
     scale: Option<u64>,
-) -> Result<TypeRelation> {
+) -> Result<LogicalPhysicalType> {
     // postgres like behavior
     let (precision, scale) = match (precision, scale) {
         (Some(p), Some(s)) => (p as u8, s as i8),

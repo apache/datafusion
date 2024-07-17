@@ -29,7 +29,7 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use datafusion_common::{assert_batches_eq, DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
 use std::fs::File;
@@ -118,8 +118,8 @@ impl TableProvider for SimpleCsvTable {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.schema.clone().into())
     }
 
     fn table_type(&self) -> TableType {

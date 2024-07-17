@@ -17,7 +17,7 @@
 
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::WindowUDF;
 use datafusion_expr::{
@@ -133,7 +133,7 @@ impl ContextProvider for MyContextProvider {
         self.udafs.get(name).cloned()
     }
 
-    fn get_variable_type(&self, _variable_names: &[String]) -> Option<TypeRelation> {
+    fn get_variable_type(&self, _variable_names: &[String]) -> Option<LogicalPhysicalType> {
         None
     }
 

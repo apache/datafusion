@@ -17,7 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     Dependency, Result,

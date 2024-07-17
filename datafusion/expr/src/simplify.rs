@@ -19,7 +19,7 @@
 
 use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
 use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion_common::{DFSchemaRef, DataFusionError, Result};
 
 /// Provides the information necessary to apply algebraic simplification to an
@@ -39,7 +39,7 @@ pub trait SimplifyInfo {
     fn execution_props(&self) -> &ExecutionProps;
 
     /// Returns data type of this expr needed for determining optimized int type of a value
-    fn get_data_type(&self, expr: &Expr) -> Result<TypeRelation>;
+    fn get_data_type(&self, expr: &Expr) -> Result<LogicalPhysicalType>;
 }
 
 /// Provides simplification information based on DFSchema and
@@ -96,7 +96,7 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
     }
 
     /// Returns data type of this expr needed for determining optimized int type of a value
-    fn get_data_type(&self, expr: &Expr) -> Result<TypeRelation> {
+    fn get_data_type(&self, expr: &Expr) -> Result<LogicalPhysicalType> {
         let schema = self.schema.as_ref().ok_or_else(|| {
             DataFusionError::Internal(
                 "attempt to get data type without schema".to_string(),

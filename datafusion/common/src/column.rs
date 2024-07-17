@@ -18,7 +18,7 @@
 //! Column
 
 use crate::error::_schema_err;
-use crate::logical_type::field::{LogicalField, LogicalFieldRef};
+use crate::logical_type::field::{LogicalPhysicalField, LogicalPhysicalFieldRef};
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{DFSchema, DataFusionError, Result, SchemaError, TableReference};
 use std::collections::HashSet;
@@ -348,15 +348,15 @@ impl From<String> for Column {
 }
 
 /// Create a column, use qualifier and field name
-impl From<(Option<&TableReference>, &LogicalField)> for Column {
-    fn from((relation, field): (Option<&TableReference>, &LogicalField)) -> Self {
+impl From<(Option<&TableReference>, &LogicalPhysicalField)> for Column {
+    fn from((relation, field): (Option<&TableReference>, &LogicalPhysicalField)) -> Self {
         Self::new(relation.cloned(), field.name())
     }
 }
 
 /// Create a column, use qualifier and field name
-impl From<(Option<&TableReference>, &LogicalFieldRef)> for Column {
-    fn from((relation, field): (Option<&TableReference>, &LogicalFieldRef)) -> Self {
+impl From<(Option<&TableReference>, &LogicalPhysicalFieldRef)> for Column {
+    fn from((relation, field): (Option<&TableReference>, &LogicalPhysicalFieldRef)) -> Self {
         Self::new(relation.cloned(), field.name())
     }
 }

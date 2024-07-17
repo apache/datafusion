@@ -24,8 +24,8 @@ use crate::{
 };
 
 use arrow::datatypes::Schema;
-use datafusion_common::logical_type::schema::LogicalSchema;
-use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchema;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
@@ -371,7 +371,7 @@ where
 
 /// Convert a logical expression to a physical expression (without any simplification, etc)
 pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-    let df_schema = LogicalSchema::from(schema.clone()).to_dfschema().unwrap();
+    let df_schema = LogicalPhysicalSchema::from(schema.clone()).to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     create_physical_expr(expr, &df_schema, &execution_props).unwrap()
 }

@@ -39,9 +39,9 @@ use datafusion_common::{
     ScalarValue, TableReference,
 };
 
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::schema::LogicalSchema;
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchema;
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 
 ///  The value to which `COUNT(*)` is expanded to in
@@ -433,7 +433,7 @@ pub fn expand_qualified_wildcard(
         return plan_err!("Invalid qualifier {qualifier}");
     }
 
-    let qualified_schema = Arc::new(LogicalSchema::new(fields_with_qualified));
+    let qualified_schema = Arc::new(LogicalPhysicalSchema::new(fields_with_qualified));
     let qualified_dfschema =
         DFSchema::try_from_qualified_schema(qualifier.clone(), &qualified_schema)?
             .with_functional_dependencies(projected_func_dependencies)?;
@@ -731,7 +731,7 @@ pub fn from_plan(
 pub fn exprlist_to_fields<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
-) -> Result<Vec<(Option<TableReference>, Arc<LogicalField>)>> {
+) -> Result<Vec<(Option<TableReference>, Arc<LogicalPhysicalField>)>> {
     // look for exact match in plan's output schema
     let input_schema = &plan.schema();
     exprs
@@ -834,7 +834,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
 /// can this data type be used in hash join equal conditions??
 /// data types here come from function 'equal_rows', if more data types are supported
 /// in equal_rows(hash join), add those data types here to generate join logical plan.
-pub fn can_hash(data_type: &TypeRelation) -> bool {
+pub fn can_hash(data_type: &LogicalPhysicalType) -> bool {
     use LogicalType::*;
     match data_type.logical() {
         Null => true,

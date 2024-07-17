@@ -52,7 +52,7 @@ use datafusion_physical_expr::{
 };
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use datafusion_common::logical_type::schema::{LogicalPhysicalSchema, LogicalPhysicalSchemaRef};
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -723,8 +723,8 @@ impl TableProvider for ListingTable {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.table_schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.table_schema.clone().into())
     }
 
     fn constraints(&self) -> Option<&Constraints> {
@@ -790,7 +790,7 @@ impl TableProvider for ListingTable {
         let filters = if let Some(expr) = conjunction(filters.to_vec()) {
             // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
             let table_df_schema =
-                LogicalSchema::from(self.table_schema.as_ref().clone()).to_dfschema()?;
+                LogicalPhysicalSchema::from(self.table_schema.as_ref().clone()).to_dfschema()?;
             let filters =
                 create_physical_expr(&expr, &table_df_schema, state.execution_props())?;
             Some(filters)

@@ -30,10 +30,10 @@ use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::fields::LogicalFields;
-use datafusion_common::logical_type::schema::LogicalSchema;
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::fields::LogicalPhysicalFields;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchema;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::TableReference;
 use datafusion_common::{
     not_impl_err, plan_err, unqualified_field_not_found, DFSchema, DataFusionError,
@@ -107,7 +107,7 @@ impl IdentNormalizer {
 pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied
     /// in `PREPARE` statement
-    prepare_param_data_types: Arc<Vec<TypeRelation>>,
+    prepare_param_data_types: Arc<Vec<LogicalPhysicalType>>,
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
@@ -134,7 +134,7 @@ impl PlannerContext {
     /// Update the PlannerContext with provided prepare_param_data_types
     pub fn with_prepare_param_data_types(
         mut self,
-        prepare_param_data_types: Vec<TypeRelation>,
+        prepare_param_data_types: Vec<LogicalPhysicalType>,
     ) -> Self {
         self.prepare_param_data_types = prepare_param_data_types.into();
         self
@@ -156,7 +156,7 @@ impl PlannerContext {
     }
 
     /// Return the types of parameters (`$1`, `$2`, etc) if known
-    pub fn prepare_param_data_types(&self) -> &[TypeRelation] {
+    pub fn prepare_param_data_types(&self) -> &[LogicalPhysicalType] {
         &self.prepare_param_data_types
     }
 
@@ -218,7 +218,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    pub fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<LogicalSchema> {
+    pub fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<LogicalPhysicalSchema> {
         let mut fields = Vec::with_capacity(columns.len());
 
         for column in columns {
@@ -227,14 +227,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .options
                 .iter()
                 .any(|x| x.option == ColumnOption::NotNull);
-            fields.push(LogicalField::new(
+            fields.push(LogicalPhysicalField::new(
                 self.normalizer.normalize(column.name),
                 data_type,
                 !not_nullable,
             ));
         }
 
-        Ok(LogicalSchema::new(fields))
+        Ok(LogicalPhysicalSchema::new(fields))
     }
 
     /// Returns a vector of (column_name, default_expr) pairs
@@ -341,13 +341,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn convert_data_type(
         &self,
         sql_type: &SQLDataType,
-    ) -> Result<TypeRelation> {
+    ) -> Result<LogicalPhysicalType> {
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type))
             | SQLDataType::Array(ArrayElemTypeDef::SquareBracket(inner_sql_type, _)) => {
                 // Arrays may be multi-dimensional.
                 let inner_data_type = self.convert_data_type(inner_sql_type)?;
-                Ok(TypeRelation::new_list(inner_data_type, true).into())
+                Ok(LogicalPhysicalType::new_list(inner_data_type, true).into())
             }
             SQLDataType::Array(ArrayElemTypeDef::None) => {
                 not_impl_err!("Arrays with unspecified type is not supported")
@@ -356,7 +356,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn convert_simple_data_type(&self, sql_type: &SQLDataType) -> Result<TypeRelation> {
+    fn convert_simple_data_type(&self, sql_type: &SQLDataType) -> Result<LogicalPhysicalType> {
         match sql_type {
             SQLDataType::Boolean | SQLDataType::Bool => Ok(DataType::Boolean.into()),
             SQLDataType::TinyInt(_) => Ok(DataType::Int8.into()),
@@ -431,14 +431,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Some(ident) => ident.clone(),
                             None => Ident::new(format!("c{idx}"))
                         };
-                        Ok(Arc::new(LogicalField::new(
+                        Ok(Arc::new(LogicalPhysicalField::new(
                             self.normalizer.normalize(field_name),
                             data_type,
                             true,
                         )))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(TypeRelation::new_struct(LogicalFields::from(fields)))
+                Ok(LogicalPhysicalType::new_struct(LogicalPhysicalFields::from(fields)))
             }
             // Explicitly list all other types so that if sqlparser
             // adds/changes the `SQLDataType` the compiler will tell us on upgrade

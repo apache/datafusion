@@ -32,7 +32,7 @@ use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::format_as_file_type;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
-use datafusion_common::logical_type::field::LogicalField;
+use datafusion_common::logical_type::field::LogicalPhysicalField;
 use datafusion_proto::logical_plan::file_formats::{
     ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, ParquetLogicalExtensionCodec,
 };
@@ -1612,12 +1612,12 @@ fn roundtrip_dfschema() {
         vec![
             (
                 None,
-                Arc::new(LogicalField::new("a", DataType::Int64, false)),
+                Arc::new(LogicalPhysicalField::new("a", DataType::Int64, false)),
             ),
             (
                 Some("t".into()),
                 Arc::new(
-                    LogicalField::new("b", DataType::Decimal128(15, 2), true)
+                    LogicalPhysicalField::new("b", DataType::Decimal128(15, 2), true)
                         .with_metadata(HashMap::from([(
                             String::from("k1"),
                             String::from("v1"),

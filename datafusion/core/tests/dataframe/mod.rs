@@ -47,7 +47,7 @@ use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::test_util::{parquet_test_data, populate_csv_partitions};
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::{assert_contains, DataFusionError, ScalarValue, UnnestOptions};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -1928,7 +1928,7 @@ impl VarProvider for HardcodedIntProvider {
         Ok(ScalarValue::Int64(Some(1234)))
     }
 
-    fn get_type(&self, _: &[String]) -> Option<TypeRelation> {
+    fn get_type(&self, _: &[String]) -> Option<LogicalPhysicalType> {
         Some(DataType::Int64.into())
     }
 }

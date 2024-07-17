@@ -21,7 +21,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use datafusion_common::Column;
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
 
@@ -83,8 +83,8 @@ impl TableProvider for ViewTable {
         Some(&self.logical_plan)
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.table_schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.table_schema.clone().into())
     }
 
     fn table_type(&self) -> TableType {

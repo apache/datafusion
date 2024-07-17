@@ -17,8 +17,8 @@
 
 use arrow_schema::DataType;
 use datafusion::prelude::{CsvReadOptions, SessionContext};
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchema;
 use datafusion_common::{DFSchemaRef, Result, ToDFSchema};
 use datafusion_expr::Expr;
 use datafusion_sql::unparser::Unparser;
@@ -29,10 +29,10 @@ use datafusion_sql::unparser::Unparser;
 /// b: Int32
 /// s: Float32
 fn schema() -> DFSchemaRef {
-    LogicalSchema::new(vec![
-        LogicalField::new("a", DataType::Int32, true),
-        LogicalField::new("b", DataType::Int32, false),
-        LogicalField::new("c", DataType::Float32, false),
+    LogicalPhysicalSchema::new(vec![
+        LogicalPhysicalField::new("a", DataType::Int32, true),
+        LogicalPhysicalField::new("b", DataType::Int32, false),
+        LogicalPhysicalField::new("c", DataType::Float32, false),
     ])
     .to_dfschema_ref()
     .unwrap()

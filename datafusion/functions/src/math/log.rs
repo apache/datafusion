@@ -24,7 +24,7 @@ use super::power::PowerFunc;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
-use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
     ScalarValue,

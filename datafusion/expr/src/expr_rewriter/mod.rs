@@ -288,8 +288,8 @@ mod test {
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::DataType;
-    use datafusion_common::logical_type::field::LogicalField;
-    use datafusion_common::logical_type::schema::LogicalSchema;
+    use datafusion_common::logical_type::field::LogicalPhysicalField;
+    use datafusion_common::logical_type::schema::LogicalPhysicalSchema;
     use datafusion_common::ScalarValue;
 
     #[derive(Default)]
@@ -410,9 +410,9 @@ mod test {
     ) -> DFSchema {
         let fields = fields
             .iter()
-            .map(|f| Arc::new(LogicalField::new(f.to_string(), DataType::Int8, false)))
+            .map(|f| Arc::new(LogicalPhysicalField::new(f.to_string(), DataType::Int8, false)))
             .collect::<Vec<_>>();
-        let schema = Arc::new(LogicalSchema::new(fields));
+        let schema = Arc::new(LogicalPhysicalSchema::new(fields));
         DFSchema::from_field_specific_qualified_schema(qualifiers, &schema.into())
             .unwrap()
     }

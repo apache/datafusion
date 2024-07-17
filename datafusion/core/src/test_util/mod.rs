@@ -49,7 +49,7 @@ use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use futures::Stream;
 use tempfile::TempDir;
 // backwards compatibility
@@ -203,8 +203,8 @@ impl TableProvider for TestTableProvider {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.schema.clone().into())
     }
 
     fn table_type(&self) -> TableType {

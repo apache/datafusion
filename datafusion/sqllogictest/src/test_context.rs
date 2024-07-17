@@ -40,7 +40,7 @@ use datafusion_common::cast::as_float64_array;
 use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use log::info;
 use tempfile::TempDir;
 
@@ -216,7 +216,7 @@ pub async fn register_temp_table(ctx: &SessionContext) {
             self.0
         }
 
-        fn schema(&self) -> LogicalSchemaRef {
+        fn schema(&self) -> LogicalPhysicalSchemaRef {
             unimplemented!()
         }
 

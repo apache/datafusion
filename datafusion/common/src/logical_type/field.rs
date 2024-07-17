@@ -21,50 +21,50 @@ use std::sync::Arc;
 
 use arrow_schema::{Field, FieldRef};
 
-use super::{ExtensionType, TypeRelation};
+use super::{TypeRelation, LogicalPhysicalType};
 
-pub type LogicalFieldRef = Arc<LogicalField>;
+pub type LogicalPhysicalFieldRef = Arc<LogicalPhysicalField>;
 
 #[derive(Debug, Clone)]
-pub struct LogicalField {
+pub struct LogicalPhysicalField {
     name: String,
-    data_type: TypeRelation,
+    data_type: LogicalPhysicalType,
     nullable: bool,
     metadata: HashMap<String, String>,
 }
 
-impl From<&Field> for LogicalField {
+impl From<&Field> for LogicalPhysicalField {
     fn from(value: &Field) -> Self {
         Self::new(value.name().clone(), value.data_type(), value.is_nullable())
     }
 }
 
-impl From<Field> for LogicalField {
+impl From<Field> for LogicalPhysicalField {
     fn from(value: Field) -> Self {
         Self::from(&value)
     }
 }
 
-impl From<&FieldRef> for LogicalField {
+impl From<&FieldRef> for LogicalPhysicalField {
     fn from(value: &FieldRef) -> Self {
         Self::from(value.as_ref())
     }
 }
 
-impl From<FieldRef> for LogicalField {
+impl From<FieldRef> for LogicalPhysicalField {
     fn from(value: FieldRef) -> Self {
         Self::from(value.as_ref())
     }
 }
 
-impl Into<Field> for LogicalField {
+impl Into<Field> for LogicalPhysicalField {
     fn into(self) -> Field {
         Field::new(self.name, self.data_type.physical().clone(), self.nullable)
             .with_metadata(self.metadata)
     }
 }
 
-impl PartialEq for LogicalField {
+impl PartialEq for LogicalPhysicalField {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
             && self.data_type == other.data_type
@@ -73,9 +73,9 @@ impl PartialEq for LogicalField {
     }
 }
 
-impl Eq for LogicalField {}
+impl Eq for LogicalPhysicalField {}
 
-impl Hash for LogicalField {
+impl Hash for LogicalPhysicalField {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.data_type.hash(state);
@@ -91,13 +91,13 @@ impl Hash for LogicalField {
     }
 }
 
-impl LogicalField {
+impl LogicalPhysicalField {
     pub fn new(
         name: impl Into<String>,
-        data_type: impl Into<TypeRelation>,
+        data_type: impl Into<LogicalPhysicalType>,
         nullable: bool,
     ) -> Self {
-        LogicalField {
+        LogicalPhysicalField {
             name: name.into(),
             data_type: data_type.into(),
             nullable,
@@ -105,7 +105,7 @@ impl LogicalField {
         }
     }
 
-    pub fn new_list_field(data_type: impl Into<TypeRelation>, nullable: bool) -> Self {
+    pub fn new_list_field(data_type: impl Into<LogicalPhysicalType>, nullable: bool) -> Self {
         Self::new("item", data_type, nullable)
     }
 
@@ -113,7 +113,7 @@ impl LogicalField {
         &self.name
     }
 
-    pub fn data_type(&self) -> &TypeRelation {
+    pub fn data_type(&self) -> &LogicalPhysicalType {
         &self.data_type
     }
 
@@ -144,13 +144,13 @@ impl LogicalField {
     }
 
     #[inline]
-    pub fn with_data_type(mut self, data_type: TypeRelation) -> Self {
+    pub fn with_data_type(mut self, data_type: LogicalPhysicalType) -> Self {
         self.data_type = data_type;
         self
     }
 }
 
-impl std::fmt::Display for LogicalField {
+impl std::fmt::Display for LogicalPhysicalField {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{self:?}")
     }

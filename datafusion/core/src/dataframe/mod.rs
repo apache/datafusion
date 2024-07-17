@@ -59,8 +59,8 @@ use datafusion_expr::{
 use datafusion_functions_aggregate::expr_fn::{avg, count, median, stddev, sum};
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
-use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
+use datafusion_common::logical_type::TypeRelation;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -1656,7 +1656,7 @@ impl TableProvider for DataFrameTableProvider {
         Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
         self.plan.schema().inner().clone()
     }
 

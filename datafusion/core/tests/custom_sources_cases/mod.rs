@@ -43,7 +43,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::{ExecutionMode, PlanProperties};
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use futures::stream::Stream;
 
 mod provider_filter_pushdown;
@@ -204,8 +204,8 @@ impl TableProvider for CustomTableProvider {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(TEST_CUSTOM_SCHEMA_REF!().as_ref().clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(TEST_CUSTOM_SCHEMA_REF!().as_ref().clone().into())
     }
 
     fn table_type(&self) -> TableType {

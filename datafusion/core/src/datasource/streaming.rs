@@ -27,7 +27,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 use crate::physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use crate::physical_plan::ExecutionPlan;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{Expr, TableType};
 use log::debug;
@@ -75,8 +75,8 @@ impl TableProvider for StreamingTable {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.schema.clone().into())
     }
 
     fn table_type(&self) -> TableType {

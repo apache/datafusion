@@ -34,7 +34,7 @@ use sqlparser::ast::{
     UnaryOperator,
 };
 
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
     ScalarValue,
@@ -961,7 +961,7 @@ impl Unparser<'_> {
 
     fn arrow_dtype_to_ast_dtype(
         &self,
-        data_type: &TypeRelation,
+        data_type: &LogicalPhysicalType,
     ) -> Result<ast::DataType> {
         match data_type.logical() {
             LogicalType::Null => {

@@ -28,7 +28,7 @@ use arrow::datatypes::{
     SchemaRef, TimeUnit, UnionMode,
 };
 use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator};
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion_common::{
     config::{
         ColumnOptions, CsvOptions, JsonOptions, ParquetOptions, TableParquetOptions,
@@ -113,10 +113,10 @@ impl TryFrom<&DataType> for protobuf::ArrowType {
     }
 }
 
-impl TryFrom<&TypeRelation> for protobuf::ArrowType {
+impl TryFrom<&LogicalPhysicalType> for protobuf::ArrowType {
     type Error = Error;
 
-    fn try_from(val: &TypeRelation) -> Result<Self, Self::Error> {
+    fn try_from(val: &LogicalPhysicalType) -> Result<Self, Self::Error> {
         let arrow_type_enum: ArrowTypeEnum = val.physical().try_into()?;
         Ok(Self {
             arrow_type_enum: Some(arrow_type_enum),

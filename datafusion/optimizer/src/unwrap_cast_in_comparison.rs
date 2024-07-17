@@ -30,7 +30,7 @@ use arrow::datatypes::{
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
@@ -277,12 +277,12 @@ fn is_comparison_op(op: &Operator) -> bool {
 }
 
 /// Returns true if [UnwrapCastExprRewriter] supports this data type
-fn is_supported_type(data_type: &TypeRelation) -> bool {
+fn is_supported_type(data_type: &LogicalPhysicalType) -> bool {
     is_supported_numeric_type(data_type) || is_supported_string_type(data_type)
 }
 
 /// Returns true if [[UnwrapCastExprRewriter]] suppors this numeric type
-fn is_supported_numeric_type(data_type: &TypeRelation) -> bool {
+fn is_supported_numeric_type(data_type: &LogicalPhysicalType) -> bool {
     use LogicalType::*;
     matches!(
         data_type.logical(),
@@ -300,14 +300,14 @@ fn is_supported_numeric_type(data_type: &TypeRelation) -> bool {
 }
 
 /// Returns true if [UnwrapCastExprRewriter] supports casting this value as a string
-fn is_supported_string_type(data_type: &TypeRelation) -> bool {
+fn is_supported_string_type(data_type: &LogicalPhysicalType) -> bool {
     matches!(data_type.logical(), LogicalType::Utf8)
 }
 
 /// Convert a literal value from one data type to another
 fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
-    target_type: &TypeRelation,
+    target_type: &LogicalPhysicalType,
 ) -> Option<ScalarValue> {
     let lit_data_type = lit_value.data_type().into();
     if !is_supported_type(&lit_data_type) || !is_supported_type(target_type) {
@@ -324,7 +324,7 @@ fn try_cast_literal_to_type(
 /// Convert a numeric value from one numeric data type to another
 fn try_cast_numeric_literal(
     lit_value: &ScalarValue,
-    target_type: &TypeRelation,
+    target_type: &LogicalPhysicalType,
 ) -> Option<ScalarValue> {
     let lit_data_type = lit_value.data_type().into();
     if !is_supported_numeric_type(&lit_data_type)
@@ -464,7 +464,7 @@ fn try_cast_numeric_literal(
 
 fn try_cast_string_literal(
     lit_value: &ScalarValue,
-    target_type: &TypeRelation,
+    target_type: &LogicalPhysicalType,
 ) -> Option<ScalarValue> {
     let string_value = match lit_value {
         ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) => s.clone(),
@@ -479,8 +479,8 @@ fn try_cast_string_literal(
 
 /// Cast a timestamp value from one unit to another
 fn cast_between_timestamp(
-    from: impl Into<TypeRelation>,
-    to: impl Into<TypeRelation>,
+    from: impl Into<LogicalPhysicalType>,
+    to: impl Into<LogicalPhysicalType>,
     value: i128,
 ) -> Option<i64> {
     let value = value as i64;
@@ -517,7 +517,7 @@ mod tests {
         compute::{cast_with_options, CastOptions},
         datatypes::DataType,
     };
-    use datafusion_common::logical_type::field::LogicalField;
+    use datafusion_common::logical_type::field::LogicalPhysicalField;
     use datafusion_common::tree_node::TransformedResult;
     use datafusion_expr::{cast, col, in_list, try_cast};
 
@@ -776,16 +776,16 @@ mod tests {
         Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![
-                    LogicalField::new("c1", DataType::Int32, false),
-                    LogicalField::new("c2", DataType::Int64, false),
-                    LogicalField::new("c3", DataType::Decimal128(18, 2), false),
-                    LogicalField::new("c4", DataType::Decimal128(38, 37), false),
-                    LogicalField::new("c5", DataType::Float32, false),
-                    LogicalField::new("c6", DataType::UInt32, false),
-                    LogicalField::new("ts_nano_none", timestamp_nano_none_type(), false),
-                    LogicalField::new("ts_nano_utf", timestamp_nano_utc_type(), false),
-                    LogicalField::new("str1", DataType::Utf8, false),
-                    LogicalField::new("largestr", DataType::LargeUtf8, false),
+                    LogicalPhysicalField::new("c1", DataType::Int32, false),
+                    LogicalPhysicalField::new("c2", DataType::Int64, false),
+                    LogicalPhysicalField::new("c3", DataType::Decimal128(18, 2), false),
+                    LogicalPhysicalField::new("c4", DataType::Decimal128(38, 37), false),
+                    LogicalPhysicalField::new("c5", DataType::Float32, false),
+                    LogicalPhysicalField::new("c6", DataType::UInt32, false),
+                    LogicalPhysicalField::new("ts_nano_none", timestamp_nano_none_type(), false),
+                    LogicalPhysicalField::new("ts_nano_utf", timestamp_nano_utc_type(), false),
+                    LogicalPhysicalField::new("str1", DataType::Utf8, false),
+                    LogicalPhysicalField::new("largestr", DataType::LargeUtf8, false),
                 ]
                 .into(),
                 HashMap::new(),
@@ -823,12 +823,12 @@ mod tests {
         lit(ScalarValue::Decimal128(None, precision, scale))
     }
 
-    fn timestamp_nano_none_type() -> TypeRelation {
+    fn timestamp_nano_none_type() -> LogicalPhysicalType {
         DataType::Timestamp(TimeUnit::Nanosecond, None).into()
     }
 
     // this is the type that now() returns
-    fn timestamp_nano_utc_type() -> TypeRelation {
+    fn timestamp_nano_utc_type() -> LogicalPhysicalType {
         let utc = Some("+0:00".into());
         DataType::Timestamp(TimeUnit::Nanosecond, utc).into()
     }
@@ -1014,10 +1014,10 @@ mod tests {
             assert_eq!(lit_tz_none, lit_tz_utc);
 
             // e.g. LogicalType::Timestamp(_, None)
-            let dt_tz_none: TypeRelation = lit_tz_none.data_type().into();
+            let dt_tz_none: LogicalPhysicalType = lit_tz_none.data_type().into();
 
             // e.g. LogicalType::Timestamp(_, Some(utc))
-            let dt_tz_utc: TypeRelation = lit_tz_utc.data_type().into();
+            let dt_tz_utc: LogicalPhysicalType = lit_tz_utc.data_type().into();
 
             // None <--> None
             expect_cast(
@@ -1100,7 +1100,7 @@ mod tests {
     /// casting is consistent with the Arrow kernels
     fn expect_cast(
         literal: ScalarValue,
-        target_type: impl Into<TypeRelation>,
+        target_type: impl Into<LogicalPhysicalType>,
         expected_result: ExpectedCast,
     ) {
         let target_type = target_type.into();

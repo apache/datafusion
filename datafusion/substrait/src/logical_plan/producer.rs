@@ -45,7 +45,7 @@ use crate::variation_const::{
     TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
-use datafusion::common::logical_type::ExtensionType;
+use datafusion::common::logical_type::TypeRelation;
 use datafusion::common::{
     exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
 };

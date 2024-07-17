@@ -37,7 +37,7 @@ use datafusion::parquet::arrow::{
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -213,8 +213,8 @@ impl TableProvider for IndexTableProvider {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.index.schema().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.index.schema().into())
     }
 
     fn table_type(&self) -> TableType {

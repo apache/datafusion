@@ -41,7 +41,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
@@ -193,8 +193,8 @@ impl TableProvider for MemTable {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.schema.clone().into())
     }
 
     fn constraints(&self) -> Option<&Constraints> {

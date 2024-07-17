@@ -22,7 +22,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::{
     FunctionFactory, RegisterFunction, SessionContext, SessionState,
 };
-use datafusion_common::logical_type::ExtensionType;
+use datafusion_common::logical_type::TypeRelation;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};

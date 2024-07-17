@@ -37,8 +37,8 @@ use datafusion_expr::LogicalPlanBuilder;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::schema::{LogicalSchema, LogicalSchemaRef};
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::schema::{LogicalPhysicalSchema, LogicalPhysicalSchemaRef};
 use tokio::time::timeout;
 
 /// This example demonstrates executing a simple query against a custom datasource
@@ -164,10 +164,10 @@ impl TableProvider for CustomDataSource {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(LogicalSchema::new(vec![
-            LogicalField::new("id", DataType::UInt8, false),
-            LogicalField::new("bank_account", DataType::UInt64, true),
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(LogicalPhysicalSchema::new(vec![
+            LogicalPhysicalField::new("id", DataType::UInt8, false),
+            LogicalPhysicalField::new("bank_account", DataType::UInt64, true),
         ]))
     }
 

@@ -20,16 +20,16 @@ use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
 
-use super::field::{LogicalField, LogicalFieldRef};
-use super::fields::LogicalFields;
+use super::field::{LogicalPhysicalField, LogicalPhysicalFieldRef};
+use super::fields::LogicalPhysicalFields;
 
 #[derive(Debug, Default)]
-pub struct LogicalSchemaBuilder {
-    fields: Vec<LogicalFieldRef>,
+pub struct LogicalPhysicalSchemaBuilder {
+    fields: Vec<LogicalPhysicalFieldRef>,
     metadata: HashMap<String, String>,
 }
 
-impl LogicalSchemaBuilder {
+impl LogicalPhysicalSchemaBuilder {
     pub fn new() -> Self {
         Self::default()
     }
@@ -41,19 +41,19 @@ impl LogicalSchemaBuilder {
         }
     }
 
-    pub fn push(&mut self, field: impl Into<LogicalFieldRef>) {
+    pub fn push(&mut self, field: impl Into<LogicalPhysicalFieldRef>) {
         self.fields.push(field.into())
     }
 
-    pub fn remove(&mut self, idx: usize) -> LogicalFieldRef {
+    pub fn remove(&mut self, idx: usize) -> LogicalPhysicalFieldRef {
         self.fields.remove(idx)
     }
 
-    pub fn field(&mut self, idx: usize) -> &LogicalFieldRef {
+    pub fn field(&mut self, idx: usize) -> &LogicalPhysicalFieldRef {
         &mut self.fields[idx]
     }
 
-    pub fn field_mut(&mut self, idx: usize) -> &mut LogicalFieldRef {
+    pub fn field_mut(&mut self, idx: usize) -> &mut LogicalPhysicalFieldRef {
         &mut self.fields[idx]
     }
 
@@ -69,16 +69,16 @@ impl LogicalSchemaBuilder {
         self.fields.reverse();
     }
 
-    pub fn finish(self) -> LogicalSchema {
-        LogicalSchema {
+    pub fn finish(self) -> LogicalPhysicalSchema {
+        LogicalPhysicalSchema {
             fields: self.fields.into(),
             metadata: self.metadata,
         }
     }
 }
 
-impl From<&LogicalFields> for LogicalSchemaBuilder {
-    fn from(value: &LogicalFields) -> Self {
+impl From<&LogicalPhysicalFields> for LogicalPhysicalSchemaBuilder {
+    fn from(value: &LogicalPhysicalFields) -> Self {
         Self {
             fields: value.to_vec(),
             metadata: Default::default(),
@@ -86,8 +86,8 @@ impl From<&LogicalFields> for LogicalSchemaBuilder {
     }
 }
 
-impl From<LogicalFields> for LogicalSchemaBuilder {
-    fn from(value: LogicalFields) -> Self {
+impl From<LogicalPhysicalFields> for LogicalPhysicalSchemaBuilder {
+    fn from(value: LogicalPhysicalFields) -> Self {
         Self {
             fields: value.to_vec(),
             metadata: Default::default(),
@@ -95,14 +95,14 @@ impl From<LogicalFields> for LogicalSchemaBuilder {
     }
 }
 
-impl From<&LogicalSchema> for LogicalSchemaBuilder {
-    fn from(value: &LogicalSchema) -> Self {
+impl From<&LogicalPhysicalSchema> for LogicalPhysicalSchemaBuilder {
+    fn from(value: &LogicalPhysicalSchema) -> Self {
         Self::from(value.clone())
     }
 }
 
-impl From<LogicalSchema> for LogicalSchemaBuilder {
-    fn from(value: LogicalSchema) -> Self {
+impl From<LogicalPhysicalSchema> for LogicalPhysicalSchemaBuilder {
+    fn from(value: LogicalPhysicalSchema) -> Self {
         Self {
             fields: value.fields.to_vec(),
             metadata: value.metadata,
@@ -110,8 +110,8 @@ impl From<LogicalSchema> for LogicalSchemaBuilder {
     }
 }
 
-impl Extend<LogicalFieldRef> for LogicalSchemaBuilder {
-    fn extend<T: IntoIterator<Item = LogicalFieldRef>>(&mut self, iter: T) {
+impl Extend<LogicalPhysicalFieldRef> for LogicalPhysicalSchemaBuilder {
+    fn extend<T: IntoIterator<Item =LogicalPhysicalFieldRef>>(&mut self, iter: T) {
         let iter = iter.into_iter();
         self.fields.reserve(iter.size_hint().0);
         for f in iter {
@@ -120,8 +120,8 @@ impl Extend<LogicalFieldRef> for LogicalSchemaBuilder {
     }
 }
 
-impl Extend<LogicalField> for LogicalSchemaBuilder {
-    fn extend<T: IntoIterator<Item = LogicalField>>(&mut self, iter: T) {
+impl Extend<LogicalPhysicalField> for LogicalPhysicalSchemaBuilder {
+    fn extend<T: IntoIterator<Item =LogicalPhysicalField>>(&mut self, iter: T) {
         let iter = iter.into_iter();
         self.fields.reserve(iter.size_hint().0);
         for f in iter {
@@ -130,15 +130,15 @@ impl Extend<LogicalField> for LogicalSchemaBuilder {
     }
 }
 
-pub type LogicalSchemaRef = Arc<LogicalSchema>;
+pub type LogicalPhysicalSchemaRef = Arc<LogicalPhysicalSchema>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LogicalSchema {
-    pub fields: LogicalFields,
+pub struct LogicalPhysicalSchema {
+    pub fields: LogicalPhysicalFields,
     pub metadata: HashMap<String, String>,
 }
 
-impl From<Schema> for LogicalSchema {
+impl From<Schema> for LogicalPhysicalSchema {
     fn from(value: Schema) -> Self {
         Self {
             fields: value.fields.into(),
@@ -147,25 +147,25 @@ impl From<Schema> for LogicalSchema {
     }
 }
 
-impl From<&Schema> for LogicalSchema {
+impl From<&Schema> for LogicalPhysicalSchema {
     fn from(value: &Schema) -> Self {
         Self::from(value.clone())
     }
 }
 
-impl From<SchemaRef> for LogicalSchema {
+impl From<SchemaRef> for LogicalPhysicalSchema {
     fn from(value: SchemaRef) -> Self {
         Self::from(value.as_ref())
     }
 }
 
-impl From<&SchemaRef> for LogicalSchema {
+impl From<&SchemaRef> for LogicalPhysicalSchema {
     fn from(value: &SchemaRef) -> Self {
         Self::from(value.as_ref())
     }
 }
 
-impl Into<Schema> for LogicalSchema {
+impl Into<Schema> for LogicalPhysicalSchema {
     fn into(self) -> Schema {
         Schema {
             fields: self.fields.into(),
@@ -174,14 +174,14 @@ impl Into<Schema> for LogicalSchema {
     }
 }
 
-impl LogicalSchema {
-    pub fn new(fields: impl Into<LogicalFields>) -> Self {
+impl LogicalPhysicalSchema {
+    pub fn new(fields: impl Into<LogicalPhysicalFields>) -> Self {
         Self::new_with_metadata(fields, HashMap::new())
     }
 
     #[inline]
     pub fn new_with_metadata(
-        fields: impl Into<LogicalFields>,
+        fields: impl Into<LogicalPhysicalFields>,
         metadata: HashMap<String, String>,
     ) -> Self {
         Self {
@@ -200,11 +200,11 @@ impl LogicalSchema {
         &self.metadata
     }
 
-    pub fn field(&self, i: usize) -> &LogicalFieldRef {
+    pub fn field(&self, i: usize) -> &LogicalPhysicalFieldRef {
         &self.fields[i]
     }
 
-    pub fn fields(&self) -> &LogicalFields {
+    pub fn fields(&self) -> &LogicalPhysicalFields {
         &self.fields
     }
 }

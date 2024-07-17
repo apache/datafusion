@@ -17,7 +17,7 @@
 
 //! Variable provider
 
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::{Result, ScalarValue};
 
 /// Variable type, system/user defined
@@ -35,7 +35,7 @@ pub trait VarProvider: std::fmt::Debug {
     fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue>;
 
     /// Return the type of the given variable
-    fn get_type(&self, var_names: &[String]) -> Option<TypeRelation>;
+    fn get_type(&self, var_names: &[String]) -> Option<LogicalPhysicalType>;
 }
 
 pub fn is_system_variables(variable_names: &[String]) -> bool {

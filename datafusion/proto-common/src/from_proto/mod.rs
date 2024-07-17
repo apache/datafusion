@@ -30,8 +30,8 @@ use arrow::datatypes::{
 };
 use arrow::ipc::{reader::read_record_batch, root_as_message};
 
-use datafusion_common::logical_type::field::LogicalField;
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::field::LogicalPhysicalField;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::{
     arrow_datafusion_err,
     config::{
@@ -160,11 +160,11 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
         df_schema: &protobuf::DfSchema,
     ) -> datafusion_common::Result<Self, Self::Error> {
         let df_fields = df_schema.columns.clone();
-        let qualifiers_and_fields: Vec<(Option<TableReference>, Arc<LogicalField>)> =
+        let qualifiers_and_fields: Vec<(Option<TableReference>, Arc<LogicalPhysicalField>)> =
             df_fields
                 .iter()
                 .map(|df_field| {
-                    let field: LogicalField =
+                    let field: LogicalPhysicalField =
                         df_field.field.as_ref().required("field")?;
                     Ok((
                         df_field
@@ -194,7 +194,7 @@ impl TryFrom<protobuf::DfSchema> for DFSchemaRef {
     }
 }
 
-impl TryFrom<&protobuf::ArrowType> for TypeRelation {
+impl TryFrom<&protobuf::ArrowType> for LogicalPhysicalType {
     type Error = Error;
 
     fn try_from(
@@ -346,7 +346,7 @@ impl TryFrom<&protobuf::Field> for Field {
     }
 }
 
-impl TryFrom<&protobuf::Field> for LogicalField {
+impl TryFrom<&protobuf::Field> for LogicalPhysicalField {
     type Error = Error;
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         Field::try_from(field).map(|t| t.into())

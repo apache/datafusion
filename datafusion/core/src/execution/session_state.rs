@@ -50,7 +50,7 @@ use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::logical_type::signature::LogicalType;
-use datafusion_common::logical_type::{ExtensionType, TypeRelation};
+use datafusion_common::logical_type::{TypeRelation, LogicalPhysicalType};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     config_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
@@ -1035,7 +1035,7 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         self.state.window_functions().get(name).cloned()
     }
 
-    fn get_variable_type(&self, variable_names: &[String]) -> Option<TypeRelation> {
+    fn get_variable_type(&self, variable_names: &[String]) -> Option<LogicalPhysicalType> {
         if variable_names.is_empty() {
             return None;
         }
@@ -1275,7 +1275,7 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
         self.state.execution_props()
     }
 
-    fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<TypeRelation> {
+    fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<LogicalPhysicalType> {
         expr.get_type(self.df_schema)
     }
 }

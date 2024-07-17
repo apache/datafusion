@@ -38,7 +38,7 @@ use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
 use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
-use datafusion_common::logical_type::schema::LogicalSchema;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchema;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -155,7 +155,7 @@ impl TestParquetFile {
                 });
 
         let df_schema =
-            LogicalSchema::from(self.schema.as_ref().clone()).to_dfschema_ref()?;
+            LogicalPhysicalSchema::from(self.schema.as_ref().clone()).to_dfschema_ref()?;
 
         // run coercion on the filters to coerce types etc.
         let props = ExecutionProps::new();

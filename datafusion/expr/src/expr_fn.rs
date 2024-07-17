@@ -35,7 +35,7 @@ use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::logical_type::TypeRelation;
+use datafusion_common::logical_type::LogicalPhysicalType;
 use datafusion_common::{Column, Result, ScalarValue};
 use std::any::Any;
 use std::fmt::Debug;
@@ -63,7 +63,7 @@ pub fn col(ident: impl Into<Column>) -> Expr {
 
 /// Create an out reference column which hold a reference that has been resolved to a field
 /// outside of the current plan.
-pub fn out_ref_col(dt: impl Into<TypeRelation>, ident: impl Into<Column>) -> Expr {
+pub fn out_ref_col(dt: impl Into<LogicalPhysicalType>, ident: impl Into<Column>) -> Expr {
     Expr::OuterReferenceColumn(dt.into(), ident.into())
 }
 
@@ -309,12 +309,12 @@ pub fn rollup(exprs: Vec<Expr>) -> Expr {
 }
 
 /// Create a cast expression
-pub fn cast(expr: Expr, data_type: impl Into<TypeRelation>) -> Expr {
+pub fn cast(expr: Expr, data_type: impl Into<LogicalPhysicalType>) -> Expr {
     Expr::Cast(Cast::new(Box::new(expr), data_type.into()))
 }
 
 /// Create a try cast expression
-pub fn try_cast(expr: Expr, data_type: impl Into<TypeRelation>) -> Expr {
+pub fn try_cast(expr: Expr, data_type: impl Into<LogicalPhysicalType>) -> Expr {
     Expr::TryCast(TryCast::new(Box::new(expr), data_type.into()))
 }
 

@@ -27,7 +27,7 @@ use datafusion::execution::context::{ExecutionProps, SessionState};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::logical_type::schema::LogicalSchemaRef;
+use datafusion_common::logical_type::schema::LogicalPhysicalSchemaRef;
 use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{Expr, TableType};
@@ -85,8 +85,8 @@ impl TableProvider for LocalCsvTable {
         self
     }
 
-    fn schema(&self) -> LogicalSchemaRef {
-        LogicalSchemaRef::new(self.schema.clone().into())
+    fn schema(&self) -> LogicalPhysicalSchemaRef {
+        LogicalPhysicalSchemaRef::new(self.schema.clone().into())
     }
 
     fn table_type(&self) -> TableType {
