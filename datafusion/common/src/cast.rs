@@ -36,6 +36,7 @@ use arrow::{
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
+use arrow_array::{BinaryViewArray, StringViewArray};
 
 // Downcast ArrayRef to Date32Array
 pub fn as_date32_array(array: &dyn Array) -> Result<&Date32Array> {
@@ -85,6 +86,11 @@ pub fn as_float64_array(array: &dyn Array) -> Result<&Float64Array> {
 // Downcast ArrayRef to StringArray
 pub fn as_string_array(array: &dyn Array) -> Result<&StringArray> {
     Ok(downcast_value!(array, StringArray))
+}
+
+// Downcast ArrayRef to StringViewArray
+pub fn as_string_view_array(array: &dyn Array) -> Result<&StringViewArray> {
+    Ok(downcast_value!(array, StringViewArray))
 }
 
 // Downcast ArrayRef to UInt32Array
@@ -219,6 +225,11 @@ pub fn as_interval_mdn_array(array: &dyn Array) -> Result<&IntervalMonthDayNanoA
 // Downcast ArrayRef to BinaryArray
 pub fn as_binary_array(array: &dyn Array) -> Result<&BinaryArray> {
     Ok(downcast_value!(array, BinaryArray))
+}
+
+// Downcast ArrayRef to BinaryViewArray
+pub fn as_binary_view_array(array: &dyn Array) -> Result<&BinaryViewArray> {
+    Ok(downcast_value!(array, BinaryViewArray))
 }
 
 // Downcast ArrayRef to FixedSizeListArray
