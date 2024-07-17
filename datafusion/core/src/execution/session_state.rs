@@ -516,7 +516,7 @@ impl SessionState {
             }
         }
 
-        let query = self.build_sql_query_planner(&provider);
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.statement_to_plan(statement)
     }
 
@@ -569,7 +569,7 @@ impl SessionState {
             tables: HashMap::new(),
         };
 
-        let query = self.build_sql_query_planner(&provider);
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
@@ -853,20 +853,6 @@ impl SessionState {
     ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
         let udtf = self.table_functions.remove(name);
         Ok(udtf.map(|x| x.function().clone()))
-    }
-
-    fn build_sql_query_planner<'a, S>(&self, provider: &'a S) -> SqlToRel<'a, S>
-    where
-        S: ContextProvider,
-    {
-        let mut query = SqlToRel::new_with_options(provider, self.get_parser_options());
-
-        // custom planners are registered first, so they're run first and take precedence over built-in planners
-        for planner in self.expr_planners.iter() {
-            query = query.with_user_defined_planner(planner.clone());
-        }
-
-        query
     }
 }
 
@@ -1597,12 +1583,20 @@ impl SessionStateDefaults {
     }
 }
 
+/// Adapter that implements the [`ContextProvider`] trait for a [`SessionState`]
+///
+/// This is used so the SQL planner can access the state of the session without
+/// having a direct dependency on the [`SessionState`] struct (and core crate)
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
     tables: HashMap<String, Arc<dyn TableSource>>,
 }
 
 impl<'a> ContextProvider for SessionContextProvider<'a> {
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.state.expr_planners
+    }
+
     fn get_table_source(
         &self,
         name: TableReference,
@@ -1896,5 +1890,49 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
 
     fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
         expr.get_type(self.df_schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::DFSchema;
+    use datafusion_common::Result;
+    use datafusion_expr::Expr;
+    use datafusion_sql::planner::{PlannerContext, SqlToRel};
+
+    use crate::execution::context::SessionState;
+
+    use super::{SessionContextProvider, SessionStateBuilder};
+
+    #[test]
+    fn test_session_state_with_default_features() {
+        // test array planners with and without builtin planners
+        fn sql_to_expr(state: &SessionState) -> Result<Expr> {
+            let provider = SessionContextProvider {
+                state,
+                tables: HashMap::new(),
+            };
+
+            let sql = "[1,2,3]";
+            let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+            let df_schema = DFSchema::try_from(schema)?;
+            let dialect = state.config.options().sql_parser.dialect.as_str();
+            let sql_expr = state.sql_to_expr(sql, dialect)?;
+
+            let query = SqlToRel::new_with_options(&provider, state.get_parser_options());
+            query.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())
+        }
+
+        let state = SessionStateBuilder::new().with_default_features().build();
+
+        assert!(sql_to_expr(&state).is_ok());
+
+        // if no builtin planners exist, you should register your own, otherwise returns error
+        let state = SessionStateBuilder::new().build();
+
+        assert!(sql_to_expr(&state).is_err())
     }
 }
