@@ -490,21 +490,56 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn create_hashes_binary() -> Result<()> {
-        let byte_array = Arc::new(BinaryArray::from_vec(vec![
-            &[4, 3, 2],
-            &[4, 3, 2],
-            &[1, 2, 3],
-        ]));
+    macro_rules! create_hash_binary {
+        ($NAME:ident, $ARRAY:ty) => {
+            #[cfg(not(feature = "force_hash_collisions"))]
+            #[test]
+            fn $NAME() {
+                let binary = [
+                    Some(b"short".to_byte_slice()),
+                    None,
+                    Some(b"long but different 12 bytes string"),
+                    Some(b"short2"),
+                    Some(b"Longer than 12 bytes string"),
+                    Some(b"short"),
+                    Some(b"Longer than 12 bytes string"),
+                ];
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        let hashes_buff = &mut vec![0; byte_array.len()];
-        let hashes = create_hashes(&[byte_array], &random_state, hashes_buff)?;
-        assert_eq!(hashes.len(), 3,);
+                let binary_array = Arc::new(binary.iter().cloned().collect::<$ARRAY>());
+                let ref_array = Arc::new(binary.iter().cloned().collect::<BinaryArray>());
 
-        Ok(())
+                let random_state = RandomState::with_seeds(0, 0, 0, 0);
+
+                let mut binary_hashes = vec![0; binary.len()];
+                create_hashes(&[binary_array], &random_state, &mut binary_hashes)
+                    .unwrap();
+
+                let mut ref_hashes = vec![0; binary.len()];
+                create_hashes(&[ref_array], &random_state, &mut ref_hashes).unwrap();
+
+                // Null values result in a zero hash,
+                for (val, hash) in binary.iter().zip(binary_hashes.iter()) {
+                    match val {
+                        Some(_) => assert_ne!(*hash, 0),
+                        None => assert_eq!(*hash, 0),
+                    }
+                }
+
+                // same logical values should hash to the same hash value
+                assert_eq!(binary_hashes, ref_hashes);
+
+                // Same values should map to same hash values
+                assert_eq!(binary[0], binary[5]);
+                assert_eq!(binary[4], binary[6]);
+
+                // different binary should map to different hash values
+                assert_ne!(binary[0], binary[2]);
+            }
+        };
     }
+
+    create_hash_binary!(binary_array, BinaryArray);
+    create_hash_binary!(binary_view_array, BinaryViewArray);
 
     #[test]
     fn create_hashes_fixed_size_binary() -> Result<()> {
@@ -520,6 +555,64 @@ mod tests {
 
         Ok(())
     }
+
+    macro_rules! create_hash_string {
+        ($NAME:ident, $ARRAY:ty) => {
+            #[cfg(not(feature = "force_hash_collisions"))]
+            #[test]
+            fn $NAME() {
+                let strings = [
+                    Some("short"),
+                    None,
+                    Some("long but different 12 bytes string"),
+                    Some("short2"),
+                    Some("Longer than 12 bytes string"),
+                    Some("short"),
+                    Some("Longer than 12 bytes string"),
+                ];
+
+                let string_array = Arc::new(strings.iter().cloned().collect::<$ARRAY>());
+                let dict_array = Arc::new(
+                    strings
+                        .iter()
+                        .cloned()
+                        .collect::<DictionaryArray<Int8Type>>(),
+                );
+
+                let random_state = RandomState::with_seeds(0, 0, 0, 0);
+
+                let mut string_hashes = vec![0; strings.len()];
+                create_hashes(&[string_array], &random_state, &mut string_hashes)
+                    .unwrap();
+
+                let mut dict_hashes = vec![0; strings.len()];
+                create_hashes(&[dict_array], &random_state, &mut dict_hashes).unwrap();
+
+                // Null values result in a zero hash,
+                for (val, hash) in strings.iter().zip(string_hashes.iter()) {
+                    match val {
+                        Some(_) => assert_ne!(*hash, 0),
+                        None => assert_eq!(*hash, 0),
+                    }
+                }
+
+                // same logical values should hash to the same hash value
+                assert_eq!(string_hashes, dict_hashes);
+
+                // Same values should map to same hash values
+                assert_eq!(strings[0], strings[5]);
+                assert_eq!(strings[4], strings[6]);
+
+                // different strings should map to different hash values
+                assert_ne!(strings[0], strings[2]);
+            }
+        };
+    }
+
+    create_hash_string!(string_array, StringArray);
+    create_hash_string!(large_string_array, LargeStringArray);
+    create_hash_string!(string_view_array, StringArray);
+    create_hash_string!(dict_string_array, DictionaryArray<Int8Type>);
 
     #[test]
     // Tests actual values of hashes, which are different if forcing collisions
