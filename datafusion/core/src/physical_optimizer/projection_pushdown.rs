@@ -18,7 +18,7 @@
 //! This file implements the `ProjectionPushdown` physical optimization rule.
 //! The function [`remove_unnecessary_projections`] tries to push down all
 //! projections one by one if the operator below is amenable to this. If a
-//! projection reaches a source, it can even dissappear from the plan entirely.
+//! projection reaches a source, it can even disappear from the plan entirely.
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -259,7 +259,7 @@ async fn sort_spill_reservation() {
         .with_query("select * from t ORDER BY a , b DESC")
     // enough memory to sort if we don't try to merge it all at once
         .with_memory_limit(partition_size)
-    // use a single partiton so only a sort is needed
+    // use a single partition so only a sort is needed
         .with_scenario(scenario)
         .with_disk_manager_config(DiskManagerConfig::NewOs)
         .with_expected_plan(
@@ -361,7 +361,7 @@ struct TestCase {
     /// How should the disk manager (that allows spilling) be
     /// configured? Defaults to `Disabled`
     disk_manager_config: DiskManagerConfig,
-    /// Expected explain plan, if non emptry
+    /// Expected explain plan, if non-empty
     expected_plan: Vec<String>,
     /// Is the plan expected to pass? Defaults to false
     expected_success: bool,

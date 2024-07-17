@@ -354,7 +354,7 @@ mod tests {
             PhysicalGroupBy::default(),
             aggr_expr,
         );
-        // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
+        // should combine the Partial/Final AggregateExecs to the Single AggregateExec
         let expected = &[
             "AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
@@ -394,7 +394,7 @@ mod tests {
         let final_group_by = PhysicalGroupBy::new_single(groups);
 
         let plan = final_aggregate_exec(partial_agg, final_group_by, aggr_expr);
-        // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
+        // should combine the Partial/Final AggregateExecs to the Single AggregateExec
         let expected = &[
             "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[Sum(b)]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",

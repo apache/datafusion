@@ -645,7 +645,7 @@ mod tests {
         let session_ctx = SessionContext::new_with_config(config);
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
-        // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
+        // skip column 9 that overflows the automatically discovered column type of i64 (u64 would work)
         let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
         let exec =
             get_exec(&state, "aggregate_test_100.csv", projection, None, true).await?;
