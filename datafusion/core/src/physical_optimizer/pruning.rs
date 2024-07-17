@@ -747,10 +747,13 @@ impl RequiredColumns {
     /// * `a > 5 OR b < 10` returns `None`
     /// * `true` returns None
     pub(crate) fn single_column(&self) -> Option<&phys_expr::Column> {
-        let cols = self.iter().map(|(c, _s, _f)| c).collect::<HashSet<_>>();
-
-        if cols.len() == 1 {
-            cols.iter().next().copied()
+        if self.columns.windows(2).all(|w| {
+            // check if all columns are the same (ignoring statistics and field)
+            let c1 = &w[0].0;
+            let c2 = &w[1].0;
+            c1 == c2
+        }) {
+            self.columns.first().map(|r| &r.0)
         } else {
             None
         }
