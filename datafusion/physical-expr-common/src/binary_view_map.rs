@@ -216,6 +216,7 @@ where
                     observe_payload_fn,
                 )
             }
+            _ => unreachable!("Utf8/Binary should use `ArrowBytesSet`"),
         };
     }
 
@@ -326,6 +327,9 @@ where
                 let array = builder.finish();
                 let array = unsafe { array.to_string_view_unchecked() };
                 Arc::new(array)
+            }
+            _ => {
+                unreachable!("Utf8/Binary should use `ArrowBytesMap`")
             }
         }
     }
