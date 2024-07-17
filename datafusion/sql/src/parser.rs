@@ -1006,14 +1006,15 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for sql stmt with `COMPRESSION TYPE GZIP` tokens
-        let sqls = vec![
-             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS 
+        let sqls =
+            vec![
+             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS
              ('format.compression' 'GZIP')", "GZIP"),
-             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS 
+             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS
              ('format.compression' 'BZIP2')", "BZIP2"),
-             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS 
+             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS
              ('format.compression' 'XZ')", "XZ"),
-             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS 
+             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS
              ('format.compression' 'ZSTD')", "ZSTD"),
          ];
         for (sql, compression) in sqls {
@@ -1123,7 +1124,10 @@ mod tests {
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int, c1) LOCATION 'foo.csv'";
-        expect_parse_error(sql, "sql parser error: Expected a data type name, found: )");
+        expect_parse_error(
+            sql,
+            "sql parser error: Expected: a data type name, found: )",
+        );
 
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
         let sql =
@@ -1291,7 +1295,7 @@ mod tests {
             LOCATION 'foo.parquet'
             OPTIONS ('format.compression' 'zstd',
                      'format.delimiter' '*',
-                     'ROW_GROUP_SIZE' '1024', 
+                     'ROW_GROUP_SIZE' '1024',
                      'TRUNCATE' 'NO',
                      'format.has_header' 'true')";
         let expected = Statement::CreateExternalTable(CreateExternalTable {

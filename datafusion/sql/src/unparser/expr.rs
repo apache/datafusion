@@ -176,6 +176,7 @@ impl Unparser<'_> {
                     null_treatment: None,
                     over: None,
                     within_group: vec![],
+                    parameters: ast::FunctionArguments::None,
                 }))
             }
             Expr::Between(Between {
@@ -306,6 +307,7 @@ impl Unparser<'_> {
                     null_treatment: None,
                     over,
                     within_group: vec![],
+                    parameters: ast::FunctionArguments::None,
                 }))
             }
             Expr::SimilarTo(Like {
@@ -351,6 +353,7 @@ impl Unparser<'_> {
                     null_treatment: None,
                     over: None,
                     within_group: vec![],
+                    parameters: ast::FunctionArguments::None,
                 }))
             }
             Expr::ScalarSubquery(subq) => {
@@ -1272,8 +1275,8 @@ impl Unparser<'_> {
             DataType::BinaryView => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Utf8 => Ok(ast::DataType::Varchar(None)),
-            DataType::LargeUtf8 => Ok(ast::DataType::Text),
+            DataType::Utf8 => Ok(self.dialect.utf8_cast_dtype()),
+            DataType::LargeUtf8 => Ok(self.dialect.large_utf8_cast_dtype()),
             DataType::Utf8View => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1932,5 +1935,35 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn custom_dialect_use_char_for_utf8_cast() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::default().build();
+        let mysql_custom_dialect = CustomDialectBuilder::new()
+            .with_utf8_cast_dtype(ast::DataType::Char(None))
+            .with_large_utf8_cast_dtype(ast::DataType::Char(None))
+            .build();
+
+        for (dialect, data_type, identifier) in [
+            (&default_dialect, DataType::Utf8, "VARCHAR"),
+            (&default_dialect, DataType::LargeUtf8, "TEXT"),
+            (&mysql_custom_dialect, DataType::Utf8, "CHAR"),
+            (&mysql_custom_dialect, DataType::LargeUtf8, "CHAR"),
+        ] {
+            let unparser = Unparser::new(dialect);
+
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
     }
 }

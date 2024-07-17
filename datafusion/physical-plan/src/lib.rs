@@ -36,13 +36,13 @@ use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_datafusion_err, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use futures::stream::TryStreamExt;
+use futures::stream::{StreamExt, TryStreamExt};
 use log::debug;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
@@ -97,7 +97,7 @@ pub use datafusion_physical_expr::{
 // Backwards compatibility
 use crate::common::IPCWriter;
 pub use crate::stream::EmptyRecordBatchStream;
-use crate::stream::RecordBatchReceiverStream;
+use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::human_readable_size;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
@@ -803,6 +803,97 @@ pub fn execute_stream_partitioned(
         streams.push(plan.execute(i, Arc::clone(&context))?);
     }
     Ok(streams)
+}
+
+/// Executes an input stream and ensures that the resulting stream adheres to
+/// the `not null` constraints specified in the `sink_schema`.
+///
+/// # Arguments
+///
+/// * `input` - An execution plan
+/// * `sink_schema` - The schema to be applied to the output stream
+/// * `partition` - The partition index to be executed
+/// * `context` - The task context
+///
+/// # Returns
+///
+/// * `Result<SendableRecordBatchStream>` - A stream of `RecordBatch`es if successful
+///
+/// This function first executes the given input plan for the specified partition
+/// and context. It then checks if there are any columns in the input that might
+/// violate the `not null` constraints specified in the `sink_schema`. If there are
+/// such columns, it wraps the resulting stream to enforce the `not null` constraints
+/// by invoking the `check_not_null_contraits` function on each batch of the stream.
+pub fn execute_input_stream(
+    input: Arc<dyn ExecutionPlan>,
+    sink_schema: SchemaRef,
+    partition: usize,
+    context: Arc<TaskContext>,
+) -> Result<SendableRecordBatchStream> {
+    let input_stream = input.execute(partition, context)?;
+
+    debug_assert_eq!(sink_schema.fields().len(), input.schema().fields().len());
+
+    // Find input columns that may violate the not null constraint.
+    let risky_columns: Vec<_> = sink_schema
+        .fields()
+        .iter()
+        .zip(input.schema().fields().iter())
+        .enumerate()
+        .filter_map(|(idx, (sink_field, input_field))| {
+            (!sink_field.is_nullable() && input_field.is_nullable()).then_some(idx)
+        })
+        .collect();
+
+    if risky_columns.is_empty() {
+        Ok(input_stream)
+    } else {
+        // Check not null constraint on the input stream
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            sink_schema,
+            input_stream
+                .map(move |batch| check_not_null_contraits(batch?, &risky_columns)),
+        )))
+    }
+}
+
+/// Checks a `RecordBatch` for `not null` constraints on specified columns.
+///
+/// # Arguments
+///
+/// * `batch` - The `RecordBatch` to be checked
+/// * `column_indices` - A vector of column indices that should be checked for
+///   `not null` constraints.
+///
+/// # Returns
+///
+/// * `Result<RecordBatch>` - The original `RecordBatch` if all constraints are met
+///
+/// This function iterates over the specified column indices and ensures that none
+/// of the columns contain null values. If any column contains null values, an error
+/// is returned.
+pub fn check_not_null_contraits(
+    batch: RecordBatch,
+    column_indices: &Vec<usize>,
+) -> Result<RecordBatch> {
+    for &index in column_indices {
+        if batch.num_columns() <= index {
+            return exec_err!(
+                "Invalid batch column count {} expected > {}",
+                batch.num_columns(),
+                index
+            );
+        }
+
+        if batch.column(index).null_count() > 0 {
+            return exec_err!(
+                "Invalid batch column at '{}' has null but schema specifies non-nullable",
+                index
+            );
+        }
+    }
+
+    Ok(batch)
 }
 
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].
