@@ -41,7 +41,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
+use datafusion_physical_expr::{ConstExpr, EquivalenceProperties, get_meet_ordering_union};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -148,11 +148,11 @@ fn calculate_union_eq_properties(
     //       classes and constants. Add support for such cases.
     let mut eq_properties = EquivalenceProperties::new(schema);
     // Use the ordering equivalence class of the first child as the seed:
-    let mut meets = children_eqs[0]
-        .oeq_class()
+    let mut meets = children_eqs
         .iter()
-        .map(|item| item.to_vec())
+        .flat_map(|child_eq| child_eq.oeq_class().iter().map(|item| item.to_vec()))
         .collect::<Vec<_>>();
+    let empty_ordering = vec![vec![]];
     // Iterate over all the children:
     for child_eqs in &children_eqs[1..] {
         // Compute meet orderings of the current meets and the new ordering
@@ -160,8 +160,8 @@ fn calculate_union_eq_properties(
         let mut idx = 0;
         while idx < meets.len() {
             // Find all the meets of `current_meet` with this child's orderings:
-            let valid_meets = child_eqs.oeq_class().iter().filter_map(|ordering| {
-                child_eqs.get_meet_ordering(ordering, &meets[idx])
+            let valid_meets = child_eqs.oeq_class().iter().chain(empty_ordering.iter()).filter_map(|ordering| {
+                get_meet_ordering_union((*child_eqs).clone(), ordering, &meets[idx])
             });
             // Use the longest of these meets as others are redundant:
             if let Some(next_meet) = valid_meets.max_by_key(|m| m.len()) {

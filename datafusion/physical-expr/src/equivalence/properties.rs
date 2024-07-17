@@ -1009,6 +1009,41 @@ impl EquivalenceProperties {
     }
 }
 
+/// Calculates the "meet" of the given orderings (`lhs` and `reference_ordering`) for the union operator.
+/// The meet of a set of orderings is the finest ordering that is satisfied
+/// by all the orderings in that set. For details, see:
+///
+/// <https://en.wikipedia.org/wiki/Join_and_meet>
+///
+/// If there is no ordering that satisfies both `lhs` and `reference_ordering`, returns
+/// `None`. As an example, the meet of orderings `[a ASC]` and `[a ASC, b ASC]`
+/// is `[a ASC]`. For the calculation of "meet" constants are considered also. As an example,
+/// if `reference_ordering` is `[a ASC, b ASC]` and `lhs` is `[b ASC]` where `a` is constant for `lhs`.
+/// "meet" would be `[a ASC, b ASC]`.
+pub fn get_meet_ordering_union(
+    mut lhs_eq_properties: EquivalenceProperties,
+    lhs: LexOrderingRef,
+    reference_ordering: LexOrderingRef,
+) -> Option<LexOrdering> {
+    let lhs = lhs_eq_properties.normalize_sort_exprs(lhs);
+    let constants = lhs_eq_properties.constants().to_vec();
+    // Do not normalize, `reference_ordering` with constants (These constants may not be valid for it).
+    lhs_eq_properties.constants = vec![];
+    let reference_ordering = lhs_eq_properties.normalize_sort_exprs(reference_ordering);
+    let mut meet = vec![];
+    for (idx, reference_ordering) in reference_ordering.into_iter().enumerate(){
+        if idx < lhs.len() && reference_ordering.eq(&lhs[idx]) {
+            meet.push(reference_ordering);
+        } else if const_exprs_contains(&constants, &reference_ordering.expr){
+            // expr is among constants for the left side. We can use it in meet ordering safely.
+            meet.push(reference_ordering);
+        } else {
+            break;
+        }
+    }
+    (!meet.is_empty()).then_some(meet)
+}
+
 /// Calculates the properties of a given [`ExprPropertiesNode`].
 ///
 /// Order information can be retrieved as:
