@@ -2542,10 +2542,10 @@ mod test {
 
     fn timestamp_seconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampSecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }
@@ -2553,10 +2553,10 @@ mod test {
 
     fn timestamp_milliseconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampMillisecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }
@@ -2564,10 +2564,10 @@ mod test {
 
     fn timestamp_microseconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampMicrosecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }
@@ -2575,10 +2575,10 @@ mod test {
 
     fn timestamp_nanoseconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampNanosecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }

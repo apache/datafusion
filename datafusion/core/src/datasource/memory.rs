@@ -644,7 +644,7 @@ mod tests {
         Ok(partitions)
     }
 
-    /// Returns the value of results. For example, returns 6 given the follwing
+    /// Returns the value of results. For example, returns 6 given the following
     ///
     /// ```text
     /// +-------+,
