@@ -420,15 +420,15 @@ message JsonOptions {
 
 message TableParquetOptions {
   ParquetOptions global = 1;
-  repeated ColumnSpecificOptions column_specific_options = 2;
+  repeated ParquetColumnSpecificOptions column_specific_options = 2;
 }
 
-message ColumnSpecificOptions {
+message ParquetColumnSpecificOptions {
   string column_name = 1;
-  ColumnOptions options = 2;
+  ParquetColumnOptions options = 2;
 }
 
-message ColumnOptions {
+message ParquetColumnOptions {
   oneof bloom_filter_enabled_opt {
     bool bloom_filter_enabled = 1;
   }

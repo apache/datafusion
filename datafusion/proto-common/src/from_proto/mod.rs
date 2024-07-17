@@ -33,7 +33,8 @@ use arrow::ipc::{reader::read_record_batch, root_as_message};
 use datafusion_common::{
     arrow_datafusion_err,
     config::{
-        ColumnOptions, CsvOptions, JsonOptions, ParquetOptions, TableParquetOptions,
+        CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
+        TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
     parsers::CompressionTypeVariant,
@@ -955,12 +956,12 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     }
 }
 
-impl TryFrom<&protobuf::ColumnOptions> for ColumnOptions {
+impl TryFrom<&protobuf::ColumnOptions> for ParquetColumnOptions {
     type Error = DataFusionError;
     fn try_from(
         value: &protobuf::ColumnOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        Ok(ColumnOptions {
+        Ok(ParquetColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::column_options::CompressionOpt::Compression(v) => Some(v),
             }).unwrap_or(None),
@@ -1008,7 +1009,8 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
     fn try_from(
         value: &protobuf::TableParquetOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        let mut column_specific_options: HashMap<String, ColumnOptions> = HashMap::new();
+        let mut column_specific_options: HashMap<String, ParquetColumnOptions> =
+            HashMap::new();
         for protobuf::ColumnSpecificOptions {
             column_name,
             options: maybe_options,

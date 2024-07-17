@@ -1396,7 +1396,7 @@ pub struct TableParquetOptions {
     /// Global Parquet options that propagates to all columns.
     pub global: ParquetOptions,
     /// Column specific options. Default usage is parquet.XX::column.
-    pub column_specific_options: HashMap<String, ColumnOptions>,
+    pub column_specific_options: HashMap<String, ParquetColumnOptions>,
     /// Additional file-level metadata to include. Inserted into the key_value_metadata
     /// for the written [`FileMetaData`](https://docs.rs/parquet/latest/parquet/file/metadata/struct.FileMetaData.html).
     ///
@@ -1534,7 +1534,7 @@ macro_rules! config_namespace_with_hashmap {
 }
 
 config_namespace_with_hashmap! {
-    pub struct ColumnOptions {
+    pub struct ParquetColumnOptions {
         /// Sets if bloom filter is enabled for the column path.
         pub bloom_filter_enabled: Option<bool>, default = None
 
