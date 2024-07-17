@@ -322,6 +322,7 @@ fn prune_pages_in_one_row_group(
         debug!(
             "Can not determine page row counts for row group {row_group_index}, skipping"
         );
+        metrics.predicate_evaluation_errors.add(1);
         return None;
     };
 
