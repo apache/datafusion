@@ -359,6 +359,7 @@ where
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // XOR is it's own inverse
         self.update_batch(values)
     }
 
