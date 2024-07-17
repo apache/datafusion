@@ -27,12 +27,12 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volatility};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion::{
-    catalog::{schema::MemorySchemaProvider, CatalogProvider, MemoryCatalogProvider},
+    catalog::CatalogProvider,
+    catalog_common::{memory::MemoryCatalogProvider, memory::MemorySchemaProvider},
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
@@ -40,6 +40,7 @@ use datafusion_common::cast::as_float64_array;
 use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use log::info;
 use tempfile::TempDir;
 
@@ -221,7 +222,7 @@ pub async fn register_temp_table(ctx: &SessionContext) {
 
         async fn scan(
             &self,
-            _state: &SessionState,
+            _state: &dyn Session,
             _: Option<&Vec<usize>>,
             _: &[Expr],
             _: Option<usize>,

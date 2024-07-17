@@ -18,9 +18,9 @@
 //! [`MemoryCatalogProvider`], [`MemoryCatalogProviderList`]: In-memory
 //! implementations of [`CatalogProviderList`] and [`CatalogProvider`].
 
-use crate::catalog::schema::SchemaProvider;
-use crate::catalog::{CatalogProvider, CatalogProviderList};
-use crate::datasource::TableProvider;
+use crate::catalog::{
+    CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider,
+};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion_common::{exec_err, DataFusionError};
@@ -201,11 +201,10 @@ impl SchemaProvider for MemorySchemaProvider {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
     use crate::catalog::CatalogProvider;
+    use crate::catalog_common::memory::MemorySchemaProvider;
     use crate::datasource::empty::EmptyTable;
     use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
-    use crate::datasource::TableProvider;
     use crate::prelude::SessionContext;
     use arrow_schema::Schema;
     use datafusion_common::assert_batches_eq;

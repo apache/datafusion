@@ -1143,6 +1143,7 @@ dependencies = [
  "bzip2",
  "chrono",
  "dashmap",
+ "datafusion-catalog",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",
@@ -1180,6 +1181,18 @@ dependencies = [
  "uuid",
  "xz2",
  "zstd 0.13.2",
+]
+
+[[package]]
+name = "datafusion-catalog"
+version = "40.0.0"
+dependencies = [
+ "arrow-schema",
+ "async-trait",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-plan",
 ]
 
 [[package]]

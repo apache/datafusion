@@ -21,9 +21,10 @@ use std::sync::Arc;
 use arrow::array::{Int32Builder, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion::datasource::provider::{TableProvider, TableType};
+use datafusion::catalog::TableProvider;
+use datafusion::datasource::provider::TableType;
 use datafusion::error::Result;
-use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion::execution::context::TaskContext;
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -39,6 +40,7 @@ use datafusion_functions_aggregate::expr_fn::count;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 
 fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
     let mut builder = Int32Builder::with_capacity(num_rows);
@@ -162,7 +164,7 @@ impl TableProvider for CustomProvider {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         _: Option<usize>,

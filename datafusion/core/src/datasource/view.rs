@@ -21,6 +21,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 use datafusion_common::Column;
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
 
@@ -31,7 +32,6 @@ use crate::{
 };
 
 use crate::datasource::{TableProvider, TableType};
-use crate::execution::context::SessionState;
 
 /// An implementation of `TableProvider` that uses another logical plan.
 pub struct ViewTable {
@@ -103,7 +103,7 @@ impl TableProvider for ViewTable {
 
     async fn scan(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
