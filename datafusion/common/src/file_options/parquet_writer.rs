@@ -76,7 +76,7 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             key_value_metadata,
         } = table_parquet_options;
 
-        let mut builder = global.writer_props_from_global_opts()?;
+        let mut builder = global.into_writer_properties_builder()?;
 
         if !key_value_metadata.is_empty() {
             builder = builder.set_key_value_metadata(Some(
@@ -144,7 +144,7 @@ impl ParquetOptions {
     ///
     /// The returned [`WriterPropertiesBuilder`] can then be further modified with additional options
     /// applied per column; a customization which is not applicable for [`ParquetOptions`].
-    pub fn writer_props_from_global_opts(&self) -> Result<WriterPropertiesBuilder> {
+    pub fn into_writer_properties_builder(&self) -> Result<WriterPropertiesBuilder> {
         let ParquetOptions {
             data_pagesize_limit,
             write_batch_size,
