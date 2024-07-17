@@ -771,7 +771,7 @@ physical_plan
 03)----InterleaveExec
 04)------ProjectionExec: expr=[0 as m, t@0 as t]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
-06)----------CoalesceBatchesExec: target_batch_size=8192
+06)----------CoalesceBatchesExec: target_batch_size=8192, fetch=None
 07)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 09)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
@@ -779,7 +779,7 @@ physical_plan
 11)--------------------ValuesExec
 12)------ProjectionExec: expr=[1 as m, t@0 as t]
 13)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
-14)----------CoalesceBatchesExec: target_batch_size=8192
+14)----------CoalesceBatchesExec: target_batch_size=8192, fetch=None
 15)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
 16)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 17)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]

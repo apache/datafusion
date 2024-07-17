@@ -372,7 +372,7 @@ physical_plan
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------ProjectionExec: expr=[]
 06)----------GlobalLimitExec: skip=6, fetch=3
-07)------------CoalesceBatchesExec: target_batch_size=8192
+07)------------CoalesceBatchesExec: target_batch_size=8192, fetch=None
 08)--------------FilterExec: a@0 > 3
 09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -400,7 +400,7 @@ logical_plan
 02)--TableScan: t1000 projection=[i]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
-02)--CoalesceBatchesExec: target_batch_size=8192
+02)--CoalesceBatchesExec: target_batch_size=8192, fetch=None
 03)----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
 04)------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
 05)--------MemoryExec: partitions=4

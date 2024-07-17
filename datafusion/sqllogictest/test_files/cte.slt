@@ -117,7 +117,7 @@ physical_plan
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[id@0 + 1 as id]
-06)------CoalesceBatchesExec: target_batch_size=8192
+06)------CoalesceBatchesExec: target_batch_size=8192, fetch=None
 07)--------FilterExec: id@0 < 10
 08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)------------WorkTableExec: name=nodes
@@ -163,7 +163,7 @@ physical_plan
 03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/balance.csv]]}, projection=[time, name, account_balance], has_header=true
 04)----CoalescePartitionsExec
 05)------ProjectionExec: expr=[time@0 + 1 as time, name@1 as name, account_balance@2 + 10 as account_balance]
-06)--------CoalesceBatchesExec: target_batch_size=2
+06)--------CoalesceBatchesExec: target_batch_size=2, fetch=None
 07)----------FilterExec: time@0 < 10
 08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)--------------WorkTableExec: name=balances
@@ -735,7 +735,7 @@ physical_plan
 04)--ProjectionExec: expr=[2 as val]
 05)----CrossJoinExec
 06)------CoalescePartitionsExec
-07)--------CoalesceBatchesExec: target_batch_size=8182
+07)--------CoalesceBatchesExec: target_batch_size=8182, fetch=None
 08)----------FilterExec: val@0 < 2
 09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 10)--------------WorkTableExec: name=recursive_cte

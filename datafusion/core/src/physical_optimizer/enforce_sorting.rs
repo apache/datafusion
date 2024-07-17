@@ -815,14 +815,14 @@ mod tests {
             "  FilterExec: NOT non_nullable_col@1",
             "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], preserve_partitioning=[false]",
             "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
-            "        CoalesceBatchesExec: target_batch_size=128",
+            "        CoalesceBatchesExec: target_batch_size=128, fetch=None",
             "          SortExec: expr=[non_nullable_col@1 DESC], preserve_partitioning=[false]",
             "            MemoryExec: partitions=1, partition_sizes=[0]"];
 
         let expected_optimized = ["WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL), is_causal: false }]",
             "  FilterExec: NOT non_nullable_col@1",
             "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
-            "      CoalesceBatchesExec: target_batch_size=128",
+            "      CoalesceBatchesExec: target_batch_size=128, fetch=None",
             "        SortExec: expr=[non_nullable_col@1 DESC], preserve_partitioning=[false]",
             "          MemoryExec: partitions=1, partition_sizes=[0]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);

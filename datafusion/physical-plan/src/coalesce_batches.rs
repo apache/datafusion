@@ -113,19 +113,12 @@ impl DisplayAs for CoalesceBatchesExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                if let Some(fetch) = self.fetch {
-                    write!(
-                        f,
-                        "CoalesceBatchesExec: target_batch_size={}, fetch={}",
-                        self.target_batch_size, fetch
-                    )
-                } else {
-                    write!(
-                        f,
-                        "CoalesceBatchesExec: target_batch_size={}",
-                        self.target_batch_size
-                    )
-                }
+                write!(
+                    f,
+                    "CoalesceBatchesExec: target_batch_size={}, fetch={}",
+                    self.target_batch_size,
+                    self.fetch.map_or("None".to_string(), |x| x.to_string())
+                )
             }
         }
     }

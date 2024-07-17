@@ -249,7 +249,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[array_length(ARRAY_AGG(DISTINCT a.foo)@1) as array_length(ARRAY_AGG(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
 02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))]
-03)----CoalesceBatchesExec: target_batch_size=8192
+03)----CoalesceBatchesExec: target_batch_size=8192, fetch=None
 04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
 05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[ARRAY_AGG(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
 06)----------UnionExec
@@ -908,7 +908,7 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-06)----------CoalesceBatchesExec: target_batch_size=8192
+06)----------CoalesceBatchesExec: target_batch_size=8192, fetch=None
 07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=4
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
@@ -4592,7 +4592,7 @@ physical_plan
 07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
 08)--------------CoalescePartitionsExec
 09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
-10)------------------CoalesceBatchesExec: target_batch_size=8192
+10)------------------CoalesceBatchesExec: target_batch_size=8192, fetch=None
 11)--------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
 12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 13)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true

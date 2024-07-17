@@ -39,11 +39,11 @@ logical_plan
 physical_plan
 01)SortMergeJoin: join_type=Inner, on=[(a@0, a@0)], filter=CAST(b@1 AS Int64) * 50 <= CAST(b@0 AS Int64)
 02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-03)----CoalesceBatchesExec: target_batch_size=8192
+03)----CoalesceBatchesExec: target_batch_size=8192, fetch=None
 04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
 05)--------MemoryExec: partitions=1, partition_sizes=[1]
 06)--SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-07)----CoalesceBatchesExec: target_batch_size=8192
+07)----CoalesceBatchesExec: target_batch_size=8192, fetch=None
 08)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
 09)--------MemoryExec: partitions=1, partition_sizes=[1]
 

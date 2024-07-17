@@ -31,7 +31,7 @@ logical_plan
 01)Filter: a.c0 < Int32(1)
 02)--TableScan: a projection=[c0]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
+01)CoalesceBatchesExec: target_batch_size=8192, fetch=None
 02)--FilterExec: c0@0 < 1
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -72,7 +72,7 @@ logical_plan
 01)Filter: a.c0 < Int32(1)
 02)--TableScan: a projection=[c0]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=1234
+01)CoalesceBatchesExec: target_batch_size=1234, fetch=None
 02)--FilterExec: c0@0 < 1
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 

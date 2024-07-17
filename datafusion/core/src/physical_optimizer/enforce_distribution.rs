@@ -3024,7 +3024,7 @@ pub(crate) mod tests {
         // data is already sorted
         let expected = &[
             "SortPreservingMergeExec: [a@0 ASC]",
-            "CoalesceBatchesExec: target_batch_size=4096",
+            "CoalesceBatchesExec: target_batch_size=4096, fetch=None",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected, exec, true);
@@ -3036,7 +3036,7 @@ pub(crate) mod tests {
         let expected = &[
             "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
             "CoalescePartitionsExec",
-            "CoalesceBatchesExec: target_batch_size=4096",
+            "CoalesceBatchesExec: target_batch_size=4096, fetch=None",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected, exec, false);

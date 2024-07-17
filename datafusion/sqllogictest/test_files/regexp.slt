@@ -387,7 +387,7 @@ logical_plan
 01)Filter: dict_table.column1 LIKE Utf8("%oo%")
 02)--TableScan: dict_table projection=[column1]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
+01)CoalesceBatchesExec: target_batch_size=8192, fetch=None
 02)--FilterExec: column1@0 LIKE %oo%
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
