@@ -17,7 +17,6 @@
 
 pub use datafusion_physical_expr_common::aggregate::AggregateExpr;
 
-pub(crate) mod array_agg_distinct;
 pub(crate) mod array_agg_ordered;
 #[macro_use]
 pub(crate) mod min_max;

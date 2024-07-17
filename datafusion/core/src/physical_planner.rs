@@ -1842,8 +1842,9 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             // TODO: Remove this after array_agg are all udafs
             let (agg_expr, filter, order_by) = match func_def {
                 AggregateFunctionDefinition::UDF(udf)
-                    if udf.name() == "ARRAY_AGG" && (*distinct || order_by.is_some()) =>
+                    if udf.name() == "ARRAY_AGG" && order_by.is_some() =>
                 {
+                    // not yet support UDAF, fallback to builtin
                     let physical_sort_exprs = match order_by {
                         Some(exprs) => Some(create_physical_sort_exprs(
                             exprs,

@@ -23,8 +23,8 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, DistinctArrayAgg, InListExpr,
-    IsNotNullExpr, IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr, NthValue, Ntile,
+    BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, InListExpr, IsNotNullExpr,
+    IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr, NthValue, Ntile,
     OrderSensitiveArrayAgg, Rank, RankType, RowNumber, TryCastExpr, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
@@ -262,10 +262,7 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     let mut distinct = false;
 
     // TODO: remove
-    let inner = if aggr_expr.downcast_ref::<DistinctArrayAgg>().is_some() {
-        distinct = true;
-        protobuf::AggregateFunction::ArrayAgg
-    } else if aggr_expr.downcast_ref::<OrderSensitiveArrayAgg>().is_some() {
+    let inner = if aggr_expr.downcast_ref::<OrderSensitiveArrayAgg>().is_some() {
         protobuf::AggregateFunction::ArrayAgg
     } else if aggr_expr.downcast_ref::<Min>().is_some() {
         protobuf::AggregateFunction::Min
