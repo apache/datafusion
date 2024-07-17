@@ -138,7 +138,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             PlannerResult::Original(_args) => {}
                         }
                     }
-                    not_impl_err!("GetField not supported by ExprPlanner")
+                    not_impl_err!(
+                        "Compound identifiers not supported by ExprPlanner: {ids:?}"
+                    )
                 }
                 None => {
                     // return default where use all identifiers to not have a nested field

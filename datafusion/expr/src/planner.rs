@@ -172,9 +172,12 @@ pub trait ExprPlanner: Send + Sync {
     fn plan_get_field(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
-    /// Plans compound identifier
+    /// Plans compound identifier eg `db.schema.table`.
     ///
-    /// Returns origin expression arguments if not possible
+    /// Note:
+    /// Currently compound identifier for outer query schema is not supported.
+    ///
+    /// Returns empty expression arguments if not possible
     fn plan_compound_identifier(
         &self,
         _filed: &Field,

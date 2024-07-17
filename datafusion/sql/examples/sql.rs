@@ -22,6 +22,7 @@ use datafusion_expr::WindowUDF;
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
+use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_sql::{
@@ -54,7 +55,8 @@ fn main() {
     let context_provider = MyContextProvider::new()
         .with_udaf(sum_udaf())
         .with_udaf(count_udaf());
-    let sql_to_rel = SqlToRel::new(&context_provider);
+    let sql_to_rel = SqlToRel::new(&context_provider)
+        .with_user_defined_planner(Arc::new(CoreFunctionPlanner::default()));
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // show the plan
