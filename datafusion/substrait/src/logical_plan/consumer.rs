@@ -68,6 +68,7 @@ use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::{IntervalDayToSecond, IntervalYearToMonth};
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
+use substrait::proto::extensions::SimpleExtensionDeclaration;
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
@@ -179,25 +180,50 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
     (accum_join_keys, nulls_equal_nulls, join_filter)
 }
 
+struct Extensions {
+    pub functions: HashMap<u32, String>,
+    pub types: HashMap<u32, String>,
+    pub type_variations: HashMap<u32, String>,
+}
+
+fn unpack_extensions(extensions: &Vec<SimpleExtensionDeclaration>) -> Result<Extensions> {
+    let mut functions = HashMap::new();
+    let mut types = HashMap::new();
+    let mut type_variations = HashMap::new();
+
+    for ext in extensions {
+        match &ext.mapping_type {
+            Some(MappingType::ExtensionFunction(ext_f)) => {
+                functions.insert(ext_f.function_anchor, ext_f.name.to_owned());
+            }
+            Some(MappingType::ExtensionType(ext_t)) => {
+                types.insert(ext_t.type_anchor, ext_t.name.to_owned());
+            }
+            Some(MappingType::ExtensionTypeVariation(ext_v)) => {
+                type_variations
+                    .insert(ext_v.type_variation_anchor, ext_v.name.to_owned());
+            }
+            None => return plan_err!("Cannot parse empty extension"),
+        }
+    }
+
+    Ok(Extensions {
+        functions,
+        types,
+        type_variations,
+    })
+}
+
 /// Convert Substrait Plan to DataFusion LogicalPlan
 pub async fn from_substrait_plan(
     ctx: &SessionContext,
     plan: &Plan,
 ) -> Result<LogicalPlan> {
     // Register function extension
-    let function_extension = plan
-        .extensions
-        .iter()
-        .map(|e| match &e.mapping_type {
-            Some(ext) => match ext {
-                MappingType::ExtensionFunction(ext_f) => {
-                    Ok((ext_f.function_anchor, &ext_f.name))
-                }
-                _ => not_impl_err!("Extension type not supported: {ext:?}"),
-            },
-            None => not_impl_err!("Cannot parse empty extension"),
-        })
-        .collect::<Result<HashMap<_, _>>>()?;
+    let extensions = unpack_extensions(&plan.extensions)?;
+    if !extensions.type_variations.is_empty() {
+        return not_impl_err!("Type variation extensions are not supported");
+    }
 
     // Parse relations
     match plan.relations.len() {
@@ -205,10 +231,10 @@ pub async fn from_substrait_plan(
             match plan.relations[0].rel_type.as_ref() {
                 Some(rt) => match rt {
                     plan_rel::RelType::Rel(rel) => {
-                        Ok(from_substrait_rel(ctx, rel, &function_extension).await?)
+                        Ok(from_substrait_rel(ctx, rel, &extensions).await?)
                     },
                     plan_rel::RelType::Root(root) => {
-                        let plan = from_substrait_rel(ctx, root.input.as_ref().unwrap(), &function_extension).await?;
+                        let plan = from_substrait_rel(ctx, root.input.as_ref().unwrap(), &extensions).await?;
                         if root.names.is_empty() {
                             // Backwards compatibility for plans missing names
                             return Ok(plan);
@@ -396,7 +422,7 @@ fn make_renamed_schema(
 pub async fn from_substrait_rel(
     ctx: &SessionContext,
     rel: &Rel,
-    extensions: &HashMap<u32, &String>,
+    extensions: &Extensions,
 ) -> Result<LogicalPlan> {
     match &rel.rel_type {
         Some(RelType::Project(p)) => {
@@ -892,7 +918,7 @@ pub async fn from_substrait_sorts(
     ctx: &SessionContext,
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
-    extensions: &HashMap<u32, &String>,
+    extensions: &Extensions,
 ) -> Result<Vec<Expr>> {
     let mut sorts: Vec<Expr> = vec![];
     for s in substrait_sorts {
@@ -942,7 +968,7 @@ pub async fn from_substrait_rex_vec(
     ctx: &SessionContext,
     exprs: &Vec<Expression>,
     input_schema: &DFSchema,
-    extensions: &HashMap<u32, &String>,
+    extensions: &Extensions,
 ) -> Result<Vec<Expr>> {
     let mut expressions: Vec<Expr> = vec![];
     for expr in exprs {
@@ -957,7 +983,7 @@ pub async fn from_substrait_func_args(
     ctx: &SessionContext,
     arguments: &Vec<FunctionArgument>,
     input_schema: &DFSchema,
-    extensions: &HashMap<u32, &String>,
+    extensions: &Extensions,
 ) -> Result<Vec<Expr>> {
     let mut args: Vec<Expr> = vec![];
     for arg in arguments {
@@ -977,7 +1003,7 @@ pub async fn from_substrait_agg_func(
     ctx: &SessionContext,
     f: &AggregateFunction,
     input_schema: &DFSchema,
-    extensions: &HashMap<u32, &String>,
+    extensions: &Extensions,
     filter: Option<Box<Expr>>,
     order_by: Option<Vec<Expr>>,
     distinct: bool,
@@ -985,14 +1011,14 @@ pub async fn from_substrait_agg_func(
     let args =
         from_substrait_func_args(ctx, &f.arguments, input_schema, extensions).await?;
 
-    let Some(function_name) = extensions.get(&f.function_reference) else {
+    let Some(function_name) = extensions.functions.get(&f.function_reference) else {
         return plan_err!(
             "Aggregate function not registered: function anchor = {:?}",
             f.function_reference
         );
     };
 
-    let function_name = substrait_fun_name((**function_name).as_str());
+    let function_name = substrait_fun_name(function_name);
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
         // deal with situation that count(*) got no arguments
@@ -1025,7 +1051,7 @@ pub async fn from_substrait_rex(
     ctx: &SessionContext,
     e: &Expression,
     input_schema: &DFSchema,
-    extensions: &HashMap<u32, &String>,
+    extensions: &Extensions,
 ) -> Result<Expr> {
     match &e.rex_type {
         Some(RexType::SingularOrList(s)) => {
@@ -1105,7 +1131,7 @@ pub async fn from_substrait_rex(
             }))
         }
         Some(RexType::ScalarFunction(f)) => {
-            let Some(fn_name) = extensions.get(&f.function_reference) else {
+            let Some(fn_name) = extensions.functions.get(&f.function_reference) else {
                 return plan_err!(
                     "Scalar function not found: function reference = {:?}",
                     f.function_reference
@@ -1174,7 +1200,8 @@ pub async fn from_substrait_rex(
             None => substrait_err!("Cast expression without output type is not allowed"),
         },
         Some(RexType::WindowFunction(window)) => {
-            let Some(fn_name) = extensions.get(&window.function_reference) else {
+            let Some(fn_name) = extensions.functions.get(&window.function_reference)
+            else {
                 return plan_err!(
                     "Window function not found: function reference = {:?}",
                     window.function_reference
@@ -2012,7 +2039,7 @@ impl BuiltinExprBuilder {
         ctx: &SessionContext,
         f: &ScalarFunction,
         input_schema: &DFSchema,
-        extensions: &HashMap<u32, &String>,
+        extensions: &Extensions,
     ) -> Result<Expr> {
         match self.expr_name.as_str() {
             "like" => {
@@ -2037,7 +2064,7 @@ impl BuiltinExprBuilder {
         fn_name: &str,
         f: &ScalarFunction,
         input_schema: &DFSchema,
-        extensions: &HashMap<u32, &String>,
+        extensions: &Extensions,
     ) -> Result<Expr> {
         if f.arguments.len() != 1 {
             return substrait_err!("Expect one argument for {fn_name} expr");
@@ -2071,7 +2098,7 @@ impl BuiltinExprBuilder {
         case_insensitive: bool,
         f: &ScalarFunction,
         input_schema: &DFSchema,
-        extensions: &HashMap<u32, &String>,
+        extensions: &Extensions,
     ) -> Result<Expr> {
         let fn_name = if case_insensitive { "ILIKE" } else { "LIKE" };
         if f.arguments.len() != 2 && f.arguments.len() != 3 {
