@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
+
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
-use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.
@@ -29,6 +31,8 @@ use std::sync::Arc;
 /// `$largeUtf8Type`,
 ///
 /// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
+///
+/// If the input type is `Utf8View` the return type is `Utf8View`,
 macro_rules! get_optimal_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
         pub(crate) fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
@@ -37,6 +41,8 @@ macro_rules! get_optimal_return_type {
                 DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
                 // Binary inputs are automatically coerced to Utf8
                 DataType::Utf8 | DataType::Binary => $utf8Type,
+                // Utf8View inputs will yield Utf8View outputs
+                DataType::Utf8View => DataType::Utf8View,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => match **value_type {
                     DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
