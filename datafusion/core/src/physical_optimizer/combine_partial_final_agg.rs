@@ -21,13 +21,13 @@
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::{physical_exprs_equal, AggregateExpr, PhysicalExpr};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.

@@ -24,7 +24,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::output_requirements::OutputRequirementExec;
-use super::PhysicalOptimizerRule;
 use crate::datasource::physical_plan::CsvExec;
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -55,6 +54,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to

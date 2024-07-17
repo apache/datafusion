@@ -31,7 +31,6 @@ use crate::physical_optimizer::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
     is_sort_preserving_merge,
 };
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::joins::{
@@ -56,6 +55,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
