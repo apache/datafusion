@@ -46,7 +46,7 @@ pub trait Dialect {
         IntervalStyle::PostgresVerbose
     }
 
-    // The SQL type to use for for Arrow Utf8 unparsing
+    // The SQL type to use for Arrow Utf8 unparsing
     // Most dialects use VARCHAR, but some, like MySQL, require CHAR
     fn utf8_cast_dtype(&self) -> ast::DataType {
         ast::DataType::Varchar(None)
