@@ -57,11 +57,11 @@ use crate::joins::utils::{
     symmetric_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
 };
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use crate::spill::spill_record_batches;
 use crate::{
-    execution_mode_from_children, metrics, spill_record_batches, DisplayAs,
-    DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 /// join execution plan executes partitions in parallel and combines them into a set of
