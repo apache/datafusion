@@ -154,7 +154,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
     ) -> Result<Expr> {
         let mut exprs = values;
-        for planner in self.context_provider.get_expr_planners().iter() {
+        for planner in self.context_provider.get_expr_planners() {
             match planner.plan_array_literal(exprs, schema)? {
                 PlannerResult::Planned(expr) => {
                     return Ok(expr);

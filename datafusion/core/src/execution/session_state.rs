@@ -503,7 +503,6 @@ impl SessionState {
         let mut provider = SessionContextProvider {
             state: self,
             tables: HashMap::with_capacity(references.len()),
-            expr_planners: self.expr_planners(),
         };
 
         for reference in references {
@@ -568,7 +567,6 @@ impl SessionState {
         let provider = SessionContextProvider {
             state: self,
             tables: HashMap::new(),
-            expr_planners: self.expr_planners(),
         };
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
@@ -1592,12 +1590,11 @@ impl SessionStateDefaults {
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
     tables: HashMap<String, Arc<dyn TableSource>>,
-    expr_planners: Vec<Arc<dyn ExprPlanner>>,
 }
 
 impl<'a> ContextProvider for SessionContextProvider<'a> {
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        &self.expr_planners
+        &self.state.expr_planners
     }
 
     fn get_table_source(
@@ -1893,5 +1890,49 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
 
     fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
         expr.get_type(self.df_schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::DFSchema;
+    use datafusion_common::Result;
+    use datafusion_expr::Expr;
+    use datafusion_sql::planner::{PlannerContext, SqlToRel};
+
+    use crate::execution::context::SessionState;
+
+    use super::{SessionContextProvider, SessionStateBuilder};
+
+    #[test]
+    fn test_session_state_with_default_features() {
+        // test array planners with and without builtin planners
+        fn sql_to_expr(state: &SessionState) -> Result<Expr> {
+            let provider = SessionContextProvider {
+                state: &state,
+                tables: HashMap::new(),
+            };
+
+            let sql = "[1,2,3]";
+            let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+            let df_schema = DFSchema::try_from(schema)?;
+            let dialect = state.config.options().sql_parser.dialect.as_str();
+            let sql_expr = state.sql_to_expr(sql, dialect)?;
+
+            let query = SqlToRel::new_with_options(&provider, state.get_parser_options());
+            query.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())
+        }
+
+        let state = SessionStateBuilder::new().with_default_features().build();
+
+        assert!(sql_to_expr(&state).is_ok());
+
+        // if no builtin planners exist, you should register your own, otherwise returns error
+        let state = SessionStateBuilder::new().build();
+
+        assert!(sql_to_expr(&state).is_err())
     }
 }
