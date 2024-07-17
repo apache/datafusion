@@ -500,9 +500,6 @@ pub use arrow;
 #[cfg(feature = "parquet")]
 pub use parquet;
 
-#[cfg(feature = "franz")]
-pub mod franz_sinks;
-
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
 // for details, see https://github.com/apache/datafusion/issues/6648
