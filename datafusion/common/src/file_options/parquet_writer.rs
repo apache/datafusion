@@ -34,6 +34,7 @@ use parquet::{
 /// Options for writing parquet files
 #[derive(Clone, Debug)]
 pub struct ParquetWriterOptions {
+    /// parquet-rs writer properties
     pub writer_options: WriterProperties,
 }
 
