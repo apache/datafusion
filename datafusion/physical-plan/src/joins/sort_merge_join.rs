@@ -57,7 +57,12 @@ use crate::joins::utils::{
     symmetric_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
 };
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use crate::{execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics, spill_record_batches};
+use crate::{
+    execution_mode_from_children, metrics, spill_record_batches, DisplayAs,
+    DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
+};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -913,7 +918,7 @@ impl SMJStream {
                     spill_record_batches(
                         vec![batch],
                         spill_file.path().into(),
-                        Arc::clone(&self.buffered_schema)
+                        Arc::clone(&self.buffered_schema),
                     )?;
                     buffered_batch.spill_file = Some(spill_file);
                     buffered_batch.batch = None;
@@ -3017,7 +3022,7 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = vec![
+        let join_types = [
             JoinType::Inner,
             JoinType::Left,
             JoinType::Right,
@@ -3032,7 +3037,7 @@ mod tests {
             .with_disk_manager(DiskManagerConfig::NewOs);
         let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
 
-        for batch_size in vec![1,50] {
+        for batch_size in [1, 50] {
             let session_config = SessionConfig::default().with_batch_size(batch_size);
 
             for join_type in &join_types {
@@ -3045,7 +3050,7 @@ mod tests {
                     Arc::clone(&left),
                     Arc::clone(&right),
                     on.clone(),
-                    join_type.clone(),
+                    *join_type,
                     sort_options.clone(),
                     false,
                 )?;
@@ -3067,7 +3072,7 @@ mod tests {
                     Arc::clone(&left),
                     Arc::clone(&right),
                     on.clone(),
-                    join_type.clone(),
+                    *join_type,
                     sort_options.clone(),
                     false,
                 )?;
@@ -3125,7 +3130,7 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = vec![
+        let join_types = [
             JoinType::Inner,
             JoinType::Left,
             JoinType::Right,
@@ -3139,7 +3144,7 @@ mod tests {
             .with_memory_limit(500, 1.0)
             .with_disk_manager(DiskManagerConfig::NewOs);
         let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
-        for batch_size in vec![1,50] {
+        for batch_size in [1, 50] {
             let session_config = SessionConfig::default().with_batch_size(batch_size);
 
             for join_type in &join_types {
@@ -3151,7 +3156,7 @@ mod tests {
                     Arc::clone(&left),
                     Arc::clone(&right),
                     on.clone(),
-                    join_type.clone(),
+                    *join_type,
                     sort_options.clone(),
                     false,
                 )?;
@@ -3172,7 +3177,7 @@ mod tests {
                     Arc::clone(&left),
                     Arc::clone(&right),
                     on.clone(),
-                    join_type.clone(),
+                    *join_type,
                     sort_options.clone(),
                     false,
                 )?;
