@@ -1912,7 +1912,7 @@ mod tests {
         // test array planners with and without builtin planners
         fn sql_to_expr(state: &SessionState) -> Result<Expr> {
             let provider = SessionContextProvider {
-                state: &state,
+                state,
                 tables: HashMap::new(),
             };
 
