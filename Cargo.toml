@@ -37,7 +37,6 @@ members = [
     "datafusion/sql",
     "datafusion/sqllogictest",
     "datafusion/substrait",
-    "datafusion/franz",
     "datafusion/wasmtest",
     "datafusion-examples",
     "docs",
@@ -93,7 +92,6 @@ datafusion-common = { path = "datafusion/common", version = "39.0.0", default-fe
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "39.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "39.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "39.0.0" }
-datafusion-franz = { path = "datafusion/franz", version = "39.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "39.0.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "39.0.0" }
 datafusion-functions-array = { path = "datafusion/functions-array", version = "39.0.0" }
