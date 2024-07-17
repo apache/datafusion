@@ -573,6 +573,8 @@ mod tests {
         );
     }
 
+    /// Ensure that the configuration defaults for writing parquet files are
+    /// consistent with the options in arrow-rs
     #[test]
     fn test_defaults_match() {
         // ensure the global settings are the same
@@ -584,8 +586,10 @@ mod tests {
             "should have matching defaults for TableParquetOptions.global and ParquetOptions",
         );
 
-        // confirm the TableParquetOptions::default matches the WriterProperties::default, once both converted to WriterProperties
+        // WriterProperties::default, a.k.a. using extern parquet's defaults
         let default_writer_props = WriterProperties::new();
+
+        // WriterProperties::try_from(TableParquetOptions::default), a.k.a. using datafusion's defaults
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
@@ -609,11 +613,23 @@ mod tests {
             "should indicate that table_parquet_opts defaults came from datafusion",
         );
 
-        // TODO: in a followup PR, start the discussion of which of these defaults should be changed,
-        // and if the change should be in datafusion's default or the extern parquet's default.
+        // Expected: the remaining should match
+        let same_created_by = default_table_writer_opts.global.created_by.clone();
+        let mut from_extern_parquet =
+            session_config_from_writer_props(&default_writer_props);
+        from_extern_parquet.global.created_by = same_created_by;
+        // TODO: the remaining defaults do not match!
         // refer to https://github.com/apache/datafusion/issues/11367
+        assert_ne!(
+            default_table_writer_opts,
+            from_extern_parquet,
+            "the default writer_props should have the same configuration as the session's default TableParquetOptions",
+        );
 
-        // TODO: does not match
+        // Below here itemizes how the defaults **should** match, but do not.
+
+        // TODO: compression defaults do not match
+        // refer to https://github.com/apache/datafusion/issues/11367
         assert_eq!(
             default_writer_props.compression(&"default".into()),
             Compression::UNCOMPRESSED,
@@ -627,7 +643,8 @@ mod tests {
             "datafusion's default is zstd"
         );
 
-        // TODO: does not match
+        // TODO: data_page_row_count_limit defaults do not match
+        // refer to https://github.com/apache/datafusion/issues/11367
         assert_eq!(
             default_writer_props.data_page_row_count_limit(),
             20_000,
@@ -639,7 +656,8 @@ mod tests {
             "datafusion's default is usize::MAX"
         );
 
-        // TODO: does not match
+        // TODO: column_index_truncate_length do not match
+        // refer to https://github.com/apache/datafusion/issues/11367
         assert_eq!(
             default_writer_props.column_index_truncate_length(),
             Some(64),
@@ -651,7 +669,17 @@ mod tests {
             "datafusion's default is None"
         );
 
-        // TODO: matches once create WriterProps, but only due to parquet's override
+        // The next few examples are where datafusion's default is None.
+        // But once datafusion's TableParquetOptions are converted to a WriterProperties,
+        // then we get the extern parquet's defaults.
+        //
+        // In other words, we do not get indeterminate behavior in the output writer props.
+        // But this is only because we use the extern parquet's defaults when we leave
+        // the datafusion setting as None.
+
+        // datafusion's `None` for Option<bool> => becomes parquet's true
+        // TODO: should this be changed?
+        // refer to https://github.com/apache/datafusion/issues/11367
         assert!(
             default_writer_props.dictionary_enabled(&"default".into()),
             "extern parquet's default is true"
@@ -665,7 +693,9 @@ mod tests {
             "should see the extern parquet's default over-riding datafusion's None",
         );
 
-        // TODO: matches once create WriterProps, but only due to parquet's override
+        // datafusion's `None` for Option<String> => becomes parquet's EnabledStatistics::Page
+        // TODO: should this be changed?
+        // refer to https://github.com/apache/datafusion/issues/11367
         assert_eq!(
             default_writer_props.statistics_enabled(&"default".into()),
             EnabledStatistics::Page,
@@ -681,7 +711,9 @@ mod tests {
             "should see the extern parquet's default over-riding datafusion's None",
         );
 
-        // TODO: matches once create WriterProps, but only due to parquet's override
+        // datafusion's `None` for Option<usize> => becomes parquet's 4096
+        // TODO: should this be changed?
+        // refer to https://github.com/apache/datafusion/issues/11367
         assert_eq!(
             default_writer_props.max_statistics_size(&"default".into()),
             4096,
@@ -697,7 +729,9 @@ mod tests {
             "should see the extern parquet's default over-riding datafusion's None",
         );
 
-        // TODO: temporarily set the extern parquet's defaults back to the  datafusion defaults.
+        // Confirm all other settings are equal.
+        // First resolve the known discrepancies, (set as the same).
+        // TODO: once we fix the above mis-matches, we should be able to remove this.
         let mut from_extern_parquet =
             session_config_from_writer_props(&default_writer_props);
         from_extern_parquet.global.compression = Some("zstd(3)".into());
@@ -713,7 +747,7 @@ mod tests {
         assert_eq!(
             default_table_writer_opts,
             from_extern_parquet,
-            "the writer_props should have the same configuration as the session's TableParquetOptions",
+            "the default writer_props should have the same configuration as the session's default TableParquetOptions",
         );
     }
 
