@@ -27,7 +27,7 @@ use sqlparser::keywords::ALL_KEYWORDS;
 ///
 /// See <https://github.com/sqlparser-rs/sqlparser-rs/pull/1170>
 /// See also the discussion in <https://github.com/apache/datafusion/pull/10625>
-pub trait Dialect {
+pub trait Dialect: Send + Sync {
     /// Return the character used to quote identifiers.
     fn identifier_quote_style(&self, _identifier: &str) -> Option<char>;
 
