@@ -719,7 +719,7 @@ mod tests_statistical {
 
     use rstest::rstest;
 
-    /// Return statistcs for empty table
+    /// Return statistics for empty table
     fn empty_statistics() -> Statistics {
         Statistics {
             num_rows: Precision::Absent,
@@ -737,7 +737,7 @@ mod tests_statistical {
         )
     }
 
-    /// Return statistcs for small table
+    /// Return statistics for small table
     fn small_statistics() -> Statistics {
         let (threshold_num_rows, threshold_byte_size) = get_thresholds();
         Statistics {
@@ -747,7 +747,7 @@ mod tests_statistical {
         }
     }
 
-    /// Return statistcs for big table
+    /// Return statistics for big table
     fn big_statistics() -> Statistics {
         let (threshold_num_rows, threshold_byte_size) = get_thresholds();
         Statistics {
@@ -757,7 +757,7 @@ mod tests_statistical {
         }
     }
 
-    /// Return statistcs for big table
+    /// Return statistics for big table
     fn bigger_statistics() -> Statistics {
         let (threshold_num_rows, threshold_byte_size) = get_thresholds();
         Statistics {

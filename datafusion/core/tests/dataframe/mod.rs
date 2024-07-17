@@ -99,7 +99,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
     // https://github.com/apache/datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
-    // for compare difference betwwen sql and df logical plan, we need to create a new SessionContext here
+    // for compare difference between sql and df logical plan, we need to create a new SessionContext here
     let ctx = create_join_context()?;
     let df_results = ctx
         .table("t1")

@@ -695,8 +695,8 @@ impl ListingTable {
     }
 
     /// Specify the SQL definition for this table, if any
-    pub fn with_definition(mut self, defintion: Option<String>) -> Self {
-        self.definition = defintion;
+    pub fn with_definition(mut self, definition: Option<String>) -> Self {
+        self.definition = definition;
         self
     }
 

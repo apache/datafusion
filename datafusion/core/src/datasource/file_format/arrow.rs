@@ -353,7 +353,7 @@ async fn infer_schema_from_file_stream(
     // Expected format:
     // <magic number "ARROW1"> - 6 bytes
     // <empty padding bytes [to 8 byte boundary]> - 2 bytes
-    // <continutation: 0xFFFFFFFF> - 4 bytes, not present below v0.15.0
+    // <continuation: 0xFFFFFFFF> - 4 bytes, not present below v0.15.0
     // <metadata_size: int32> - 4 bytes
     // <metadata_flatbuffer: bytes>
     // <rest of file bytes>
@@ -365,7 +365,7 @@ async fn infer_schema_from_file_stream(
     // Files should start with these magic bytes
     if bytes[0..6] != ARROW_MAGIC {
         return Err(ArrowError::ParseError(
-            "Arrow file does not contian correct header".to_string(),
+            "Arrow file does not contain correct header".to_string(),
         ))?;
     }
 
