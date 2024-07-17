@@ -1031,10 +1031,10 @@ pub fn get_meet_ordering_union(
     lhs_eq_properties.constants = vec![];
     let reference_ordering = lhs_eq_properties.normalize_sort_exprs(reference_ordering);
     let mut meet = vec![];
-    for (idx, reference_ordering) in reference_ordering.into_iter().enumerate(){
+    for (idx, reference_ordering) in reference_ordering.into_iter().enumerate() {
         if idx < lhs.len() && reference_ordering.eq(&lhs[idx]) {
             meet.push(reference_ordering);
-        } else if const_exprs_contains(&constants, &reference_ordering.expr){
+        } else if const_exprs_contains(&constants, &reference_ordering.expr) {
             // expr is among constants for the left side. We can use it in meet ordering safely.
             meet.push(reference_ordering);
         } else {
