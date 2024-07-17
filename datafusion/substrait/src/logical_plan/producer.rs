@@ -33,6 +33,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
+use crate::extensions::Extensions;
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
@@ -874,87 +875,6 @@ fn to_substrait_sort_field(
             })
         }
         _ => exec_err!("expects to receive sort expression"),
-    }
-}
-
-struct Extensions {
-    pub functions: HashMap<String, u32>,
-    pub types: HashMap<String, u32>,
-    // pub type_variations: HashMap<String, u32>, // type variations not supported yet
-}
-
-impl Extensions {
-    pub fn new() -> Self {
-        Self {
-            functions: HashMap::new(),
-            types: HashMap::new(),
-        }
-    }
-
-    pub fn register_function(&mut self, function_name: String) -> u32 {
-        let function_name = function_name.to_lowercase();
-
-        // Some functions are named differently in Substrait default extensions than in DF
-        // Rename those to match the Substrait extensions for interoperability
-        let function_name = match function_name.as_str() {
-            "substr" => "substring".to_string(),
-            _ => function_name,
-        };
-
-        match self.functions.get(&function_name) {
-            Some(function_anchor) => *function_anchor, // Function has been registered
-            None => {
-                // Function has NOT been registered
-                let function_anchor = self.functions.len() as u32;
-                self.functions
-                    .insert(function_name.clone(), function_anchor);
-                function_anchor
-            }
-        }
-    }
-
-    pub fn register_type(&mut self, type_name: String) -> u32 {
-        let type_name = type_name.to_lowercase();
-        match self.types.get(&type_name) {
-            Some(type_anchor) => *type_anchor, // Type has been registered
-            None => {
-                // Type has NOT been registered
-                let type_anchor = self.types.len() as u32;
-                self.types.insert(type_name.clone(), type_anchor);
-                type_anchor
-            }
-        }
-    }
-}
-
-impl Into<Vec<SimpleExtensionDeclaration>> for Extensions {
-    fn into(self) -> Vec<SimpleExtensionDeclaration> {
-        let mut extensions = vec![];
-        for (f_name, f_anchor) in self.functions {
-            let function_extension = ExtensionFunction {
-                extension_uri_reference: u32::MAX,
-                function_anchor: f_anchor,
-                name: f_name,
-            };
-            let simple_extension = SimpleExtensionDeclaration {
-                mapping_type: Some(MappingType::ExtensionFunction(function_extension)),
-            };
-            extensions.push(simple_extension);
-        }
-
-        for (t_name, t_anchor) in self.types {
-            let type_extension = ExtensionType {
-                extension_uri_reference: u32::MAX, // We don't register proper extension URIs yet
-                type_anchor: t_anchor,
-                name: t_name,
-            };
-            let simple_extension = SimpleExtensionDeclaration {
-                mapping_type: Some(MappingType::ExtensionType(type_extension)),
-            };
-            extensions.push(simple_extension);
-        }
-
-        extensions
     }
 }
 
@@ -2273,9 +2193,10 @@ mod test {
     fn round_trip_literal(scalar: ScalarValue) -> Result<()> {
         println!("Checking round trip of {scalar:?}");
 
-        let substrait_literal = to_substrait_literal(&scalar)?;
+        let mut extensions = Extensions::new();
+        let substrait_literal = to_substrait_literal(&scalar, &mut extensions)?;
         let roundtrip_scalar =
-            from_substrait_literal_without_names(&substrait_literal, Extensions::new())?;
+            from_substrait_literal_without_names(&substrait_literal, &extensions)?;
         assert_eq!(scalar, roundtrip_scalar);
         Ok(())
     }
@@ -2345,10 +2266,12 @@ mod test {
     fn round_trip_type(dt: DataType) -> Result<()> {
         println!("Checking round trip of {dt:?}");
 
+        let mut extensions = Extensions::new();
+
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
-        let substrait = to_substrait_type(&dt, true)?;
-        let roundtrip_dt = from_substrait_type_without_names(&substrait)?;
+        let substrait = to_substrait_type(&dt, true, &mut extensions)?;
+        let roundtrip_dt = from_substrait_type_without_names(&substrait, &extensions)?;
         assert_eq!(dt, roundtrip_dt);
         Ok(())
     }

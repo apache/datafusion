@@ -36,6 +36,7 @@ use datafusion::logical_expr::{
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use url::Url;
 
+use crate::extensions::Extensions;
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
@@ -180,44 +181,6 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
 
     let join_filter = accum_filters.into_iter().reduce(Expr::and);
     (accum_join_keys, nulls_equal_nulls, join_filter)
-}
-
-struct Extensions {
-    pub functions: HashMap<u32, String>,
-    pub types: HashMap<u32, String>,
-    pub type_variations: HashMap<u32, String>,
-}
-
-impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
-    type Error = DataFusionError;
-
-    fn try_from(value: &Vec<SimpleExtensionDeclaration>) -> Result<Self> {
-        let mut functions = HashMap::new();
-        let mut types = HashMap::new();
-        let mut type_variations = HashMap::new();
-
-        for ext in value {
-            match &ext.mapping_type {
-                Some(MappingType::ExtensionFunction(ext_f)) => {
-                    functions.insert(ext_f.function_anchor, ext_f.name.to_owned());
-                }
-                Some(MappingType::ExtensionType(ext_t)) => {
-                    types.insert(ext_t.type_anchor, ext_t.name.to_owned());
-                }
-                Some(MappingType::ExtensionTypeVariation(ext_v)) => {
-                    type_variations
-                        .insert(ext_v.type_variation_anchor, ext_v.name.to_owned());
-                }
-                None => return plan_err!("Cannot parse empty extension"),
-            }
-        }
-
-        Ok(Extensions {
-            functions,
-            types,
-            type_variations,
-        })
-    }
 }
 
 /// Convert Substrait Plan to DataFusion LogicalPlan
