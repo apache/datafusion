@@ -149,14 +149,15 @@ fn calculate_union_eq_properties(
     // TODO: In some cases, we should be able to preserve some equivalence
     //       classes and constants. Add support for such cases.
     let mut eq_properties = EquivalenceProperties::new(schema);
-    // Use the ordering equivalence class of the first child as the seed:
+    // Use the ordering equivalence class of the all children as the seed
+    // (These will be pruned out during meet calculation with each child):
     let mut meets = children_eqs
         .iter()
         .flat_map(|child_eq| child_eq.oeq_class().iter().map(|item| item.to_vec()))
         .collect::<Vec<_>>();
     let empty_ordering = [vec![]];
     // Iterate over all the children:
-    for child_eqs in &children_eqs[1..] {
+    for child_eqs in children_eqs {
         // Compute meet orderings of the current meets and the new ordering
         // equivalence class.
         let mut idx = 0;
