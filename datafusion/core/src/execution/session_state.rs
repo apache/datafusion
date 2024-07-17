@@ -503,6 +503,7 @@ impl SessionState {
         let mut provider = SessionContextProvider {
             state: self,
             tables: HashMap::with_capacity(references.len()),
+            expr_planners: self.expr_planners(),
         };
 
         for reference in references {
@@ -567,6 +568,7 @@ impl SessionState {
         let provider = SessionContextProvider {
             state: self,
             tables: HashMap::new(),
+            expr_planners: self.expr_planners(),
         };
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
@@ -1590,11 +1592,12 @@ impl SessionStateDefaults {
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
     tables: HashMap<String, Arc<dyn TableSource>>,
+    expr_planners: Vec<Arc<dyn ExprPlanner>>,
 }
 
 impl<'a> ContextProvider for SessionContextProvider<'a> {
-    fn get_expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
-        self.state.expr_planners()
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.expr_planners
     }
 
     fn get_table_source(
