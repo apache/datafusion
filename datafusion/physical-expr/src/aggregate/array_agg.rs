@@ -24,7 +24,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::Array;
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::array_into_list_array;
+use datafusion_common::utils::array_into_list_array_nullable;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
@@ -40,8 +40,6 @@ pub struct ArrayAgg {
     input_data_type: DataType,
     /// The input expression
     expr: Arc<dyn PhysicalExpr>,
-    /// If the input expression can have NULLs
-    nullable: bool,
 }
 
 impl ArrayAgg {
@@ -50,13 +48,11 @@ impl ArrayAgg {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
-        nullable: bool,
     ) -> Self {
         Self {
             name: name.into(),
             input_data_type: data_type,
             expr,
-            nullable,
         }
     }
 }
@@ -70,7 +66,7 @@ impl AggregateExpr for ArrayAgg {
         Ok(Field::new_list(
             &self.name,
             // This should be the same as return type of AggregateFunction::ArrayAgg
-            Field::new("item", self.input_data_type.clone(), self.nullable),
+            Field::new("item", self.input_data_type.clone(), true),
             true,
         ))
     }
@@ -78,14 +74,13 @@ impl AggregateExpr for ArrayAgg {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(ArrayAggAccumulator::try_new(
             &self.input_data_type,
-            self.nullable,
         )?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
-            Field::new("item", self.input_data_type.clone(), self.nullable),
+            Field::new("item", self.input_data_type.clone(), true),
             true,
         )])
     }
@@ -116,16 +111,14 @@ impl PartialEq<dyn Any> for ArrayAgg {
 pub(crate) struct ArrayAggAccumulator {
     values: Vec<ArrayRef>,
     datatype: DataType,
-    nullable: bool,
 }
 
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
-    pub fn try_new(datatype: &DataType, nullable: bool) -> Result<Self> {
+    pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             values: vec![],
             datatype: datatype.clone(),
-            nullable,
         })
     }
 }
@@ -169,15 +162,11 @@ impl Accumulator for ArrayAggAccumulator {
             self.values.iter().map(|a| a.as_ref()).collect();
 
         if element_arrays.is_empty() {
-            return Ok(ScalarValue::new_null_list(
-                self.datatype.clone(),
-                self.nullable,
-                1,
-            ));
+            return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
-        let list_array = array_into_list_array(concated_array, self.nullable);
+        let list_array = array_into_list_array_nullable(concated_array);
 
         Ok(ScalarValue::List(Arc::new(list_array)))
     }
