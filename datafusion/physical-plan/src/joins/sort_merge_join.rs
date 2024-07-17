@@ -57,12 +57,7 @@ use crate::joins::utils::{
     symmetric_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
 };
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use crate::{
-    execution_mode_from_children, metrics, spill_record_batch_by_size, DisplayAs,
-    DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
-};
+use crate::{execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics, spill_record_batches};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -914,12 +909,11 @@ impl SMJStream {
                     .disk_manager
                     .create_tmp_file("SortMergeJoinBuffered")?;
 
-                if let Some(batch) = &buffered_batch.batch {
-                    spill_record_batch_by_size(
-                        batch,
+                if let Some(batch) = buffered_batch.batch {
+                    spill_record_batches(
+                        vec![batch],
                         spill_file.path().into(),
-                        Arc::clone(&self.buffered_schema),
-                        self.batch_size,
+                        Arc::clone(&self.buffered_schema)
                     )?;
                     buffered_batch.spill_file = Some(spill_file);
                     buffered_batch.batch = None;
@@ -3037,53 +3031,56 @@ mod tests {
             .with_memory_limit(100, 1.0)
             .with_disk_manager(DiskManagerConfig::NewOs);
         let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
-        let session_config = SessionConfig::default().with_batch_size(50);
 
-        for join_type in join_types {
-            let task_ctx = TaskContext::default()
-                .with_session_config(session_config.clone())
-                .with_runtime(Arc::clone(&runtime));
-            let task_ctx = Arc::new(task_ctx);
+        for batch_size in vec![1,50] {
+            let session_config = SessionConfig::default().with_batch_size(batch_size);
 
-            let join = join_with_options(
-                Arc::clone(&left),
-                Arc::clone(&right),
-                on.clone(),
-                join_type,
-                sort_options.clone(),
-                false,
-            )?;
+            for join_type in &join_types {
+                let task_ctx = TaskContext::default()
+                    .with_session_config(session_config.clone())
+                    .with_runtime(Arc::clone(&runtime));
+                let task_ctx = Arc::new(task_ctx);
 
-            let stream = join.execute(0, task_ctx)?;
-            let spilled_join_result = common::collect(stream).await.unwrap();
+                let join = join_with_options(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    join_type.clone(),
+                    sort_options.clone(),
+                    false,
+                )?;
 
-            assert!(join.metrics().is_some());
-            assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
-            assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
-            assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
+                let stream = join.execute(0, task_ctx)?;
+                let spilled_join_result = common::collect(stream).await.unwrap();
 
-            // Run the test with no spill configuration as
-            let task_ctx_no_spill =
-                TaskContext::default().with_session_config(session_config.clone());
-            let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
+                assert!(join.metrics().is_some());
+                assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
+                assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
+                assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
 
-            let join = join_with_options(
-                Arc::clone(&left),
-                Arc::clone(&right),
-                on.clone(),
-                join_type,
-                sort_options.clone(),
-                false,
-            )?;
-            let stream = join.execute(0, task_ctx_no_spill)?;
-            let no_spilled_join_result = common::collect(stream).await.unwrap();
+                // Run the test with no spill configuration as
+                let task_ctx_no_spill =
+                    TaskContext::default().with_session_config(session_config.clone());
+                let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
 
-            assert!(join.metrics().is_some());
-            assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
-            assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
-            assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
-            // Compare spilled and non spilled data to check spill logic doesn't corrupt the data
-            assert_eq!(spilled_join_result, no_spilled_join_result);
+                let join = join_with_options(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    join_type.clone(),
+                    sort_options.clone(),
+                    false,
+                )?;
+                let stream = join.execute(0, task_ctx_no_spill)?;
+                let no_spilled_join_result = common::collect(stream).await.unwrap();
+
+                assert!(join.metrics().is_some());
+                assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
+                assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
+                assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+                // Compare spilled and non spilled data to check spill logic doesn't corrupt the data
+                assert_eq!(spilled_join_result, no_spilled_join_result);
+            }
         }
 
         Ok(())
@@ -3142,51 +3139,53 @@ mod tests {
             .with_memory_limit(500, 1.0)
             .with_disk_manager(DiskManagerConfig::NewOs);
         let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
-        let session_config = SessionConfig::default().with_batch_size(50);
+        for batch_size in vec![1,50] {
+            let session_config = SessionConfig::default().with_batch_size(batch_size);
 
-        for join_type in join_types {
-            let task_ctx = TaskContext::default()
-                .with_session_config(session_config.clone())
-                .with_runtime(Arc::clone(&runtime));
-            let task_ctx = Arc::new(task_ctx);
-            let join = join_with_options(
-                Arc::clone(&left),
-                Arc::clone(&right),
-                on.clone(),
-                join_type,
-                sort_options.clone(),
-                false,
-            )?;
+            for join_type in &join_types {
+                let task_ctx = TaskContext::default()
+                    .with_session_config(session_config.clone())
+                    .with_runtime(Arc::clone(&runtime));
+                let task_ctx = Arc::new(task_ctx);
+                let join = join_with_options(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    join_type.clone(),
+                    sort_options.clone(),
+                    false,
+                )?;
 
-            let stream = join.execute(0, task_ctx)?;
-            let spilled_join_result = common::collect(stream).await.unwrap();
-            assert!(join.metrics().is_some());
-            assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
-            assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
-            assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
+                let stream = join.execute(0, task_ctx)?;
+                let spilled_join_result = common::collect(stream).await.unwrap();
+                assert!(join.metrics().is_some());
+                assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
+                assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
+                assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
 
-            // Run the test with no spill configuration as
-            let task_ctx_no_spill =
-                TaskContext::default().with_session_config(session_config.clone());
-            let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
+                // Run the test with no spill configuration as
+                let task_ctx_no_spill =
+                    TaskContext::default().with_session_config(session_config.clone());
+                let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
 
-            let join = join_with_options(
-                Arc::clone(&left),
-                Arc::clone(&right),
-                on.clone(),
-                join_type,
-                sort_options.clone(),
-                false,
-            )?;
-            let stream = join.execute(0, task_ctx_no_spill)?;
-            let no_spilled_join_result = common::collect(stream).await.unwrap();
+                let join = join_with_options(
+                    Arc::clone(&left),
+                    Arc::clone(&right),
+                    on.clone(),
+                    join_type.clone(),
+                    sort_options.clone(),
+                    false,
+                )?;
+                let stream = join.execute(0, task_ctx_no_spill)?;
+                let no_spilled_join_result = common::collect(stream).await.unwrap();
 
-            assert!(join.metrics().is_some());
-            assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
-            assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
-            assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
-            // Compare spilled and non spilled data to check spill logic doesn't corrupt the data
-            assert_eq!(spilled_join_result, no_spilled_join_result);
+                assert!(join.metrics().is_some());
+                assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
+                assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
+                assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+                // Compare spilled and non spilled data to check spill logic doesn't corrupt the data
+                assert_eq!(spilled_join_result, no_spilled_join_result);
+            }
         }
 
         Ok(())
