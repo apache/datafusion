@@ -16,7 +16,7 @@
 // under the License.
 
 use regex::Regex;
-use sqlparser::keywords::ALL_KEYWORDS;
+use sqlparser::{ast, keywords::ALL_KEYWORDS};
 
 /// `Dialect` to use for Unparsing
 ///
@@ -46,11 +46,15 @@ pub trait Dialect {
         IntervalStyle::PostgresVerbose
     }
 
-    // Does the dialect use CHAR to cast Utf8 rather than TEXT?
-    // E.g. MySQL requires CHAR instead of TEXT and automatically produces a string with
-    // the VARCHAR, TEXT or LONGTEXT data type based on the length of the string
-    fn use_char_for_utf8_cast(&self) -> bool {
-        false
+    // The SQL type to use for for Arrow Utf8 unparsing
+    // Most dialects use VARCHAR, but some, like MySQL, require CHAR
+    fn utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Varchar(None)
+    }
+    // The SQL type to use for Arrow LargeUtf8 unparsing
+    // Most dialects use TEXT, but some, like MySQL, require CHAR
+    fn large_utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Text
     }
 }
 
@@ -111,8 +115,12 @@ impl Dialect for MySqlDialect {
         IntervalStyle::MySQL
     }
 
-    fn use_char_for_utf8_cast(&self) -> bool {
-        true
+    fn utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Char(None)
+    }
+
+    fn large_utf8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Char(None)
     }
 }
 
@@ -129,7 +137,8 @@ pub struct CustomDialect {
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
-    use_char_for_utf8_cast: bool,
+    utf8_cast_dtype: ast::DataType,
+    large_utf8_cast_dtype: ast::DataType,
 }
 
 impl Default for CustomDialect {
@@ -139,7 +148,8 @@ impl Default for CustomDialect {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::SQLStandard,
-            use_char_for_utf8_cast: false,
+            utf8_cast_dtype: ast::DataType::Varchar(None),
+            large_utf8_cast_dtype: ast::DataType::Text,
         }
     }
 }
@@ -172,8 +182,12 @@ impl Dialect for CustomDialect {
         self.interval_style
     }
 
-    fn use_char_for_utf8_cast(&self) -> bool {
-        self.use_char_for_utf8_cast
+    fn utf8_cast_dtype(&self) -> ast::DataType {
+        self.utf8_cast_dtype.clone()
+    }
+
+    fn large_utf8_cast_dtype(&self) -> ast::DataType {
+        self.large_utf8_cast_dtype.clone()
     }
 }
 
@@ -196,7 +210,8 @@ pub struct CustomDialectBuilder {
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
-    use_char_for_utf8_cast: bool,
+    utf8_cast_dtype: ast::DataType,
+    large_utf8_cast_dtype: ast::DataType,
 }
 
 impl Default for CustomDialectBuilder {
@@ -212,7 +227,8 @@ impl CustomDialectBuilder {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::PostgresVerbose,
-            use_char_for_utf8_cast: false,
+            utf8_cast_dtype: ast::DataType::Varchar(None),
+            large_utf8_cast_dtype: ast::DataType::Text,
         }
     }
 
@@ -222,7 +238,8 @@ impl CustomDialectBuilder {
             supports_nulls_first_in_sort: self.supports_nulls_first_in_sort,
             use_timestamp_for_date64: self.use_timestamp_for_date64,
             interval_style: self.interval_style,
-            use_char_for_utf8_cast: self.use_char_for_utf8_cast,
+            utf8_cast_dtype: self.utf8_cast_dtype,
+            large_utf8_cast_dtype: self.large_utf8_cast_dtype,
         }
     }
 
@@ -256,8 +273,16 @@ impl CustomDialectBuilder {
         self
     }
 
-    pub fn with_use_char_for_utf8_cast(mut self, use_char_for_utf8_cast: bool) -> Self {
-        self.use_char_for_utf8_cast = use_char_for_utf8_cast;
+    pub fn with_utf8_cast_dtype(mut self, utf8_cast_dtype: ast::DataType) -> Self {
+        self.utf8_cast_dtype = utf8_cast_dtype;
+        self
+    }
+
+    pub fn with_large_utf8_cast_dtype(
+        mut self,
+        large_utf8_cast_dtype: ast::DataType,
+    ) -> Self {
+        self.large_utf8_cast_dtype = large_utf8_cast_dtype;
         self
     }
 }
