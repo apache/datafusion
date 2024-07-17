@@ -39,9 +39,13 @@ path = "src/lib.rs"
 default = [
     "regex_expressions",
     "encoding_expressions",
+    "arrow_udf"
 ]
 encoding_expressions = ["base64", "hex"]
 regex_expressions = ["regex"]
+arrow_udf = [
+    "datafusion-functions/arrow_udf",
+]
 
 [dependencies]
 ahash = { workspace = true }
@@ -57,6 +61,7 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+datafusion-functions = { workspace = true, optional = true, default-features = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
 hex = { version = "0.4", optional = true }
