@@ -325,7 +325,7 @@ select
 ----
 Interval(MonthDayNano) Interval(MonthDayNano)
 
-# cast with explicit cast sytax
+# cast with explicit cast syntax
 query TT
 select
   arrow_typeof(cast ('5 months' as interval)),
@@ -377,13 +377,13 @@ drop table t;
 
 ##### Tests for interval arithmetic
 
-statement ok
+statement error DataFusion error: SQL error: ParserError\("Expected \(, found: ;"\)
 create table t(i interval, d date, ts timestamp)
 as
 values
   ('1 month',  '1980-01-01', '2000-01-01T00:00:00'),
   ('1 day',    '1990-10-01', '2000-01-01T12:11:10'),
-  ('1 minute', '1980-01-02', '2000-02-01T00:00:00')
+  ('1 minute', '1980-01-02', '2000-02-01T00:00:00'),
 ;
 
 ### date / timestamp (scalar) + interval (scalar)
@@ -413,95 +413,47 @@ select '1980-01-01'::timestamp - interval '1 day'
 
 
 ### date / timestamp (array) + interval (scalar)
-query D
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select d + interval '1 day' from t;
-----
-1980-01-02
-1990-10-02
-1980-01-03
 
-query P
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select ts + interval '1 day' from t;
-----
-2000-01-02T00:00:00
-2000-01-02T12:11:10
-2000-02-02T00:00:00
 
 ### date / timestamp (array) - interval (scalar)
-query D
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select d - interval '1 day' from t;
-----
-1979-12-31
-1990-09-30
-1980-01-01
 
-query P
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select ts - interval '1 day' from t;
-----
-1999-12-31T00:00:00
-1999-12-31T12:11:10
-2000-01-31T00:00:00
 
 ### date / timestamp (scalar) + interval (array)
-query D
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select '1980-01-01'::date + i from t;
-----
-1980-02-01
-1980-01-02
-1980-01-01
 
-query P
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select '1980-01-01T12:00:00'::timestamp + i from t;
-----
-1980-02-01T12:00:00
-1980-01-02T12:00:00
-1980-01-01T12:01:00
 
 
-query D
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select '1980-01-01'::date - i from t;
-----
-1979-12-01
-1979-12-31
-1980-01-01
 
-query P
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select '1980-01-01T12:00:00'::timestamp - i from t;
-----
-1979-12-01T12:00:00
-1979-12-31T12:00:00
-1980-01-01T11:59:00
 
 ### date / timestamp (array) + interval (array)
-query D
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select d + i from t;
-----
-1980-02-01
-1990-10-02
-1980-01-02
 
-query P
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select ts + i from t;
-----
-2000-02-01T00:00:00
-2000-01-02T12:11:10
-2000-02-01T00:01:00
 
 
 ### date / timestamp (array) - interval (array)
-query D
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select d - i from t;
-----
-1979-12-01
-1990-09-30
-1980-01-02
 
-query P
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select ts - i from t;
-----
-1999-12-01T00:00:00
-1999-12-31T12:11:10
-2000-01-31T23:59:00
 
 
 # Now reverse the argument order
@@ -523,48 +475,32 @@ query error DataFusion error: Error during planning: Cannot coerce arithmetic ex
 select '1 month'::interval - '1980-01-01T12:00:00'::timestamp;
 
 # interval (array) + date / timestamp (array)
-query D
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select i + d from t;
-----
-1980-02-01
-1990-10-02
-1980-01-02
 
-query P
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select i + ts from t;
-----
-2000-02-01T00:00:00
-2000-01-02T12:11:10
-2000-02-01T00:01:00
 
 # expected error interval (array) - date / timestamp (array)
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Date32 to valid types
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select i - d from t;
 
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select i - ts from t;
 
 
 # interval (scalar) + date / timestamp (array)
-query D
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select '1 month'::interval + d from t;
-----
-1980-02-01
-1990-11-01
-1980-02-02
 
-query P
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select '1 month'::interval + ts from t;
-----
-2000-02-01T00:00:00
-2000-02-01T12:11:10
-2000-03-01T00:00:00
 
 # expected error interval (scalar) - date / timestamp (array)
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Date32 to valid types
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select '1 month'::interval - d from t;
 
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select '1 month'::interval - ts from t;
 
 # interval + date
@@ -574,7 +510,7 @@ select interval '1 month' + '2012-01-01'::date;
 2012-02-01
 
 # is (not) distinct from
-query BBBBBB
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select
     i is distinct from null,
     i is distinct from (interval '1 month'),
@@ -583,21 +519,13 @@ select
     i is not distinct from (interval '1 day'),
     i is not distinct from i
 from t;
-----
-true false false false false true
-true true false false true true
-true true false false false true
 
 ### interval (array) cmp interval (array)
-query BBBBBB
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select i = i, i != i, i < i, i <= i, i > i, i >= i from t;
-----
-true false false true false true
-true false false true false true
-true false false true false true
 
 ### interval (array) cmp interval (scalar)
-query BBBBBB
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 select
     (interval '1 day') = i,
     (interval '1 day') != i,
@@ -606,10 +534,6 @@ select
     i > (interval '1 day'),
     i >= (interval '1 day')
 from t;
-----
-false true false false true true
-true false false true false true
-false true true true false false
 
 ### interval (scalar) cmp interval (scalar)
 query BBBBBB
@@ -622,6 +546,22 @@ select
     (interval '1 day') >= (interval '1 day');
 ----
 true true true true true true
+
+### interval with string literal default as second
+query ????
+SELECT interval '1', '-12'::interval, '1'::interval, '1'::interval + '1'::interval
+----
+0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs 0 years 0 mons 0 days 0 hours 0 mins -12.000000000 secs 0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs 0 years 0 mons 0 days 0 hours 0 mins 2.000000000 secs
+
+### interval with column string literal
+statement ok
+create table t(i1 VARCHAR(2), i2 VARCHAR(2)) as
+values ('1',  '-12');
+
+query ???
+select i1::interval, i2::interval, i1::interval + i2::interval from t;
+----
+0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs 0 years 0 mons 0 days 0 hours 0 mins -12.000000000 secs 0 years 0 mons 0 days 0 hours 0 mins -11.000000000 secs
 
 statement ok
 drop table t

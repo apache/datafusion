@@ -21,6 +21,8 @@ use arrow::array::ArrayRef;
 use arrow::array::NullArray;
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use arrow::error::ArrowError;
+use arrow_array::Array;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
@@ -183,6 +185,43 @@ impl ColumnarValue {
         Ok(args)
     }
 
+    fn _format_interval_string_value(&self, str_val: &String) -> Option<String> {
+        let start_idx = if str_val.starts_with('-') { 1 } else { 0 };
+
+        // only incase of simple input that all char is a number.
+        if str_val[start_idx..].chars().all(|c| c.is_ascii_digit()) {
+            return Some(format!("{} second", str_val));
+        }
+        None
+    }
+
+    fn _kernels_cast_with_option(
+        &self,
+        array_val: &ArrayRef,
+        cast_type: &DataType,
+        cast_options: &CastOptions,
+    ) -> Result<ArrayRef, ArrowError> {
+        let array_data = array_val.to_data();
+
+        let array: &ArrayRef = match (array_data.data_type(), cast_type) {
+            (DataType::Utf8, &DataType::Interval(IntervalUnit::MonthDayNano)) => {
+                let string_array = arrow_array::StringArray::from(array_data);
+                let string_value: String = string_array.value(0).to_string();
+
+                match self._format_interval_string_value(&string_value) {
+                    Some(value) => {
+                        &(Arc::new(arrow_array::StringArray::from(vec![value]))
+                            as ArrayRef)
+                    }
+                    _ => array_val,
+                }
+            }
+            (_, _) => array_val,
+        };
+
+        kernels::cast::cast_with_options(array, cast_type, cast_options)
+    }
+
     /// Cast's this [ColumnarValue] to the specified `DataType`
     pub fn cast_to(
         &self,
@@ -192,42 +231,33 @@ impl ColumnarValue {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-                kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
+                self._kernels_cast_with_option(array, cast_type, &cast_options)?,
             )),
             ColumnarValue::Scalar(scalar) => {
-                let scalar_array = if cast_type
-                    == &DataType::Timestamp(TimeUnit::Nanosecond, None)
-                {
-                    if let ScalarValue::Float64(Some(float_ts)) = scalar {
-                        ScalarValue::Int64(Some(
-                            (float_ts * 1_000_000_000_f64).trunc() as i64
-                        ))
-                        .to_array()?
-                    } else {
-                        scalar.to_array()?
-                    }
-                } else {
-                    // Arrow by default will parse str as Month for unit MonthDayNano.
-                    // So we need to be explict that we want it to parse as second.
-                    match (scalar, cast_type) {
-                        (
-                            ScalarValue::Utf8(Some(s_val)),
-                            &DataType::Interval(IntervalUnit::MonthDayNano),
-                        ) => {
-                            // negative case
-                            let start_idx = if s_val.starts_with('-') { 1 } else { 0 };
-
-                            // only incase of simple input that all char is a number.
-                            if s_val[start_idx..].chars().all(|c| c.is_ascii_digit()) {
-                                ScalarValue::Utf8(Some(format!("{} second", s_val)))
-                                    .to_array()
-                            } else {
-                                scalar.to_array()
-                            }
+                let scalar_array =
+                    if cast_type == &DataType::Timestamp(TimeUnit::Nanosecond, None) {
+                        if let ScalarValue::Float64(Some(float_ts)) = scalar {
+                            ScalarValue::Int64(Some(
+                                (float_ts * 1_000_000_000_f64).trunc() as i64,
+                            ))
+                            .to_array()?
+                        } else {
+                            scalar.to_array()?
                         }
-                        (_, _) => scalar.to_array(),
-                    }?
-                };
+                    } else {
+                        // Arrow by default will parse str as Month for unit MonthDayNano.
+                        // So we need to be explict that we want it to parse as second.
+                        match (scalar, cast_type) {
+                            (
+                                ScalarValue::Utf8(Some(s_val)),
+                                &DataType::Interval(IntervalUnit::MonthDayNano),
+                            ) => self._format_interval_string_value(s_val).map_or_else(
+                                || scalar.to_array(),
+                                |value| ScalarValue::Utf8(Some(value)).to_array(),
+                            ),
+                            (_, _) => scalar.to_array(),
+                        }?
+                    };
                 let cast_array = kernels::cast::cast_with_options(
                     &scalar_array,
                     cast_type,
