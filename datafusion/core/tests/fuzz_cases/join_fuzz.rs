@@ -226,6 +226,7 @@ async fn test_semi_join_1k() {
 #[tokio::test]
 async fn test_semi_join_1k_filtered() {
     // NLJ vs HJ gives wrong result
+    // Tracked in https://github.com/apache/datafusion/issues/11537
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
@@ -251,6 +252,7 @@ async fn test_anti_join_1k() {
 #[tokio::test]
 async fn test_anti_join_1k_filtered() {
     // NLJ vs HJ gives wrong result
+    // Tracked in https://github.com/apache/datafusion/issues/11537
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
