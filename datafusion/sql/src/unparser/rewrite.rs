@@ -100,6 +100,25 @@ fn rewrite_sort_expr_for_union(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
     Ok(sort_exprs)
 }
 
+// Rewrite logic plan for query that order by columns are not in projections
+// Plan before rewrite:
+//
+// Projection: j1.j1_string, j2.j2_string
+//   Sort: j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST
+//     Projection: j1.j1_string, j2.j2_string, j1.j1_id, j2.j2_id
+//       Inner Join:  Filter: j1.j1_id = j2.j2_id
+//         TableScan: j1
+//         TableScan: j2
+//
+// Plan after rewrite
+//
+// Sort: j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST
+//   Projection: j1.j1_string, j2.j2_string
+//     Inner Join:  Filter: j1.j1_id = j2.j2_id
+//       TableScan: j1
+//       TableScan: j2
+//
+// This prevents the original plan generate query with derived table but missing alias.
 pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     p: &Projection,
 ) -> Option<LogicalPlan> {
