@@ -31,7 +31,7 @@ select 1 where NULL
 ----
 
 # Where clause does not accept non boolean and has nice error message
-query Cannot create filter with non\-boolean predicate 'Utf8\("foo"\)' returning Utf8
+query error Cannot create filter with non\-boolean predicate 'Utf8\("foo"\)' returning Utf8
 select 1 where 'foo'
 
 query I
