@@ -54,7 +54,7 @@ type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 /// which should be contained within the same output file. The outer channel
 /// is used to send a dynamic number of inner channels, representing a dynamic
 /// number of total output files. The caller is also responsible to monitor
-/// the demux task for errors and abort accordingly. The single_file_ouput parameter
+/// the demux task for errors and abort accordingly. The single_file_output parameter
 /// overrides all other settings to force only a single file to be written.
 /// partition_by parameter will additionally split the input based on the unique
 /// values of a specific column `<https://github.com/apache/datafusion/issues/7744>``

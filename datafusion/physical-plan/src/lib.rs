@@ -21,31 +21,41 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::coalesce_partitions::CoalescePartitionsExec;
-use crate::display::DisplayableExecutionPlan;
-use crate::metrics::MetricsSet;
-use crate::repartition::RepartitionExec;
-use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
-
 use arrow::datatypes::SchemaRef;
-use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
+use futures::stream::{StreamExt, TryStreamExt};
+use tokio::task::JoinSet;
+
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_datafusion_err, Result};
+pub use datafusion_common::hash_utils;
+pub use datafusion_common::utils::project_schema;
+use datafusion_common::{exec_err, Result};
+pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 use datafusion_execution::TaskContext;
+pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+pub use datafusion_expr::{Accumulator, ColumnarValue};
+pub use datafusion_physical_expr::window::WindowExpr;
+pub use datafusion_physical_expr::{
+    expressions, functions, udf, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
+};
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use futures::stream::TryStreamExt;
-use log::debug;
-use tokio::sync::mpsc::Sender;
-use tokio::task::JoinSet;
+use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::display::DisplayableExecutionPlan;
+pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+pub use crate::metrics::Metric;
+use crate::metrics::MetricsSet;
+pub use crate::ordering::InputOrderMode;
+use crate::repartition::RepartitionExec;
+use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
+pub use crate::stream::EmptyRecordBatchStream;
+use crate::stream::RecordBatchStreamAdapter;
+pub use crate::topk::TopK;
+pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 mod ordering;
 mod topk;
@@ -70,6 +80,7 @@ pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
 pub mod sorts;
+pub mod spill;
 pub mod stream;
 pub mod streaming;
 pub mod tree_node;
@@ -78,29 +89,6 @@ pub mod unnest;
 pub mod values;
 pub mod windows;
 pub mod work_table;
-
-pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-pub use crate::metrics::Metric;
-pub use crate::ordering::InputOrderMode;
-pub use crate::topk::TopK;
-pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
-
-pub use datafusion_common::hash_utils;
-pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
-pub use datafusion_expr::{Accumulator, ColumnarValue};
-pub use datafusion_physical_expr::window::WindowExpr;
-pub use datafusion_physical_expr::{
-    expressions, functions, udf, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
-};
-
-// Backwards compatibility
-use crate::common::IPCWriter;
-pub use crate::stream::EmptyRecordBatchStream;
-use crate::stream::RecordBatchReceiverStream;
-use datafusion_execution::disk_manager::RefCountedTempFile;
-use datafusion_execution::memory_pool::human_readable_size;
-pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 
 pub mod udaf {
     pub use datafusion_physical_expr_common::aggregate::{
@@ -805,62 +793,102 @@ pub fn execute_stream_partitioned(
     Ok(streams)
 }
 
+/// Executes an input stream and ensures that the resulting stream adheres to
+/// the `not null` constraints specified in the `sink_schema`.
+///
+/// # Arguments
+///
+/// * `input` - An execution plan
+/// * `sink_schema` - The schema to be applied to the output stream
+/// * `partition` - The partition index to be executed
+/// * `context` - The task context
+///
+/// # Returns
+///
+/// * `Result<SendableRecordBatchStream>` - A stream of `RecordBatch`es if successful
+///
+/// This function first executes the given input plan for the specified partition
+/// and context. It then checks if there are any columns in the input that might
+/// violate the `not null` constraints specified in the `sink_schema`. If there are
+/// such columns, it wraps the resulting stream to enforce the `not null` constraints
+/// by invoking the `check_not_null_contraits` function on each batch of the stream.
+pub fn execute_input_stream(
+    input: Arc<dyn ExecutionPlan>,
+    sink_schema: SchemaRef,
+    partition: usize,
+    context: Arc<TaskContext>,
+) -> Result<SendableRecordBatchStream> {
+    let input_stream = input.execute(partition, context)?;
+
+    debug_assert_eq!(sink_schema.fields().len(), input.schema().fields().len());
+
+    // Find input columns that may violate the not null constraint.
+    let risky_columns: Vec<_> = sink_schema
+        .fields()
+        .iter()
+        .zip(input.schema().fields().iter())
+        .enumerate()
+        .filter_map(|(idx, (sink_field, input_field))| {
+            (!sink_field.is_nullable() && input_field.is_nullable()).then_some(idx)
+        })
+        .collect();
+
+    if risky_columns.is_empty() {
+        Ok(input_stream)
+    } else {
+        // Check not null constraint on the input stream
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            sink_schema,
+            input_stream
+                .map(move |batch| check_not_null_contraits(batch?, &risky_columns)),
+        )))
+    }
+}
+
+/// Checks a `RecordBatch` for `not null` constraints on specified columns.
+///
+/// # Arguments
+///
+/// * `batch` - The `RecordBatch` to be checked
+/// * `column_indices` - A vector of column indices that should be checked for
+///   `not null` constraints.
+///
+/// # Returns
+///
+/// * `Result<RecordBatch>` - The original `RecordBatch` if all constraints are met
+///
+/// This function iterates over the specified column indices and ensures that none
+/// of the columns contain null values. If any column contains null values, an error
+/// is returned.
+pub fn check_not_null_contraits(
+    batch: RecordBatch,
+    column_indices: &Vec<usize>,
+) -> Result<RecordBatch> {
+    for &index in column_indices {
+        if batch.num_columns() <= index {
+            return exec_err!(
+                "Invalid batch column count {} expected > {}",
+                batch.num_columns(),
+                index
+            );
+        }
+
+        if batch.column(index).null_count() > 0 {
+            return exec_err!(
+                "Invalid batch column at '{}' has null but schema specifies non-nullable",
+                index
+            );
+        }
+    }
+
+    Ok(batch)
+}
+
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].
 pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     actual.iter().map(|elem| elem.to_string()).collect()
-}
-
-/// Read spilled batches from the disk
-///
-/// `path` - temp file
-/// `schema` - batches schema, should be the same across batches
-/// `buffer` - internal buffer of capacity batches
-pub fn read_spill_as_stream(
-    path: RefCountedTempFile,
-    schema: SchemaRef,
-    buffer: usize,
-) -> Result<SendableRecordBatchStream> {
-    let mut builder = RecordBatchReceiverStream::builder(schema, buffer);
-    let sender = builder.tx();
-
-    builder.spawn_blocking(move || read_spill(sender, path.path()));
-
-    Ok(builder.build())
-}
-
-/// Spills in-memory `batches` to disk.
-///
-/// Returns total number of the rows spilled to disk.
-pub fn spill_record_batches(
-    batches: Vec<RecordBatch>,
-    path: PathBuf,
-    schema: SchemaRef,
-) -> Result<usize> {
-    let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
-    for batch in batches {
-        writer.write(&batch)?;
-    }
-    writer.finish()?;
-    debug!(
-        "Spilled {} batches of total {} rows to disk, memory released {}",
-        writer.num_batches,
-        writer.num_rows,
-        human_readable_size(writer.num_bytes),
-    );
-    Ok(writer.num_rows)
-}
-
-fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
-    let file = BufReader::new(File::open(path)?);
-    let reader = FileReader::try_new(file, None)?;
-    for batch in reader {
-        sender
-            .blocking_send(batch.map_err(Into::into))
-            .map_err(|e| exec_datafusion_err!("{e}"))?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -869,6 +897,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{Schema, SchemaRef};
+
     use datafusion_common::{Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 

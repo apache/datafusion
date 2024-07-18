@@ -1578,7 +1578,7 @@ false
 statement ok
 CREATE TABLE t1(
   a boolean,
-  b boolean,
+  b boolean
 ) as VALUES
   (true, true),
   (true, null),

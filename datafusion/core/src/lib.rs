@@ -199,7 +199,7 @@
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
 //! [`AnalyzerRule`]:  datafusion_optimizer::analyzer::AnalyzerRule
-//! [`PhysicalOptimizerRule`]: crate::physical_optimizer::optimizer::PhysicalOptimizerRule
+//! [`PhysicalOptimizerRule`]: crate::physical_optimizer::PhysicalOptimizerRule
 //!
 //! ## Query Planning and Execution Overview
 //!

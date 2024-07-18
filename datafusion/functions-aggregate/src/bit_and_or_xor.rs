@@ -358,6 +358,15 @@ where
         Ok(())
     }
 
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // XOR is it's own inverse
+        self.update_batch(values)
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
     fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
@@ -454,5 +463,43 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{ArrayRef, UInt64Array};
+    use arrow::datatypes::UInt64Type;
+    use datafusion_common::ScalarValue;
+
+    use crate::bit_and_or_xor::BitXorAccumulator;
+    use datafusion_expr::Accumulator;
+
+    #[test]
+    fn test_bit_xor_accumulator() {
+        let mut accumulator = BitXorAccumulator::<UInt64Type> { value: None };
+        let batches: Vec<_> = vec![vec![1, 2], vec![1]]
+            .into_iter()
+            .map(|b| Arc::new(b.into_iter().collect::<UInt64Array>()) as ArrayRef)
+            .collect();
+
+        let added = &[Arc::clone(&batches[0])];
+        let retracted = &[Arc::clone(&batches[1])];
+
+        // XOR of 1..3 is 3
+        accumulator.update_batch(added).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(3))
+        );
+
+        // Removing [1] ^ 3 = 2
+        accumulator.retract_batch(retracted).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(2))
+        );
     }
 }

@@ -3415,7 +3415,7 @@ SELECT
 # window1 spec is defined multiple times
 statement error DataFusion error: Error during planning: The window window1 is defined multiple times!
 SELECT
-  MAX(c12) OVER window1 as min1,
+  MAX(c12) OVER window1 as min1
   FROM aggregate_test_100
   WINDOW window1 AS (ORDER BY C12),
   window1 AS (ORDER BY C3)

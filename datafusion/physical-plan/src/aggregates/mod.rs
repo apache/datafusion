@@ -2231,7 +2231,6 @@ mod tests {
                     Arc::clone(col_a),
                     "array_agg",
                     DataType::Int32,
-                    false,
                     vec![],
                     order_by_expr.unwrap_or_default(),
                 )) as _

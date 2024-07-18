@@ -500,7 +500,7 @@ impl SessionContext {
         self.execute_logical_plan(plan).await
     }
 
-    /// Creates logical expresssions from SQL query text.
+    /// Creates logical expressions from SQL query text.
     ///
     /// # Example: Parsing SQL queries
     ///
@@ -1352,7 +1352,7 @@ impl SessionContext {
         self.state.write().register_catalog_list(catalog_list)
     }
 
-    /// Registers a [`ConfigExtension`] as a table option extention that can be
+    /// Registers a [`ConfigExtension`] as a table option extension that can be
     /// referenced from SQL statements executed against this context.
     pub fn register_table_options_extension<T: ConfigExtension>(&self, extension: T) {
         self.state

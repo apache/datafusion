@@ -24,7 +24,6 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
@@ -32,6 +31,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlanProperties, PlanProperties};
 
