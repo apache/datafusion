@@ -37,14 +37,14 @@ use arrow::{
     buffer::BooleanBuffer,
 };
 use datafusion_common::{
-    downcast_value, internal_err, DataFusionError, Result, ScalarValue,
+    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     EmitTo, GroupsAccumulator, Signature, Volatility,
 };
-use datafusion_expr::{Expr, ReversedUDAF};
+use datafusion_expr::{Expr, ReversedUDAF, TypeSignature};
 use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
 use datafusion_physical_expr_common::{
     aggregate::count_distinct::{
@@ -95,7 +95,11 @@ impl Default for Count {
 impl Count {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                // TypeSignature::Any(0) is required to handle `Count()` with no args
+                vec![TypeSignature::VariadicAny, TypeSignature::Any(0)],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -136,6 +140,10 @@ impl AggregateUDFImpl for Count {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if !acc_args.is_distinct {
             return Ok(Box::new(CountAccumulator::new()));
+        }
+
+        if acc_args.input_exprs.len() > 1 {
+            return not_impl_err!("COUNT DISTINCT with multiple arguments");
         }
 
         let data_type = acc_args.input_type;

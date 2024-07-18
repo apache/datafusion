@@ -988,7 +988,6 @@ statement ok
 DROP TABLE department
 
 
-# Test issue: https://github.com/apache/datafusion/issues/11269
 statement ok
 CREATE TABLE t1 (v0 BIGINT) AS VALUES (-503661263);
 
@@ -998,10 +997,21 @@ CREATE TABLE t2 (v0 DOUBLE) AS VALUES (-1.663563947387);
 statement ok
 CREATE TABLE t3 (v0 DOUBLE) AS VALUES (0.05112015193508901);
 
+# Test issue: https://github.com/apache/datafusion/issues/11269
 query RR
 SELECT t3.v0, t2.v0 FROM t1,t2,t3 WHERE t3.v0 >= t1.v0;
 ----
 0.051120151935 -1.663563947387
+
+# Test issue: https://github.com/apache/datafusion/issues/11414
+query IRR
+SELECT * FROM t1 INNER JOIN t2 ON NULL RIGHT JOIN t3 ON TRUE;
+----
+NULL NULL 0.051120151935
+
+# ON expression must be boolean type
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Join condition must be boolean type, but got Utf8
+SELECT * FROM t1 INNER JOIN t2 ON 'TRUE'
 
 statement ok
 DROP TABLE t1;

@@ -28,15 +28,16 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
-use datafusion::execution::context::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{
-    Extension, LogicalPlan, Repartition, UserDefinedLogicalNode, Volatility,
+    Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
+    Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
 
+use datafusion::execution::session_state::SessionStateBuilder;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
@@ -861,6 +862,39 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_window_udf() -> Result<()> {
+    #[derive(Debug)]
+    struct Dummy {}
+
+    impl PartitionEvaluator for Dummy {
+        fn evaluate_all(
+            &mut self,
+            values: &[ArrayRef],
+            _num_rows: usize,
+        ) -> Result<ArrayRef> {
+            Ok(values[0].to_owned())
+        }
+    }
+
+    fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+        Ok(Box::new(Dummy {}))
+    }
+
+    let dummy_agg = create_udwf(
+        "dummy_window",            // name
+        DataType::Int64,           // input type
+        Arc::new(DataType::Int64), // return type
+        Volatility::Immutable,
+        Arc::new(make_partition_evaluator),
+    );
+
+    let ctx = create_context().await?;
+    ctx.register_udwf(dummy_agg);
+
+    roundtrip_with_ctx("select dummy_window(a) OVER () from data", ctx).await
+}
+
+#[tokio::test]
 async fn roundtrip_repartition_roundrobin() -> Result<()> {
     let ctx = create_context().await?;
     let scan_plan = ctx.sql("SELECT * FROM data").await?.into_optimized_plan()?;
@@ -1121,11 +1155,12 @@ async fn function_extension_info(sql: &str) -> Result<(Vec<String>, Vec<u32>)> {
 }
 
 async fn create_context() -> Result<SessionContext> {
-    let mut state = SessionState::new_with_config_rt(
-        SessionConfig::default(),
-        Arc::new(RuntimeEnv::default()),
-    )
-    .with_serializer_registry(Arc::new(MockSerializerRegistry));
+    let mut state = SessionStateBuilder::new()
+        .with_config(SessionConfig::default())
+        .with_runtime_env(Arc::new(RuntimeEnv::default()))
+        .with_default_features()
+        .with_serializer_registry(Arc::new(MockSerializerRegistry))
+        .build();
 
     // register udaf for test, e.g. `sum()`
     datafusion_functions_aggregate::register_all(&mut state)

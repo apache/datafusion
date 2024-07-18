@@ -53,7 +53,7 @@ mod opener;
 mod page_filter;
 mod reader;
 mod row_filter;
-mod row_groups;
+mod row_group_filter;
 mod statistics;
 mod writer;
 

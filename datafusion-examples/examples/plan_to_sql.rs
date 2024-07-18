@@ -19,7 +19,7 @@ use datafusion::error::Result;
 
 use datafusion::prelude::*;
 use datafusion::sql::unparser::expr_to_sql;
-use datafusion_sql::unparser::dialect::CustomDialect;
+use datafusion_sql::unparser::dialect::CustomDialectBuilder;
 use datafusion_sql::unparser::{plan_to_sql, Unparser};
 
 /// This example demonstrates the programmatic construction of SQL strings using
@@ -31,9 +31,9 @@ use datafusion_sql::unparser::{plan_to_sql, Unparser};
 /// 1. [`simple_expr_to_sql_demo`]: Create a simple expression [`Exprs`] with
 /// fluent API and convert to sql suitable for passing to another database
 ///
-/// 2. [`simple_expr_to_sql_demo_no_escape`]  Create a simple expression
-/// [`Exprs`] with fluent API and convert to sql without escaping column names
-/// more suitable for displaying to humans.
+/// 2. [`simple_expr_to_pretty_sql_demo`] Create a simple expression
+/// [`Exprs`] with fluent API and convert to sql without extra parentheses,
+/// suitable for displaying to humans
 ///
 /// 3. [`simple_expr_to_sql_demo_escape_mysql_style`]" Create a simple
 /// expression [`Exprs`] with fluent API and convert to sql escaping column
@@ -49,6 +49,7 @@ use datafusion_sql::unparser::{plan_to_sql, Unparser};
 async fn main() -> Result<()> {
     // See how to evaluate expressions
     simple_expr_to_sql_demo()?;
+    simple_expr_to_pretty_sql_demo()?;
     simple_expr_to_sql_demo_escape_mysql_style()?;
     simple_plan_to_sql_demo().await?;
     round_trip_plan_to_sql_demo().await?;
@@ -64,11 +65,24 @@ fn simple_expr_to_sql_demo() -> Result<()> {
     Ok(())
 }
 
+/// DataFusioon can remove parentheses when converting an expression to SQL.
+/// Note that output is intended for humans, not for other SQL engines,
+/// as difference in precedence rules can cause expressions to be parsed differently.
+fn simple_expr_to_pretty_sql_demo() -> Result<()> {
+    let expr = col("a").lt(lit(5)).or(col("a").eq(lit(8)));
+    let unparser = Unparser::default().with_pretty(true);
+    let sql = unparser.expr_to_sql(&expr)?.to_string();
+    assert_eq!(sql, r#"a < 5 OR a = 8"#);
+    Ok(())
+}
+
 /// DataFusion can convert expressions to SQL without escaping column names using
 /// using a custom dialect and an explicit unparser
 fn simple_expr_to_sql_demo_escape_mysql_style() -> Result<()> {
     let expr = col("a").lt(lit(5)).or(col("a").eq(lit(8)));
-    let dialect = CustomDialect::new(Some('`'));
+    let dialect = CustomDialectBuilder::new()
+        .with_identifier_quote_style('`')
+        .build();
     let unparser = Unparser::new(&dialect);
     let sql = unparser.expr_to_sql(&expr)?.to_string();
     assert_eq!(sql, r#"((`a` < 5) OR (`a` = 8))"#);

@@ -30,8 +30,8 @@ use arrow_array::{Date32Array, Date64Array, PrimitiveArray};
 use arrow_schema::DataType;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Expr as AstExpr, Function, FunctionArg, Ident, Interval, TimezoneInfo,
-    UnaryOperator,
+    self, BinaryOperator, Expr as AstExpr, Function, FunctionArg, Ident, Interval,
+    TimezoneInfo, UnaryOperator,
 };
 
 use datafusion_common::{
@@ -43,6 +43,7 @@ use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
 
+use super::dialect::IntervalStyle;
 use super::Unparser;
 
 /// DataFusion's Exprs can represent either an `Expr` or an `OrderByExpr`
@@ -72,21 +73,34 @@ impl Display for Unparsed {
     }
 }
 
-/// Convert a DataFusion [`Expr`] to `sqlparser::ast::Expr`
+/// Convert a DataFusion [`Expr`] to [`ast::Expr`]
 ///
-/// This function is the opposite of `SqlToRel::sql_to_expr` and can
-/// be used to, among other things, convert [`Expr`]s to strings.
-/// Throws an error if [`Expr`] can not be represented by an `sqlparser::ast::Expr`
+/// This function is the opposite of [`SqlToRel::sql_to_expr`] and can be used
+/// to, among other things, convert [`Expr`]s to SQL strings. Such strings could
+/// be used to pass filters or other expressions to another SQL engine.
+///
+/// # Errors
+///
+/// Throws an error if [`Expr`] can not be represented by an [`ast::Expr`]
+///
+/// # See Also
+///
+/// * [`Unparser`] for more control over the conversion to SQL
+/// * [`plan_to_sql`] for converting a [`LogicalPlan`] to SQL
 ///
 /// # Example
 /// ```
 /// use datafusion_expr::{col, lit};
 /// use datafusion_sql::unparser::expr_to_sql;
-/// let expr = col("a").gt(lit(4));
-/// let sql = expr_to_sql(&expr).unwrap();
-///
-/// assert_eq!(format!("{}", sql), "(a > 4)")
+/// let expr = col("a").gt(lit(4)); // form an expression `a > 4`
+/// let sql = expr_to_sql(&expr).unwrap(); // convert to ast::Expr
+/// // use the Display impl to convert to SQL text
+/// assert_eq!(sql.to_string(), "(a > 4)")
 /// ```
+///
+/// [`SqlToRel::sql_to_expr`]: crate::planner::SqlToRel::sql_to_expr
+/// [`plan_to_sql`]: crate::unparser::plan_to_sql
+/// [`LogicalPlan`]: datafusion_expr::logical_plan::LogicalPlan
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
     unparser.expr_to_sql(expr)
@@ -101,8 +115,21 @@ pub fn expr_to_unparsed(expr: &Expr) -> Result<Unparsed> {
     unparser.expr_to_unparsed(expr)
 }
 
+const LOWEST: &BinaryOperator = &BinaryOperator::Or;
+// closest precedence we have to IS operator is BitwiseAnd (any other) in PG docs
+// (https://www.postgresql.org/docs/7.2/sql-precedence.html)
+const IS: &BinaryOperator = &BinaryOperator::BitwiseAnd;
+
 impl Unparser<'_> {
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
+        let mut root_expr = self.expr_to_sql_inner(expr)?;
+        if self.pretty {
+            root_expr = self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST);
+        }
+        Ok(root_expr)
+    }
+
+    fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
         match expr {
             Expr::InList(InList {
                 expr,
@@ -111,10 +138,10 @@ impl Unparser<'_> {
             }) => {
                 let list_expr = list
                     .iter()
-                    .map(|e| self.expr_to_sql(e))
+                    .map(|e| self.expr_to_sql_inner(e))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(ast::Expr::InList {
-                    expr: Box::new(self.expr_to_sql(expr)?),
+                    expr: Box::new(self.expr_to_sql_inner(expr)?),
                     list: list_expr,
                     negated: *negated,
                 })
@@ -128,7 +155,7 @@ impl Unparser<'_> {
                         if matches!(e, Expr::Wildcard { qualifier: None }) {
                             Ok(FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
                         } else {
-                            self.expr_to_sql(e).map(|e| {
+                            self.expr_to_sql_inner(e).map(|e| {
                                 FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e))
                             })
                         }
@@ -149,6 +176,7 @@ impl Unparser<'_> {
                     null_treatment: None,
                     over: None,
                     within_group: vec![],
+                    parameters: ast::FunctionArguments::None,
                 }))
             }
             Expr::Between(Between {
@@ -157,9 +185,9 @@ impl Unparser<'_> {
                 low,
                 high,
             }) => {
-                let sql_parser_expr = self.expr_to_sql(expr)?;
-                let sql_low = self.expr_to_sql(low)?;
-                let sql_high = self.expr_to_sql(high)?;
+                let sql_parser_expr = self.expr_to_sql_inner(expr)?;
+                let sql_low = self.expr_to_sql_inner(low)?;
+                let sql_high = self.expr_to_sql_inner(high)?;
                 Ok(ast::Expr::Nested(Box::new(self.between_op_to_sql(
                     sql_parser_expr,
                     *negated,
@@ -169,8 +197,8 @@ impl Unparser<'_> {
             }
             Expr::Column(col) => self.col_to_sql(col),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let l = self.expr_to_sql(left.as_ref())?;
-                let r = self.expr_to_sql(right.as_ref())?;
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
                 let op = self.op_to_sql(op)?;
 
                 Ok(ast::Expr::Nested(Box::new(self.binary_op_to_sql(l, r, op))))
@@ -182,21 +210,21 @@ impl Unparser<'_> {
             }) => {
                 let conditions = when_then_expr
                     .iter()
-                    .map(|(w, _)| self.expr_to_sql(w))
+                    .map(|(w, _)| self.expr_to_sql_inner(w))
                     .collect::<Result<Vec<_>>>()?;
                 let results = when_then_expr
                     .iter()
-                    .map(|(_, t)| self.expr_to_sql(t))
+                    .map(|(_, t)| self.expr_to_sql_inner(t))
                     .collect::<Result<Vec<_>>>()?;
                 let operand = match expr.as_ref() {
-                    Some(e) => match self.expr_to_sql(e) {
+                    Some(e) => match self.expr_to_sql_inner(e) {
                         Ok(sql_expr) => Some(Box::new(sql_expr)),
                         Err(_) => None,
                     },
                     None => None,
                 };
                 let else_result = match else_expr.as_ref() {
-                    Some(e) => match self.expr_to_sql(e) {
+                    Some(e) => match self.expr_to_sql_inner(e) {
                         Ok(sql_expr) => Some(Box::new(sql_expr)),
                         Err(_) => None,
                     },
@@ -211,7 +239,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::Cast(Cast { expr, data_type }) => {
-                let inner_expr = self.expr_to_sql(expr)?;
+                let inner_expr = self.expr_to_sql_inner(expr)?;
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(inner_expr),
@@ -220,7 +248,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
-            Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql(expr),
+            Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
@@ -255,7 +283,7 @@ impl Unparser<'_> {
                     window_name: None,
                     partition_by: partition_by
                         .iter()
-                        .map(|e| self.expr_to_sql(e))
+                        .map(|e| self.expr_to_sql_inner(e))
                         .collect::<Result<Vec<_>>>()?,
                     order_by,
                     window_frame: Some(ast::WindowFrame {
@@ -279,6 +307,7 @@ impl Unparser<'_> {
                     null_treatment: None,
                     over,
                     within_group: vec![],
+                    parameters: ast::FunctionArguments::None,
                 }))
             }
             Expr::SimilarTo(Like {
@@ -296,8 +325,8 @@ impl Unparser<'_> {
                 case_insensitive: _,
             }) => Ok(ast::Expr::Like {
                 negated: *negated,
-                expr: Box::new(self.expr_to_sql(expr)?),
-                pattern: Box::new(self.expr_to_sql(pattern)?),
+                expr: Box::new(self.expr_to_sql_inner(expr)?),
+                pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                 escape_char: escape_char.map(|c| c.to_string()),
             }),
             Expr::AggregateFunction(agg) => {
@@ -305,7 +334,7 @@ impl Unparser<'_> {
 
                 let args = self.function_args_to_sql(&agg.args)?;
                 let filter = match &agg.filter {
-                    Some(filter) => Some(Box::new(self.expr_to_sql(filter)?)),
+                    Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
                 Ok(ast::Expr::Function(Function {
@@ -324,6 +353,7 @@ impl Unparser<'_> {
                     null_treatment: None,
                     over: None,
                     within_group: vec![],
+                    parameters: ast::FunctionArguments::None,
                 }))
             }
             Expr::ScalarSubquery(subq) => {
@@ -339,7 +369,7 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Subquery(sub_query))
             }
             Expr::InSubquery(insubq) => {
-                let inexpr = Box::new(self.expr_to_sql(insubq.expr.as_ref())?);
+                let inexpr = Box::new(self.expr_to_sql_inner(insubq.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(insubq.subquery.subquery.as_ref())?;
                 let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
@@ -377,38 +407,38 @@ impl Unparser<'_> {
                 nulls_first: _,
             }) => plan_err!("Sort expression should be handled by expr_to_unparsed"),
             Expr::IsNull(expr) => {
-                Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql(expr)?)))
+                Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql_inner(expr)?)))
             }
-            Expr::IsNotNull(expr) => {
-                Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
-            }
+            Expr::IsNotNull(expr) => Ok(ast::Expr::IsNotNull(Box::new(
+                self.expr_to_sql_inner(expr)?,
+            ))),
             Expr::IsTrue(expr) => {
-                Ok(ast::Expr::IsTrue(Box::new(self.expr_to_sql(expr)?)))
+                Ok(ast::Expr::IsTrue(Box::new(self.expr_to_sql_inner(expr)?)))
             }
-            Expr::IsNotTrue(expr) => {
-                Ok(ast::Expr::IsNotTrue(Box::new(self.expr_to_sql(expr)?)))
-            }
+            Expr::IsNotTrue(expr) => Ok(ast::Expr::IsNotTrue(Box::new(
+                self.expr_to_sql_inner(expr)?,
+            ))),
             Expr::IsFalse(expr) => {
-                Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql(expr)?)))
+                Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql_inner(expr)?)))
             }
-            Expr::IsNotFalse(expr) => {
-                Ok(ast::Expr::IsNotFalse(Box::new(self.expr_to_sql(expr)?)))
-            }
-            Expr::IsUnknown(expr) => {
-                Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
-            }
-            Expr::IsNotUnknown(expr) => {
-                Ok(ast::Expr::IsNotUnknown(Box::new(self.expr_to_sql(expr)?)))
-            }
+            Expr::IsNotFalse(expr) => Ok(ast::Expr::IsNotFalse(Box::new(
+                self.expr_to_sql_inner(expr)?,
+            ))),
+            Expr::IsUnknown(expr) => Ok(ast::Expr::IsUnknown(Box::new(
+                self.expr_to_sql_inner(expr)?,
+            ))),
+            Expr::IsNotUnknown(expr) => Ok(ast::Expr::IsNotUnknown(Box::new(
+                self.expr_to_sql_inner(expr)?,
+            ))),
             Expr::Not(expr) => {
-                let sql_parser_expr = self.expr_to_sql(expr)?;
+                let sql_parser_expr = self.expr_to_sql_inner(expr)?;
                 Ok(AstExpr::UnaryOp {
                     op: UnaryOperator::Not,
                     expr: Box::new(sql_parser_expr),
                 })
             }
             Expr::Negative(expr) => {
-                let sql_parser_expr = self.expr_to_sql(expr)?;
+                let sql_parser_expr = self.expr_to_sql_inner(expr)?;
                 Ok(AstExpr::UnaryOp {
                     op: UnaryOperator::Minus,
                     expr: Box::new(sql_parser_expr),
@@ -432,7 +462,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::TryCast(TryCast { expr, data_type }) => {
-                let inner_expr = self.expr_to_sql(expr)?;
+                let inner_expr = self.expr_to_sql_inner(expr)?;
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::TryCast,
                     expr: Box::new(inner_expr),
@@ -449,7 +479,7 @@ impl Unparser<'_> {
                         .iter()
                         .map(|set| {
                             set.iter()
-                                .map(|e| self.expr_to_sql(e))
+                                .map(|e| self.expr_to_sql_inner(e))
                                 .collect::<Result<Vec<_>>>()
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -460,7 +490,7 @@ impl Unparser<'_> {
                     let expr_ast_sets = cube
                         .iter()
                         .map(|e| {
-                            let sql = self.expr_to_sql(e)?;
+                            let sql = self.expr_to_sql_inner(e)?;
                             Ok(vec![sql])
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -470,7 +500,7 @@ impl Unparser<'_> {
                     let expr_ast_sets: Vec<Vec<AstExpr>> = rollup
                         .iter()
                         .map(|e| {
-                            let sql = self.expr_to_sql(e)?;
+                            let sql = self.expr_to_sql_inner(e)?;
                             Ok(vec![sql])
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -512,6 +542,14 @@ impl Unparser<'_> {
                 let sql_parser_expr = self.expr_to_sql(expr)?;
                 Ok(Unparsed::Expr(sql_parser_expr))
             }
+        }
+    }
+
+    fn ast_type_for_date64_in_cast(&self) -> ast::DataType {
+        if self.dialect.use_timestamp_for_date64() {
+            ast::DataType::Timestamp(None, ast::TimezoneInfo::None)
+        } else {
+            ast::DataType::Datetime(None)
         }
     }
 
@@ -603,6 +641,88 @@ impl Unparser<'_> {
         }
     }
 
+    /// Given an expression of the form `((a + b) * (c * d))`,
+    /// the parenthesing is redundant if the precedence of the nested expression is already higher
+    /// than the surrounding operators' precedence. The above expression would become
+    /// `(a + b) * c * d`.
+    ///
+    /// Also note that when fetching the precedence of a nested expression, we ignore other nested
+    /// expressions, so precedence of expr `(a * (b + c))` equals `*` and not `+`.
+    fn remove_unnecessary_nesting(
+        &self,
+        expr: ast::Expr,
+        left_op: &BinaryOperator,
+        right_op: &BinaryOperator,
+    ) -> ast::Expr {
+        match expr {
+            ast::Expr::Nested(nested) => {
+                let surrounding_precedence = self
+                    .sql_op_precedence(left_op)
+                    .max(self.sql_op_precedence(right_op));
+
+                let inner_precedence = self.inner_precedence(&nested);
+
+                let not_associative =
+                    matches!(left_op, BinaryOperator::Minus | BinaryOperator::Divide);
+
+                if inner_precedence == surrounding_precedence && not_associative {
+                    ast::Expr::Nested(Box::new(
+                        self.remove_unnecessary_nesting(*nested, LOWEST, LOWEST),
+                    ))
+                } else if inner_precedence >= surrounding_precedence {
+                    self.remove_unnecessary_nesting(*nested, left_op, right_op)
+                } else {
+                    ast::Expr::Nested(Box::new(
+                        self.remove_unnecessary_nesting(*nested, LOWEST, LOWEST),
+                    ))
+                }
+            }
+            ast::Expr::BinaryOp { left, op, right } => ast::Expr::BinaryOp {
+                left: Box::new(self.remove_unnecessary_nesting(*left, left_op, &op)),
+                right: Box::new(self.remove_unnecessary_nesting(*right, &op, right_op)),
+                op,
+            },
+            ast::Expr::IsTrue(expr) => ast::Expr::IsTrue(Box::new(
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
+            )),
+            ast::Expr::IsNotTrue(expr) => ast::Expr::IsNotTrue(Box::new(
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
+            )),
+            ast::Expr::IsFalse(expr) => ast::Expr::IsFalse(Box::new(
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
+            )),
+            ast::Expr::IsNotFalse(expr) => ast::Expr::IsNotFalse(Box::new(
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
+            )),
+            ast::Expr::IsNull(expr) => ast::Expr::IsNull(Box::new(
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
+            )),
+            ast::Expr::IsNotNull(expr) => ast::Expr::IsNotNull(Box::new(
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
+            )),
+            ast::Expr::IsUnknown(expr) => ast::Expr::IsUnknown(Box::new(
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
+            )),
+            ast::Expr::IsNotUnknown(expr) => ast::Expr::IsNotUnknown(Box::new(
+                self.remove_unnecessary_nesting(*expr, left_op, IS),
+            )),
+            _ => expr,
+        }
+    }
+
+    fn inner_precedence(&self, expr: &ast::Expr) -> u8 {
+        match expr {
+            ast::Expr::Nested(_) | ast::Expr::Identifier(_) | ast::Expr::Value(_) => 100,
+            ast::Expr::BinaryOp { op, .. } => self.sql_op_precedence(op),
+            // closest precedence we currently have to Between is PGLikeMatch
+            // (https://www.postgresql.org/docs/7.2/sql-precedence.html)
+            ast::Expr::Between { .. } => {
+                self.sql_op_precedence(&ast::BinaryOperator::PGLikeMatch)
+            }
+            _ => 0,
+        }
+    }
+
     pub(super) fn between_op_to_sql(
         &self,
         expr: ast::Expr,
@@ -615,6 +735,48 @@ impl Unparser<'_> {
             negated,
             low: Box::new(low),
             high: Box::new(high),
+        }
+    }
+
+    fn sql_op_precedence(&self, op: &BinaryOperator) -> u8 {
+        match self.sql_to_op(op) {
+            Ok(op) => op.precedence(),
+            Err(_) => 0,
+        }
+    }
+
+    fn sql_to_op(&self, op: &BinaryOperator) -> Result<Operator> {
+        match op {
+            ast::BinaryOperator::Eq => Ok(Operator::Eq),
+            ast::BinaryOperator::NotEq => Ok(Operator::NotEq),
+            ast::BinaryOperator::Lt => Ok(Operator::Lt),
+            ast::BinaryOperator::LtEq => Ok(Operator::LtEq),
+            ast::BinaryOperator::Gt => Ok(Operator::Gt),
+            ast::BinaryOperator::GtEq => Ok(Operator::GtEq),
+            ast::BinaryOperator::Plus => Ok(Operator::Plus),
+            ast::BinaryOperator::Minus => Ok(Operator::Minus),
+            ast::BinaryOperator::Multiply => Ok(Operator::Multiply),
+            ast::BinaryOperator::Divide => Ok(Operator::Divide),
+            ast::BinaryOperator::Modulo => Ok(Operator::Modulo),
+            ast::BinaryOperator::And => Ok(Operator::And),
+            ast::BinaryOperator::Or => Ok(Operator::Or),
+            ast::BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
+            ast::BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
+            ast::BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
+            ast::BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
+            ast::BinaryOperator::PGILikeMatch => Ok(Operator::ILikeMatch),
+            ast::BinaryOperator::PGNotLikeMatch => Ok(Operator::NotLikeMatch),
+            ast::BinaryOperator::PGLikeMatch => Ok(Operator::LikeMatch),
+            ast::BinaryOperator::PGNotILikeMatch => Ok(Operator::NotILikeMatch),
+            ast::BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
+            ast::BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
+            ast::BinaryOperator::BitwiseXor => Ok(Operator::BitwiseXor),
+            ast::BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
+            ast::BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
+            ast::BinaryOperator::StringConcat => Ok(Operator::StringConcat),
+            ast::BinaryOperator::AtArrow => Ok(Operator::AtArrow),
+            ast::BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
+            _ => not_impl_err!("unsupported operation: {op:?}"),
         }
     }
 
@@ -853,7 +1015,7 @@ impl Unparser<'_> {
                     expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
                         datetime.to_string(),
                     ))),
-                    data_type: ast::DataType::Datetime(None),
+                    data_type: self.ast_type_for_date64_in_cast(),
                     format: None,
                 })
             }
@@ -905,22 +1067,7 @@ impl Unparser<'_> {
             ScalarValue::IntervalYearMonth(Some(_))
             | ScalarValue::IntervalDayTime(Some(_))
             | ScalarValue::IntervalMonthDayNano(Some(_)) => {
-                let wrap_array = v.to_array()?;
-                let Some(result) = array_value_to_string(&wrap_array, 0).ok() else {
-                    return internal_err!(
-                        "Unable to convert interval scalar value to string"
-                    );
-                };
-                let interval = Interval {
-                    value: Box::new(ast::Expr::Value(SingleQuotedString(
-                        result.to_uppercase(),
-                    ))),
-                    leading_field: None,
-                    leading_precision: None,
-                    last_field: None,
-                    fractional_seconds_precision: None,
-                };
-                Ok(ast::Expr::Interval(interval))
+                self.interval_scalar_to_sql(v)
             }
             ScalarValue::IntervalYearMonth(None) => {
                 Ok(ast::Expr::Value(ast::Value::Null))
@@ -958,6 +1105,123 @@ impl Unparser<'_> {
         }
     }
 
+    fn interval_scalar_to_sql(&self, v: &ScalarValue) -> Result<ast::Expr> {
+        match self.dialect.interval_style() {
+            IntervalStyle::PostgresVerbose => {
+                let wrap_array = v.to_array()?;
+                let Some(result) = array_value_to_string(&wrap_array, 0).ok() else {
+                    return internal_err!(
+                        "Unable to convert interval scalar value to string"
+                    );
+                };
+                let interval = Interval {
+                    value: Box::new(ast::Expr::Value(SingleQuotedString(
+                        result.to_uppercase(),
+                    ))),
+                    leading_field: None,
+                    leading_precision: None,
+                    last_field: None,
+                    fractional_seconds_precision: None,
+                };
+                Ok(ast::Expr::Interval(interval))
+            }
+            // If the interval standard is SQLStandard, implement a simple unparse logic
+            IntervalStyle::SQLStandard => match v {
+                ScalarValue::IntervalYearMonth(v) => {
+                    let Some(v) = v else {
+                        return Ok(ast::Expr::Value(ast::Value::Null));
+                    };
+                    let interval = Interval {
+                        value: Box::new(ast::Expr::Value(
+                            ast::Value::SingleQuotedString(v.to_string()),
+                        )),
+                        leading_field: Some(ast::DateTimeField::Month),
+                        leading_precision: None,
+                        last_field: None,
+                        fractional_seconds_precision: None,
+                    };
+                    Ok(ast::Expr::Interval(interval))
+                }
+                ScalarValue::IntervalDayTime(v) => {
+                    let Some(v) = v else {
+                        return Ok(ast::Expr::Value(ast::Value::Null));
+                    };
+                    let days = v.days;
+                    let secs = v.milliseconds / 1_000;
+                    let mins = secs / 60;
+                    let hours = mins / 60;
+
+                    let secs = secs - (mins * 60);
+                    let mins = mins - (hours * 60);
+
+                    let millis = v.milliseconds % 1_000;
+                    let interval = Interval {
+                        value: Box::new(ast::Expr::Value(
+                            ast::Value::SingleQuotedString(format!(
+                                "{days} {hours}:{mins}:{secs}.{millis:3}"
+                            )),
+                        )),
+                        leading_field: Some(ast::DateTimeField::Day),
+                        leading_precision: None,
+                        last_field: Some(ast::DateTimeField::Second),
+                        fractional_seconds_precision: None,
+                    };
+                    Ok(ast::Expr::Interval(interval))
+                }
+                ScalarValue::IntervalMonthDayNano(v) => {
+                    let Some(v) = v else {
+                        return Ok(ast::Expr::Value(ast::Value::Null));
+                    };
+
+                    if v.months >= 0 && v.days == 0 && v.nanoseconds == 0 {
+                        let interval = Interval {
+                            value: Box::new(ast::Expr::Value(
+                                ast::Value::SingleQuotedString(v.months.to_string()),
+                            )),
+                            leading_field: Some(ast::DateTimeField::Month),
+                            leading_precision: None,
+                            last_field: None,
+                            fractional_seconds_precision: None,
+                        };
+                        Ok(ast::Expr::Interval(interval))
+                    } else if v.months == 0
+                        && v.days >= 0
+                        && v.nanoseconds % 1_000_000 == 0
+                    {
+                        let days = v.days;
+                        let secs = v.nanoseconds / 1_000_000_000;
+                        let mins = secs / 60;
+                        let hours = mins / 60;
+
+                        let secs = secs - (mins * 60);
+                        let mins = mins - (hours * 60);
+
+                        let millis = (v.nanoseconds % 1_000_000_000) / 1_000_000;
+
+                        let interval = Interval {
+                            value: Box::new(ast::Expr::Value(
+                                ast::Value::SingleQuotedString(format!(
+                                    "{days} {hours}:{mins}:{secs}.{millis:03}"
+                                )),
+                            )),
+                            leading_field: Some(ast::DateTimeField::Day),
+                            leading_precision: None,
+                            last_field: Some(ast::DateTimeField::Second),
+                            fractional_seconds_precision: None,
+                        };
+                        Ok(ast::Expr::Interval(interval))
+                    } else {
+                        not_impl_err!("Unsupported IntervalMonthDayNano scalar with both Month and DayTime for IntervalStyle::SQLStandard")
+                    }
+                }
+                _ => Ok(ast::Expr::Value(ast::Value::Null)),
+            },
+            IntervalStyle::MySQL => {
+                not_impl_err!("Unsupported interval scalar for IntervalStyle::MySQL")
+            }
+        }
+    }
+
     fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
         match data_type {
             DataType::Null => {
@@ -986,7 +1250,7 @@ impl Unparser<'_> {
                 Ok(ast::DataType::Timestamp(None, tz_info))
             }
             DataType::Date32 => Ok(ast::DataType::Date),
-            DataType::Date64 => Ok(ast::DataType::Datetime(None)),
+            DataType::Date64 => Ok(self.ast_type_for_date64_in_cast()),
             DataType::Time32(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1011,8 +1275,8 @@ impl Unparser<'_> {
             DataType::BinaryView => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Utf8 => Ok(ast::DataType::Varchar(None)),
-            DataType::LargeUtf8 => Ok(ast::DataType::Text),
+            DataType::Utf8 => Ok(self.dialect.utf8_cast_dtype()),
+            DataType::LargeUtf8 => Ok(self.dialect.large_utf8_cast_dtype()),
             DataType::Utf8View => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1082,7 +1346,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
 
-    use crate::unparser::dialect::CustomDialect;
+    use crate::unparser::dialect::{CustomDialect, CustomDialectBuilder};
 
     use super::*;
 
@@ -1445,46 +1709,7 @@ mod tests {
             ),
             (col("need-quoted").eq(lit(1)), r#"("need-quoted" = 1)"#),
             (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
-            (
-                interval_month_day_nano_lit(
-                    "1 YEAR 1 MONTH 1 DAY 3 HOUR 10 MINUTE 20 SECOND",
-                ),
-                r#"INTERVAL '0 YEARS 13 MONS 1 DAYS 3 HOURS 10 MINS 20.000000000 SECS'"#,
-            ),
-            (
-                interval_month_day_nano_lit("1.5 MONTH"),
-                r#"INTERVAL '0 YEARS 1 MONS 15 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
-            ),
-            (
-                interval_month_day_nano_lit("-3 MONTH"),
-                r#"INTERVAL '0 YEARS -3 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
-            ),
-            (
-                interval_month_day_nano_lit("1 MONTH")
-                    .add(interval_month_day_nano_lit("1 DAY")),
-                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' + INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
-            ),
-            (
-                interval_month_day_nano_lit("1 MONTH")
-                    .sub(interval_month_day_nano_lit("1 DAY")),
-                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
-            ),
-            (
-                interval_datetime_lit("10 DAY 1 HOUR 10 MINUTE 20 SECOND"),
-                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 10 MINS 20.000 SECS'"#,
-            ),
-            (
-                interval_datetime_lit("10 DAY 1.5 HOUR 10 MINUTE 20 SECOND"),
-                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 40 MINS 20.000 SECS'"#,
-            ),
-            (
-                interval_year_month_lit("1 YEAR 1 MONTH"),
-                r#"INTERVAL '1 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
-            ),
-            (
-                interval_year_month_lit("1.5 YEAR 1 MONTH"),
-                r#"INTERVAL '1 YEARS 7 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
-            ),
+            // See test_interval_scalar_to_expr for interval literals
             (
                 (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal128(
                     Some(100123),
@@ -1538,9 +1763,12 @@ mod tests {
 
         Ok(())
     }
+
     #[test]
-    fn custom_dialect() -> Result<()> {
-        let dialect = CustomDialect::new(Some('\''));
+    fn custom_dialect_with_identifier_quote_style() -> Result<()> {
+        let dialect = CustomDialectBuilder::new()
+            .with_identifier_quote_style('\'')
+            .build();
         let unparser = Unparser::new(&dialect);
 
         let expr = col("a").gt(lit(4));
@@ -1555,8 +1783,8 @@ mod tests {
     }
 
     #[test]
-    fn custom_dialect_none() -> Result<()> {
-        let dialect = CustomDialect::new(None);
+    fn custom_dialect_without_identifier_quote_style() -> Result<()> {
+        let dialect = CustomDialect::default();
         let unparser = Unparser::new(&dialect);
 
         let expr = col("a").gt(lit(4));
@@ -1567,6 +1795,175 @@ mod tests {
         let expected = r#"(a > 4)"#;
         assert_eq!(actual, expected);
 
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_use_timestamp_for_date64() -> Result<()> {
+        for (use_timestamp_for_date64, identifier) in
+            [(false, "DATETIME"), (true, "TIMESTAMP")]
+        {
+            let dialect = CustomDialectBuilder::new()
+                .with_use_timestamp_for_date64(use_timestamp_for_date64)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type: DataType::Date64,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn customer_dialect_support_nulls_first_in_ort() -> Result<()> {
+        let tests: Vec<(Expr, &str, bool)> = vec![
+            (col("a").sort(true, true), r#"a ASC NULLS FIRST"#, true),
+            (col("a").sort(true, true), r#"a ASC"#, false),
+        ];
+
+        for (expr, expected, supports_nulls_first_in_sort) in tests {
+            let dialect = CustomDialectBuilder::new()
+                .with_supports_nulls_first_in_sort(supports_nulls_first_in_sort)
+                .build();
+            let unparser = Unparser::new(&dialect);
+            let ast = unparser.expr_to_unparsed(&expr)?;
+
+            let actual = format!("{}", ast);
+
+            assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_scalar_to_expr() {
+        let tests = [
+            (
+                interval_month_day_nano_lit("1 MONTH"),
+                IntervalStyle::SQLStandard,
+                "INTERVAL '1' MONTH",
+            ),
+            (
+                interval_month_day_nano_lit("1.5 DAY"),
+                IntervalStyle::SQLStandard,
+                "INTERVAL '1 12:0:0.000' DAY TO SECOND",
+            ),
+            (
+                interval_month_day_nano_lit("1.51234 DAY"),
+                IntervalStyle::SQLStandard,
+                "INTERVAL '1 12:17:46.176' DAY TO SECOND",
+            ),
+            (
+                interval_datetime_lit("1.51234 DAY"),
+                IntervalStyle::SQLStandard,
+                "INTERVAL '1 12:17:46.176' DAY TO SECOND",
+            ),
+            (
+                interval_year_month_lit("1 YEAR"),
+                IntervalStyle::SQLStandard,
+                "INTERVAL '12' MONTH",
+            ),
+            (
+                interval_month_day_nano_lit(
+                    "1 YEAR 1 MONTH 1 DAY 3 HOUR 10 MINUTE 20 SECOND",
+                ),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '0 YEARS 13 MONS 1 DAYS 3 HOURS 10 MINS 20.000000000 SECS'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1.5 MONTH"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '0 YEARS 1 MONS 15 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
+            ),
+            (
+                interval_month_day_nano_lit("-3 MONTH"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '0 YEARS -3 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
+            ),
+            (
+                interval_month_day_nano_lit("1 MONTH")
+                    .add(interval_month_day_nano_lit("1 DAY")),
+                IntervalStyle::PostgresVerbose,
+                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' + INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
+            ),
+            (
+                interval_month_day_nano_lit("1 MONTH")
+                    .sub(interval_month_day_nano_lit("1 DAY")),
+                IntervalStyle::PostgresVerbose,
+                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
+            ),
+            (
+                interval_datetime_lit("10 DAY 1 HOUR 10 MINUTE 20 SECOND"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 10 MINS 20.000 SECS'"#,
+            ),
+            (
+                interval_datetime_lit("10 DAY 1.5 HOUR 10 MINUTE 20 SECOND"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 40 MINS 20.000 SECS'"#,
+            ),
+            (
+                interval_year_month_lit("1 YEAR 1 MONTH"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '1 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
+            ),
+            (
+                interval_year_month_lit("1.5 YEAR 1 MONTH"),
+                IntervalStyle::PostgresVerbose,
+                r#"INTERVAL '1 YEARS 7 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
+            ),
+        ];
+
+        for (value, style, expected) in tests {
+            let dialect = CustomDialectBuilder::new()
+                .with_interval_style(style)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn custom_dialect_use_char_for_utf8_cast() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::default().build();
+        let mysql_custom_dialect = CustomDialectBuilder::new()
+            .with_utf8_cast_dtype(ast::DataType::Char(None))
+            .with_large_utf8_cast_dtype(ast::DataType::Char(None))
+            .build();
+
+        for (dialect, data_type, identifier) in [
+            (&default_dialect, DataType::Utf8, "VARCHAR"),
+            (&default_dialect, DataType::LargeUtf8, "TEXT"),
+            (&mysql_custom_dialect, DataType::Utf8, "CHAR"),
+            (&mysql_custom_dialect, DataType::LargeUtf8, "CHAR"),
+        ] {
+            let unparser = Unparser::new(dialect);
+
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
         Ok(())
     }
 }

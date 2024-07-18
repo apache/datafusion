@@ -632,6 +632,7 @@ mod tests {
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::{col, lit};
 
+    use crate::execution::session_state::SessionStateBuilder;
     use chrono::DateTime;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -644,7 +645,7 @@ mod tests {
         let session_ctx = SessionContext::new_with_config(config);
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
-        // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
+        // skip column 9 that overflows the automatically discovered column type of i64 (u64 would work)
         let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
         let exec =
             get_exec(&state, "aggregate_test_100.csv", projection, None, true).await?;
@@ -814,7 +815,11 @@ mod tests {
         let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new()).unwrap());
         let mut cfg = SessionConfig::new();
         cfg.options_mut().catalog.has_header = true;
-        let session_state = SessionState::new_with_config_rt(cfg, runtime);
+        let session_state = SessionStateBuilder::new()
+            .with_config(cfg)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
         let integration = LocalFileSystem::new_with_prefix(arrow_test_data()).unwrap();
         let path = Path::from("csv/aggregate_test_100.csv");
         let csv = CsvFormat::default().with_has_header(true);

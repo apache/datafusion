@@ -3693,7 +3693,7 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
     let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
     assert_eq!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: ParserError(\"Expected AS, found: SELECT\")"
+        "SQL error: ParserError(\"Expected: AS, found: SELECT\")"
     )
 }
 
@@ -3734,7 +3734,7 @@ fn test_non_prepare_statement_should_infer_types() {
 
 #[test]
 #[should_panic(
-    expected = "value: SQL(ParserError(\"Expected [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1\""
+    expected = "value: SQL(ParserError(\"Expected: [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1\""
 )]
 fn test_prepare_statement_to_plan_panic_is_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
@@ -4413,7 +4413,7 @@ fn test_parse_escaped_string_literal_value() {
     let sql = r"SELECT character_length(E'\000') AS len";
     assert_eq!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 25\")"
+        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column: 25\")"
     )
 }
 

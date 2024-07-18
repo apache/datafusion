@@ -308,14 +308,17 @@ pub fn parse_expr(
                     let aggr_function = parse_i32_to_aggregate_function(i)?;
 
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::expr::WindowFunctionDefinition::AggregateFunction(
-                            aggr_function,
-                        ),
-                        vec![parse_required_expr(expr.expr.as_deref(), registry, "expr", codec)?],
+                        expr::WindowFunctionDefinition::AggregateFunction(aggr_function),
+                        vec![parse_required_expr(
+                            expr.expr.as_deref(),
+                            registry,
+                            "expr",
+                            codec,
+                        )?],
                         partition_by,
                         order_by,
                         window_frame,
-                        None
+                        None,
                     )))
                 }
                 window_expr_node::WindowFunction::BuiltInFunction(i) => {
@@ -329,26 +332,28 @@ pub fn parse_expr(
                             .unwrap_or_else(Vec::new);
 
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::expr::WindowFunctionDefinition::BuiltInWindowFunction(
+                        expr::WindowFunctionDefinition::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args,
                         partition_by,
                         order_by,
                         window_frame,
-                        null_treatment
+                        null_treatment,
                     )))
                 }
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
-                    let udaf_function = registry.udaf(udaf_name)?;
+                    let udaf_function = match &expr.fun_definition {
+                        Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
+                        None => registry.udaf(udaf_name)?,
+                    };
+
                     let args =
                         parse_optional_expr(expr.expr.as_deref(), registry, codec)?
                             .map(|e| vec![e])
                             .unwrap_or_else(Vec::new);
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::expr::WindowFunctionDefinition::AggregateUDF(
-                            udaf_function,
-                        ),
+                        expr::WindowFunctionDefinition::AggregateUDF(udaf_function),
                         args,
                         partition_by,
                         order_by,
@@ -357,15 +362,17 @@ pub fn parse_expr(
                     )))
                 }
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
-                    let udwf_function = registry.udwf(udwf_name)?;
+                    let udwf_function = match &expr.fun_definition {
+                        Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
+                        None => registry.udwf(udwf_name)?,
+                    };
+
                     let args =
                         parse_optional_expr(expr.expr.as_deref(), registry, codec)?
                             .map(|e| vec![e])
                             .unwrap_or_else(Vec::new);
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::expr::WindowFunctionDefinition::WindowUDF(
-                            udwf_function,
-                        ),
+                        expr::WindowFunctionDefinition::WindowUDF(udwf_function),
                         args,
                         partition_by,
                         order_by,
@@ -613,7 +620,10 @@ pub fn parse_expr(
             )))
         }
         ExprType::AggregateUdfExpr(pb) => {
-            let agg_fn = registry.udaf(pb.fun_name.as_str())?;
+            let agg_fn = match &pb.fun_definition {
+                Some(buf) => codec.try_decode_udaf(&pb.fun_name, buf)?,
+                None => registry.udaf(&pb.fun_name)?,
+            };
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,

@@ -42,4 +42,4 @@ mod utils;
 #[cfg(test)]
 pub mod test_utils;
 
-pub use optimizer::PhysicalOptimizerRule;
+pub use datafusion_physical_optimizer::*;

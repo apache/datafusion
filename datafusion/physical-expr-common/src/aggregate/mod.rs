@@ -43,6 +43,14 @@ use datafusion_expr::utils::AggregateOrderSensitivity;
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
+///
+/// `input_exprs` and `sort_exprs` are used for customizing Accumulator
+/// whose behavior depends on arguments such as the `ORDER BY`.
+///
+/// For example to call `ARRAY_AGG(x ORDER BY y)` would pass `y` to `sort_exprs`, `x` to `input_exprs`
+///
+/// `input_exprs` and `sort_exprs` are used for customizing Accumulator as the arguments in `AccumulatorArgs`,
+/// if you don't need them it is fine to pass empty slice `&[]`.
 #[allow(clippy::too_many_arguments)]
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
@@ -274,6 +282,11 @@ impl AggregateFunctionExpr {
     /// Return if the aggregation is distinct
     pub fn is_distinct(&self) -> bool {
         self.is_distinct
+    }
+
+    /// Return if the aggregation ignores nulls
+    pub fn ignore_nulls(&self) -> bool {
+        self.ignore_nulls
     }
 }
 

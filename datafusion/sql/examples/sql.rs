@@ -69,8 +69,7 @@ struct MyContextProvider {
 
 impl MyContextProvider {
     fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
-        // TODO: change to to_string() if all the function name is converted to lowercase
-        self.udafs.insert(udaf.name().to_lowercase(), udaf);
+        self.udafs.insert(udaf.name().to_string(), udaf);
         self
     }
 
@@ -119,7 +118,7 @@ fn create_table_source(fields: Vec<Field>) -> Arc<dyn TableSource> {
 impl ContextProvider for MyContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         match self.tables.get(name.table()) {
-            Some(table) => Ok(table.clone()),
+            Some(table) => Ok(Arc::clone(table)),
             _ => plan_err!("Table not found: {}", name.table()),
         }
     }

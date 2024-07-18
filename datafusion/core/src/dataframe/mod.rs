@@ -896,9 +896,8 @@ impl DataFrame {
         join_type: JoinType,
         on_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<DataFrame> {
-        let expr = on_exprs.into_iter().reduce(Expr::and);
         let plan = LogicalPlanBuilder::from(self.plan)
-            .join_on(right.plan, join_type, expr)?
+            .join_on(right.plan, join_type, on_exprs)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -1472,7 +1471,7 @@ impl DataFrame {
     ///
     /// The method supports case sensitive rename with wrapping column name into one of following symbols (  "  or  '  or  `  )
     ///
-    /// Alternatively setting Datafusion param `datafusion.sql_parser.enable_ident_normalization` to `false` will enable  
+    /// Alternatively setting DataFusion param `datafusion.sql_parser.enable_ident_normalization` to `false` will enable
     /// case sensitive rename without need to wrap column name into special symbols
     ///
     /// # Example
@@ -1694,7 +1693,7 @@ mod tests {
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
     use arrow::array::{self, Int32Array};
-    use datafusion_common::{Constraint, Constraints};
+    use datafusion_common::{Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
         array_agg, cast, create_udf, expr, lit, BuiltInWindowFunction,
@@ -2552,6 +2551,32 @@ mod tests {
         \n    TableScan: b";
         assert_eq!(expected_plan, format!("{:?}", join.logical_plan()));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_on_filter_datatype() -> Result<()> {
+        let left = test_table_with_name("a").await?.select_columns(&["c1"])?;
+        let right = test_table_with_name("b").await?.select_columns(&["c1"])?;
+
+        // JOIN ON untyped NULL
+        let join = left.clone().join_on(
+            right.clone(),
+            JoinType::Inner,
+            Some(Expr::Literal(ScalarValue::Null)),
+        )?;
+        let expected_plan = "CrossJoin:\
+        \n  TableScan: a projection=[c1], full_filters=[Boolean(NULL)]\
+        \n  TableScan: b projection=[c1]";
+        assert_eq!(expected_plan, format!("{:?}", join.into_optimized_plan()?));
+
+        // JOIN ON expression must be boolean type
+        let join = left.join_on(right, JoinType::Inner, Some(lit("TRUE")))?;
+        let expected = join.into_optimized_plan().unwrap_err();
+        assert_eq!(
+            expected.strip_backtrace(),
+            "type_coercion\ncaused by\nError during planning: Join condition must be boolean type, but got Utf8"
+        );
         Ok(())
     }
 

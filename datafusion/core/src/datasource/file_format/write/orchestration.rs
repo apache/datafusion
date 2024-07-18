@@ -42,15 +42,20 @@ use tokio::task::JoinSet;
 type WriterType = Box<dyn AsyncWrite + Send + Unpin>;
 type SerializerType = Arc<dyn BatchSerializer>;
 
-/// Serializes a single data stream in parallel and writes to an ObjectStore
-/// concurrently. Data order is preserved. In the event of an error,
-/// the ObjectStore writer is returned to the caller in addition to an error,
-/// so that the caller may handle aborting failed writes.
+/// Serializes a single data stream in parallel and writes to an ObjectStore concurrently.
+/// Data order is preserved.
+///
+/// In the event of a non-IO error which does not involve the ObjectStore writer,
+/// the writer returned to the caller in addition to the error,
+/// so that failed writes may be aborted.
+///
+/// In the event of an IO error involving the ObjectStore writer,
+/// the writer is dropped to avoid calling further methods on it which might panic.
 pub(crate) async fn serialize_rb_stream_to_object_store(
     mut data_rx: Receiver<RecordBatch>,
     serializer: Arc<dyn BatchSerializer>,
     mut writer: WriterType,
-) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)> {
+) -> std::result::Result<(WriterType, u64), (Option<WriterType>, DataFusionError)> {
     let (tx, mut rx) =
         mpsc::channel::<SpawnedTask<Result<(usize, Bytes), DataFusionError>>>(100);
     let serialize_task = SpawnedTask::spawn(async move {
@@ -82,7 +87,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                     Ok(_) => (),
                     Err(e) => {
                         return Err((
-                            writer,
+                            None,
                             DataFusionError::Execution(format!(
                                 "Error writing to object store: {e}"
                             )),
@@ -93,12 +98,12 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
             }
             Ok(Err(e)) => {
                 // Return the writer along with the error
-                return Err((writer, e));
+                return Err((Some(writer), e));
             }
             Err(e) => {
                 // Handle task panic or cancellation
                 return Err((
-                    writer,
+                    Some(writer),
                     DataFusionError::Execution(format!(
                         "Serialization task panicked or was cancelled: {e}"
                     )),
@@ -109,10 +114,10 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
 
     match serialize_task.join().await {
         Ok(Ok(_)) => (),
-        Ok(Err(e)) => return Err((writer, e)),
+        Ok(Err(e)) => return Err((Some(writer), e)),
         Err(_) => {
             return Err((
-                writer,
+                Some(writer),
                 internal_datafusion_err!("Unknown error writing to object store"),
             ))
         }
@@ -136,7 +141,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
     // tracks the specific error triggering abort
     let mut triggering_error = None;
     // tracks if any errors were encountered in the process of aborting writers.
-    // if true, we may not have a guarentee that all written data was cleaned up.
+    // if true, we may not have a guarantee that all written data was cleaned up.
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
     while let Some((data_rx, serializer, writer)) = rx.recv().await {
@@ -153,7 +158,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
                     row_count += cnt;
                 }
                 Err((writer, e)) => {
-                    finished_writers.push(writer);
+                    finished_writers.extend(writer);
                     any_errors = true;
                     triggering_error = Some(e);
                 }
@@ -183,7 +188,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
             true => return internal_err!("Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."),
             false => match triggering_error {
                 Some(e) => return Err(e),
-                None => return internal_err!("Unknown Error encountered during writing to ObjectStore. All writers succesfully aborted.")
+                None => return internal_err!("Unknown Error encountered during writing to ObjectStore. All writers successfully aborted.")
             }
         }
     }
@@ -263,7 +268,7 @@ pub(crate) async fn stateless_multipart_put(
     r2?;
 
     let total_count = rx_row_cnt.await.map_err(|_| {
-        internal_datafusion_err!("Did not receieve row count from write coordinater")
+        internal_datafusion_err!("Did not receive row count from write coordinator")
     })?;
 
     Ok(total_count)

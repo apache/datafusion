@@ -324,7 +324,7 @@ impl AggregateExec {
 
     /// Create a new hash aggregate execution plan with the given schema.
     /// This constructor isn't part of the public API, it is used internally
-    /// by Datafusion to enforce schema consistency during when re-creating
+    /// by DataFusion to enforce schema consistency during when re-creating
     /// `AggregateExec`s inside optimization rules. Schema field names of an
     /// `AggregateExec` depends on the names of aggregate expressions. Since
     /// a rule may re-write aggregate expressions (e.g. reverse them) during
@@ -2231,7 +2231,6 @@ mod tests {
                     Arc::clone(col_a),
                     "array_agg",
                     DataType::Int32,
-                    false,
                     vec![],
                     order_by_expr.unwrap_or_default(),
                 )) as _

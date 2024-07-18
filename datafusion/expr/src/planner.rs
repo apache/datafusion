@@ -60,6 +60,11 @@ pub trait ContextProvider {
         not_impl_err!("Recursive CTE is not implemented")
     }
 
+    /// Getter for expr planners
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &[]
+    }
+
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
@@ -159,6 +164,13 @@ pub trait ExprPlanner: Send + Sync {
         args: Vec<Expr>,
         _is_named_struct: bool,
     ) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
+
+    /// Plans an overlay expression eg `overlay(str PLACING substr FROM pos [FOR count])`
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_overlay(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 }

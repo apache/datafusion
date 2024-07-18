@@ -68,7 +68,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        for planner in self.planners.iter() {
+        for planner in self.context_provider.get_expr_planners() {
             match planner.plan_substring(substring_args)? {
                 PlannerResult::Planned(expr) => return Ok(expr),
                 PlannerResult::Original(args) => {
