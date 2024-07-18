@@ -87,12 +87,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     // CASE WHEN c1 <= 500 THEN c2 [ELSE NULL] END
     c.bench_function("case_when: column or null", |b| {
         let expr = Arc::new(
-            CaseExpr::try_new(
-                None,
-                vec![(predicate.clone(), make_col("c2", 1))],
-                None,
-            )
-            .unwrap(),
+            CaseExpr::try_new(None, vec![(predicate.clone(), make_col("c2", 1))], None)
+                .unwrap(),
         );
         b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
     });
