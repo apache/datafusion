@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
+//! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::DataType;
@@ -23,8 +23,8 @@ use arrow_schema::Field;
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::array_into_list_array_nullable;
-use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::AggregateUDFImpl;
@@ -126,12 +126,15 @@ impl ArrayAggAccumulator {
 }
 
 impl Accumulator for ArrayAggAccumulator {
-    // Append value like Int64Array(1,2,3)
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // Append value like Int64Array(1,2,3)
         if values.is_empty() {
             return Ok(());
         }
-        assert!(values.len() == 1, "array_agg can only take 1 param!");
+
+        if values.len() != 1 {
+            return internal_err!("expects single batch");
+        }
 
         let val = Arc::clone(&values[0]);
         if val.len() > 0 {
@@ -140,12 +143,15 @@ impl Accumulator for ArrayAggAccumulator {
         Ok(())
     }
 
-    // Append value like ListArray(Int64Array(1,2,3), Int64Array(4,5,6))
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // Append value like ListArray(Int64Array(1,2,3), Int64Array(4,5,6))
         if states.is_empty() {
             return Ok(());
         }
-        assert!(states.len() == 1, "array_agg states must be singleton!");
+
+        if states.len() != 1 {
+            return internal_err!("expects single state");
+        }
 
         let list_arr = as_list_array(&states[0])?;
         for arr in list_arr.iter().flatten() {
@@ -207,7 +213,9 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        assert_eq!(values.len(), 1, "batch input should only include 1 column!");
+        if values.len() != 1 {
+            return internal_err!("expects single batch");
+        }
 
         let array = &values[0];
 
@@ -222,6 +230,10 @@ impl Accumulator for DistinctArrayAggAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
+        }
+
+        if states.len() != 1 {
+            return internal_err!("expects single state");
         }
 
         states[0]

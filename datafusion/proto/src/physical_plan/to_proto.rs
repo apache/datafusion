@@ -260,7 +260,7 @@ struct AggrFn {
 fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     let aggr_expr = expr.as_any();
 
-    // TODO: remove
+    // TODO: remove OrderSensitiveArrayAgg
     let inner = if aggr_expr.downcast_ref::<OrderSensitiveArrayAgg>().is_some() {
         protobuf::AggregateFunction::ArrayAgg
     } else if aggr_expr.downcast_ref::<Min>().is_some() {
