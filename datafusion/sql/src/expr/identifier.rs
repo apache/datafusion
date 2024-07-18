@@ -128,7 +128,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             match search_result {
                 // found matching field with spare identifier(s) for nested field(s) in structure
                 Some((field, qualifier, nested_names)) => {
-                    for planner in self.planners.iter() {
+                    for planner in self.context_provider.get_expr_planners() {
                         match planner.plan_compound_identifier(
                             field,
                             qualifier,

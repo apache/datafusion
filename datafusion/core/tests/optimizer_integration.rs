@@ -44,6 +44,7 @@ use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
 
 use chrono::DateTime;
+use datafusion_expr::planner::ExprPlanner;
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions::datetime;
 
@@ -265,9 +266,9 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         .with_udf(datetime::now())
         .with_udf(datafusion_functions::core::arrow_cast())
         .with_udf(datafusion_functions::string::concat())
-        .with_udf(datafusion_functions::string::concat_ws());
-    let sql_to_rel = SqlToRel::new(&context_provider)
-        .with_user_defined_planner(Arc::new(CoreFunctionPlanner::default()));
+        .with_udf(datafusion_functions::string::concat_ws())
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+    let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // hard code the return value of now()
@@ -286,11 +287,16 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 struct MyContextProvider {
     options: ConfigOptions,
     udfs: HashMap<String, Arc<ScalarUDF>>,
+    expr_planners: Vec<Arc<dyn ExprPlanner>>,
 }
 
 impl MyContextProvider {
     fn with_udf(mut self, udf: Arc<ScalarUDF>) -> Self {
         self.udfs.insert(udf.name().to_string(), udf);
+        self
+    }
+    fn with_expr_planner(mut self, planner: Arc<dyn ExprPlanner>) -> Self {
+        self.expr_planners.push(planner);
         self
     }
 }
@@ -360,6 +366,10 @@ impl ContextProvider for MyContextProvider {
 
     fn udwf_names(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.expr_planners
     }
 }
 

@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::{collections::HashMap, sync::Arc};
+
 use arrow_schema::{DataType, Field, Schema};
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::WindowUDF;
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
-use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_sql::{
@@ -30,7 +32,6 @@ use datafusion_sql::{
     sqlparser::{dialect::GenericDialect, parser::Parser},
     TableReference,
 };
-use std::{collections::HashMap, sync::Arc};
 
 fn main() {
     let sql = "SELECT \
@@ -55,8 +56,7 @@ fn main() {
     let context_provider = MyContextProvider::new()
         .with_udaf(sum_udaf())
         .with_udaf(count_udaf());
-    let sql_to_rel = SqlToRel::new(&context_provider)
-        .with_user_defined_planner(Arc::new(CoreFunctionPlanner::default()));
+    let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // show the plan

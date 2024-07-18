@@ -2696,10 +2696,10 @@ fn logical_plan_with_dialect_and_options(
         .with_udaf(approx_median_udaf())
         .with_udaf(count_udaf())
         .with_udaf(avg_udaf())
-        .with_udaf(grouping_udaf());
+        .with_udaf(grouping_udaf())
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
-    let planner = SqlToRel::new_with_options(&context, options)
-        .with_user_defined_planner(Arc::new(CoreFunctionPlanner::default()));
+    let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
     planner.statement_to_plan(ast.pop_front().unwrap())
