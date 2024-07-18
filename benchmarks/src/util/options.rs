@@ -38,7 +38,8 @@ pub struct CommonOpt {
     #[structopt(short, long)]
     pub debug: bool,
 
-    /// If true, will use StringView/BinaryViewArray instead of String/BinaryArray.
+    /// If true, will use StringView/BinaryViewArray instead of String/BinaryArray
+    /// when reading ParquetFiles
     #[structopt(long)]
     pub string_view: bool,
 }
