@@ -108,14 +108,9 @@ fn analyze_internal(
         predicate, input, ..
     }) = &plan
     {
-        if let Some(boolean_type) =
-            comparison_coercion(&DataType::Boolean, &predicate.get_type(&schema)?)
-        {
-            if let Ok(predicate) = predicate.clone().cast_to(&boolean_type, &schema) {
-                plan =
-                    LogicalPlan::Filter(Filter::try_new(predicate, Arc::clone(input))?);
-            }
-        };
+        if let Ok(predicate) = predicate.clone().cast_to(&DataType::Boolean, &schema) {
+            plan = LogicalPlan::Filter(Filter::try_new(predicate, Arc::clone(input))?);
+        }
     }
 
     let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
