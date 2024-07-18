@@ -39,7 +39,6 @@ use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryP
 #[cfg(feature = "array_expressions")]
 use crate::functions_array;
 use crate::physical_optimizer::optimizer::PhysicalOptimizer;
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use crate::{functions, functions_aggregate};
 use arrow_schema::{DataType, SchemaRef};
@@ -74,6 +73,7 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
@@ -1019,7 +1019,7 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Set tje [`PhysicalOptimizerRule`]s used to optimize plans.
+    /// Set the [`PhysicalOptimizerRule`]s used to optimize plans.
     pub fn with_physical_optimizer_rules(
         mut self,
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,

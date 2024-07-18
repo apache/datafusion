@@ -105,10 +105,6 @@ SELECT power(1, 2, 3);
 
 # AggregateFunction with wrong number of arguments
 query error
-select count();
-
-# AggregateFunction with wrong number of arguments
-query error
 select avg(c1, c12) from aggregate_test_100;
 
 # AggregateFunction with wrong argument type

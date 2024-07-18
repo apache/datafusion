@@ -141,7 +141,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
     // tracks the specific error triggering abort
     let mut triggering_error = None;
     // tracks if any errors were encountered in the process of aborting writers.
-    // if true, we may not have a guarentee that all written data was cleaned up.
+    // if true, we may not have a guarantee that all written data was cleaned up.
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
     while let Some((data_rx, serializer, writer)) = rx.recv().await {
@@ -188,7 +188,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
             true => return internal_err!("Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."),
             false => match triggering_error {
                 Some(e) => return Err(e),
-                None => return internal_err!("Unknown Error encountered during writing to ObjectStore. All writers succesfully aborted.")
+                None => return internal_err!("Unknown Error encountered during writing to ObjectStore. All writers successfully aborted.")
             }
         }
     }
@@ -268,7 +268,7 @@ pub(crate) async fn stateless_multipart_put(
     r2?;
 
     let total_count = rx_row_cnt.await.map_err(|_| {
-        internal_datafusion_err!("Did not receieve row count from write coordinater")
+        internal_datafusion_err!("Did not receive row count from write coordinator")
     })?;
 
     Ok(total_count)
