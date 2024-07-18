@@ -410,7 +410,7 @@ pub fn accumulate_indices<F>(
                 },
             );
 
-            // handle any remaining bits (after the intial 64)
+            // handle any remaining bits (after the initial 64)
             let remainder_bits = bit_chunks.remainder_bits();
             group_indices_remainder
                 .iter()
@@ -835,7 +835,7 @@ mod test {
         }
     }
 
-    /// Parallel implementaiton of NullState to check expected values
+    /// Parallel implementation of NullState to check expected values
     #[derive(Debug, Default)]
     struct MockNullState {
         /// group indices that had values that passed the filter

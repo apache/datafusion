@@ -190,7 +190,7 @@ impl GroupValues for GroupValuesRows {
                 let groups_rows = group_values.iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
                 // Clear out first n group keys by copying them to a new Rows.
-                // TODO file some ticket in arrow-rs to make this more efficent?
+                // TODO file some ticket in arrow-rs to make this more efficient?
                 let mut new_group_values = self.row_converter.empty_rows(0, 0);
                 for row in group_values.iter().skip(n) {
                     new_group_values.push(row);

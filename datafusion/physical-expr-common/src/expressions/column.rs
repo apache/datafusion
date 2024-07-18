@@ -80,7 +80,7 @@ impl PhysicalExpr for Column {
         Ok(input_schema.field(self.index).data_type().clone())
     }
 
-    /// Decide whehter this expression is nullable, given the schema of the input
+    /// Decide whether this expression is nullable, given the schema of the input
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
         self.bounds_check(input_schema)?;
         Ok(input_schema.field(self.index).is_nullable())

@@ -65,7 +65,7 @@ pub enum Volatility {
 /// automatically coerces (add casts to) function arguments so they match the type signature.
 ///
 /// For example, a function like `cos` may only be implemented for `Float64` arguments. To support a query
-/// that calles `cos` with a different argument type, such as `cos(int_column)`, type coercion automatically
+/// that calls `cos` with a different argument type, such as `cos(int_column)`, type coercion automatically
 /// adds a cast such as `cos(CAST int_column AS DOUBLE)` during planning.
 ///
 /// # Data Types
