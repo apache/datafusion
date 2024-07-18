@@ -23,8 +23,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
 };
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
@@ -33,7 +33,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     Distribution, EquivalenceProperties, PhysicalSortRequirement,
@@ -117,46 +117,6 @@ impl DataSinkExec {
             count_schema: make_count_schema(),
             sort_order,
             cache,
-        }
-    }
-
-    fn execute_input_stream(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        let input_stream = self.input.execute(partition, context)?;
-
-        debug_assert_eq!(
-            self.sink_schema.fields().len(),
-            self.input.schema().fields().len()
-        );
-
-        // Find input columns that may violate the not null constraint.
-        let risky_columns: Vec<_> = self
-            .sink_schema
-            .fields()
-            .iter()
-            .zip(self.input.schema().fields().iter())
-            .enumerate()
-            .filter_map(|(i, (sink_field, input_field))| {
-                if !sink_field.is_nullable() && input_field.is_nullable() {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if risky_columns.is_empty() {
-            Ok(input_stream)
-        } else {
-            // Check not null constraint on the input stream
-            Ok(Box::pin(RecordBatchStreamAdapter::new(
-                Arc::clone(&self.sink_schema),
-                input_stream
-                    .map(move |batch| check_not_null_contraits(batch?, &risky_columns)),
-            )))
         }
     }
 
@@ -269,7 +229,12 @@ impl ExecutionPlan for DataSinkExec {
         if partition != 0 {
             return internal_err!("DataSinkExec can only be called on partition 0!");
         }
-        let data = self.execute_input_stream(0, Arc::clone(&context))?;
+        let data = execute_input_stream(
+            Arc::clone(&self.input),
+            Arc::clone(&self.sink_schema),
+            0,
+            Arc::clone(&context),
+        )?;
 
         let count_schema = Arc::clone(&self.count_schema);
         let sink = Arc::clone(&self.sink);
@@ -313,28 +278,4 @@ fn make_count_schema() -> SchemaRef {
         DataType::UInt64,
         false,
     )]))
-}
-
-fn check_not_null_contraits(
-    batch: RecordBatch,
-    column_indices: &Vec<usize>,
-) -> Result<RecordBatch> {
-    for &index in column_indices {
-        if batch.num_columns() <= index {
-            return exec_err!(
-                "Invalid batch column count {} expected > {}",
-                batch.num_columns(),
-                index
-            );
-        }
-
-        if batch.column(index).null_count() > 0 {
-            return exec_err!(
-                "Invalid batch column at '{}' has null but schema specifies non-nullable",
-                index
-            );
-        }
-    }
-
-    Ok(batch)
 }

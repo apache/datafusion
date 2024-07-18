@@ -251,7 +251,7 @@ mod tests {
 
     #[tokio::test]
     async fn can_override_schema_adapter() {
-        // Test shows that SchemaAdapter can add a column that doesn't existin in the
+        // Test shows that SchemaAdapter can add a column that doesn't existing in the
         // record batches returned from parquet.  This can be useful for schema evolution
         // where older files may not have all columns.
         let tmp_dir = TempDir::new().unwrap();

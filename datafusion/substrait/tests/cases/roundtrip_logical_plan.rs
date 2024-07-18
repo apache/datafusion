@@ -31,7 +31,8 @@ use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{
-    Extension, LogicalPlan, Repartition, UserDefinedLogicalNode, Volatility,
+    Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
+    Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -858,6 +859,39 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
     ctx.register_udaf(dummy_agg);
 
     roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_window_udf() -> Result<()> {
+    #[derive(Debug)]
+    struct Dummy {}
+
+    impl PartitionEvaluator for Dummy {
+        fn evaluate_all(
+            &mut self,
+            values: &[ArrayRef],
+            _num_rows: usize,
+        ) -> Result<ArrayRef> {
+            Ok(values[0].to_owned())
+        }
+    }
+
+    fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+        Ok(Box::new(Dummy {}))
+    }
+
+    let dummy_agg = create_udwf(
+        "dummy_window",            // name
+        DataType::Int64,           // input type
+        Arc::new(DataType::Int64), // return type
+        Volatility::Immutable,
+        Arc::new(make_partition_evaluator),
+    );
+
+    let ctx = create_context().await?;
+    ctx.register_udwf(dummy_agg);
+
+    roundtrip_with_ctx("select dummy_window(a) OVER () from data", ctx).await
 }
 
 #[tokio::test]
