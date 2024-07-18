@@ -33,7 +33,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{AggregateExt, ColumnarValue, ExprSchemable, Operator};
+use datafusion_expr::{ExprFunctionExt, ColumnarValue, ExprSchemable, Operator};
 
 /// This example demonstrates the DataFusion [`Expr`] API.
 ///
@@ -95,7 +95,7 @@ fn expr_fn_demo() -> Result<()> {
     let agg = first_value.call(vec![col("price")]);
     assert_eq!(agg.to_string(), "first_value(price)");
 
-    // You can use the AggregateExt trait to create more complex aggregates
+    // You can use the ExprFunctionExt trait to create more complex aggregates
     // such as `FIRST_VALUE(price FILTER quantity > 100 ORDER BY ts )
     let agg = first_value
         .call(vec![col("price")])
