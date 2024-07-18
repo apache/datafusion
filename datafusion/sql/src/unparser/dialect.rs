@@ -298,11 +298,12 @@ impl CustomDialectBuilder {
         float64_ast_dtype: sqlparser::ast::DataType,
     ) -> Self {
         self.float64_ast_dtype = float64_ast_dtype;
+        self
+    }
 
-        pub fn with_utf8_cast_dtype(mut self, utf8_cast_dtype: ast::DataType) -> Self {
-            self.utf8_cast_dtype = utf8_cast_dtype;
-            self
-        }
+    pub fn with_utf8_cast_dtype(mut self, utf8_cast_dtype: ast::DataType) -> Self {
+        self.utf8_cast_dtype = utf8_cast_dtype;
+        self
     }
 
     pub fn with_large_utf8_cast_dtype(
