@@ -47,9 +47,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprSchemable, Filter,
-    LogicalPlan, Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprSchemable, LogicalPlan,
+    Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -104,12 +103,13 @@ fn analyze_internal(
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
     schema.merge(external_schema);
 
-    if let LogicalPlan::Filter(Filter {
-        predicate, input, ..
-    }) = &plan
-    {
-        if let Ok(predicate) = predicate.clone().cast_to(&DataType::Boolean, &schema) {
-            plan = LogicalPlan::Filter(Filter::try_new(predicate, Arc::clone(input))?);
+    if let LogicalPlan::Filter(filter) = &mut plan {
+        if let Ok(new_predicate) = filter
+            .predicate
+            .clone()
+            .cast_to(&DataType::Boolean, filter.input.schema())
+        {
+            filter.predicate = new_predicate;
         }
     }
 

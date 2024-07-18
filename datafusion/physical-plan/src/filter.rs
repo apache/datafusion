@@ -355,13 +355,14 @@ pub(crate) fn batch_filter(
         .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
             Ok(match as_boolean_array(&array) {
+                // apply filter array to record batch
                 Ok(filter_array) => filter_record_batch(batch, filter_array)?,
                 Err(_) => {
                     return internal_err!(
                         "Cannot create filter_array from non-boolean predicates"
                     );
                 }
-            }) // apply filter array to record batch
+            })
         })
 }
 
