@@ -44,16 +44,16 @@ enum EvalMethod {
     ///      [WHEN ...]
     ///      [ELSE result]
     /// END
-    CaseNoExpression,
+    NoExpression,
     /// CASE expression
     ///     WHEN value THEN result
     ///     [WHEN ...]
     ///     [ELSE result]
     /// END
-    CaseWithExpression,
+    WithExpression,
     /// This is a specialization for a specific use case where we can take a fast path
     /// CASE WHEN condition THEN column [ELSE NULL] END
-    CaseColumnOrNull,
+    ColumnOrNull,
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -122,14 +122,14 @@ impl CaseExpr {
             exec_err!("There must be at least one WHEN clause")
         } else {
             let eval_method = if expr.is_some() {
-                EvalMethod::CaseWithExpression
+                EvalMethod::WithExpression
             } else if when_then_expr.len() == 1
                 && when_then_expr[0].1.as_any().is::<Column>()
                 && else_expr.is_none()
             {
-                EvalMethod::CaseColumnOrNull
+                EvalMethod::ColumnOrNull
             } else {
-                EvalMethod::CaseNoExpression
+                EvalMethod::NoExpression
             };
 
             Ok(Self {
@@ -378,17 +378,17 @@ impl PhysicalExpr for CaseExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         match self.eval_method {
-            EvalMethod::CaseWithExpression => {
+            EvalMethod::WithExpression => {
                 // this use case evaluates "expr" and then compares the values with the "when"
                 // values
                 self.case_when_with_expr(batch)
             }
-            EvalMethod::CaseNoExpression => {
+            EvalMethod::NoExpression => {
                 // The "when" conditions all evaluate to boolean in this use case and can be
                 // arbitrary expressions
                 self.case_when_no_expr(batch)
             }
-            EvalMethod::CaseColumnOrNull => {
+            EvalMethod::ColumnOrNull => {
                 // Specialization for CASE WHEN expr THEN column [ELSE NULL] END
                 self.case_column_or_null(batch)
             }
@@ -1108,7 +1108,7 @@ mod tests {
             make_lit_i32(250),
         ));
         let expr = CaseExpr::try_new(None, vec![(predicate, make_col("c2", 1))], None)?;
-        assert!(matches!(expr.eval_method, EvalMethod::CaseColumnOrNull));
+        assert!(matches!(expr.eval_method, EvalMethod::ColumnOrNull));
         match expr.evaluate(&batch)? {
             ColumnarValue::Array(array) => {
                 assert_eq!(1000, array.len());
