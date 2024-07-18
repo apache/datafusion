@@ -109,7 +109,10 @@ impl ValueNormalizer {
         if self.normalize {
             crate::utils::normalize_value(&value)
         } else {
-            crate::utils::value_to_string(&value)
+            match crate::utils::value_to_string(&value) {
+                Some(s) => Ok(s),
+                None => internal_err!("Unsupport value type to string: {:?}", value),
+            }
         }
     }
 }

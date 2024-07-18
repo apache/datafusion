@@ -194,8 +194,7 @@ fn test_parse_options_value_normalization() {
                 enable_options_value_normalization,
             },
         );
-        if plan.is_ok() {
-            let plan = plan.unwrap();
+        if let Ok(plan) = plan {
             assert_eq!(expected_plan, format!("{plan:?}"));
 
             match plan {

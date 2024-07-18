@@ -1153,10 +1153,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let value_string = match &value[0] {
             SQLExpr::Identifier(i) => ident_to_string(i),
             SQLExpr::Value(v) => match crate::utils::value_to_string(v) {
-                Err(_) => {
+                None => {
                     return plan_err!("Unsupported Value {}", value[0]);
                 }
-                Ok(v) => v,
+                Some(v) => v,
             },
             // for capture signed number e.g. +8, -8
             SQLExpr::UnaryOp { op, expr } => match op {

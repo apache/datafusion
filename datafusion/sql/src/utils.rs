@@ -264,14 +264,17 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
 }
 
 pub(crate) fn normalize_value(value: &Value) -> Result<String> {
-    value_to_string(value).map(|v| v.to_ascii_lowercase())
+    match value_to_string(value) {
+        Some(s) => Ok(s),
+        None => exec_err!("Unsupported value to normalize: {:?}", value),
+    }
 }
 
-pub(crate) fn value_to_string(value: &Value) -> Result<String> {
+pub(crate) fn value_to_string(value: &Value) -> Option<String> {
     match value {
-        Value::SingleQuotedString(s) => Ok(s.to_string()),
-        Value::DollarQuotedString(s) => Ok(s.to_string()),
-        Value::Number(_, _) | Value::Boolean(_) => Ok(value.to_string()),
+        Value::SingleQuotedString(s) => Some(s.to_string()),
+        Value::DollarQuotedString(s) => Some(s.to_string()),
+        Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
         Value::DoubleQuotedString(_)
         | Value::EscapedStringLiteral(_)
         | Value::NationalStringLiteral(_)
@@ -287,7 +290,7 @@ pub(crate) fn value_to_string(value: &Value) -> Result<String> {
         | Value::TripleDoubleQuotedRawStringLiteral(_)
         | Value::HexStringLiteral(_)
         | Value::Null
-        | Value::Placeholder(_) => plan_err!("Unsupported Value to normalize {}", value),
+        | Value::Placeholder(_) => None,
     }
 }
 
