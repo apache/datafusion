@@ -84,7 +84,7 @@ impl AnalyzerRule for TypeCoercion {
 /// Assumes that children have already been optimized
 fn analyze_internal(
     external_schema: &DFSchema,
-    plan: LogicalPlan,
+    mut plan: LogicalPlan,
 ) -> Result<Transformed<LogicalPlan>> {
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
@@ -102,6 +102,16 @@ fn analyze_internal(
     // like case:
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
     schema.merge(external_schema);
+
+    if let LogicalPlan::Filter(filter) = &mut plan {
+        if let Ok(new_predicate) = filter
+            .predicate
+            .clone()
+            .cast_to(&DataType::Boolean, filter.input.schema())
+        {
+            filter.predicate = new_predicate;
+        }
+    }
 
     let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
 
