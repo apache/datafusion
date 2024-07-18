@@ -50,13 +50,14 @@ pub trait Dialect {
     // E.g. Postgres uses DOUBLE PRECISION instead of DOUBLE
     fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
         sqlparser::ast::DataType::Double
+    }
 
     // The SQL type to use for Arrow Utf8 unparsing
     // Most dialects use VARCHAR, but some, like MySQL, require CHAR
     fn utf8_cast_dtype(&self) -> ast::DataType {
         ast::DataType::Varchar(None)
     }
-      
+
     // The SQL type to use for Arrow LargeUtf8 unparsing
     // Most dialects use TEXT, but some, like MySQL, require CHAR
     fn large_utf8_cast_dtype(&self) -> ast::DataType {
@@ -196,6 +197,7 @@ impl Dialect for CustomDialect {
 
     fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
         self.float64_ast_dtype.clone()
+    }
 
     fn utf8_cast_dtype(&self) -> ast::DataType {
         self.utf8_cast_dtype.clone()
@@ -203,7 +205,6 @@ impl Dialect for CustomDialect {
 
     fn large_utf8_cast_dtype(&self) -> ast::DataType {
         self.large_utf8_cast_dtype.clone()
-
     }
 }
 
@@ -297,10 +298,11 @@ impl CustomDialectBuilder {
         float64_ast_dtype: sqlparser::ast::DataType,
     ) -> Self {
         self.float64_ast_dtype = float64_ast_dtype;
-      
-    pub fn with_utf8_cast_dtype(mut self, utf8_cast_dtype: ast::DataType) -> Self {
-        self.utf8_cast_dtype = utf8_cast_dtype;
-        self
+
+        pub fn with_utf8_cast_dtype(mut self, utf8_cast_dtype: ast::DataType) -> Self {
+            self.utf8_cast_dtype = utf8_cast_dtype;
+            self
+        }
     }
 
     pub fn with_large_utf8_cast_dtype(
