@@ -29,8 +29,8 @@ use arrow_buffer::IntervalMonthDayNano;
 
 use crate::cast::{
     as_boolean_array, as_fixed_size_list_array, as_generic_binary_array,
-    as_large_list_array, as_list_array, as_primitive_array, as_string_array,
-    as_struct_array,
+    as_large_list_array, as_list_array, as_map_array, as_primitive_array,
+    as_string_array, as_struct_array,
 };
 use crate::error::{Result, _internal_err};
 
@@ -236,6 +236,40 @@ fn hash_struct_array(
     Ok(())
 }
 
+fn hash_map_array(
+    array: &MapArray,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()> {
+    let nulls = array.nulls();
+    let offsets = array.offsets();
+
+    // Create hashes for each entry in each row
+    let mut values_hashes = vec![0u64; array.entries().len()];
+    create_hashes(array.entries().columns(), random_state, &mut values_hashes)?;
+
+    // Combine the hashes for entries on each row with each other and previous hash for that row
+    if let Some(nulls) = nulls {
+        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+            if nulls.is_valid(i) {
+                let hash = &mut hashes_buffer[i];
+                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                    *hash = combine_hashes(*hash, *values_hash);
+                }
+            }
+        }
+    } else {
+        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+            let hash = &mut hashes_buffer[i];
+            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                *hash = combine_hashes(*hash, *values_hash);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn hash_list_array<OffsetSize>(
     array: &GenericListArray<OffsetSize>,
     random_state: &RandomState,
@@ -399,6 +433,10 @@ pub fn create_hashes<'a>(
             DataType::LargeList(_) => {
                 let array = as_large_list_array(array)?;
                 hash_list_array(array, random_state, hashes_buffer)?;
+            }
+            DataType::Map(_, _) => {
+                let array = as_map_array(array)?;
+                hash_map_array(array, random_state, hashes_buffer)?;
             }
             DataType::FixedSizeList(_,_) => {
                 let array = as_fixed_size_list_array(array)?;
@@ -690,6 +728,48 @@ mod tests {
         let mut hashes = vec![0; array.len()];
         create_hashes(&[array], &random_state, &mut hashes).unwrap();
         assert_eq!(hashes[0], hashes[1]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_map_arrays() {
+        let value_array = Int32Array::from(vec![
+            Some(10),
+            Some(11),
+            Some(10),
+            Some(11),
+            Some(10),
+            Some(12),
+            Some(10),
+            Some(11),
+            Some(11),
+            None,
+        ]);
+
+        let map_array = MapArray::new_from_strings(
+            vec![
+                "key1", "key2", "key1", "key2", "key1", "key2", "key1", "key3", "key1",
+                "key1",
+            ]
+            .into_iter(),
+            &value_array,
+            &[0, 2, 4, 6, 8, 9, 9, 9, 10],
+        )
+        .expect("failed to create map array");
+
+        let array = Arc::new(map_array) as ArrayRef;
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; array.len()];
+        create_hashes(&[array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1]);
+        assert_ne!(hashes[0], hashes[2]); // different key
+        assert_ne!(hashes[0], hashes[3]); // different value
+        assert_ne!(hashes[0], hashes[4]); // missing an entry
+        assert_eq!(hashes[5], hashes[6]); // both empty
+        assert_ne!(hashes[5], hashes[7]); // empty vs null value
+        assert_ne!(hashes[4], hashes[7]); // filled vs null value
     }
 
     #[test]
