@@ -32,9 +32,28 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
+use datafusion_physical_expr_common::expressions::column::Column;
 use itertools::Itertools;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
+
+#[derive(Debug, Hash)]
+enum EvalMethod {
+    /// CASE WHEN condition THEN result
+    ///      [WHEN ...]
+    ///      [ELSE result]
+    /// END
+    CaseNoExpression,
+    /// CASE expression
+    ///     WHEN value THEN result
+    ///     [WHEN ...]
+    ///     [ELSE result]
+    /// END
+    CaseWithExpression,
+    /// This is a specialization for a specific use case where we can take a fast path
+    /// CASE WHEN condition THEN column [ELSE NULL] END
+    CaseColumnOrNull,
+}
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
 /// can be used. The first form consists of a series of boolean "when" expressions with
@@ -61,6 +80,8 @@ pub struct CaseExpr {
     when_then_expr: Vec<WhenThen>,
     /// Optional "else" expression
     else_expr: Option<Arc<dyn PhysicalExpr>>,
+    /// Evaluation method to use
+    eval_method: EvalMethod,
 }
 
 impl std::fmt::Display for CaseExpr {
@@ -89,10 +110,22 @@ impl CaseExpr {
         if when_then_expr.is_empty() {
             exec_err!("There must be at least one WHEN clause")
         } else {
+            let eval_method = if expr.is_some() {
+                EvalMethod::CaseWithExpression
+            } else if when_then_expr.len() == 1
+                && when_then_expr[0].1.as_any().is::<Column>()
+                && else_expr.is_none()
+            {
+                EvalMethod::CaseColumnOrNull
+            } else {
+                EvalMethod::CaseNoExpression
+            };
+
             Ok(Self {
                 expr,
                 when_then_expr,
                 else_expr,
+                eval_method,
             })
         }
     }
@@ -256,6 +289,36 @@ impl CaseExpr {
 
         Ok(ColumnarValue::Array(current_value))
     }
+
+    /// This function evaluates the specialized case of:
+    ///
+    /// CASE WHEN condition THEN column
+    ///      [ELSE NULL]
+    /// END
+    fn case_column_or_null(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let when_expr = &self.when_then_expr[0].0;
+        let then_expr = &self.when_then_expr[0].1;
+        if let ColumnarValue::Array(bit_mask) = when_expr.evaluate(batch)? {
+            let bit_mask = bit_mask
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .expect("predicate should evaluate to a boolean array");
+            // invert the bitmask
+            let bit_mask = not(bit_mask)?;
+            match then_expr.evaluate(batch)? {
+                ColumnarValue::Array(array) => {
+                    Ok(ColumnarValue::Array(nullif(&array, &bit_mask)?))
+                }
+                ColumnarValue::Scalar(_) => Err(DataFusionError::Execution(
+                    "expression did not evaluate to an array".to_string(),
+                )),
+            }
+        } else {
+            Err(DataFusionError::Execution(
+                "predicate did not evaluate to an array".to_string(),
+            ))
+        }
+    }
 }
 
 impl PhysicalExpr for CaseExpr {
@@ -303,14 +366,21 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        if self.expr.is_some() {
-            // this use case evaluates "expr" and then compares the values with the "when"
-            // values
-            self.case_when_with_expr(batch)
-        } else {
-            // The "when" conditions all evaluate to boolean in this use case and can be
-            // arbitrary expressions
-            self.case_when_no_expr(batch)
+        match self.eval_method {
+            EvalMethod::CaseWithExpression => {
+                // this use case evaluates "expr" and then compares the values with the "when"
+                // values
+                self.case_when_with_expr(batch)
+            }
+            EvalMethod::CaseNoExpression => {
+                // The "when" conditions all evaluate to boolean in this use case and can be
+                // arbitrary expressions
+                self.case_when_no_expr(batch)
+            }
+            EvalMethod::CaseColumnOrNull => {
+                // Specialization for CASE WHEN expr THEN column [ELSE NULL] END
+                self.case_column_or_null(batch)
+            }
         }
     }
 
@@ -409,7 +479,7 @@ pub fn case(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{binary, cast, col, lit};
+    use crate::expressions::{binary, cast, col, lit, BinaryExpr};
 
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
@@ -419,6 +489,7 @@ mod tests {
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
+    use datafusion_physical_expr_common::expressions::Literal;
 
     #[test]
     fn case_with_expr() -> Result<()> {
@@ -996,6 +1067,53 @@ mod tests {
         assert!(expr2.eq(&expr3));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_column_or_null_specialization() -> Result<()> {
+        // create input data
+        let mut c1 = Int32Builder::new();
+        let mut c2 = StringBuilder::new();
+        for i in 0..1000 {
+            c1.append_value(i);
+            if i % 7 == 0 {
+                c2.append_null();
+            } else {
+                c2.append_value(&format!("string {i}"));
+            }
+        }
+        let c1 = Arc::new(c1.finish());
+        let c2 = Arc::new(c2.finish());
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Utf8, true),
+        ]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![c1, c2]).unwrap();
+
+        // CaseWhenExprOrNull should produce same results as CaseExpr
+        let predicate = Arc::new(BinaryExpr::new(
+            make_col("c1", 0),
+            Operator::LtEq,
+            make_lit_i32(250),
+        ));
+        let expr = CaseExpr::try_new(None, vec![(predicate, make_col("c2", 1))], None)?;
+        assert!(matches!(expr.eval_method, EvalMethod::CaseColumnOrNull));
+        match expr.evaluate(&batch)? {
+            ColumnarValue::Array(array) => {
+                assert_eq!(1000, array.len());
+                assert_eq!(785, array.null_count());
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    fn make_col(name: &str, index: usize) -> Arc<dyn PhysicalExpr> {
+        Arc::new(Column::new(name, index))
+    }
+
+    fn make_lit_i32(n: i32) -> Arc<dyn PhysicalExpr> {
+        Arc::new(Literal::new(ScalarValue::Int32(Some(n))))
     }
 
     fn generate_case_when_with_type_coercion(
