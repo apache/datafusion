@@ -233,6 +233,14 @@ impl CsvFormat {
         self
     }
 
+    /// Set true to ensure that newlines in (quoted) values are supported.
+    /// Note that setting this may reduce performance as large file scans will not be repartitioned.
+    /// - default is None
+    pub fn with_newlines_in_values(mut self, newlines_in_values: bool) -> Self {
+        self.options.newlines_in_values = Some(newlines_in_values);
+        self
+    }
+
     /// Set a `FileCompressionType` of CSV
     /// - defaults to `FileCompressionType::UNCOMPRESSED`
     pub fn with_file_compression_type(
@@ -330,6 +338,9 @@ impl FileFormat for CsvFormat {
             self.options.quote,
             self.options.escape,
             self.options.comment,
+            self.options
+                .newlines_in_values
+                .unwrap_or(state.config_options().catalog.newlines_in_values),
             self.options.compression.into(),
         );
         Ok(Arc::new(exec))
@@ -1048,6 +1059,41 @@ mod tests {
             "+--------------+"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(1, actual_partitions); // Compressed csv won't be scanned in parallel
+
+        Ok(())
+    }
+
+    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
+    #[tokio::test]
+    async fn test_csv_parallel_newlines_in_values(n_partitions: usize) -> Result<()> {
+        let config = SessionConfig::new()
+            .with_repartition_file_scans(true)
+            .with_repartition_file_min_size(0)
+            .with_target_partitions(n_partitions);
+        let csv_options = CsvReadOptions::default()
+            .has_header(true)
+            .newlines_in_values(true);
+        let ctx = SessionContext::new_with_config(config);
+        let testdata = arrow_test_data();
+        ctx.register_csv(
+            "aggr",
+            &format!("{testdata}/csv/aggregate_test_100.csv"),
+            csv_options,
+        )
+        .await?;
+
+        let query = "select sum(c3) from aggr;";
+        let query_result = ctx.sql(query).await?.collect().await?;
+        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
+
+        #[rustfmt::skip]
+        let expected = ["+--------------+",
+            "| sum(aggr.c3) |",
+            "+--------------+",
+            "| 781          |",
+            "+--------------+"];
+        assert_batches_eq!(expected, &query_result);
+        assert_eq!(1, actual_partitions); // csv won't be scanned in parallel when newlines_in_values is set
 
         Ok(())
     }
