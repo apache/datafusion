@@ -149,7 +149,7 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     {
         let mut sort = sort.clone();
         let mut inner_p = inner_p.clone();
-        inner_p.expr = p.expr.clone();
+        inner_p.expr.clone_from(&p.expr);
         sort.input = Arc::new(LogicalPlan::Projection(inner_p));
 
         Some(LogicalPlan::Sort(sort))
