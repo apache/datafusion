@@ -1345,8 +1345,8 @@ mod tests {
 
     #[tokio::test]
     // As the hash results might be different on different platforms or
-    // wiht different compilers, we will compare the same execution with
-    // and without droping the output stream.
+    // with different compilers, we will compare the same execution with
+    // and without dropping the output stream.
     async fn hash_repartition_with_dropping_output_stream() {
         let task_ctx = Arc::new(TaskContext::default());
         let partitioning = Partitioning::Hash(
@@ -1357,7 +1357,7 @@ mod tests {
             2,
         );
 
-        // We first collect the results without droping the output stream.
+        // We first collect the results without dropping the output stream.
         let input = Arc::new(make_barrier_exec());
         let exec = RepartitionExec::try_new(
             Arc::clone(&input) as Arc<dyn ExecutionPlan>,

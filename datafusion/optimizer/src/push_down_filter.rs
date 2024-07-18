@@ -1913,7 +1913,7 @@ mod tests {
         assert_optimized_plan_eq(plan, expected)
     }
 
-    /// post-join predicates with columns from both sides are converted to join filterss
+    /// post-join predicates with columns from both sides are converted to join filters
     #[test]
     fn filter_join_on_common_dependent() -> Result<()> {
         let table_scan = test_table_scan()?;

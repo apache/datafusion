@@ -931,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn case_tranform() -> Result<()> {
+    fn case_transform() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
 
         let when1 = lit("foo");

@@ -296,7 +296,7 @@ macro_rules! typed_min_max_batch_string {
     }};
 }
 
-// Statically-typed version of min/max(array) -> ScalarValue for binay types.
+// Statically-typed version of min/max(array) -> ScalarValue for binary types.
 macro_rules! typed_min_max_batch_binary {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
