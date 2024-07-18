@@ -206,7 +206,7 @@ fn test_parse_options_value_normalization() {
                         assert_eq!(Some(&v.to_string()), options.get(*k));
                     });
                 }
-                _ => panic!("Expected Ddl(CreateExternalTable) but got {:?}", plan),
+                _ => panic!("Expected Ddl(CreateExternalTable) or Copy(CopyTo) but got {:?}", plan),
             }
         } else {
             assert_eq!(expected_plan, plan.unwrap_err().strip_backtrace());

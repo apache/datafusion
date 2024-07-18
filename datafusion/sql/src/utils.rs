@@ -265,7 +265,7 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
 
 pub(crate) fn normalize_value(value: &Value) -> Result<String> {
     match value_to_string(value) {
-        Some(s) => Ok(s),
+        Some(s) => Ok(s.to_ascii_lowercase()),
         None => exec_err!("Unsupported value to normalize: {:?}", value),
     }
 }
