@@ -83,7 +83,7 @@ fn less_than_100_join_filter(schema1: Arc<Schema>, _schema2: Arc<Schema>) -> Joi
 }
 
 fn col_lt_col_filter(schema1: Arc<Schema>, schema2: Arc<Schema>) -> JoinFilter {
-    let less_than_100 = Arc::new(BinaryExpr::new(
+    let less_filter = Arc::new(BinaryExpr::new(
         Arc::new(Column::new("x", 1)),
         Operator::Lt,
         Arc::new(Column::new("x", 0)),
@@ -99,11 +99,19 @@ fn col_lt_col_filter(schema1: Arc<Schema>, schema2: Arc<Schema>) -> JoinFilter {
         },
     ];
     let intermediate_schema = Schema::new(vec![
-        schema1.field_with_name("x").unwrap().to_owned(),
-        schema2.field_with_name("x").unwrap().to_owned(),
+        schema1
+            .field_with_name("x")
+            .unwrap()
+            .clone()
+            .with_nullable(true),
+        schema2
+            .field_with_name("x")
+            .unwrap()
+            .clone()
+            .with_nullable(true),
     ]);
 
-    JoinFilter::new(less_than_100, column_indices, intermediate_schema)
+    JoinFilter::new(less_filter, column_indices, intermediate_schema)
 }
 
 #[tokio::test]
@@ -217,6 +225,7 @@ async fn test_semi_join_1k() {
 
 #[tokio::test]
 async fn test_semi_join_1k_filtered() {
+    // NLJ vs HJ gives wrong result
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
@@ -239,17 +248,16 @@ async fn test_anti_join_1k() {
     .await
 }
 
-// Test failed for now. https://github.com/apache/datafusion/issues/10872
-#[ignore]
 #[tokio::test]
 async fn test_anti_join_1k_filtered() {
+    // NLJ vs HJ gives wrong result
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::LeftAnti,
-        Some(Box::new(less_than_100_join_filter)),
+        Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[JoinTestType::HjSmj], false)
     .await
 }
 
@@ -422,11 +430,12 @@ impl JoinFuzzTestCase {
             let session_config = SessionConfig::new().with_batch_size(*batch_size);
             let ctx = SessionContext::new_with_config(session_config);
             let task_ctx = ctx.task_ctx();
-            let smj = self.sort_merge_join();
-            let smj_collected = collect(smj, task_ctx.clone()).await.unwrap();
 
             let hj = self.hash_join();
             let hj_collected = collect(hj, task_ctx.clone()).await.unwrap();
+
+            let smj = self.sort_merge_join();
+            let smj_collected = collect(smj, task_ctx.clone()).await.unwrap();
 
             let nlj = self.nested_loop_join();
             let nlj_collected = collect(nlj, task_ctx.clone()).await.unwrap();
@@ -437,11 +446,12 @@ impl JoinFuzzTestCase {
             let nlj_rows = nlj_collected.iter().fold(0, |acc, b| acc + b.num_rows());
 
             if debug {
-                println!("The debug is ON. Input data will be saved");
                 let fuzz_debug = "fuzz_test_debug";
                 std::fs::remove_dir_all(fuzz_debug).unwrap_or(());
                 std::fs::create_dir_all(fuzz_debug).unwrap();
                 let out_dir_name = &format!("{fuzz_debug}/batch_size_{batch_size}");
+                println!("The debug is ON. Input data will be saved to {out_dir_name}");
+
                 Self::save_partitioned_batches_as_parquet(
                     &self.input1,
                     out_dir_name,
@@ -562,8 +572,7 @@ impl JoinFuzzTestCase {
     ///         Some(Box::new(col_lt_col_filter)),
     ///     )
     ///     .run_test(&[JoinTestType::HjSmj], false)
-    ///     .await
-    /// }
+    ///     .await;
     ///
     ///     let ctx: SessionContext = SessionContext::new();
     ///     let df = ctx
@@ -592,6 +601,7 @@ impl JoinFuzzTestCase {
     ///         )
     ///         .run_test()
     ///         .await
+    /// }
     fn save_partitioned_batches_as_parquet(
         input: &[RecordBatch],
         output_dir: &str,
