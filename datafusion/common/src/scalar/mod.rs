@@ -1773,6 +1773,7 @@ impl ScalarValue {
             }
             DataType::List(_)
             | DataType::LargeList(_)
+            | DataType::Map(_, _)
             | DataType::Struct(_)
             | DataType::Union(_, _) => {
                 let arrays = scalars.map(|s| s.to_array()).collect::<Result<Vec<_>>>()?;
@@ -1841,7 +1842,6 @@ impl ScalarValue {
             | DataType::Time32(TimeUnit::Nanosecond)
             | DataType::Time64(TimeUnit::Second)
             | DataType::Time64(TimeUnit::Millisecond)
-            | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _)
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
