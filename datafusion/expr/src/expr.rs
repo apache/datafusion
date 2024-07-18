@@ -289,9 +289,9 @@ pub enum Expr {
     /// Calls an aggregate function with arguments, and optional
     /// `ORDER BY`, `FILTER`, `DISTINCT` and `NULL TREATMENT`.
     ///
-    /// See also [`AggregateExt`] to set these fields.
+    /// See also [`ExprFunctionExt`] to set these fields.
     ///
-    /// [`AggregateExt`]: crate::udaf::AggregateExt
+    /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),
@@ -641,9 +641,9 @@ impl AggregateFunctionDefinition {
 
 /// Aggregate function
 ///
-/// See also  [`AggregateExt`] to set these fields on `Expr`
+/// See also  [`ExprFunctionExt`] to set these fields on `Expr`
 ///
-/// [`AggregateExt`]: crate::udaf::AggregateExt
+/// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function

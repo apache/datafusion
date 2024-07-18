@@ -60,7 +60,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    Accumulator, AggregateExt, AggregateFunction, AggregateUDF, ColumnarValue,
+    Accumulator, ExprFunctionExt, AggregateFunction, AggregateUDF, ColumnarValue,
     ExprSchemable, Literal, LogicalPlan, Operator, PartitionEvaluator, ScalarUDF,
     Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,

@@ -31,7 +31,7 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateExt, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
+    Accumulator, ExprFunctionExt, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
     TypeSignature, Volatility,
 };
 use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
