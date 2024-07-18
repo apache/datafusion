@@ -1744,11 +1744,18 @@ fn from_substrait_literal(
             )
         }
         Some(LiteralType::List(l)) => {
+            // Each element should start the name index from the same value, then we increase it
+            // once at the end
+            let mut element_name_idx = *name_idx;
             let elements = l
                 .values
                 .iter()
-                .map(|el| from_substrait_literal(el, extensions, dfs_names, name_idx))
+                .map(|el| {
+                    element_name_idx = *name_idx;
+                    from_substrait_literal(el, extensions, dfs_names, &mut element_name_idx)
+                })
                 .collect::<Result<Vec<_>>>()?;
+            *name_idx = element_name_idx;
             if elements.is_empty() {
                 return substrait_err!(
                     "Empty list must be encoded as EmptyList literal type, not List"
@@ -1787,21 +1794,25 @@ fn from_substrait_literal(
             }
         }
         Some(LiteralType::Map(m)) => {
+            // Each entry should start the name index from the same value, then we increase it
+            // once at the end
+            let mut entry_name_idx = *name_idx;
             let entries = m
                 .key_values
                 .iter()
                 .map(|kv| {
+                    entry_name_idx = *name_idx;
                     let key_sv = from_substrait_literal(
                         kv.key.as_ref().unwrap(),
                         extensions,
                         dfs_names,
-                        name_idx,
+                        &mut entry_name_idx,
                     )?;
                     let value_sv = from_substrait_literal(
                         kv.value.as_ref().unwrap(),
                         extensions,
                         dfs_names,
-                        name_idx,
+                        &mut entry_name_idx,
                     )?;
                     ScalarStructBuilder::new()
                         .with_scalar(Field::new("key", key_sv.data_type(), false), key_sv)
@@ -1812,6 +1823,7 @@ fn from_substrait_literal(
                         .build()
                 })
                 .collect::<Result<Vec<_>>>()?;
+            *name_idx = entry_name_idx;
 
             if entries.is_empty() {
                 return substrait_err!(
