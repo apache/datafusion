@@ -587,107 +587,107 @@ Environment variables are read during <code class="docutils literal notranslate"
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.enable_page_index</p></td>
 <td><p>true</p></td>
-<td><p>If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce the I/O and number of rows decoded.</p></td>
+<td><p>(reading) If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce the I/O and number of rows decoded.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.pruning</p></td>
 <td><p>true</p></td>
-<td><p>If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file</p></td>
+<td><p>(reading) If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.skip_metadata</p></td>
 <td><p>true</p></td>
-<td><p>If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata</p></td>
+<td><p>(reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.metadata_size_hint</p></td>
 <td><p>NULL</p></td>
-<td><p>If specified, the parquet reader will try and fetch the last <code class="docutils literal notranslate"><span class="pre">size_hint</span></code> bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer</p></td>
+<td><p>(reading) If specified, the parquet reader will try and fetch the last <code class="docutils literal notranslate"><span class="pre">size_hint</span></code> bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.pushdown_filters</p></td>
 <td><p>false</p></td>
-<td><p>If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded. This optimization is sometimes called “late materialization”.</p></td>
+<td><p>(reading) If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded. This optimization is sometimes called “late materialization”.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.reorder_filters</p></td>
 <td><p>false</p></td>
-<td><p>If true, filter expressions evaluated during the parquet decoding operation will be reordered heuristically to minimize the cost of evaluation. If false, the filters are applied in the same order as written in the query</p></td>
+<td><p>(reading) If true, filter expressions evaluated during the parquet decoding operation will be reordered heuristically to minimize the cost of evaluation. If false, the filters are applied in the same order as written in the query</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.data_pagesize_limit</p></td>
 <td><p>1048576</p></td>
-<td><p>Sets best effort maximum size of data page in bytes</p></td>
+<td><p>(writing) Sets best effort maximum size of data page in bytes</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.write_batch_size</p></td>
 <td><p>1024</p></td>
-<td><p>Sets write_batch_size in bytes</p></td>
+<td><p>(writing) Sets write_batch_size in bytes</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.writer_version</p></td>
 <td><p>1.0</p></td>
-<td><p>Sets parquet writer version valid values are “1.0” and “2.0”</p></td>
+<td><p>(writing) Sets parquet writer version valid values are “1.0” and “2.0”</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.compression</p></td>
 <td><p>zstd(3)</p></td>
-<td><p>Sets default parquet compression codec Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting</p></td>
+<td><p>(writing) Sets default parquet compression codec. Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.dictionary_enabled</p></td>
 <td><p>NULL</p></td>
-<td><p>Sets if dictionary encoding is enabled. If NULL, uses default parquet writer setting</p></td>
+<td><p>(writing) Sets if dictionary encoding is enabled. If NULL, uses default parquet writer setting</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.dictionary_page_size_limit</p></td>
 <td><p>1048576</p></td>
-<td><p>Sets best effort maximum dictionary page size, in bytes</p></td>
+<td><p>(writing) Sets best effort maximum dictionary page size, in bytes</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.statistics_enabled</p></td>
 <td><p>NULL</p></td>
-<td><p>Sets if statistics are enabled for any column Valid values are: “none”, “chunk”, and “page” These values are not case sensitive. If NULL, uses default parquet writer setting</p></td>
+<td><p>(writing) Sets if statistics are enabled for any column Valid values are: “none”, “chunk”, and “page” These values are not case sensitive. If NULL, uses default parquet writer setting</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.max_statistics_size</p></td>
 <td><p>NULL</p></td>
-<td><p>Sets max statistics size for any column. If NULL, uses default parquet writer setting</p></td>
+<td><p>(writing) Sets max statistics size for any column. If NULL, uses default parquet writer setting</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.max_row_group_size</p></td>
 <td><p>1048576</p></td>
-<td><p>Target maximum number of rows in each row group (defaults to 1M rows). Writing larger row groups requires more memory to write, but can get better compression and be faster to read.</p></td>
+<td><p>(writing) Target maximum number of rows in each row group (defaults to 1M rows). Writing larger row groups requires more memory to write, but can get better compression and be faster to read.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.created_by</p></td>
 <td><p>datafusion version 40.0.0</p></td>
-<td><p>Sets “created by” property</p></td>
+<td><p>(writing) Sets “created by” property</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.column_index_truncate_length</p></td>
 <td><p>NULL</p></td>
-<td><p>Sets column index truncate length</p></td>
+<td><p>(writing) Sets column index truncate length</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.data_page_row_count_limit</p></td>
 <td><p>18446744073709551615</p></td>
-<td><p>Sets best effort maximum number of rows in data page</p></td>
+<td><p>(writing) Sets best effort maximum number of rows in data page</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.encoding</p></td>
 <td><p>NULL</p></td>
-<td><p>Sets default encoding for any column Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting</p></td>
+<td><p>(writing) Sets default encoding for any column. Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.bloom_filter_on_read</p></td>
 <td><p>true</p></td>
-<td><p>Use any available bloom filters when reading parquet files</p></td>
+<td><p>(writing) Use any available bloom filters when reading parquet files</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.bloom_filter_on_write</p></td>
 <td><p>false</p></td>
-<td><p>Write bloom filters for all columns when creating parquet files</p></td>
+<td><p>(writing) Write bloom filters for all columns when creating parquet files</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.bloom_filter_fpp</p></td>
 <td><p>NULL</p></td>
-<td><p>Sets bloom filter false positive probability. If NULL, uses default parquet writer setting</p></td>
+<td><p>(writing) Sets bloom filter false positive probability. If NULL, uses default parquet writer setting</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.bloom_filter_ndv</p></td>
 <td><p>NULL</p></td>
-<td><p>Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting</p></td>
+<td><p>(writing) Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.allow_single_file_parallelism</p></td>
 <td><p>true</p></td>
-<td><p>Controls whether DataFusion will attempt to speed up writing parquet files by serializing them in parallel. Each column in each row group in each output file are serialized in parallel leveraging a maximum possible core count of n_files<em>n_row_groups</em>n_columns.</p></td>
+<td><p>(writing) Controls whether DataFusion will attempt to speed up writing parquet files by serializing them in parallel. Each column in each row group in each output file are serialized in parallel leveraging a maximum possible core count of n_files<em>n_row_groups</em>n_columns.</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.maximum_parallel_row_group_writers</p></td>
 <td><p>1</p></td>
-<td><p>By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.</p></td>
+<td><p>(writing) By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.maximum_buffered_record_batches_per_stream</p></td>
 <td><p>2</p></td>
-<td><p>By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.</p></td>
+<td><p>(writing) By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.aggregate.scalar_update_factor</p></td>
 <td><p>10</p></td>
@@ -899,7 +899,7 @@ Environment variables are read during <code class="docutils literal notranslate"
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.4.4.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.4.5.<br>
 </p>
     </div>
     
