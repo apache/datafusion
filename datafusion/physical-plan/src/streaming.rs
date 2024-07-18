@@ -80,7 +80,7 @@ impl StreamingTableExec {
             if !schema.eq(partition_schema) {
                 debug!(
                     "Target schema does not match with partition schema. \
-                        Target_schema: {schema:?}. Partiton Schema: {partition_schema:?}"
+                        Target_schema: {schema:?}. Partition Schema: {partition_schema:?}"
                 );
                 return plan_err!("Mismatch between schema and batches");
             }

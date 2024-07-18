@@ -634,7 +634,7 @@ struct SMJStream {
     pub buffered: SendableRecordBatchStream,
     /// Current processing record batch of streamed
     pub streamed_batch: StreamedBatch,
-    /// Currrent buffered data
+    /// Current buffered data
     pub buffered_data: BufferedData,
     /// (used in outer join) Is current streamed row joined at least once?
     pub streamed_joined: bool,

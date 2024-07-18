@@ -412,14 +412,14 @@ impl LogicalPlanBuilder {
 
     /// Add missing sort columns to all downstream projection
     ///
-    /// Thus, if you have a LogialPlan that selects A and B and have
+    /// Thus, if you have a LogicalPlan that selects A and B and have
     /// not requested a sort by C, this code will add C recursively to
     /// all input projections.
     ///
     /// Adding a new column is not correct if there is a `Distinct`
     /// node, which produces only distinct values of its
     /// inputs. Adding a new column to its input will result in
-    /// potententially different results than with the original column.
+    /// potentially different results than with the original column.
     ///
     /// For example, if the input is like:
     ///
@@ -1763,7 +1763,7 @@ mod tests {
         .unwrap();
         assert_eq!(&expected, plan.schema().as_ref());
 
-        // Note scan of "EMPLOYEE_CSV" is treated as a SQL identifer
+        // Note scan of "EMPLOYEE_CSV" is treated as a SQL identifier
         // (and thus normalized to "employee"csv") as well
         let projection = None;
         let plan =
