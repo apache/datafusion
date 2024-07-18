@@ -602,3 +602,48 @@ physical_plan
 09)--ProjectionExec: expr=[1 as count, MAX(Int64(10))@0 as n]
 10)----AggregateExec: mode=Single, gby=[], aggr=[MAX(Int64(10))]
 11)------PlaceholderRowExec
+
+
+# Test issue: https://github.com/apache/datafusion/issues/11409
+statement ok
+CREATE TABLE t1(v0 BIGINT, v1 BIGINT, v2 BIGINT, v3 BOOLEAN);
+
+statement ok
+CREATE TABLE t2(v0 DOUBLE);
+
+query I
+INSERT INTO t1(v0, v2, v1) VALUES (-1229445667, -342312412, -1507138076);
+----
+1
+
+query I
+INSERT INTO t1(v0, v1) VALUES (1541512604, -1229445667);
+----
+1
+
+query I
+INSERT INTO t1(v1, v3, v0, v2) VALUES (-1020641465, false, -1493773377, 1751276473);
+----
+1
+
+query I
+INSERT INTO t1(v3) VALUES (true), (true), (false);
+----
+3
+
+query I
+INSERT INTO t2(v0) VALUES (0.28014577292925047);
+----
+1
+
+query II
+SELECT t1.v2, t1.v0 FROM t2 NATURAL JOIN t1
+    UNION ALL
+SELECT t1.v2, t1.v0 FROM t2 NATURAL JOIN t1 WHERE (t1.v2 IS NULL);
+----
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;

@@ -431,7 +431,12 @@ impl ExecutionPlan for InterleaveExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(InterleaveExec::try_new(children)?))
+        // New children may not be able to interleave; in that case, we fall back to UnionExec.
+        if !can_interleave(children.iter()) {
+            Ok(Arc::new(UnionExec::new(children)))
+        } else {
+            Ok(Arc::new(InterleaveExec::try_new(children)?))
+        }
     }
 
     fn execute(
