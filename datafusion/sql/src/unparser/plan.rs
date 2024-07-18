@@ -29,6 +29,7 @@ use super::{
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
     rewrite::normalize_union_schema,
+    rewrite::rewrite_plan_for_sort_on_non_projected_fields,
     utils::{find_agg_node_within_select, unproject_window_exprs, AggVariant},
     Unparser,
 };
@@ -214,12 +215,12 @@ impl Unparser<'_> {
         } else {
             let mut derived_builder = DerivedRelationBuilder::default();
             derived_builder.lateral(false).alias(None).subquery({
-                let inner_statment = self.plan_to_sql(plan)?;
-                if let ast::Statement::Query(inner_query) = inner_statment {
+                let inner_statement = self.plan_to_sql(plan)?;
+                if let ast::Statement::Query(inner_query) = inner_statement {
                     inner_query
                 } else {
                     return internal_err!(
-                        "Subquery must be a Query, but found {inner_statment:?}"
+                        "Subquery must be a Query, but found {inner_statement:?}"
                     );
                 }
             });
@@ -256,7 +257,11 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::Projection(p) => {
-                self.projection_to_sql(plan, p, query, select, relation)
+                if let Some(new_plan) = rewrite_plan_for_sort_on_non_projected_fields(p) {
+                    self.select_to_sql_recursively(&new_plan, query, select, relation)
+                } else {
+                    self.projection_to_sql(plan, p, query, select, relation)
+                }
             }
             LogicalPlan::Filter(filter) => {
                 if let Some(AggVariant::Aggregate(agg)) =

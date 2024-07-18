@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeIterator},
     Result,
 };
-use datafusion_expr::{Expr, LogicalPlan, Sort};
+use datafusion_expr::{Expr, LogicalPlan, Projection, Sort};
 
 /// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
 ///
@@ -98,4 +98,43 @@ fn rewrite_sort_expr_for_union(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
         .data()?;
 
     Ok(sort_exprs)
+}
+
+pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
+    p: &Projection,
+) -> Option<LogicalPlan> {
+    let mut collects = vec![];
+
+    for expr in p.expr.clone() {
+        collects.push(expr.clone());
+    }
+
+    let LogicalPlan::Sort(sort) = p.input.as_ref() else {
+        return None;
+    };
+
+    let LogicalPlan::Projection(inner_p) = sort.input.as_ref() else {
+        return None;
+    };
+
+    let inner_exprs = inner_p.expr.clone();
+
+    for expr in &sort.expr {
+        if let Expr::Sort(s) = expr {
+            collects.push(s.expr.as_ref().clone());
+        }
+    }
+
+    if collects.iter().collect::<HashSet<_>>()
+        == inner_exprs.iter().collect::<HashSet<_>>()
+    {
+        let mut sort = sort.clone();
+        let mut inner_p = inner_p.clone();
+        inner_p.expr = p.expr.clone();
+        sort.input = Arc::new(LogicalPlan::Projection(inner_p));
+
+        Some(LogicalPlan::Sort(sort))
+    } else {
+        None
+    }
 }
