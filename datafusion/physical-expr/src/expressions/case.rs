@@ -33,6 +33,7 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarV
 use datafusion_expr::ColumnarValue;
 
 use datafusion_physical_expr_common::expressions::column::Column;
+use datafusion_physical_expr_common::expressions::Literal;
 use itertools::Itertools;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
@@ -107,6 +108,16 @@ impl CaseExpr {
         when_then_expr: Vec<WhenThen>,
         else_expr: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
+        // normalize null literals to None in the else_expr (this already happens
+        // during SQL planning, but not necessarily for other use cases)
+        let else_expr = match &else_expr {
+            Some(e) => match e.as_any().downcast_ref::<Literal>() {
+                Some(lit) if lit.value().is_null() => None,
+                _ => else_expr,
+            },
+            _ => else_expr,
+        };
+
         if when_then_expr.is_empty() {
             exec_err!("There must be at least one WHEN clause")
         } else {
