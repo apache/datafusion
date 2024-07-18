@@ -131,14 +131,18 @@ SELECT MAKE_MAP([1,2], ['a', 'b'], [3,4], ['b']);
 ----
 {[1, 2]: [a, b], [3, 4]: [b]}
 
-query error DataFusion error: Error during planning: All arguments must have the same type
+query ?
 SELECT MAKE_MAP('POST', 41, 'HEAD', 'ab', 'PATCH', 30);
+----
+{POST: 41, HEAD: ab, PATCH: 30}
 
 query error
 SELECT MAKE_MAP('POST', 41, 'HEAD', 33, null, 30);
 
-query error DataFusion error: Error during planning: All arguments must have the same type
-SELECT MAKE_MAP('POST', 41, 123, 33,'PATCH', 30);
+query ?
+SELECT MAKE_MAP('POST', 41, 'HEAD', 'ab', 'PATCH', 30);
+----
+{POST: 41, HEAD: ab, PATCH: 30}
 
 query ?
 SELECT MAKE_MAP()

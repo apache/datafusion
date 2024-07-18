@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarUDFImpl`] definitions for `make_array` and `make_array_strict` function.
+//! [`ScalarUDFImpl`] definitions for `make_array` function.
 
 use std::{any::Any, sync::Arc};
 
@@ -39,13 +39,6 @@ make_udf_expr_and_func!(
     make_array,
     "Returns an Arrow array using the specified input expressions.",
     make_array_udf
-);
-
-make_udf_expr_and_func!(
-    MakeArrayStrict,
-    make_array_strict,
-    "Returns an Arrow array using the specified input expressions without type coercion.",
-    make_array_strict_udf
 );
 
 #[derive(Debug)]
@@ -135,77 +128,6 @@ impl ScalarUDFImpl for MakeArray {
             },
         )?;
         Ok(vec![new_type; arg_types.len()])
-    }
-}
-
-#[derive(Debug)]
-pub struct MakeArrayStrict {
-    signature: Signature,
-}
-
-impl Default for MakeArrayStrict {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl MakeArrayStrict {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::one_of(
-                vec![TypeSignature::VariadicAny, TypeSignature::Any(0)],
-                Volatility::Immutable,
-            ),
-        }
-    }
-}
-
-impl ScalarUDFImpl for MakeArrayStrict {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "make_array_strict"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.len() {
-            0 => Ok(empty_array_type()),
-            _ => {
-                let mut expr_type = DataType::Null;
-                for arg_type in arg_types {
-                    if !arg_type.equals_datatype(&DataType::Null) {
-                        expr_type = arg_type.clone();
-                        break;
-                    }
-                }
-
-                if arg_types.iter().any(|arg_type| {
-                    arg_type != &expr_type && !arg_type.equals_datatype(&DataType::Null)
-                }) {
-                    return plan_err!("All arguments must have the same type");
-                }
-
-                if expr_type.is_null() {
-                    expr_type = DataType::Int64;
-                }
-
-                Ok(List(Arc::new(Field::new("item", expr_type, true))))
-            }
-        }
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(args)
-    }
-
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(&[])
     }
 }
 

@@ -26,7 +26,6 @@ use datafusion_expr::{
 use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 
-use crate::make_array::make_array_strict;
 use crate::{
     array_has::array_has_all,
     expr_fn::{array_append, array_concat, array_prepend},
@@ -107,8 +106,8 @@ impl ExprPlanner for ArrayFunctionPlanner {
 
         let (keys, values): (Vec<_>, Vec<_>) =
             args.into_iter().enumerate().partition(|(i, _)| i % 2 == 0);
-        let keys = make_array_strict(keys.into_iter().map(|(_, e)| e).collect());
-        let values = make_array_strict(values.into_iter().map(|(_, e)| e).collect());
+        let keys = make_array(keys.into_iter().map(|(_, e)| e).collect());
+        let values = make_array(values.into_iter().map(|(_, e)| e).collect());
 
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(
