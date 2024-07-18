@@ -167,7 +167,7 @@ physical_plan
 statement ok
 CREATE TABLE table_with_necessary_quoting (
   int_col INT,
-  string_col TEXT,
+  string_col TEXT
 ) AS VALUES
 (1, 'e|e|e'),
 (2, 'f|f|f'),

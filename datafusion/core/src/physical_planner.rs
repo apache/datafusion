@@ -38,7 +38,6 @@ use crate::logical_expr::{
 };
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
-use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::empty::EmptyExec;
@@ -91,6 +90,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};

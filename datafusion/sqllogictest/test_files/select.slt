@@ -101,7 +101,7 @@ statement ok
 CREATE TABLE test (
   c1 BIGINT NOT NULL,
   c2 BIGINT NOT NULL,
-  c3 BOOLEAN NOT NULL,
+  c3 BOOLEAN NOT NULL
 ) AS VALUES (0, 1, false),
 (0, 10, true),
 (0, 2, true),
@@ -336,13 +336,13 @@ three 1
 NULL 1
 
 # select_values_list
-statement error DataFusion error: SQL error: ParserError\("Expected \(, found: EOF"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: \(, found: EOF"\)
 VALUES
 
-statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
 VALUES ()
 
-statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
 VALUES (1),()
 
 statement error DataFusion error: Error during planning: Inconsistent data length across values list: got 2 values in row 1 but expected 1

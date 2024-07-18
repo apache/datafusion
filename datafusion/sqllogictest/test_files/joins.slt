@@ -3844,7 +3844,7 @@ EXPLAIN SELECT * FROM (
 ----
 logical_plan EmptyRelation
 
-# Left ANTI join with empty right table 
+# Left ANTI join with empty right table
 query TT
 EXPLAIN SELECT * FROM (
 	SELECT 1 as a
@@ -3855,7 +3855,7 @@ logical_plan
 02)--Projection: Int64(1) AS a
 03)----EmptyRelation
 
-# Right ANTI join with empty left table 
+# Right ANTI join with empty left table
 query TT
 EXPLAIN SELECT * FROM (
 	SELECT 1 as a WHERE 1=0
@@ -4043,4 +4043,3 @@ physical_plan
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
 05)------MemoryExec: partitions=1, partition_sizes=[1]
-

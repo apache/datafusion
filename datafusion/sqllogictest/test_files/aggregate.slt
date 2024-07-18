@@ -3643,7 +3643,7 @@ create table bool_aggregate_functions (
   c5 boolean,
   c6 boolean,
   c7 boolean,
-  c8 boolean,
+  c8 boolean
 )
 as values
   (true, true, false, false, true, true, null, null),

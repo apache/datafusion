@@ -941,11 +941,11 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
 
 /// Saves whatever is passed to it as a scalar function
 #[derive(Debug, Default)]
-struct RecordingFunctonFactory {
+struct RecordingFunctionFactory {
     calls: Mutex<Vec<CreateFunction>>,
 }
 
-impl RecordingFunctonFactory {
+impl RecordingFunctionFactory {
     fn new() -> Self {
         Self::default()
     }
@@ -957,7 +957,7 @@ impl RecordingFunctonFactory {
 }
 
 #[async_trait::async_trait]
-impl FunctionFactory for RecordingFunctonFactory {
+impl FunctionFactory for RecordingFunctionFactory {
     async fn create(
         &self,
         _state: &SessionState,
@@ -972,7 +972,7 @@ impl FunctionFactory for RecordingFunctonFactory {
 
 #[tokio::test]
 async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<()> {
-    let function_factory = Arc::new(RecordingFunctonFactory::new());
+    let function_factory = Arc::new(RecordingFunctionFactory::new());
     let ctx = SessionContext::new().with_function_factory(function_factory.clone());
 
     let sql = r#"
