@@ -229,8 +229,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // user-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
-            let args = self.function_args_to_expr(args, schema, planner_context)?;
-            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));
+            let argss =
+                self.function_args_to_expr(args.clone(), schema, planner_context)?;
+
+            // TODO: ExprPlanner
+            if name == "map" {
+                let mut final_args = vec![];
+                for args in argss {
+                    if let Expr::ScalarFunction(fun) = args {
+                        final_args.extend_from_slice(&fun.args)
+                    }
+                }
+                return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                    fm, final_args,
+                )));
+            }
+
+            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, argss)));
         }
 
         // Build Unnest expression

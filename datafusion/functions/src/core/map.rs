@@ -75,31 +75,29 @@ fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     make_map_batch_internal(key, value, can_evaluate_to_const)
 }
 
+fn get_scalar_from_col(c: &ColumnarValue) -> ScalarValue {
+    match c {
+        ColumnarValue::Scalar(s) => s.clone(),
+        _ => todo!(""),
+    }
+}
+
 fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
+    if args.len() % 2 != 0 {
         return exec_err!(
             "make_map requires exactly 2 arguments, got {} instead",
             args.len()
         );
     }
 
+    let len = args.len() / 2;
+    let key_iter = args[0..len].into_iter().map(get_scalar_from_col);
+    let key = ScalarValue::iter_to_array(key_iter)?;
+    let val_iter = args[len..].into_iter().map(get_scalar_from_col);
+    let value = ScalarValue::iter_to_array(val_iter)?;
+
     let can_evaluate_to_const = can_evaluate_to_const(args);
-
-    let key = get_first_array_ref(&args[0])?;
-    let value = get_first_array_ref(&args[1])?;
     make_map_batch_internal(key, value, can_evaluate_to_const)
-}
-
-fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
-    match columnar_value {
-        ColumnarValue::Scalar(value) => match value {
-            ScalarValue::List(array) => Ok(array.value(0)),
-            ScalarValue::LargeList(array) => Ok(array.value(0)),
-            ScalarValue::FixedSizeList(array) => Ok(array.value(0)),
-            _ => exec_err!("Expected array, got {:?}", value),
-        },
-        ColumnarValue::Array(array) => exec_err!("Expected scalar, got {:?}", array),
-    }
 }
 
 fn make_map_batch_internal(
@@ -302,17 +300,13 @@ impl ScalarUDFImpl for MapFunc {
                 arg_types.len()
             );
         }
+
+        let key_type = &arg_types[0];
+        let val_type = arg_types.last().unwrap();
+
         let mut builder = SchemaBuilder::new();
-        builder.push(Field::new(
-            "key",
-            get_element_type(&arg_types[0])?.clone(),
-            false,
-        ));
-        builder.push(Field::new(
-            "value",
-            get_element_type(&arg_types[1])?.clone(),
-            true,
-        ));
+        builder.push(Field::new("key", key_type.clone(), false));
+        builder.push(Field::new("value", val_type.clone(), true));
         let fields = builder.finish().fields;
         Ok(DataType::Map(
             Arc::new(Field::new("entries", DataType::Struct(fields), false)),
