@@ -249,7 +249,7 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        return self.expr_planners.as_ref();
+        &self.expr_planners
     }
 }
 
