@@ -173,6 +173,13 @@ pub trait ExprPlanner: Send + Sync {
     fn plan_overlay(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
+
+    /// Plan a make_map expression, e.g., `make_map(key1, value1, key2, value2, ...)`
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_make_map(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
 }
 
 /// An operator with two arguments to plan
