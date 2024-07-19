@@ -368,18 +368,12 @@ datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g.
 
 
 # show empty verbose
-query error
+statement error DataFusion error: Error during planning: '' is not a variable which can be viewed with 'SHOW'
 SHOW VERBOSE
-----
-DataFusion error: Error during planning: '' is not a variable which can be viewed with 'SHOW'
-
 
 # show nonsense verbose
-query error
+statement error DataFusion error: Error during planning: 'nonsense' is not a variable which can be viewed with 'SHOW'
 SHOW NONSENSE VERBOSE
-----
-DataFusion error: Error during planning: 'nonsense' is not a variable which can be viewed with 'SHOW'
-
 
 # information_schema_describe_table
 
