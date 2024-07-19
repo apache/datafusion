@@ -151,13 +151,15 @@ fn extract_limit(plan: Arc<dyn ExecutionPlan>) -> Option<GlobalOrLocal> {
             global_limit.skip(),
             global_limit.fetch(),
         )))
-    } else if let Some(local_limit) = plan.as_any().downcast_ref::<LocalLimitExec>() {
-        Some(GlobalOrLocal::Local(LocalLimitExec::new(
-            local_limit.input().clone(),
-            local_limit.fetch(),
-        )))
     } else {
-        None
+        plan.as_any()
+            .downcast_ref::<LocalLimitExec>()
+            .map(|local_limit| {
+                GlobalOrLocal::Local(LocalLimitExec::new(
+                    local_limit.input().clone(),
+                    local_limit.fetch(),
+                ))
+            })
     }
 }
 
