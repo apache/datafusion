@@ -799,39 +799,42 @@ impl ExprFuncBuilder {
 
         Ok(fun_expr)
     }
+}
+
+impl ExprFunctionExt for ExprFuncBuilder {
 
     /// Add `ORDER BY <order_by>`
     ///
     /// Note: `order_by` must be [`Expr::Sort`]
-    pub fn order_by(mut self, order_by: Vec<Expr>) -> ExprFuncBuilder {
+    fn order_by(mut self, order_by: Vec<Expr>) -> ExprFuncBuilder {
         self.order_by = Some(order_by);
         self
     }
 
     /// Add `FILTER <filter>`
-    pub fn filter(mut self, filter: Expr) -> ExprFuncBuilder {
+    fn filter(mut self, filter: Expr) -> ExprFuncBuilder {
         self.filter = Some(filter);
         self
     }
 
     /// Add `DISTINCT`
-    pub fn distinct(mut self) -> ExprFuncBuilder {
+    fn distinct(mut self) -> ExprFuncBuilder {
         self.distinct = true;
         self
     }
 
     /// Add `RESPECT NULLS` or `IGNORE NULLS`
-    pub fn null_treatment(mut self, null_treatment: impl Into<Option<NullTreatment>>) -> ExprFuncBuilder {
+    fn null_treatment(mut self, null_treatment: impl Into<Option<NullTreatment>>) -> ExprFuncBuilder {
         self.null_treatment = null_treatment.into();
         self
     }
 
-    pub fn partition_by(mut self, partition_by: Vec<Expr>) -> ExprFuncBuilder {
+    fn partition_by(mut self, partition_by: Vec<Expr>) -> ExprFuncBuilder {
         self.partition_by = Some(partition_by);
         self
     }
     
-    pub fn window_frame(mut self, window_frame: WindowFrame) -> ExprFuncBuilder {
+    fn window_frame(mut self, window_frame: WindowFrame) -> ExprFuncBuilder {
         self.window_frame = Some(window_frame);
         self
     }
