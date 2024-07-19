@@ -419,14 +419,14 @@ config_namespace! {
         // and map to parquet::file::properties::WriterProperties
 
         /// (writing) Sets best effort maximum size of data page in bytes
-        pub data_pagesize_limit: usize, default = 1024 * 1024
+        pub data_pagesize_limit: usize, default = parquet_defaults::DEFAULT_PAGE_SIZE
 
         /// (writing) Sets write_batch_size in bytes
-        pub write_batch_size: usize, default = 1024
+        pub write_batch_size: usize, default = parquet_defaults::DEFAULT_WRITE_BATCH_SIZE
 
         /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
-        pub writer_version: String, default = "1.0".into()
+        pub writer_version: String, default = parquet_defaults::DEFAULT_WRITER_VERSION.to_string()
 
         /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
@@ -440,7 +440,7 @@ config_namespace! {
         pub dictionary_enabled: Option<bool>, default = None
 
         /// (writing) Sets best effort maximum dictionary page size, in bytes
-        pub dictionary_page_size_limit: usize, default = 1024 * 1024
+        pub dictionary_page_size_limit: usize, default = parquet_defaults::DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT
 
         /// (writing) Sets if statistics are enabled for any column
         /// Valid values are: "none", "chunk", and "page"
@@ -455,7 +455,7 @@ config_namespace! {
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
         /// can get better compression and be faster to read.
-        pub max_row_group_size: usize, default = 1024 * 1024
+        pub max_row_group_size: usize, default = parquet_defaults::DEFAULT_MAX_ROW_GROUP_SIZE
 
         /// (writing) Sets "created by" property
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
