@@ -240,6 +240,35 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
+        // more tests around subquery/derived table roundtrip
+        TestStatementWithDialect {
+            sql: "SELECT string_count FROM (
+                    SELECT
+                        j1_id,
+                        MIN(j2_string)
+                    FROM
+                        j1 LEFT OUTER JOIN j2 ON
+                                    j1_id = j2_id
+                    GROUP BY
+                        j1_id
+                ) AS agg (id, string_count)
+            ",
+            expected: r#"SELECT agg.string_count FROM (SELECT j1.j1_id, MIN(j2.j2_string) FROM j1 LEFT JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT j1_id from j1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT j1_id as id from j1) AS c",
+            expected: r#"SELECT c.id FROM (SELECT j1.j1_id AS id FROM j1) AS c"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
     ];
 
     for query in tests {
