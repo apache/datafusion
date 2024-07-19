@@ -305,7 +305,7 @@ fn _regexp_replace_early_abort<T: ArrayAccessor>(
 /// then calls the given early abort function.
 macro_rules! fetch_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident, $ARRAY_SIZE:expr) => {{
-        let array = as_generic_string_array::<T>($ARG)?;
+        let array = as_generic_string_array::<$T>($ARG)?;
         if array.len() == 0 || array.is_null(0) {
             return $EARLY_ABORT(array, $ARRAY_SIZE);
         } else {
@@ -326,20 +326,20 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     let pattern = fetch_string_arg!(
         &args[1],
         "pattern",
-        T,
+        i32,
         _regexp_replace_early_abort,
         array_size
     );
     let replacement = fetch_string_arg!(
         &args[2],
         "replacement",
-        T,
+        i32,
         _regexp_replace_early_abort,
         array_size
     );
     let flags = match args.len() {
         3 => None,
-        4 => Some(fetch_string_arg!(&args[3], "flags", T, _regexp_replace_early_abort, array_size)),
+        4 => Some(fetch_string_arg!(&args[3], "flags", i32, _regexp_replace_early_abort, array_size)),
         other => {
             return exec_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
@@ -507,7 +507,7 @@ mod tests {
     use super::*;
 
     macro_rules! static_pattern_regexp_replace {
-        ($name:ident, $T:ty) => {
+        ($name:ident, $T:ty, $O:ty) => {
             #[test]
             fn $name() {
                 let values = vec!["abc", "acd", "abcd1234567890123", "123456789012abc"];
@@ -521,7 +521,7 @@ mod tests {
                 let replacements = StringArray::from(replacement);
                 let expected = <$T>::from(expected);
 
-                let re = _regexp_replace_static_pattern_replace::<i32>(&[
+                let re = _regexp_replace_static_pattern_replace::<$O>(&[
                     Arc::new(values),
                     Arc::new(patterns),
                     Arc::new(replacements),
@@ -533,12 +533,12 @@ mod tests {
         };
     }
 
-    static_pattern_regexp_replace!(string_array, StringArray);
-    static_pattern_regexp_replace!(string_view_array, StringViewArray);
-    static_pattern_regexp_replace!(large_string_array, LargeStringArray);
+    static_pattern_regexp_replace!(string_array, StringArray, i32);
+    static_pattern_regexp_replace!(string_view_array, StringViewArray, i32);
+    static_pattern_regexp_replace!(large_string_array, LargeStringArray, i64);
 
     macro_rules! static_pattern_regexp_replace_with_flags {
-        ($name:ident, $T:ty) => {
+        ($name:ident, $T:ty, $O: ty) => {
             #[test]
             fn $name() {
                 let values = vec![
@@ -566,7 +566,7 @@ mod tests {
                 let flags = StringArray::from(vec!["i"; 5]);
                 let expected = <$T>::from(expected);
 
-                let re = _regexp_replace_static_pattern_replace::<i32>(&[
+                let re = _regexp_replace_static_pattern_replace::<$O>(&[
                     Arc::new(values),
                     Arc::new(patterns),
                     Arc::new(replacements),
@@ -579,14 +579,16 @@ mod tests {
         };
     }
 
-    static_pattern_regexp_replace_with_flags!(string_array_with_flags, StringArray);
+    static_pattern_regexp_replace_with_flags!(string_array_with_flags, StringArray, i32);
     static_pattern_regexp_replace_with_flags!(
         string_view_array_with_flags,
-        StringViewArray
+        StringViewArray,
+        i32
     );
     static_pattern_regexp_replace_with_flags!(
         large_string_array_with_flags,
-        LargeStringArray
+        LargeStringArray,
+        i64
     );
 
     #[test]
