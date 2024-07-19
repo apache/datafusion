@@ -19,8 +19,9 @@
 
 use datafusion_common::{utils::list_ndims, DFSchema, Result};
 use datafusion_expr::{
+    expr::AggregateFunctionDefinition,
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
-    sqlparser, AggregateFunction, Expr, ExprSchemable, GetFieldAccess,
+    sqlparser, Expr, ExprSchemable, GetFieldAccess,
 };
 use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
@@ -153,8 +154,9 @@ impl ExprPlanner for FieldAccessPlanner {
 }
 
 fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
-    agg_func.func_def
-        == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(
-            AggregateFunction::ArrayAgg,
-        )
+    if let AggregateFunctionDefinition::UDF(udf) = &agg_func.func_def {
+        return udf.name() == "ARRAY_AGG";
+    }
+
+    false
 }
