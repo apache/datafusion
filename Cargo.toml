@@ -154,7 +154,6 @@ large_futures = "warn"
 [workspace.lints.rust]
 unused_imports = "deny"
 
-
 ## Temporary arrow-rs patch until 52.2.0 is released
 
 [patch.crates-io]
