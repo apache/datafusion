@@ -218,7 +218,7 @@ impl fmt::Display for CreateExternalTable {
 ///
 /// This can either be a [`Statement`] from [`sqlparser`] from a
 /// standard SQL dialect, or a DataFusion extension such as `CREATE
-/// EXTERAL TABLE`. See [`DFParser`] for more information.
+/// EXTERNAL TABLE`. See [`DFParser`] for more information.
 ///
 /// [`Statement`]: sqlparser::ast::Statement
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1101,7 +1101,7 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
-        // positive case: column definiton allowed in 'partition by' clause
+        // positive case: column definition allowed in 'partition by' clause
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {

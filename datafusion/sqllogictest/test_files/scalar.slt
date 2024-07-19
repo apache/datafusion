@@ -1203,7 +1203,7 @@ FROM t1
 999
 999
 
-# case_when_else_with_null_contant()
+# case_when_else_with_null_constant()
 query I
  SELECT
 CASE WHEN c1 = 'a' THEN 1

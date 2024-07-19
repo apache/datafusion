@@ -484,7 +484,7 @@ query error DataFusion error: type_coercion\ncaused by\nThis feature is not impl
 select sum(unnest(generate_series(1,10)));
 
 ## TODO: support unnest as a child expr
-query error DataFusion error: Internal error: unnest on struct can ony be applied at the root level of select expression
+query error DataFusion error: Internal error: unnest on struct can only be applied at the root level of select expression
 select arrow_typeof(unnest(column5)) from unnest_table;
 
 
@@ -517,7 +517,7 @@ select unnest(unnest(unnest(column3)['c1'])), column3 from recursive_unnest_tabl
 3 [{c0: [2], c1: [[3], [4]]}]
 4 [{c0: [2], c1: [[3], [4]]}]
 
-## tripple list unnest
+## triple list unnest
 query I?
 select unnest(unnest(unnest(column2))), column2 from recursive_unnest_table;
 ----
