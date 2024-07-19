@@ -1865,7 +1865,11 @@ mod tests {
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::FirstValue,
             ),
-            vec![col("aggregate_test_100.c1")])).partition_by(vec![col("aggregate_test_100.c2")]).build().unwrap();
+            vec![col("aggregate_test_100.c1")],
+        ))
+        .partition_by(vec![col("aggregate_test_100.c2")])
+        .build()
+        .unwrap();
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
 

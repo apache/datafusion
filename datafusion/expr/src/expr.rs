@@ -28,7 +28,8 @@ use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::{
-    aggregate_function, built_in_window_function, udaf, BuiltInWindowFunction, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF
+    aggregate_function, built_in_window_function, udaf, BuiltInWindowFunction,
+    ExprSchemable, Operator, Signature, WindowFrame, WindowUDF,
 };
 use crate::{window_frame, Volatility};
 
@@ -811,11 +812,7 @@ pub struct WindowFunction {
 
 impl WindowFunction {
     /// Create a new Window expression
-    pub fn new(
-        fun: impl Into<WindowFunctionDefinition>,
-        args: Vec<Expr>,
-
-    ) -> Self {
+    pub fn new(fun: impl Into<WindowFunctionDefinition>, args: Vec<Expr>) -> Self {
         Self {
             fun: fun.into(),
             args,

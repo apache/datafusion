@@ -180,13 +180,16 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .await?
         .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(count_udaf()),
-            vec![wildcard()])).order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))]).window_frame(
-            WindowFrame::new_bounds(
-                WindowFrameUnits::Range,
-                WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
-                WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-            )).build().unwrap()
-        ])?
+            vec![wildcard()],
+        ))
+        .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+        .window_frame(WindowFrame::new_bounds(
+            WindowFrameUnits::Range,
+            WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
+            WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
+        ))
+        .build()
+        .unwrap()])?
         .explain(false, false)?
         .collect()
         .await?;

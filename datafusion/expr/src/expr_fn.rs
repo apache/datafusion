@@ -30,7 +30,9 @@ use crate::{
     AggregateUDF, Expr, LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF,
     Signature, Volatility,
 };
-use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl};
+use crate::{
+    AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
+};
 use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
@@ -665,7 +667,6 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
     Expr::Literal(ScalarValue::IntervalMonthDayNano(interval))
 }
 
-
 /// Extensions for configuring [`Expr::AggregateFunction`]
 ///
 /// Adds methods to [`Expr`] that make it easy to set optional aggregate options
@@ -704,7 +705,10 @@ pub trait ExprFunctionExt {
     /// Add `DISTINCT`
     fn distinct(self) -> ExprFuncBuilder;
     /// Add `RESPECT NULLS` or `IGNORE NULLS`
-    fn null_treatment(self, null_treatment: impl Into<Option<NullTreatment>>) -> ExprFuncBuilder;
+    fn null_treatment(
+        self,
+        null_treatment: impl Into<Option<NullTreatment>>,
+    ) -> ExprFuncBuilder;
     // Add `PARTITION BY`
     fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder;
     // Add appropriate window frame conditions
@@ -791,7 +795,8 @@ impl ExprFuncBuilder {
                 let has_order_by = order_by.as_ref().map(|o| o.len() > 0);
                 udwf.order_by = order_by.unwrap_or_default();
                 udwf.partition_by = partition_by.unwrap_or_default();
-                udwf.window_frame = window_frame.unwrap_or(WindowFrame::new(has_order_by));
+                udwf.window_frame =
+                    window_frame.unwrap_or(WindowFrame::new(has_order_by));
                 udwf.null_treatment = null_treatment;
                 Expr::WindowFunction(udwf)
             }
@@ -802,7 +807,6 @@ impl ExprFuncBuilder {
 }
 
 impl ExprFunctionExt for ExprFuncBuilder {
-
     /// Add `ORDER BY <order_by>`
     ///
     /// Note: `order_by` must be [`Expr::Sort`]
@@ -824,7 +828,10 @@ impl ExprFunctionExt for ExprFuncBuilder {
     }
 
     /// Add `RESPECT NULLS` or `IGNORE NULLS`
-    fn null_treatment(mut self, null_treatment: impl Into<Option<NullTreatment>>) -> ExprFuncBuilder {
+    fn null_treatment(
+        mut self,
+        null_treatment: impl Into<Option<NullTreatment>>,
+    ) -> ExprFuncBuilder {
         self.null_treatment = null_treatment.into();
         self
     }
@@ -833,7 +840,7 @@ impl ExprFunctionExt for ExprFuncBuilder {
         self.partition_by = Some(partition_by);
         self
     }
-    
+
     fn window_frame(mut self, window_frame: WindowFrame) -> ExprFuncBuilder {
         self.window_frame = Some(window_frame);
         self
@@ -843,8 +850,12 @@ impl ExprFunctionExt for ExprFuncBuilder {
 impl ExprFunctionExt for Expr {
     fn order_by(self, order_by: Vec<Expr>) -> ExprFuncBuilder {
         let mut builder = match self {
-            Expr::AggregateFunction(udaf) => ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf))),
-            Expr::WindowFunction(udwf) => ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf))),
+            Expr::AggregateFunction(udaf) => {
+                ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
+            }
+            Expr::WindowFunction(udwf) => {
+                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
+            }
             _ => ExprFuncBuilder::new(None),
         };
         if builder.fun.is_some() {
@@ -855,7 +866,8 @@ impl ExprFunctionExt for Expr {
     fn filter(self, filter: Expr) -> ExprFuncBuilder {
         match self {
             Expr::AggregateFunction(udaf) => {
-                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
+                let mut builder =
+                    ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
                 builder.filter = Some(filter);
                 builder
             }
@@ -865,17 +877,25 @@ impl ExprFunctionExt for Expr {
     fn distinct(self) -> ExprFuncBuilder {
         match self {
             Expr::AggregateFunction(udaf) => {
-                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
+                let mut builder =
+                    ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
                 builder.distinct = true;
                 builder
             }
             _ => ExprFuncBuilder::new(None),
         }
     }
-    fn null_treatment(self, null_treatment: impl Into<Option<NullTreatment>>) -> ExprFuncBuilder {
+    fn null_treatment(
+        self,
+        null_treatment: impl Into<Option<NullTreatment>>,
+    ) -> ExprFuncBuilder {
         let mut builder = match self {
-            Expr::AggregateFunction(udaf) => ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf))),
-            Expr::WindowFunction(udwf) => ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf))),
+            Expr::AggregateFunction(udaf) => {
+                ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
+            }
+            Expr::WindowFunction(udwf) => {
+                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
+            }
             _ => ExprFuncBuilder::new(None),
         };
         if builder.fun.is_some() {
@@ -883,7 +903,7 @@ impl ExprFunctionExt for Expr {
         }
         builder
     }
-    
+
     fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder {
         match self {
             Expr::WindowFunction(udwf) => {
@@ -894,7 +914,7 @@ impl ExprFunctionExt for Expr {
             _ => ExprFuncBuilder::new(None),
         }
     }
-    
+
     fn window_frame(self, window_frame: WindowFrame) -> ExprFuncBuilder {
         match self {
             Expr::WindowFunction(udwf) => {
@@ -906,7 +926,6 @@ impl ExprFunctionExt for Expr {
         }
     }
 }
-
 
 #[cfg(test)]
 mod test {

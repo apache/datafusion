@@ -2,8 +2,6 @@ use datafusion_common::ScalarValue;
 
 use crate::{expr::WindowFunction, BuiltInWindowFunction, Expr, Literal};
 
-
-
 /// Create an expression to represent the `row_number` window function
 ///
 /// Note: call [`WindowFunction::build]` to create an [`Expr`]
