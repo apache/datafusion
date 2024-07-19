@@ -50,3 +50,19 @@ SELECT CASE WHEN a > 2 THEN b END FROM foo
 NULL
 4
 6
+
+# scalar or scalar (string)
+query T
+SELECT CASE WHEN a > 2 THEN 'even' ELSE 'odd' END FROM foo
+----
+odd
+even
+even
+
+# scalar or scalar (int)
+query I
+SELECT CASE WHEN a > 2 THEN 1 ELSE 0 END FROM foo
+----
+0
+1
+1
