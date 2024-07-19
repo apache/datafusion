@@ -46,9 +46,7 @@ use datafusion_expr::type_coercion::other::{
 use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprSchemable, LogicalPlan,
-    Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not, type_coercion, AggregateFunction, AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -458,14 +456,16 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     _ => args,
                 };
 
-                Ok(Transformed::yes(Expr::WindowFunction(WindowFunction::new(
+                Ok(Transformed::yes({
+                    let mut builder = Expr::WindowFunction(WindowFunction::new(
                     fun,
-                    args,
-                    partition_by,
-                    order_by,
-                    window_frame,
-                    null_treatment,
-                ))))
+                    args)).partition_by(partition_by).order_by(order_by).window_frame(window_frame);
+                    if let Some(n) = null_treatment {
+                        builder = builder.null_treatment(n);
+                    }
+                    builder.build()?
+                }
+                ))
             }
             Expr::Alias(_)
             | Expr::Column(_)

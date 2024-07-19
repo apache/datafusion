@@ -758,12 +758,12 @@ impl ExprFuncBuilder {
         }
     }
 
-    /// Updates and returns the in progress [`Expr::AggregateFunction`]
+    /// Updates and returns the in progress [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
     ///
     /// # Errors:
     ///
     /// Returns an error of this builder  [`ExprFunctionExt`] was used with an
-    /// `Expr` variant other than [`Expr::AggregateFunction`]
+    /// `Expr` variant other than [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
     pub fn build(self) -> Result<Expr> {
         let Self {
             fun,

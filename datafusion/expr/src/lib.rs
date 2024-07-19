@@ -60,6 +60,7 @@ pub mod type_coercion;
 pub mod utils;
 pub mod var_provider;
 pub mod window_frame;
+pub mod window_function;
 pub mod window_state;
 
 pub use accumulator::Accumulator;

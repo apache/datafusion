@@ -28,8 +28,7 @@ use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::{
-    aggregate_function, built_in_window_function, udaf, ExprSchemable, Operator,
-    Signature,
+    aggregate_function, built_in_window_function, udaf, BuiltInWindowFunction, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF
 };
 use crate::{window_frame, Volatility};
 
@@ -769,6 +768,30 @@ impl fmt::Display for WindowFunctionDefinition {
     }
 }
 
+impl From<aggregate_function::AggregateFunction> for WindowFunctionDefinition {
+    fn from(value: aggregate_function::AggregateFunction) -> Self {
+        Self::AggregateFunction(value)
+    }
+}
+
+impl From<BuiltInWindowFunction> for WindowFunctionDefinition {
+    fn from(value: BuiltInWindowFunction) -> Self {
+        Self::BuiltInWindowFunction(value)
+    }
+}
+
+impl From<Arc<crate::AggregateUDF>> for WindowFunctionDefinition {
+    fn from(value: Arc<crate::AggregateUDF>) -> Self {
+        Self::AggregateUDF(value)
+    }
+}
+
+impl From<Arc<WindowUDF>> for WindowFunctionDefinition {
+    fn from(value: Arc<WindowUDF>) -> Self {
+        Self::WindowUDF(value)
+    }
+}
+
 /// Window function
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct WindowFunction {
@@ -789,20 +812,17 @@ pub struct WindowFunction {
 impl WindowFunction {
     /// Create a new Window expression
     pub fn new(
-        fun: WindowFunctionDefinition,
+        fun: impl Into<WindowFunctionDefinition>,
         args: Vec<Expr>,
-        partition_by: Vec<Expr>,
-        order_by: Vec<Expr>,
-        window_frame: window_frame::WindowFrame,
-        null_treatment: Option<NullTreatment>,
+
     ) -> Self {
         Self {
-            fun,
+            fun: fun.into(),
             args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment,
+            partition_by: Vec::default(),
+            order_by: Vec::default(),
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
         }
     }
 }
