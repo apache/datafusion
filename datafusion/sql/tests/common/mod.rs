@@ -56,7 +56,7 @@ pub(crate) struct MockContextProvider {
 }
 
 impl MockContextProvider {
-    // Surpressing dead code warning, as this is used in integration test crates
+    // Suppressing dead code warning, as this is used in integration test crates
     #[allow(dead_code)]
     pub(crate) fn options_mut(&mut self) -> &mut ConfigOptions {
         &mut self.options

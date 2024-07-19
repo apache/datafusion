@@ -214,12 +214,12 @@ impl Unparser<'_> {
         } else {
             let mut derived_builder = DerivedRelationBuilder::default();
             derived_builder.lateral(false).alias(None).subquery({
-                let inner_statment = self.plan_to_sql(plan)?;
-                if let ast::Statement::Query(inner_query) = inner_statment {
+                let inner_statement = self.plan_to_sql(plan)?;
+                if let ast::Statement::Query(inner_query) = inner_statement {
                     inner_query
                 } else {
                     return internal_err!(
-                        "Subquery must be a Query, but found {inner_statment:?}"
+                        "Subquery must be a Query, but found {inner_statement:?}"
                     );
                 }
             });

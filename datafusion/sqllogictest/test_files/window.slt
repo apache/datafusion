@@ -3968,7 +3968,7 @@ CREATE TABLE table_with_pk (
 # However, if we know that <expr> contains a unique column (e.g. a PRIMARY KEY),
 # it can be treated as `OVER (ORDER BY <expr> ROWS BETWEEN UNBOUNDED PRECEDING
 # AND CURRENT ROW)` where window frame units change from `RANGE` to `ROWS`. This
-# conversion makes the window frame manifestly causal by eliminating the possiblity
+# conversion makes the window frame manifestly causal by eliminating the possibility
 # of ties explicitly (see window frame documentation for a discussion of causality
 # in this context). The Query below should have `ROWS` in its window frame.
 query TT

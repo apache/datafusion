@@ -31,7 +31,7 @@ pub(crate) enum AggVariant<'a> {
 /// Recursively searches children of [LogicalPlan] to find an Aggregate or window node if one exists
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
 /// If an Aggregate or window node is not found prior to this or at all before reaching the end
-/// of the tree, None is returned. It is assumed that a Window and Aggegate node cannot both
+/// of the tree, None is returned. It is assumed that a Window and Aggregate node cannot both
 /// be found in a single select query.
 pub(crate) fn find_agg_node_within_select<'a>(
     plan: &'a LogicalPlan,
@@ -82,7 +82,7 @@ pub(crate) fn unproject_agg_exprs(expr: &Expr, agg: &Aggregate) -> Result<Expr> 
     expr.clone()
         .transform(|sub_expr| {
             if let Expr::Column(c) = sub_expr {
-                // find the column in the agg schmea
+                // find the column in the agg schema
                 if let Ok(n) = agg.schema.index_of_column(&c) {
                     let unprojected_expr = agg
                         .group_expr
