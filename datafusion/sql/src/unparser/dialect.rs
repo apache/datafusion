@@ -63,6 +63,10 @@ pub trait Dialect: Send + Sync {
     fn large_utf8_cast_dtype(&self) -> ast::DataType {
         ast::DataType::Text
     }
+
+    fn date_field_extract_style(&self) -> DateFieldExtractStyle {
+        DateFieldExtractStyle::DatePart
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -78,6 +82,19 @@ pub enum IntervalStyle {
     PostgresVerbose,
     SQLStandard,
     MySQL,
+}
+
+/// Datetime subfield extraction style for unparsing
+/// 
+/// https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-EXTRACT
+/// Different DBMSs follow different standards; popular ones are:
+/// date_part('YEAR', date '2001-02-16')
+/// EXTRACT(YEAR from date '2001-02-16')
+/// Some DBMSs, like Postgres, support both, whereas others like MySQL require EXTRACT.
+#[derive(Clone, Copy, PartialEq)]
+pub enum DateFieldExtractStyle {
+    DatePart,
+    Extract
 }
 
 pub struct DefaultDialect {}
@@ -133,6 +150,10 @@ impl Dialect for MySqlDialect {
     fn large_utf8_cast_dtype(&self) -> ast::DataType {
         ast::DataType::Char(None)
     }
+
+    fn date_field_extract_style(&self) -> DateFieldExtractStyle {
+        DateFieldExtractStyle::Extract
+    }
 }
 
 pub struct SqliteDialect {}
@@ -151,6 +172,7 @@ pub struct CustomDialect {
     float64_ast_dtype: sqlparser::ast::DataType,
     utf8_cast_dtype: ast::DataType,
     large_utf8_cast_dtype: ast::DataType,
+    date_subfield_extract_style: DateFieldExtractStyle,
 }
 
 impl Default for CustomDialect {
@@ -163,6 +185,8 @@ impl Default for CustomDialect {
             float64_ast_dtype: sqlparser::ast::DataType::Double,
             utf8_cast_dtype: ast::DataType::Varchar(None),
             large_utf8_cast_dtype: ast::DataType::Text,
+            use_char_for_utf8_cast: false,
+            date_subfield_extract_style: DateFieldExtractStyle::DatePart,
         }
     }
 }
@@ -206,6 +230,10 @@ impl Dialect for CustomDialect {
     fn large_utf8_cast_dtype(&self) -> ast::DataType {
         self.large_utf8_cast_dtype.clone()
     }
+
+    fn date_field_extract_style(&self) -> DateFieldExtractStyle {
+        self.date_subfield_extract_style
+    }
 }
 
 /// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
@@ -230,6 +258,7 @@ pub struct CustomDialectBuilder {
     float64_ast_dtype: sqlparser::ast::DataType,
     utf8_cast_dtype: ast::DataType,
     large_utf8_cast_dtype: ast::DataType,
+    date_subfield_extract_style: DateFieldExtractStyle,
 }
 
 impl Default for CustomDialectBuilder {
@@ -248,6 +277,7 @@ impl CustomDialectBuilder {
             float64_ast_dtype: sqlparser::ast::DataType::Double,
             utf8_cast_dtype: ast::DataType::Varchar(None),
             large_utf8_cast_dtype: ast::DataType::Text,
+            date_subfield_extract_style: DateFieldExtractStyle::DatePart,
         }
     }
 
@@ -260,6 +290,7 @@ impl CustomDialectBuilder {
             float64_ast_dtype: self.float64_ast_dtype,
             utf8_cast_dtype: self.utf8_cast_dtype,
             large_utf8_cast_dtype: self.large_utf8_cast_dtype,
+            date_subfield_extract_style: self.date_subfield_extract_style,
         }
     }
 
@@ -311,6 +342,14 @@ impl CustomDialectBuilder {
         large_utf8_cast_dtype: ast::DataType,
     ) -> Self {
         self.large_utf8_cast_dtype = large_utf8_cast_dtype;
+        self
+    }
+
+    pub fn with_date_field_extract_style(
+        mut self,
+        date_subfield_extract_style: DateFieldExtractStyle,
+    ) -> Self {
+        self.date_subfield_extract_style = date_subfield_extract_style;
         self
     }
 }

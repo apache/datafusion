@@ -16,6 +16,13 @@
 // under the License.
 
 use core::fmt;
+
+use datafusion_expr::ScalarUDF;
+use sqlparser::ast::TimezoneInfo;
+use sqlparser::ast::Value::SingleQuotedString;
+use sqlparser::ast::{
+    self, Expr as AstExpr, Function, FunctionArg, Ident, Interval, UnaryOperator,
+};
 use std::sync::Arc;
 use std::{fmt::Display, vec};
 
@@ -43,7 +50,7 @@ use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
 
-use super::dialect::IntervalStyle;
+use super::dialect::{DateFieldExtractStyle, IntervalStyle};
 use super::Unparser;
 
 /// DataFusion's Exprs can represent either an `Expr` or an `OrderByExpr`
@@ -148,6 +155,12 @@ impl Unparser<'_> {
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let func_name = func.name();
+
+                if let Some(expr) =
+                    self.scalar_function_to_sql_overrides(func_name, func, args)
+                {
+                    return Ok(expr);
+                }
 
                 let args = args
                     .iter()
@@ -543,6 +556,38 @@ impl Unparser<'_> {
                 Ok(Unparsed::Expr(sql_parser_expr))
             }
         }
+    }
+
+    fn scalar_function_to_sql_overrides(
+        &self,
+        func_name: &str,
+        _func: &Arc<ScalarUDF>,
+        args: &[Expr],
+    ) -> Option<ast::Expr> {
+        if func_name.to_lowercase() == "date_part"
+            && self.dialect.date_field_extract_style() == DateFieldExtractStyle::Extract
+            && args.len() == 2
+        {
+            let date_expr = self.expr_to_sql(&args[1]).ok()?;
+
+            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &args[0] {
+                let field = match field.to_lowercase().as_str() {
+                    "year" => ast::DateTimeField::Year,
+                    "month" => ast::DateTimeField::Month,
+                    "day" => ast::DateTimeField::Day,
+                    "hour" => ast::DateTimeField::Hour,
+                    "minute" => ast::DateTimeField::Minute,
+                    "second" => ast::DateTimeField::Second,
+                    _ => return None,
+                };
+
+                return Some(ast::Expr::Extract {
+                    field,
+                    expr: Box::new(date_expr),
+                });
+            }
+        }
+        None
     }
 
     fn ast_type_for_date64_in_cast(&self) -> ast::DataType {
@@ -1989,6 +2034,54 @@ mod tests {
 
             let actual = format!("{}", ast);
             let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_with_date_field_extract_style() -> Result<()> {
+        for (extract_style, unit, expected) in [
+            (
+                DateFieldExtractStyle::DatePart,
+                "YEAR",
+                "date_part('YEAR', x)",
+            ),
+            (
+                DateFieldExtractStyle::Extract,
+                "YEAR",
+                "EXTRACT(YEAR FROM x)",
+            ),
+            (
+                DateFieldExtractStyle::DatePart,
+                "MONTH",
+                "date_part('MONTH', x)",
+            ),
+            (
+                DateFieldExtractStyle::Extract,
+                "MONTH",
+                "EXTRACT(MONTH FROM x)",
+            ),
+            (
+                DateFieldExtractStyle::DatePart,
+                "DAY",
+                "date_part('DAY', x)",
+            ),
+            (DateFieldExtractStyle::Extract, "DAY", "EXTRACT(DAY FROM x)"),
+        ] {
+            let dialect = CustomDialectBuilder::new()
+                .with_date_field_extract_style(extract_style)
+                .build();
+
+            let unparser = Unparser::new(&dialect);
+            let expr = ScalarUDF::new_from_impl(
+                datafusion_functions::datetime::date_part::DatePartFunc::new(),
+            )
+            .call(vec![Expr::Literal(ScalarValue::new_utf8(unit)), col("x")]);
+
+            let ast = unparser.expr_to_sql(&expr)?;
+            let actual = format!("{}", ast);
 
             assert_eq!(actual, expected);
         }
