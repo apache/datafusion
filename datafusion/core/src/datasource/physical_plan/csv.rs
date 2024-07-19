@@ -69,6 +69,7 @@ pub struct CsvExec {
 
 impl CsvExec {
     /// Create a new CSV reader execution plan provided base and specific configurations
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         base_config: FileScanConfig,
         has_header: bool,
