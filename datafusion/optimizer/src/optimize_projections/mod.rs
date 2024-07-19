@@ -1918,11 +1918,16 @@ mod tests {
 
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
-            vec![col("test.a")])).partition_by(vec![col("test.b")]).build().unwrap();
+            vec![col("test.a")],
+        ))
+        .partition_by(vec![col("test.b")])
+        .build()
+        .unwrap();
 
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
-            vec![col("test.b")]));
+            vec![col("test.b")],
+        ));
         let col1 = col(max1.display_name()?);
         let col2 = col(max2.display_name()?);
 

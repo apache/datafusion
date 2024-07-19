@@ -223,12 +223,15 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![Expr::WindowFunction(expr::WindowFunction::new(
                 WindowFunctionDefinition::AggregateUDF(count_udaf()),
-                vec![wildcard()])).order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))]).window_frame(WindowFrame::new_bounds(
-                    WindowFrameUnits::Range,
-                    WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
-                    WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-                )).build()?
-            ])?
+                vec![wildcard()],
+            ))
+            .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+            .window_frame(WindowFrame::new_bounds(
+                WindowFrameUnits::Range,
+                WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
+                WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
+            ))
+            .build()?])?
             .project(vec![count(wildcard())])?
             .build()?;
 

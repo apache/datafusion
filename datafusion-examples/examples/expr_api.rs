@@ -33,7 +33,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{ExprFunctionExt, ColumnarValue, ExprSchemable, Operator};
+use datafusion_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
 
 /// This example demonstrates the DataFusion [`Expr`] API.
 ///

@@ -3855,10 +3855,9 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::WindowFunction(datafusion_expr::expr::WindowFunction::new(
-                udwf,
-                vec![]));
+        let window_function_expr = Expr::WindowFunction(
+            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
+        );
 
         let expected = col("result_column");
         assert_eq!(simplify(window_function_expr), expected);
@@ -3866,10 +3865,9 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::WindowFunction(datafusion_expr::expr::WindowFunction::new(
-                udwf,
-                vec![]));
+        let window_function_expr = Expr::WindowFunction(
+            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
+        );
 
         let expected = window_function_expr.clone();
         assert_eq!(simplify(window_function_expr), expected);

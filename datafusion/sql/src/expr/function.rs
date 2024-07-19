@@ -23,7 +23,8 @@ use datafusion_common::{
 };
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    expr, AggregateFunction, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition
+    expr, AggregateFunction, Expr, ExprFunctionExt, ExprSchemable, WindowFrame,
+    WindowFunctionDefinition,
 };
 use datafusion_expr::{
     expr::{ScalarFunction, Unnest},
@@ -316,13 +317,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                         Expr::WindowFunction(expr::WindowFunction::new(
                             WindowFunctionDefinition::AggregateFunction(aggregate_fun),
-                            args)).partition_by(partition_by).order_by(order_by).window_frame(window_frame).null_treatment(null_treatment).build().unwrap()
+                            args,
+                        ))
+                        .partition_by(partition_by)
+                        .order_by(order_by)
+                        .window_frame(window_frame)
+                        .null_treatment(null_treatment)
+                        .build()
+                        .unwrap()
                     }
-                    _ => {
-                        Expr::WindowFunction(expr::WindowFunction::new(
-                            fun,
-                            self.function_args_to_expr(args, schema, planner_context)?)).partition_by(partition_by).order_by(order_by).window_frame(window_frame).null_treatment(null_treatment).build().unwrap()
-                    },
+                    _ => Expr::WindowFunction(expr::WindowFunction::new(
+                        fun,
+                        self.function_args_to_expr(args, schema, planner_context)?,
+                    ))
+                    .partition_by(partition_by)
+                    .order_by(order_by)
+                    .window_frame(window_frame)
+                    .null_treatment(null_treatment)
+                    .build()
+                    .unwrap(),
                 };
                 return Ok(expr);
             }
