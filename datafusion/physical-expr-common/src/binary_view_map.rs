@@ -31,14 +31,14 @@ use std::sync::Arc;
 /// Should the output be a String or Binary?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputType {
-    /// `StringArray` or `LargeStringArray`
+    /// `StringViewArray`
     Utf8View,
-    /// `BinaryArray` or `LargeBinaryArray`
+    /// `BinaryViewArray`
     BinaryView,
 }
 
 /// HashSet optimized for storing string or binary values that can produce that
-/// the final set as a GenericStringArray with minimal copies.
+/// the final set as a `GenericBinaryViewArray` with minimal copies.
 #[derive(Debug)]
 pub struct ArrowBytesViewSet(ArrowBytesViewMap<()>);
 
@@ -55,9 +55,9 @@ impl ArrowBytesViewSet {
             .insert_if_new(values, make_payload_fn, observe_payload_fn);
     }
 
-    /// Converts this set into a `StringArray`/`LargeStringArray` or
-    /// `BinaryArray`/`LargeBinaryArray` containing each distinct value that
-    /// was interned. This is done without copying the values.
+    /// Converts this set into a `StringViewArray` or `BinaryViewArray`
+    /// containing each distinct value that was interned.
+    /// This is done without copying the values.
     pub fn into_state(self) -> ArrayRef {
         self.0.into_state()
     }
@@ -103,7 +103,6 @@ impl ArrowBytesViewSet {
 /// the string values themselves, both when inserting and when emitting the
 /// final array.
 ///
-///
 /// 2. Retains the insertion order of entries in the final array. The values are
 /// in the same order as they were inserted.
 ///
@@ -118,13 +117,14 @@ pub struct ArrowBytesViewMap<V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
-    /// Should the output be String or Binary?
+    /// Should the output be StringView or BinaryView?
     output_type: OutputType,
     /// Underlying hash set for each distinct value
     map: hashbrown::raw::RawTable<Entry<V>>,
     /// Total size of the map in bytes
     map_size: usize,
 
+    /// Builder for output array
     builder: GenericByteViewBuilder<BinaryViewType>,
     /// random state used to generate hashes
     random_state: RandomState,
@@ -198,7 +198,7 @@ where
         MP: FnMut(Option<&[u8]>) -> V,
         OP: FnMut(V),
     {
-        // Sanity array type
+        // Sanity check array type
         match self.output_type {
             OutputType::BinaryView => {
                 assert!(matches!(values.data_type(), DataType::BinaryView));
