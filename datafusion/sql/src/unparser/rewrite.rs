@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeIterator},
@@ -122,12 +125,6 @@ fn rewrite_sort_expr_for_union(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
 pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     p: &Projection,
 ) -> Option<LogicalPlan> {
-    let mut collects = vec![];
-
-    for expr in p.expr.clone() {
-        collects.push(expr.clone());
-    }
-
     let LogicalPlan::Sort(sort) = p.input.as_ref() else {
         return None;
     };
@@ -136,8 +133,22 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         return None;
     };
 
-    let inner_exprs = inner_p.expr.clone();
+    let mut map = HashMap::new();
+    let inner_exprs = inner_p
+        .expr
+        .iter()
+        .map(|f| {
+            if let Expr::Alias(alias) = f {
+                let a = Expr::Column(alias.name.clone().into());
+                map.insert(a.clone(), f.clone());
+                a
+            } else {
+                f.clone()
+            }
+        })
+        .collect::<Vec<_>>();
 
+    let mut collects = p.expr.clone();
     for expr in &sort.expr {
         if let Expr::Sort(s) = expr {
             collects.push(s.expr.as_ref().clone());
@@ -149,7 +160,14 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     {
         let mut sort = sort.clone();
         let mut inner_p = inner_p.clone();
-        inner_p.expr.clone_from(&p.expr);
+
+        let new_exprs = p
+            .expr
+            .iter()
+            .map(|e| map.get(e).unwrap_or(e).clone())
+            .collect::<Vec<_>>();
+
+        inner_p.expr.clone_from(&new_exprs);
         sort.input = Arc::new(LogicalPlan::Projection(inner_p));
 
         Some(LogicalPlan::Sort(sort))
