@@ -54,9 +54,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
-    cast, col, exists, expr, in_subquery, lit, max, out_ref_col, placeholder,
-    scalar_subquery, when, wildcard, Expr, ExprSchemable, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition,
+    cast, col, exists, expr, in_subquery, lit, max, out_ref_col, placeholder, scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition
 };
 use datafusion_functions_aggregate::expr_fn::{array_agg, avg, count, sum};
 
@@ -182,16 +180,13 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .await?
         .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(count_udaf()),
-            vec![wildcard()],
-            vec![],
-            vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
+            vec![wildcard()])).order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))]).window_frame(
             WindowFrame::new_bounds(
                 WindowFrameUnits::Range,
                 WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
                 WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-            ),
-            None,
-        ))])?
+            )).build().unwrap()
+        ])?
         .explain(false, false)?
         .collect()
         .await?;

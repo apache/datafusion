@@ -815,7 +815,7 @@ mod tests {
         lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
         max, min, not, try_cast, when, AggregateFunction, BinaryExpr, Expr, Extension,
-        Like, LogicalPlan, Operator, Projection, UserDefinedLogicalNodeCore, WindowFrame,
+        Like, LogicalPlan, Operator, Projection, UserDefinedLogicalNodeCore,
         WindowFunctionDefinition,
     };
 
@@ -1918,21 +1918,11 @@ mod tests {
 
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
-            vec![col("test.a")],
-            vec![col("test.b")],
-            vec![],
-            WindowFrame::new(None),
-            None,
-        ));
+            vec![col("test.a")])).partition_by(vec![col("test.b")]).build().unwrap();
 
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
-            vec![col("test.b")],
-            vec![],
-            vec![],
-            WindowFrame::new(None),
-            None,
-        ));
+            vec![col("test.b")]));
         let col1 = col(max1.display_name()?);
         let col2 = col(max2.display_name()?);
 
