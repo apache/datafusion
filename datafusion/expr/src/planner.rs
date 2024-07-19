@@ -186,7 +186,9 @@ pub trait ExprPlanner: Send + Sync {
         _qualifier: Option<&TableReference>,
         _nested_names: &[String],
     ) -> Result<PlannerResult<Vec<Expr>>> {
-        not_impl_err!("Default planner compound identifier hasn't been implemented for ExprPlanner")
+        not_impl_err!(
+            "Default planner compound identifier hasn't been implemented for ExprPlanner"
+        )
     }
 }
 
