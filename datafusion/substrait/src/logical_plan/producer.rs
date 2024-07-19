@@ -2089,6 +2089,7 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use crate::logical_plan::consumer::{
         from_substrait_literal_without_names, from_substrait_type_without_names,
     };
@@ -2096,8 +2097,7 @@ mod test {
     use datafusion::arrow::array::GenericListArray;
     use datafusion::arrow::datatypes::Field;
     use datafusion::common::scalar::ScalarStructBuilder;
-
-    use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn round_trip_literals() -> Result<()> {
@@ -2195,6 +2195,43 @@ mod test {
     }
 
     #[test]
+    fn custom_type_literal_extensions() -> Result<()> {
+        let mut extensions = Extensions::default();
+        // IntervalMonthDayNano is represented as a custom type in Substrait
+        let scalar = ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::new(
+            17, 25, 1234567890,
+        )));
+        let substrait_literal = to_substrait_literal(&scalar, &mut extensions)?;
+        let roundtrip_scalar =
+            from_substrait_literal_without_names(&substrait_literal, &extensions)?;
+        assert_eq!(scalar, roundtrip_scalar);
+
+        assert_eq!(
+            extensions,
+            Extensions {
+                functions: HashMap::new(),
+                types: HashMap::from([(
+                    0,
+                    INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string()
+                )]),
+                type_variations: HashMap::new(),
+            }
+        );
+
+        // Check we fail if we don't propagate extensions
+        assert_eq!(
+            from_substrait_literal_without_names(
+                &substrait_literal,
+                &Extensions::default()
+            )
+            .unwrap_err()
+            .message(),
+            "Unsupported Substrait user defined type with ref 0 and variation 0"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn round_trip_types() -> Result<()> {
         round_trip_type(DataType::Boolean)?;
         round_trip_type(DataType::Int8)?;
@@ -2266,6 +2303,39 @@ mod test {
         let substrait = to_substrait_type(&dt, true, &mut extensions)?;
         let roundtrip_dt = from_substrait_type_without_names(&substrait, &extensions)?;
         assert_eq!(dt, roundtrip_dt);
+        Ok(())
+    }
+
+    #[test]
+    fn custom_type_extensions() -> Result<()> {
+        let mut extensions = Extensions::default();
+        // IntervalMonthDayNano is represented as a custom type in Substrait
+        let dt = DataType::Interval(IntervalUnit::MonthDayNano);
+
+        let substrait = to_substrait_type(&dt, true, &mut extensions)?;
+        let roundtrip_dt = from_substrait_type_without_names(&substrait, &extensions)?;
+        assert_eq!(dt, roundtrip_dt);
+
+        assert_eq!(
+            extensions,
+            Extensions {
+                functions: HashMap::new(),
+                types: HashMap::from([(
+                    0,
+                    INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string()
+                )]),
+                type_variations: HashMap::new(),
+            }
+        );
+
+        // Check we fail if we don't propagate extensions
+        assert_eq!(
+            from_substrait_type_without_names(&substrait, &Extensions::default())
+                .unwrap_err()
+                .message(),
+            "Unsupported Substrait user defined type with ref 0 and variation 0"
+        );
+
         Ok(())
     }
 }
