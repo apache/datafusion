@@ -248,30 +248,27 @@ impl CoalesceBatchesStream {
                             if self.total_rows + batch.num_rows() >= fetch {
                                 // we have reached the fetch limit
                                 let remaining_rows = fetch - self.total_rows;
-                                if remaining_rows > 0 {
-                                    self.is_closed = true;
-                                    self.total_rows = fetch;
-                                    // trim the batch
-                                    let batch = batch.slice(0, remaining_rows);
-                                    // add to the buffered batches
-                                    self.buffered_rows += batch.num_rows();
-                                    self.buffer.push(batch);
-                                    // combine the batches and return
-                                    let batch = concat_batches(
-                                        &self.schema,
-                                        &self.buffer,
-                                        self.buffered_rows,
-                                    )?;
-                                    // reset buffer state
-                                    self.buffer.clear();
-                                    self.buffered_rows = 0;
-                                    // return batch
-                                    return Poll::Ready(Some(Ok(batch)));
-                                } else {
-                                    // should be unreachable but just in case
-                                    self.is_closed = true;
-                                    return Poll::Ready(None);
-                                }
+                                // Shouldn't be empty
+                                debug_assert!(remaining_rows > 0);
+
+                                self.is_closed = true;
+                                self.total_rows = fetch;
+                                // trim the batch
+                                let batch = batch.slice(0, remaining_rows);
+                                // add to the buffered batches
+                                self.buffered_rows += batch.num_rows();
+                                self.buffer.push(batch);
+                                // combine the batches and return
+                                let batch = concat_batches(
+                                    &self.schema,
+                                    &self.buffer,
+                                    self.buffered_rows,
+                                )?;
+                                // reset buffer state
+                                self.buffer.clear();
+                                self.buffered_rows = 0;
+                                // return batch
+                                return Poll::Ready(Some(Ok(batch)));
                             } else {
                                 self.total_rows += batch.num_rows();
                             }
