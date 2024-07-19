@@ -40,7 +40,7 @@ use crate::stream::RecordBatchReceiverStream;
 /// `path` - temp file
 /// `schema` - batches schema, should be the same across batches
 /// `buffer` - internal buffer of capacity batches
-pub fn read_spill_as_stream(
+pub(crate) fn read_spill_as_stream(
     path: RefCountedTempFile,
     schema: SchemaRef,
     buffer: usize,
@@ -56,7 +56,7 @@ pub fn read_spill_as_stream(
 /// Spills in-memory `batches` to disk.
 ///
 /// Returns total number of the rows spilled to disk.
-pub fn spill_record_batches(
+pub(crate) fn spill_record_batches(
     batches: Vec<RecordBatch>,
     path: PathBuf,
     schema: SchemaRef,
@@ -94,7 +94,7 @@ pub fn spill_record_batch_by_size(
     path: PathBuf,
     schema: SchemaRef,
     batch_size_rows: usize,
-) -> Result<usize> {
+) -> Result<()> {
     let mut offset = 0;
     let total_rows = batch.num_rows();
     let mut writer = IPCWriter::new(&path, schema.as_ref())?;
@@ -107,7 +107,7 @@ pub fn spill_record_batch_by_size(
     }
     writer.finish()?;
 
-    Ok(total_rows)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -168,14 +168,12 @@ mod tests {
 
         let spill_file = disk_manager.create_tmp_file("Test Spill")?;
         let schema = batch1.schema();
-        let num_rows = batch1.num_rows();
-        let cnt = spill_record_batch_by_size(
+        spill_record_batch_by_size(
             &batch1,
             spill_file.path().into(),
             Arc::clone(&schema),
             1,
-        );
-        assert_eq!(cnt.unwrap(), num_rows);
+        )?;
 
         let file = BufReader::new(File::open(spill_file.path())?);
         let reader = arrow::ipc::reader::FileReader::try_new(file, None)?;

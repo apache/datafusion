@@ -175,8 +175,9 @@ async fn sort_merge_join_no_spill() {
             "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
+            "Failed to allocate additional",
             "SMJStream",
+            "Disk spilling disabled",
         ])
         .with_memory_limit(1_000)
         .with_config(config)

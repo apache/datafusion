@@ -42,7 +42,8 @@ use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
 
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
+    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType,
+    Result,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -252,10 +253,10 @@ impl DisplayAs for SortMergeJoinExec {
                     "SortMergeJoin: join_type={:?}, on=[{}]{}",
                     self.join_type,
                     on,
-                    self.filter
-                        .as_ref()
-                        .map(|f| format!(", filter={}", f.expression()))
-                        .unwrap_or("".to_string())
+                    self.filter.as_ref().map_or("".to_string(), |f| format!(
+                        ", filter={}",
+                        f.expression()
+                    ))
                 )
             }
         }
@@ -583,6 +584,7 @@ impl StreamedBatch {
 #[derive(Debug)]
 struct BufferedBatch {
     /// The buffered record batch
+    /// None if the batch spilled to disk th
     pub batch: Option<RecordBatch>,
     /// The range in which the rows share the same join key
     pub range: Range<usize>,
@@ -599,7 +601,9 @@ struct BufferedBatch {
     /// but if batch is spilled to disk this property is preferable
     /// and less expensive
     pub num_rows: usize,
-    /// A temp spill file name on the disk if the batch spilled
+    /// An optional temp spill file name on the disk if the batch spilled
+    /// None by default
+    /// Some(fileName) if the batch spilled to the disk
     pub spill_file: Option<RefCountedTempFile>,
 }
 
@@ -890,7 +894,7 @@ impl SMJStream {
     }
 
     fn free_reservation(&mut self, buffered_batch: BufferedBatch) -> Result<()> {
-        // Shrink memory usage for in memory batches only
+        // Shrink memory usage for in-memory batches only
         if buffered_batch.spill_file.is_none() && buffered_batch.batch.is_some() {
             self.reservation
                 .try_shrink(buffered_batch.size_estimation)?;
@@ -912,7 +916,7 @@ impl SMJStream {
                 let spill_file = self
                     .runtime_env
                     .disk_manager
-                    .create_tmp_file("SortMergeJoinBuffered")?;
+                    .create_tmp_file("sort_merge_join_buffered_spill")?;
 
                 if let Some(batch) = buffered_batch.batch {
                     spill_record_batches(
@@ -929,11 +933,12 @@ impl SMJStream {
                         .spilled_bytes
                         .add(buffered_batch.size_estimation);
                     self.join_metrics.spilled_rows.add(buffered_batch.num_rows);
+                    Ok(())
+                } else {
+                    internal_err!("Buffered batch has empty body")
                 }
-
-                Ok(())
             }
-            Err(e) => Err(e),
+            Err(e) => exec_err!("{}. Disk spilling disabled.", e.message()),
         }?;
 
         self.buffered_data.batches.push_back(buffered_batch);
@@ -1020,7 +1025,7 @@ impl SMJStream {
                                 self.buffered_state = BufferedState::Ready;
                             }
                             Poll::Ready(Some(batch)) => {
-                                // Multi batch
+                                // Polling batches coming concurrently as multiple partitions
                                 self.join_metrics.input_batches.add(1);
                                 self.join_metrics.input_rows.add(batch.num_rows());
                                 if batch.num_rows() > 0 {
@@ -1609,7 +1614,7 @@ fn get_buffered_columns_from_batch(
             Ok(buffered_cols)
         }
         // Invalid combination
-        _ => internal_err!("Buffered batch spill status is in the inconsistent state."),
+        (spill, batch) => internal_err!("Unexpected buffered batch spill status. Spill exists: {}. In-memory exists: {}", spill.is_some(), batch.is_some()),
     }
 }
 
@@ -1646,7 +1651,6 @@ fn get_filtered_join_mask(
         // we don't need to check any others for the same index
         JoinType::LeftSemi => {
             // have we seen a filter match for a streaming index before
-            // have we seen a filter match for are streaming index before
             for i in 0..streamed_indices_length {
                 // LeftSemi respects only first true values for specific streaming index,
                 // others true values for the same index must be false
@@ -2904,11 +2908,9 @@ mod tests {
             let stream = join.execute(0, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
-            assert_contains!(
-                err.to_string(),
-                "Resources exhausted: Failed to allocate additional"
-            );
+            assert_contains!(err.to_string(), "Failed to allocate additional");
             assert_contains!(err.to_string(), "SMJStream[0]");
+            assert_contains!(err.to_string(), "Disk spilling disabled");
             assert!(join.metrics().is_some());
             assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
             assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
@@ -2990,11 +2992,9 @@ mod tests {
             let stream = join.execute(0, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
-            assert_contains!(
-                err.to_string(),
-                "Resources exhausted: Failed to allocate additional"
-            );
+            assert_contains!(err.to_string(), "Failed to allocate additional");
             assert_contains!(err.to_string(), "SMJStream[0]");
+            assert_contains!(err.to_string(), "Disk spilling disabled");
             assert!(join.metrics().is_some());
             assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
             assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
