@@ -22,14 +22,23 @@ use substrait::proto::extensions::simple_extension_declaration::{
 };
 use substrait::proto::extensions::SimpleExtensionDeclaration;
 
+/// Substrait uses SimpleExtensions to define behavior of plans in addition to what's supported
+/// directly by the protobuf definitions: https://substrait.io/extensions/#simple-extensions
+/// That includes functions, but also provides support for custom types and variations for existing
+/// types. This structs facilitates the use of these extensions in DataFusion.
+/// TODO: DF doesn't yet use extensions for type variations https://github.com/apache/datafusion/issues/11544
+/// TODO: DF doesn't yet provide valid extensionUris https://github.com/apache/datafusion/issues/11545
 #[derive(Default)]
 pub struct Extensions {
-    pub functions: HashMap<u32, String>,
-    pub types: HashMap<u32, String>,
-    pub type_variations: HashMap<u32, String>,
+    pub functions: HashMap<u32, String>, // anchor -> function name
+    pub types: HashMap<u32, String>,     // anchor -> type name
+    pub type_variations: HashMap<u32, String>, // anchor -> type variation name
 }
 
 impl Extensions {
+    /// Registers a function and returns the anchor (reference) to it. If the function has already
+    /// been registered, it returns the existing anchor.
+    /// Function names are case-insensitive (converted to lowercase).
     pub fn register_function(&mut self, function_name: String) -> u32 {
         let function_name = function_name.to_lowercase();
 
@@ -52,6 +61,8 @@ impl Extensions {
         }
     }
 
+    /// Registers a type and returns the anchor (reference) to it. If the type has already
+    /// been registered, it returns the existing anchor.
     pub fn register_type(&mut self, type_name: String) -> u32 {
         let type_name = type_name.to_lowercase();
         match self.types.iter().find(|(_, t)| *t == &type_name) {
@@ -117,7 +128,7 @@ impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
 
         for (t_anchor, t_name) in val.types {
             let type_extension = ExtensionType {
-                extension_uri_reference: u32::MAX, // We don't register proper extension URIs yet
+                extension_uri_reference: u32::MAX, // https://github.com/apache/datafusion/issues/11545
                 type_anchor: t_anchor,
                 name: t_name,
             };
