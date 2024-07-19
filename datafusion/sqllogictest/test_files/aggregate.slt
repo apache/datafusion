@@ -183,7 +183,7 @@ CREATE TABLE array_agg_distinct_list_table AS VALUES
 ;
 
 # Apply array_sort to have deterministic result, higher dimension nested array also works but not for array sort,
-# so they are covered in `datafusion/physical-expr/src/aggregate/array_agg_distinct.rs`
+# so they are covered in `datafusion/functions-aggregate/src/array_agg.rs`
 query ??
 select array_sort(c1), array_sort(c2) from (
   select array_agg(distinct column1) as c1, array_agg(distinct column2) as c2 from array_agg_distinct_list_table

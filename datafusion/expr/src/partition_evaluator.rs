@@ -135,7 +135,7 @@ pub trait PartitionEvaluator: Debug + Send {
     /// must produce an output column with one output row for every
     /// input row.
     ///
-    /// `num_rows` is requied to correctly compute the output in case
+    /// `num_rows` is required to correctly compute the output in case
     /// `values.len() == 0`
     ///
     /// Implementing this function is an optimization: certain window

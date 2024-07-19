@@ -805,7 +805,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_satisfiy_nullable() -> Result<()> {
+    async fn test_satisfy_nullable() -> Result<()> {
         let schema = create_test_schema()?;
         let params = vec![
             ((true, true), (false, false), false),

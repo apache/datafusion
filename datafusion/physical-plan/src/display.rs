@@ -236,7 +236,7 @@ enum ShowMetrics {
     /// Do not show any metrics
     None,
 
-    /// Show aggregrated metrics across partition
+    /// Show aggregated metrics across partition
     Aggregated,
 
     /// Show full per-partition metrics

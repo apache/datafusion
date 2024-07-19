@@ -646,7 +646,7 @@ mod tests {
                 vec![DataType::UInt8, DataType::UInt16],
                 Some(vec![DataType::UInt8, DataType::UInt16]),
             ),
-            // 2 entries, can coerse values
+            // 2 entries, can coerce values
             (
                 vec![DataType::UInt16, DataType::UInt16],
                 vec![DataType::UInt8, DataType::UInt16],

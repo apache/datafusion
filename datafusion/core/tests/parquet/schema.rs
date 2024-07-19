@@ -25,7 +25,7 @@ use datafusion_common::assert_batches_sorted_eq;
 
 #[tokio::test]
 async fn schema_merge_ignores_metadata_by_default() {
-    // Create several parquet files in same directoty / table with
+    // Create several parquet files in same directory / table with
     // same schema but different metadata
     let tmp_dir = TempDir::new().unwrap();
     let table_dir = tmp_dir.path().join("parquet_test");
@@ -103,7 +103,7 @@ async fn schema_merge_ignores_metadata_by_default() {
 
 #[tokio::test]
 async fn schema_merge_can_preserve_metadata() {
-    // Create several parquet files in same directoty / table with
+    // Create several parquet files in same directory / table with
     // same schema but different metadata
     let tmp_dir = TempDir::new().unwrap();
     let table_dir = tmp_dir.path().join("parquet_test");

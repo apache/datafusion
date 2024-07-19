@@ -1310,7 +1310,7 @@ mod tests {
         ])
     }
     #[test]
-    fn test_dfschema_to_schema_convertion() {
+    fn test_dfschema_to_schema_conversion() {
         let mut a_metadata = HashMap::new();
         a_metadata.insert("key".to_string(), "value".to_string());
         let a_field = Field::new("a", DataType::Int64, false).with_metadata(a_metadata);

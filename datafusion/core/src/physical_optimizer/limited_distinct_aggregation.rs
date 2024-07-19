@@ -20,7 +20,6 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::AggregateExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -29,6 +28,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint into grouped aggregations which don't require all

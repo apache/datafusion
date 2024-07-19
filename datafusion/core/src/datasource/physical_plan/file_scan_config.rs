@@ -56,7 +56,7 @@ pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
 }
 
 /// Convert a [`ScalarValue`] of partition columns to a type, as
-/// decribed in the documentation of [`wrap_partition_type_in_dict`],
+/// described in the documentation of [`wrap_partition_type_in_dict`],
 /// which can wrap the types.
 pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
     ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
@@ -682,7 +682,7 @@ mod tests {
             vec![table_partition_col.clone()],
         );
 
-        // verify the proj_schema inlcudes the last column and exactly the same the field it is defined
+        // verify the proj_schema includes the last column and exactly the same the field it is defined
         let (proj_schema, _proj_statistics, _) = conf.project();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(

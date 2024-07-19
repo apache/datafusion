@@ -23,7 +23,7 @@ use arrow_buffer::{OffsetBuffer, ScalarBuffer};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
-use datafusion_functions::core::{make_map, map};
+use datafusion_functions::core::map;
 use rand::prelude::ThreadRng;
 use rand::Rng;
 use std::sync::Arc;
@@ -45,27 +45,6 @@ fn values(rng: &mut ThreadRng) -> Vec<i32> {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("make_map_1000", |b| {
-        let mut rng = rand::thread_rng();
-        let keys = keys(&mut rng);
-        let values = values(&mut rng);
-        let mut buffer = Vec::new();
-        for i in 0..1000 {
-            buffer.push(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                keys[i].clone(),
-            ))));
-            buffer.push(ColumnarValue::Scalar(ScalarValue::Int32(Some(values[i]))));
-        }
-
-        b.iter(|| {
-            black_box(
-                make_map()
-                    .invoke(&buffer)
-                    .expect("map should work on valid values"),
-            );
-        });
-    });
-
     c.bench_function("map_1000", |b| {
         let mut rng = rand::thread_rng();
         let field = Arc::new(Field::new("item", DataType::Utf8, true));

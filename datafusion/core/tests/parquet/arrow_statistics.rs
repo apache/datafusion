@@ -579,7 +579,7 @@ async fn test_data_page_stats_with_all_null_page() {
 
 /////////////// MORE GENERAL TESTS //////////////////////
 // . Many columns in a file
-// . Differnet data types
+// . Different data types
 // . Different row group sizes
 
 // Four different integer types
@@ -1733,7 +1733,7 @@ async fn test_float16() {
 
 #[tokio::test]
 async fn test_decimal() {
-    // This creates a parquet file of 1 column "decimal_col" with decimal data type and precicion 9, scale 2
+    // This creates a parquet file of 1 column "decimal_col" with decimal data type and precision 9, scale 2
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
         scenario: Scenario::Decimal,
@@ -1763,7 +1763,7 @@ async fn test_decimal() {
 }
 #[tokio::test]
 async fn test_decimal_256() {
-    // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precicion 9, scale 2
+    // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precision 9, scale 2
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
         scenario: Scenario::Decimal256,

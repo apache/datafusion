@@ -30,13 +30,13 @@ use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use crate::sorts::streaming_merge::streaming_merge;
+use crate::spill::{read_spill_as_stream, spill_record_batches};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    read_spill_as_stream, spill_record_batches, DisplayAs, DisplayFormatType,
-    Distribution, EmptyRecordBatchStream, ExecutionMode, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
+    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn};
@@ -602,7 +602,7 @@ pub fn sort_batch(
         .collect::<Result<Vec<_>>>()?;
 
     let indices = if is_multi_column_with_lists(&sort_columns) {
-        // lex_sort_to_indices doesn't support List with more than one colum
+        // lex_sort_to_indices doesn't support List with more than one column
         // https://github.com/apache/arrow-rs/issues/5454
         lexsort_to_indices_multi_columns(sort_columns, fetch)?
     } else {
@@ -802,12 +802,12 @@ impl DisplayAs for SortExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr = PhysicalSortExpr::format_list(&self.expr);
-                let preserve_partioning = self.preserve_partitioning;
+                let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partioning}]",)
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]",)
                     }
-                    None => write!(f, "SortExec: expr=[{expr}], preserve_partitioning=[{preserve_partioning}]"),
+                    None => write!(f, "SortExec: expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]"),
                 }
             }
         }

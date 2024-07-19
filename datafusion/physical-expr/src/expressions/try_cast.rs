@@ -31,7 +31,7 @@ use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-/// TRY_CAST expression casts an expression to a specific data type and retuns NULL on invalid cast
+/// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
 #[derive(Debug, Hash)]
 pub struct TryCastExpr {
     /// The expression to cast
