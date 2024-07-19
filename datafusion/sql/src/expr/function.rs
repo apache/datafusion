@@ -21,6 +21,7 @@ use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     Dependency, Result,
 };
+use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     expr, AggregateFunction, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition,
@@ -226,6 +227,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             crate::utils::normalize_ident(name.0[0].clone())
         };
+
+        if name.eq("make_map") {
+            let mut fn_args =
+                self.function_args_to_expr(args.clone(), schema, planner_context)?;
+            for planner in self.context_provider.get_expr_planners().iter() {
+                match planner.plan_make_map(fn_args)? {
+                    PlannerResult::Planned(expr) => return Ok(expr),
+                    PlannerResult::Original(args) => fn_args = args,
+                }
+            }
+        }
 
         // user-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {

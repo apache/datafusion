@@ -17,16 +17,14 @@
 
 extern crate criterion;
 
-use arrow::array::{Int32Array, ListArray, StringArray};
-use arrow::datatypes::{DataType, Field};
-use arrow_buffer::{OffsetBuffer, ScalarBuffer};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_common::ScalarValue;
-use datafusion_expr::ColumnarValue;
-use datafusion_functions::core::map;
 use rand::prelude::ThreadRng;
 use rand::Rng;
-use std::sync::Arc;
+
+use datafusion_common::ScalarValue;
+use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::Expr;
+use datafusion_functions_array::planner::ArrayFunctionPlanner;
 
 fn keys(rng: &mut ThreadRng) -> Vec<String> {
     let mut keys = vec![];
@@ -45,31 +43,22 @@ fn values(rng: &mut ThreadRng) -> Vec<i32> {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("map_1000", |b| {
+    c.bench_function("make_map_1000", |b| {
         let mut rng = rand::thread_rng();
-        let field = Arc::new(Field::new("item", DataType::Utf8, true));
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
-        let key_list = ListArray::new(
-            field,
-            offsets,
-            Arc::new(StringArray::from(keys(&mut rng))),
-            None,
-        );
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
-        let value_list = ListArray::new(
-            field,
-            offsets,
-            Arc::new(Int32Array::from(values(&mut rng))),
-            None,
-        );
-        let keys = ColumnarValue::Scalar(ScalarValue::List(Arc::new(key_list)));
-        let values = ColumnarValue::Scalar(ScalarValue::List(Arc::new(value_list)));
+        let keys = keys(&mut rng);
+        let values = values(&mut rng);
+        let mut buffer = Vec::new();
+        for i in 0..1000 {
+            buffer.push(Expr::Literal(ScalarValue::Utf8(Some(keys[i].clone()))));
+            buffer.push(Expr::Literal(ScalarValue::Int32(Some(values[i]))));
+        }
+
+        let planner = ArrayFunctionPlanner {};
 
         b.iter(|| {
             black_box(
-                map()
-                    .invoke(&[keys.clone(), values.clone()])
+                planner
+                    .plan_make_map(buffer.clone())
                     .expect("map should work on valid values"),
             );
         });
