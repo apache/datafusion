@@ -47,7 +47,7 @@ use kernels::{
 };
 
 /// Binary expression
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
@@ -116,14 +116,14 @@ impl BinaryExpr {
                 .downcast_ref::<Literal>()
                 .and_then(|pattern| match pattern.value() {
                     ScalarValue::Utf8(pattern) | ScalarValue::LargeUtf8(pattern) => {
-                        pattern.as_ref().and_then(|p| {
+                        pattern.as_ref().map(|p| {
                             let string_value = match op {
                                 Operator::RegexIMatch | Operator::RegexNotIMatch => {
-                                    vec!["(?i)", p.as_str()].join("")
+                                    ["(?i)", p.as_str()].join("")
                                 }
                                 _ => p.clone(),
                             };
-                            Some(regex::Regex::new(string_value.as_str()).unwrap())
+                            regex::Regex::new(string_value.as_str()).unwrap()
                         })
                     }
                     _ => None,
@@ -139,6 +139,17 @@ impl std::hash::Hash for BinaryExpr {
         self.op.hash(state);
         self.right.hash(state);
         self.fail_on_overflow.hash(state);
+    }
+}
+
+impl std::fmt::Debug for BinaryExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BinaryExpr")
+            .field("left", &self.left)
+            .field("op", &self.op)
+            .field("right", &self.right)
+            .field("fail_on_overflow", &self.fail_on_overflow)
+            .finish()
     }
 }
 
