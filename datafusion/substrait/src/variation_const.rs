@@ -27,13 +27,13 @@
 //!
 //! TODO: Definitions here are not the final form. All the non-system-preferred variations will be defined
 //! using [simple extensions] as per the [spec of type_variations](https://substrait.io/types/type_variations/)
-//! https://github.com/apache/datafusion/issues/11545
+//! <https://github.com/apache/datafusion/issues/11545>
 //!
 //! [simple extensions]: (https://substrait.io/extensions/#simple-extensions)
 
 // For [type variations](https://substrait.io/types/type_variations/#type-variations) in substrait.
 // Type variations are used to represent different types based on one type class.
-// TODO: Define as extensions: https://github.com/apache/datafusion/issues/11544
+// TODO: Define as extensions: <https://github.com/apache/datafusion/issues/11544>
 
 /// The "system-preferred" variation (i.e., no variation).
 pub const DEFAULT_TYPE_VARIATION_REF: u32 = 0;

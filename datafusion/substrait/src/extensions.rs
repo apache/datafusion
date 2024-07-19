@@ -22,12 +22,12 @@ use substrait::proto::extensions::simple_extension_declaration::{
 };
 use substrait::proto::extensions::SimpleExtensionDeclaration;
 
-/// Substrait uses SimpleExtensions to define behavior of plans in addition to what's supported
-/// directly by the protobuf definitions: https://substrait.io/extensions/#simple-extensions
+/// Substrait uses [SimpleExtensions](https://substrait.io/extensions/#simple-extensions) to define
+/// behavior of plans in addition to what's supported directly by the protobuf definitions.
 /// That includes functions, but also provides support for custom types and variations for existing
 /// types. This structs facilitates the use of these extensions in DataFusion.
-/// TODO: DF doesn't yet use extensions for type variations https://github.com/apache/datafusion/issues/11544
-/// TODO: DF doesn't yet provide valid extensionUris https://github.com/apache/datafusion/issues/11545
+/// TODO: DF doesn't yet use extensions for type variations <https://github.com/apache/datafusion/issues/11544>
+/// TODO: DF doesn't yet provide valid extensionUris <https://github.com/apache/datafusion/issues/11545>
 #[derive(Default, Debug, PartialEq)]
 pub struct Extensions {
     pub functions: HashMap<u32, String>, // anchor -> function name
