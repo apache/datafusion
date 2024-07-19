@@ -431,6 +431,12 @@ impl ExecutionPlan for InterleaveExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // New children are no longer interleavable, which might be a bug of optimization rewrite.
+        if !can_interleave(children.iter()) {
+            return internal_err!(
+                "Can not create InterleaveExec: new children can not be interleaved"
+            );
+        }
         Ok(Arc::new(InterleaveExec::try_new(children)?))
     }
 
