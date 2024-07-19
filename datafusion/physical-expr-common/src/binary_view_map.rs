@@ -16,7 +16,9 @@
 // under the License.
 
 //! [`ArrowBytesViewMap`] and [`ArrowBytesViewSet`] for storing maps/sets of values from
-//! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
+//! `StringViewArray`/`BinaryViewArray`.
+//! Much of the code is from `binary_map.rs`, but with simpler implementation because we directly use the
+//! [`GenericByteViewBuilder`].
 use ahash::RandomState;
 use arrow::array::cast::AsArray;
 use arrow::array::{Array, ArrayBuilder, ArrayRef, GenericByteViewBuilder};
