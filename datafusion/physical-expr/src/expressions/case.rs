@@ -52,8 +52,11 @@ enum EvalMethod {
     /// END
     WithExpression,
     /// This is a specialization for a specific use case where we can take a fast path
+    /// for expressions that are infallible and can be cheaply computed for the entire
+    /// record batch rather than just for the rows where the predicate is true.
+    ///
     /// CASE WHEN condition THEN column [ELSE NULL] END
-    ColumnOrNull,
+    InfallibleExprOrNull,
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -101,6 +104,15 @@ impl std::fmt::Display for CaseExpr {
     }
 }
 
+/// This is a specialization for a specific use case where we can take a fast path
+/// for expressions that are infallible and can be cheaply computed for the entire
+/// record batch rather than just for the rows where the predicate is true. For now,
+/// this is limited to use with Column expressions but could potentially be used for other
+/// expressions in the future
+fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.as_any().is::<Column>()
+}
+
 impl CaseExpr {
     /// Create a new CASE WHEN expression
     pub fn try_new(
@@ -124,10 +136,10 @@ impl CaseExpr {
             let eval_method = if expr.is_some() {
                 EvalMethod::WithExpression
             } else if when_then_expr.len() == 1
-                && when_then_expr[0].1.as_any().is::<Column>()
+                && is_cheap_and_infallible(&(when_then_expr[0].1))
                 && else_expr.is_none()
             {
-                EvalMethod::ColumnOrNull
+                EvalMethod::InfallibleExprOrNull
             } else {
                 EvalMethod::NoExpression
             };
@@ -306,6 +318,10 @@ impl CaseExpr {
     /// CASE WHEN condition THEN column
     ///      [ELSE NULL]
     /// END
+    ///
+    /// Note that this function is only safe to use for "then" expressions
+    /// that are infallible because the expression will be evaluated for all
+    /// rows in the input batch.
     fn case_column_or_null(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let when_expr = &self.when_then_expr[0].0;
         let then_expr = &self.when_then_expr[0].1;
@@ -320,14 +336,12 @@ impl CaseExpr {
                 ColumnarValue::Array(array) => {
                     Ok(ColumnarValue::Array(nullif(&array, &bit_mask)?))
                 }
-                ColumnarValue::Scalar(_) => Err(DataFusionError::Execution(
-                    "expression did not evaluate to an array".to_string(),
-                )),
+                ColumnarValue::Scalar(_) => {
+                    internal_err!("expression did not evaluate to an array")
+                }
             }
         } else {
-            Err(DataFusionError::Execution(
-                "predicate did not evaluate to an array".to_string(),
-            ))
+            internal_err!("predicate did not evaluate to an array")
         }
     }
 }
@@ -388,7 +402,7 @@ impl PhysicalExpr for CaseExpr {
                 // arbitrary expressions
                 self.case_when_no_expr(batch)
             }
-            EvalMethod::ColumnOrNull => {
+            EvalMethod::InfallibleExprOrNull => {
                 // Specialization for CASE WHEN expr THEN column [ELSE NULL] END
                 self.case_column_or_null(batch)
             }
@@ -1108,7 +1122,7 @@ mod tests {
             make_lit_i32(250),
         ));
         let expr = CaseExpr::try_new(None, vec![(predicate, make_col("c2", 1))], None)?;
-        assert!(matches!(expr.eval_method, EvalMethod::ColumnOrNull));
+        assert!(matches!(expr.eval_method, EvalMethod::InfallibleExprOrNull));
         match expr.evaluate(&batch)? {
             ColumnarValue::Array(array) => {
                 assert_eq!(1000, array.len());
