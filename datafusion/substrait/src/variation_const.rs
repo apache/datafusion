@@ -58,7 +58,7 @@ pub const DECIMAL_256_TYPE_VARIATION_REF: u32 = 1;
 /// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
 /// [`IntervalUnit::YearMonth`]: datafusion::arrow::datatypes::IntervalUnit::YearMonth
 /// [`ScalarValue::IntervalYearMonth`]: datafusion::common::ScalarValue::IntervalYearMonth
-#[deprecated(since = "41.0", note = "Use Substrait `IntervalYear` type instead")]
+#[deprecated(since = "41.0.0", note = "Use Substrait `IntervalYear` type instead")]
 pub const INTERVAL_YEAR_MONTH_TYPE_REF: u32 = 1;
 
 /// For [`DataType::Interval`] with [`IntervalUnit::DayTime`].
@@ -72,7 +72,7 @@ pub const INTERVAL_YEAR_MONTH_TYPE_REF: u32 = 1;
 /// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
 /// [`IntervalUnit::DayTime`]: datafusion::arrow::datatypes::IntervalUnit::DayTime
 /// [`ScalarValue::IntervalDayTime`]: datafusion::common::ScalarValue::IntervalDayTime
-#[deprecated(since = "41.0", note = "Use Substrait `IntervalDay` type instead")]
+#[deprecated(since = "41.0.0", note = "Use Substrait `IntervalDay` type instead")]
 pub const INTERVAL_DAY_TIME_TYPE_REF: u32 = 2;
 
 /// For [`DataType::Interval`] with [`IntervalUnit::MonthDayNano`].
@@ -88,7 +88,7 @@ pub const INTERVAL_DAY_TIME_TYPE_REF: u32 = 2;
 /// [`IntervalUnit::MonthDayNano`]: datafusion::arrow::datatypes::IntervalUnit::MonthDayNano
 /// [`ScalarValue::IntervalMonthDayNano`]: datafusion::common::ScalarValue::IntervalMonthDayNano
 #[deprecated(
-    since = "41.0",
+    since = "41.0.0",
     note = "Use Substrait `UserDefinedType` with name `INTERVAL_MONTH_DAY_NANO_TYPE_NAME` instead"
 )]
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;

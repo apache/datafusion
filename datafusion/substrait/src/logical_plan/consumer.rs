@@ -1895,7 +1895,7 @@ fn from_substrait_literal(
                     }
                     _ => {
                         return not_impl_err!(
-                            "Unsupported Substrait user defined type with ref {}",
+                            "Unsupported Substrait user defined type literal with ref {}",
                             user_defined.type_reference
                         )
                     }

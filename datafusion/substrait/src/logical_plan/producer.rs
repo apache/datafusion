@@ -2226,7 +2226,7 @@ mod test {
             )
             .unwrap_err()
             .message(),
-            "Unsupported Substrait user defined type with ref 0 and variation 0"
+            "Unsupported Substrait user defined type literal with ref 0"
         );
         Ok(())
     }
