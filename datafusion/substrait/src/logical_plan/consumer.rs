@@ -1752,7 +1752,12 @@ fn from_substrait_literal(
                 .iter()
                 .map(|el| {
                     element_name_idx = *name_idx;
-                    from_substrait_literal(el, extensions, dfs_names, &mut element_name_idx)
+                    from_substrait_literal(
+                        el,
+                        extensions,
+                        dfs_names,
+                        &mut element_name_idx,
+                    )
                 })
                 .collect::<Result<Vec<_>>>()?;
             *name_idx = element_name_idx;
