@@ -302,3 +302,9 @@ SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'LargeList(Utf8)'), a
 {POST: 41, HEAD: 33, PATCH: 30}
 {POST: 41, HEAD: 33, PATCH: 30}
 {POST: 41, HEAD: 33, PATCH: 30}
+
+
+query ?
+VALUES(MAP([], []))
+----
+{}
