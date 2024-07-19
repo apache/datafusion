@@ -1146,6 +1146,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // we could introduce alias in OptionDefinition if this string matching thing grows
             format!("{base_query} WHERE name = 'datafusion.execution.time_zone'")
         } else {
+            // These values are what are used to make the information_schema table, so we just
+            // check here, before actually planning or executing the query, if it would produce no
+            // results, and error preemptively if it would (for a better UX)
+            let is_valid_variable = self.context_provider
+                .options()
+                .entries()
+                .iter()
+                .any(|opt| opt.key == variable);
+
+            if !is_valid_variable {
+                return plan_err!("'{variable}' is not a variable which can be viewed with 'SHOW'")
+            }
+
             format!("{base_query} WHERE name = '{variable}'")
         };
 

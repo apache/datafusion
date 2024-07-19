@@ -368,9 +368,18 @@ datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g.
 
 
 # show empty verbose
-query TTT
+statement error
 SHOW VERBOSE
 ----
+DataFusion error: Error during planning: '' is not a variable which can be viewed with 'SHOW'
+
+
+# show nonsense verbose
+statement error
+SHOW NONSENSE VERBOSE
+----
+DataFusion error: Error during planning: 'nonsense' is not a variable which can be viewed with 'SHOW'
+
 
 # information_schema_describe_table
 
@@ -506,10 +515,11 @@ SHOW columns from datafusion.public.t2
 
 
 # show_non_existing_variable
-# FIXME
-# currently we cannot know whether a variable exists, this will output 0 row instead
-statement ok
+statement error
 SHOW SOMETHING_UNKNOWN;
+----
+DataFusion error: Error during planning: 'something_unknown' is not a variable which can be viewed with 'SHOW'
+
 
 statement ok
 DROP TABLE t;
