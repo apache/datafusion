@@ -95,10 +95,8 @@ impl PhysicalExpr for UnKnownColumn {
 
 impl PartialEq<dyn Any> for UnKnownColumn {
     fn eq(&self, _other: &dyn Any) -> bool {
-        // The `name` of an `UnKnownColumn` may come from another expression's name, and different expressions
-        // may have the same name.  For example, `t1.a` and `t2.a` both have the same name `a`.
-        // Therefore, we can't determine whether two UnknownColumns are the same only by their names,
-        // so return false for safety.
+        // UnknownColumn is not a valid expression, so it should not be equal to any other expression.
+        // See https://github.com/apache/datafusion/pull/11536
         false
     }
 }
