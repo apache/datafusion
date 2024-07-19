@@ -118,11 +118,10 @@ impl ExprSchemable for Expr {
                     return Ok(then_type);
                 }
 
-                let else_type = if let Some(e) = &case.else_expr {
-                    e.get_type(schema)?
-                } else {
-                    DataType::Null
-                };
+                let else_type = case
+                    .else_expr
+                    .as_ref()
+                    .map_or(Ok(DataType::Null), |e| e.get_type(schema))?;
 
                 match (then_type.clone(), else_type.clone()) {
                     (DataType::Null, DataType::Null) => Ok(DataType::Int64),
