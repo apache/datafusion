@@ -185,8 +185,14 @@ config_namespace! {
         /// if not specified explicitly in the statement.
         pub has_header: bool, default = false
 
-        /// Default value for `format.newlines_in_values` for `CREATE EXTERNAL TABLE`
-        // if not specified explicitly in the statement.
+        /// Specifies whether newlines in (quoted) CSV values are supported.
+        ///
+        /// This is the default value for `format.newlines_in_values` for `CREATE EXTERNAL TABLE`
+        /// if not specified explicitly in the statement.
+        ///
+        /// Parsing newlines in quoted values may be affected by execution behaviour such as
+        /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+        /// parsed successfully, which may reduce performance.
         pub newlines_in_values: bool, default = false
     }
 }
@@ -1597,6 +1603,13 @@ config_namespace! {
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
         pub double_quote: Option<bool>, default = None
+        /// Specifies whether newlines in (quoted) values are supported.
+        ///
+        /// Parsing newlines in quoted values may be affected by execution behaviour such as
+        /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+        /// parsed successfully, which may reduce performance.
+        ///
+        /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
         pub newlines_in_values: Option<bool>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
         pub schema_infer_max_rec: usize, default = 100
@@ -1670,9 +1683,13 @@ impl CsvOptions {
         self
     }
 
-    /// Set true to ensure that newlines in (quoted) values are supported.
-    /// Note that setting this may reduce performance as large file scans will not be repartitioned.
-    /// - default is None
+    /// Specifies whether newlines in (quoted) values are supported.
+    ///
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
     pub fn with_newlines_in_values(mut self, newlines_in_values: bool) -> Self {
         self.newlines_in_values = Some(newlines_in_values);
         self

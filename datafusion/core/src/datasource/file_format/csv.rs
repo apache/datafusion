@@ -233,9 +233,13 @@ impl CsvFormat {
         self
     }
 
-    /// Set true to ensure that newlines in (quoted) values are supported.
-    /// Note that setting this may reduce performance as large file scans will not be repartitioned.
-    /// - default is None
+    /// Specifies whether newlines in (quoted) values are supported.
+    ///
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
     pub fn with_newlines_in_values(mut self, newlines_in_values: bool) -> Self {
         self.options.newlines_in_values = Some(newlines_in_values);
         self

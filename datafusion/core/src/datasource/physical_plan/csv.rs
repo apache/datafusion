@@ -129,9 +129,13 @@ impl CsvExec {
         self.escape
     }
 
-    /// Whether newlines are always supported in values.
+    /// Specifies whether newlines in (quoted) values are supported.
     ///
-    /// When set, this will disable file repartitioning.
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
     pub fn newlines_in_values(&self) -> bool {
         self.newlines_in_values
     }

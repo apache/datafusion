@@ -63,9 +63,13 @@ pub struct CsvReadOptions<'a> {
     pub escape: Option<u8>,
     /// If enabled, lines beginning with this byte are ignored.
     pub comment: Option<u8>,
-    /// Does the CSV file contain newlines in values?
+    /// Specifies whether newlines in (quoted) values are supported.
     ///
-    /// If enabled, parallel scanning will be disabled.
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
     pub newlines_in_values: bool,
     /// An optional schema representing the CSV files. If None, CSV reader will try to infer it
     /// based on data in file.
@@ -138,7 +142,13 @@ impl<'a> CsvReadOptions<'a> {
         self
     }
 
-    /// Specify whether to support newlines in values.
+    /// Specifies whether newlines in (quoted) values are supported.
+    ///
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
     pub fn newlines_in_values(mut self, newlines_in_values: bool) -> Self {
         self.newlines_in_values = newlines_in_values;
         self
