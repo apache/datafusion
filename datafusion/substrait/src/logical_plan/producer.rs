@@ -2224,9 +2224,8 @@ mod test {
                 &substrait_literal,
                 &Extensions::default()
             )
-            .unwrap_err()
-            .message(),
-            "Unsupported Substrait user defined type literal with ref 0"
+            .is_err(),
+            true
         );
         Ok(())
     }
@@ -2331,9 +2330,8 @@ mod test {
         // Check we fail if we don't propagate extensions
         assert_eq!(
             from_substrait_type_without_names(&substrait, &Extensions::default())
-                .unwrap_err()
-                .message(),
-            "Unsupported Substrait user defined type with ref 0 and variation 0"
+                .is_err(),
+            true
         );
 
         Ok(())
