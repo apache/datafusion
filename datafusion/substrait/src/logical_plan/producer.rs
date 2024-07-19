@@ -994,7 +994,7 @@ pub fn make_binary_op_scalar_func(
 ///
 /// * `expr` - DataFusion expression to be parse into a Substrait expression
 /// * `schema` - DataFusion input schema for looking up field qualifiers
-/// * `col_ref_offset` - Offset for caculating Substrait field reference indices.
+/// * `col_ref_offset` - Offset for calculating Substrait field reference indices.
 ///                     This should only be set by caller with more than one input relations i.e. Join.
 ///                     Substrait expects one set of indices when joining two relations.
 ///                     Let's say `left` and `right` have `m` and `n` columns, respectively. The `right`
