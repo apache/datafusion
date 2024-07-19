@@ -21,7 +21,6 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::{
@@ -95,11 +94,12 @@ impl PhysicalExpr for UnKnownColumn {
 }
 
 impl PartialEq<dyn Any> for UnKnownColumn {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self == x)
-            .unwrap_or(false)
+    fn eq(&self, _other: &dyn Any) -> bool {
+        // The `name` of an `UnKnownColumn` may come from another expression's name, and different expressions
+        // may have the same name.  For example, `t1.a` and `t2.a` both have the same name `a`.
+        // Therefore, we can't determine whether two UnknownColumns are the same only by their names,
+        // so return false for safety.
+        false
     }
 }
 
