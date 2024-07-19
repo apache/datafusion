@@ -437,7 +437,7 @@ config_namespace! {
 
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
-        pub dictionary_enabled: Option<bool>, default = None
+        pub dictionary_enabled: Option<bool>, default = parquet_defaults::DEFAULT_DICTIONARY_ENABLED
 
         /// (writing) Sets best effort maximum dictionary page size, in bytes
         pub dictionary_page_size_limit: usize, default = parquet_defaults::DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT
@@ -450,7 +450,7 @@ config_namespace! {
 
         /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
-        pub max_statistics_size: Option<usize>, default = None
+        pub max_statistics_size: Option<usize>, default = parquet_defaults::DEFAULT_MAX_STATISTICS_SIZE
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
@@ -461,10 +461,10 @@ config_namespace! {
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
 
         /// (writing) Sets column index truncate length
-        pub column_index_truncate_length: Option<usize>, default = None
+        pub column_index_truncate_length: Option<usize>, default = parquet_defaults::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH
 
         /// (writing) Sets best effort maximum number of rows in data page
-        pub data_page_row_count_limit: usize, default = usize::MAX
+        pub data_page_row_count_limit: usize, default = parquet_defaults::DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT
 
         /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
