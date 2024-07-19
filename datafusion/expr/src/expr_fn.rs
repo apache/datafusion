@@ -716,7 +716,7 @@ pub trait ExprFunctionExt {
     /// Add `DISTINCT`
     fn distinct(self) -> ExprFuncBuilder;
     /// Add `RESPECT NULLS` or `IGNORE NULLS`
-    fn null_treatment(self, null_treatment: NullTreatment) -> ExprFuncBuilder;
+    fn null_treatment(self, null_treatment: impl Into<Option<NullTreatment>>) -> ExprFuncBuilder;
     // Add `PARTITION BY`
     fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder;
     // Add appropriate window frame conditions
@@ -833,8 +833,8 @@ impl ExprFuncBuilder {
     }
 
     /// Add `RESPECT NULLS` or `IGNORE NULLS`
-    pub fn null_treatment(mut self, null_treatment: NullTreatment) -> ExprFuncBuilder {
-        self.null_treatment = Some(null_treatment);
+    pub fn null_treatment(mut self, null_treatment: impl Into<Option<NullTreatment>>) -> ExprFuncBuilder {
+        self.null_treatment = null_treatment.into();
         self
     }
 
@@ -881,14 +881,14 @@ impl ExprFunctionExt for Expr {
             _ => ExprFuncBuilder::new(None),
         }
     }
-    fn null_treatment(self, null_treatment: NullTreatment) -> ExprFuncBuilder {
+    fn null_treatment(self, null_treatment: impl Into<Option<NullTreatment>>) -> ExprFuncBuilder {
         let mut builder = match self {
             Expr::AggregateFunction(udaf) => ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf))),
             Expr::WindowFunction(udwf) => ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf))),
             _ => ExprFuncBuilder::new(None),
         };
         if builder.fun.is_some() {
-            builder.null_treatment = Some(null_treatment);
+            builder.null_treatment = null_treatment.into();
         }
         builder
     }

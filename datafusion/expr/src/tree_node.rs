@@ -293,20 +293,10 @@ impl TreeNode for Expr {
                 order_by,
                 transform_vec(order_by, &mut f)
             )?
-            .update_data(|(new_args, new_partition_by, new_order_by)| {
-                let mut builder = Expr::WindowFunction(WindowFunction::new(
+            .update_data(|(new_args, new_partition_by, new_order_by)| Expr::WindowFunction(WindowFunction::new(
                     fun,
-                    new_args)).partition_by(new_partition_by).order_by(new_order_by).window_frame(window_frame);
-                if let Some(n) = null_treatment {
-                    builder = builder.null_treatment(n)
-                }
-                builder.build().unwrap()
-                //     new_partition_by,
-                //     new_order_by,
-                //     window_frame,
-                //     null_treatment,
-                // ))
-            }),
+                    new_args)).partition_by(new_partition_by).order_by(new_order_by).window_frame(window_frame).null_treatment(null_treatment).build().unwrap()
+            ),
             Expr::AggregateFunction(AggregateFunction {
                 args,
                 func_def,

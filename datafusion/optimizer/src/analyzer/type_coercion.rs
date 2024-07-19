@@ -456,15 +456,9 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     _ => args,
                 };
 
-                Ok(Transformed::yes({
-                    let mut builder = Expr::WindowFunction(WindowFunction::new(
+                Ok(Transformed::yes(Expr::WindowFunction(WindowFunction::new(
                     fun,
-                    args)).partition_by(partition_by).order_by(order_by).window_frame(window_frame);
-                    if let Some(n) = null_treatment {
-                        builder = builder.null_treatment(n);
-                    }
-                    builder.build()?
-                }
+                    args)).partition_by(partition_by).order_by(order_by).window_frame(window_frame).null_treatment(null_treatment).build()?
                 ))
             }
             Expr::Alias(_)
