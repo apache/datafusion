@@ -509,11 +509,8 @@ SHOW columns from datafusion.public.t2
 
 
 # show_non_existing_variable
-statement error
+statement error DataFusion error: Error during planning: 'something_unknown' is not a variable which can be viewed with 'SHOW'
 SHOW SOMETHING_UNKNOWN;
-----
-DataFusion error: Error during planning: 'something_unknown' is not a variable which can be viewed with 'SHOW'
-
 
 statement ok
 DROP TABLE t;
