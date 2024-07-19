@@ -67,20 +67,10 @@ impl CoalesceBatchesExec {
         }
     }
 
-    /// Create a new CoalesceBatchesExec with fetch
-    pub fn new_with_fetch(
-        input: Arc<dyn ExecutionPlan>,
-        target_batch_size: usize,
-        fetch: Option<usize>,
-    ) -> Self {
-        let cache = Self::compute_properties(&input);
-        Self {
-            input,
-            target_batch_size,
-            fetch,
-            metrics: ExecutionPlanMetricsSet::new(),
-            cache,
-        }
+    /// Update fetch with the argument
+    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
+        self
     }
 
     /// The input plan
@@ -154,11 +144,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CoalesceBatchesExec::new_with_fetch(
-            Arc::clone(&children[0]),
-            self.target_batch_size,
-            self.fetch,
-        )))
+        Ok(Arc::new(
+            CoalesceBatchesExec::new(Arc::clone(&children[0]), self.target_batch_size)
+                .with_fetch(self.fetch),
+        ))
     }
 
     fn execute(
@@ -488,11 +477,9 @@ mod tests {
         let exec = MemoryExec::try_new(&input_partitions, Arc::clone(schema), None)?;
         let exec =
             RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(1))?;
-        let exec: Arc<dyn ExecutionPlan> = Arc::new(CoalesceBatchesExec::new_with_fetch(
-            Arc::new(exec),
-            target_batch_size,
-            fetch,
-        ));
+        let exec: Arc<dyn ExecutionPlan> = Arc::new(
+            CoalesceBatchesExec::new(Arc::new(exec), target_batch_size).with_fetch(fetch),
+        );
 
         // execute and collect results
         let output_partition_count = exec.output_partitioning().partition_count();
