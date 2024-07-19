@@ -179,7 +179,7 @@ pub trait ExprPlanner: Send + Sync {
     /// Note:
     /// Currently compound identifier for outer query schema is not supported.
     ///
-    /// Returns empty expression arguments if not possible
+    /// Returns planned expression
     fn plan_compound_identifier(
         &self,
         _field: &Field,

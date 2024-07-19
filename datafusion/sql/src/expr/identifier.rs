@@ -127,20 +127,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let search_result = search_dfschema(&ids, schema);
             match search_result {
                 // found matching field with spare identifier(s) for nested field(s) in structure
-                Some((field, qualifier, nested_names)) => {
+                Some((field, qualifier, nested_names)) if !nested_names.is_empty() => {
+                    // found matching field with spare identifier(s) for nested field(s) in structure
                     for planner in self.context_provider.get_expr_planners() {
-                        match planner.plan_compound_identifier(
+                        if let Ok(planner_result) = planner.plan_compound_identifier(
                             field,
                             qualifier,
                             nested_names,
-                        )? {
-                            PlannerResult::Planned(expr) => return Ok(expr),
-                            PlannerResult::Original(_args) => {}
+                        ) {
+                            match planner_result {
+                                PlannerResult::Planned(expr) => return Ok(expr),
+                                PlannerResult::Original(_args) => {}
+                            }
                         }
                     }
                     not_impl_err!(
                         "Compound identifiers not supported by ExprPlanner: {ids:?}"
                     )
+                }
+                // found matching field with no spare identifier(s)
+                Some((field, qualifier, _nested_names)) => {
+                    Ok(Expr::Column(Column::from((qualifier, field))))
                 }
                 None => {
                     // return default where use all identifiers to not have a nested field
