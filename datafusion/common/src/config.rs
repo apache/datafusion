@@ -321,27 +321,27 @@ mod parquet_defaults {
     use parquet::basic::Compression;
     use parquet::file::properties as props;
 
-    /// Default value for [`parquet::WriterProperties::data_page_size_limit`]
+    /// Default value for [`props::WriterProperties::data_page_size_limit`]
     pub const DEFAULT_PAGE_SIZE: usize = props::DEFAULT_PAGE_SIZE;
-    /// Default value for [`parquet::WriterProperties::write_batch_size`]
+    /// Default value for [`props::WriterProperties::write_batch_size`]
     pub const DEFAULT_WRITE_BATCH_SIZE: usize = props::DEFAULT_WRITE_BATCH_SIZE;
-    /// Default value for [`parquet::WriterProperties::writer_version`]
+    /// Default value for [`props::WriterProperties::writer_version`]
     pub const DEFAULT_WRITER_VERSION: &str = "1.0";
-    /// Default value for [`parquet::WriterProperties::dictionary_enabled`]
+    /// Default value for [`props::WriterProperties::dictionary_enabled`]
     pub const DEFAULT_DICTIONARY_ENABLED: Option<bool> =
         Some(props::DEFAULT_DICTIONARY_ENABLED);
-    /// Default value for [`parquet::WriterProperties::dictionary_page_size_limit`]
+    /// Default value for [`props::WriterProperties::dictionary_page_size_limit`]
     pub const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize =
         props::DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT;
-    /// Default value for [`parquet::WriterProperties::data_page_row_count_limit`]
+    /// Default value for [`props::WriterProperties::data_page_row_count_limit`]
     pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize =
         props::DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT;
-    /// Default value for [`parquet::WriterProperties::max_statistics_size`]
+    /// Default value for [`props::WriterProperties::max_statistics_size`]
     pub const DEFAULT_MAX_STATISTICS_SIZE: Option<usize> =
         Some(props::DEFAULT_MAX_STATISTICS_SIZE);
-    /// Default value for [`parquet::WriterProperties::max_row_group_size`]
+    /// Default value for [`props::WriterProperties::max_row_group_size`]
     pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = props::DEFAULT_MAX_ROW_GROUP_SIZE;
-    /// Default value for [`parquet::WriterProperties::column_index_truncate_length`]
+    /// Default value for [`props::WriterProperties::column_index_truncate_length`]
     pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> =
         props::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH;
 
@@ -349,19 +349,19 @@ mod parquet_defaults {
     // refer to https://github.com/apache/datafusion/issues/11367
 
     #[allow(dead_code)]
-    /// Default value for [`parquet::WriterProperties::statistics_enabled`]
+    /// Default value for [`props::WriterProperties::statistics_enabled`]
     pub const DEFAULT_STATISTICS_ENABLED: Option<&str> = Some("page");
     #[allow(dead_code)]
-    /// Default value for [`parquet::BloomFilterProperties::fpp`]
+    /// Default value for [`props::BloomFilterProperties::fpp`]
     pub const DEFAULT_BLOOM_FILTER_FPP: Option<f64> =
         Some(props::DEFAULT_BLOOM_FILTER_FPP);
     #[allow(dead_code)]
-    /// Default value for [`parquet::BloomFilterProperties::ndv`]
+    /// Default value for [`props::BloomFilterProperties::ndv`]
     pub const DEFAULT_BLOOM_FILTER_NDV: Option<u64> =
         Some(props::DEFAULT_BLOOM_FILTER_NDV);
 
     #[allow(dead_code)]
-    /// Default value for [`parquet::WriterProperties::compression`]
+    /// Default value for [props::WriterProperties::compression`]
     pub const DEFAULT_COMPRESSION: Compression = Compression::UNCOMPRESSED;
 }
 
