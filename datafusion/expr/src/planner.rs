@@ -174,10 +174,7 @@ pub trait ExprPlanner: Send + Sync {
         Ok(PlannerResult::Original(args))
     }
 
-    fn plan_get_field(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Original(args))
-    }
-    /// Plans compound identifier eg `db.schema.table`.
+    /// Plans compound identifier eg `db.schema.table` for non-empty nested names
     ///
     /// Note:
     /// Currently compound identifier for outer query schema is not supported.
@@ -185,11 +182,11 @@ pub trait ExprPlanner: Send + Sync {
     /// Returns empty expression arguments if not possible
     fn plan_compound_identifier(
         &self,
-        _filed: &Field,
+        _field: &Field,
         _qualifier: Option<&TableReference>,
         _nested_names: &[String],
     ) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Original(vec![]))
+        not_impl_err!("Default planner compound identifier hasn't been implemented for {self:?} yet")
     }
 }
 

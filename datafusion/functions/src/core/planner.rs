@@ -70,27 +70,19 @@ impl ExprPlanner for CoreFunctionPlanner {
         qualifier: Option<&TableReference>,
         nested_names: &[String],
     ) -> Result<PlannerResult<Vec<Expr>>> {
-        // found matching field with no spare identifier(s)
-        if nested_names.is_empty() {
-            Ok(PlannerResult::Planned(Expr::Column(Column::from((
-                qualifier, field,
-            )))))
-        } else {
-            // found matching field with spare identifier(s) for nested field(s) in structure
-            // TODO: remove when can support multiple nested identifiers
-            if nested_names.len() > 1 {
-                return not_impl_err!(
-                    "Nested identifiers not yet supported for column {}",
-                    Column::from((qualifier, field)).quoted_flat_name()
-                );
-            }
-            let nested_name = nested_names[0].to_string();
-
-            let col = Expr::Column(Column::from((qualifier, field)));
-            let get_field_args = vec![col, lit(ScalarValue::from(nested_name))];
-            Ok(PlannerResult::Planned(Expr::ScalarFunction(
-                ScalarFunction::new_udf(crate::core::get_field(), get_field_args),
-            )))
+        // TODO: remove when can support multiple nested identifiers
+        if nested_names.len() > 1 {
+            return not_impl_err!(
+                "Nested identifiers not yet supported for column {}",
+                Column::from((qualifier, field)).quoted_flat_name()
+            );
         }
+        let nested_name = nested_names[0].to_string();
+
+        let col = Expr::Column(Column::from((qualifier, field)));
+        let get_field_args = vec![col, lit(ScalarValue::from(nested_name))];
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::core::get_field(), get_field_args),
+        )))
     }
 }
