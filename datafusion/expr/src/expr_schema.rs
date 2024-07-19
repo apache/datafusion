@@ -112,7 +112,24 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.data_type()),
-            Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
+            Expr::Case(case) => {
+                let then_type = case.when_then_expr[0].1.get_type(schema)?;
+                if !then_type.is_null() {
+                    return Ok(then_type);
+                }
+
+                let else_type = if let Some(e) = &case.else_expr {
+                    e.get_type(schema)?
+                } else {
+                    DataType::Null
+                };
+
+                match (then_type.clone(), else_type.clone()) {
+                    (DataType::Null, DataType::Null) => Ok(DataType::Int64),
+                    (DataType::Null, _) => Ok(else_type),
+                    _ => Ok(else_type),
+                }
+            }
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
             Expr::Unnest(Unnest { expr }) => {
