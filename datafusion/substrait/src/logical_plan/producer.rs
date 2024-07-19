@@ -2219,14 +2219,11 @@ mod test {
         );
 
         // Check we fail if we don't propagate extensions
-        assert_eq!(
-            from_substrait_literal_without_names(
-                &substrait_literal,
-                &Extensions::default()
-            )
-            .is_err(),
-            true
-        );
+        assert!(from_substrait_literal_without_names(
+            &substrait_literal,
+            &Extensions::default()
+        )
+        .is_err());
         Ok(())
     }
 
@@ -2328,10 +2325,9 @@ mod test {
         );
 
         // Check we fail if we don't propagate extensions
-        assert_eq!(
+        assert!(
             from_substrait_type_without_names(&substrait, &Extensions::default())
-                .is_err(),
-            true
+                .is_err()
         );
 
         Ok(())
