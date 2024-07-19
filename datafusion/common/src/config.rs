@@ -318,7 +318,7 @@ config_namespace! {
 /// use the same default writer settings as the extern parquet.
 #[cfg(feature = "parquet")]
 mod parquet_defaults {
-    #![allow(dead_code)]
+    use parquet::basic::Compression;
     use parquet::file::properties as props;
 
     /// Default value for [`parquet::WriterProperties::data_page_size_limit`]
@@ -336,8 +336,6 @@ mod parquet_defaults {
     /// Default value for [`parquet::WriterProperties::data_page_row_count_limit`]
     pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize =
         props::DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT;
-    /// Default value for [`parquet::WriterProperties::statistics_enabled`]
-    pub const DEFAULT_STATISTICS_ENABLED: Option<&str> = Some("page");
     /// Default value for [`parquet::WriterProperties::max_statistics_size`]
     pub const DEFAULT_MAX_STATISTICS_SIZE: Option<usize> =
         Some(props::DEFAULT_MAX_STATISTICS_SIZE);
@@ -346,12 +344,25 @@ mod parquet_defaults {
     /// Default value for [`parquet::WriterProperties::column_index_truncate_length`]
     pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> =
         props::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH;
+
+    // TODO: discuss if we want datafusion to use these defaults from the extern parquet
+    // refer to https://github.com/apache/datafusion/issues/11367
+
+    #[allow(dead_code)]
+    /// Default value for [`parquet::WriterProperties::statistics_enabled`]
+    pub const DEFAULT_STATISTICS_ENABLED: Option<&str> = Some("page");
+    #[allow(dead_code)]
     /// Default value for [`parquet::BloomFilterProperties::fpp`]
     pub const DEFAULT_BLOOM_FILTER_FPP: Option<f64> =
         Some(props::DEFAULT_BLOOM_FILTER_FPP);
+    #[allow(dead_code)]
     /// Default value for [`parquet::BloomFilterProperties::ndv`]
     pub const DEFAULT_BLOOM_FILTER_NDV: Option<u64> =
         Some(props::DEFAULT_BLOOM_FILTER_NDV);
+
+    #[allow(dead_code)]
+    /// Default value for [`parquet::WriterProperties::compression`]
+    pub const DEFAULT_COMPRESSION: Compression = Compression::UNCOMPRESSED;
 }
 
 /// When note using the parquet feature, provide a manual copy
@@ -361,18 +372,24 @@ mod parquet_defaults {
 /// `config_namespace` macro, which does not handle internal configuration macros.
 #[cfg(not(feature = "parquet"))]
 mod parquet_defaults {
-    #![allow(dead_code)]
     pub const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
     pub const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
     pub const DEFAULT_WRITER_VERSION: &str = "1.0";
     pub const DEFAULT_DICTIONARY_ENABLED: Option<bool> = Some(true);
     pub const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
     pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
-    pub const DEFAULT_STATISTICS_ENABLED: Option<&str> = Some("page");
     pub const DEFAULT_MAX_STATISTICS_SIZE: Option<usize> = Some(4096);
     pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
     pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
+
+    // TODO: discuss if we want datafusion to use these defaults from the extern parquet
+    // refer to https://github.com/apache/datafusion/issues/11367
+
+    #[allow(dead_code)]
+    pub const DEFAULT_STATISTICS_ENABLED: Option<&str> = Some("page");
+    #[allow(dead_code)]
     pub const DEFAULT_BLOOM_FILTER_FPP: Option<f64> = Some(0.05);
+    #[allow(dead_code)]
     pub const DEFAULT_BLOOM_FILTER_NDV: Option<u64> = Some(1_000_000_u64);
 }
 
