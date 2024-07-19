@@ -218,6 +218,7 @@ fn aggregate_batch(
                 Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
                 None => Cow::Borrowed(&batch),
             };
+
             // 1.3
             let values = &expr
                 .iter()

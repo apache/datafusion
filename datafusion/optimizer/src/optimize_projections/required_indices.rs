@@ -160,7 +160,7 @@ impl RequiredIndicies {
         (l, r.map_indices(|idx| idx - n))
     }
 
-    /// Partitions the indicies in this instance into two groups based on the
+    /// Partitions the indices in this instance into two groups based on the
     /// given predicate function `f`.
     fn partition<F>(&self, f: F) -> (Self, Self)
     where

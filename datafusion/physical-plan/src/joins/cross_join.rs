@@ -578,7 +578,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stats_cartesian_product_with_unknwon_size() {
+    async fn test_stats_cartesian_product_with_unknown_size() {
         let left_row_count = 11;
 
         let left = Statistics {
