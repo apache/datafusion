@@ -115,7 +115,6 @@ pub fn create_aggregate_expr_with_dfschema(
     input_exprs: &[Expr],
     sort_exprs: &[Expr],
     ordering_req: &[PhysicalSortExpr],
-    schema: &Schema,
     dfschema: &DFSchema,
     name: impl Into<String>,
     ignore_nulls: bool,
@@ -124,9 +123,11 @@ pub fn create_aggregate_expr_with_dfschema(
 ) -> Result<Arc<dyn AggregateExpr>> {
     debug_assert_eq!(sort_exprs.len(), ordering_req.len());
 
+    let schema: Schema = dfschema.into();
+
     let input_exprs_types = input_phy_exprs
         .iter()
-        .map(|arg| arg.data_type(schema))
+        .map(|arg| arg.data_type(&schema))
         .collect::<Result<Vec<_>>>()?;
 
     check_arg_count(
@@ -137,7 +138,7 @@ pub fn create_aggregate_expr_with_dfschema(
 
     let ordering_types = ordering_req
         .iter()
-        .map(|e| e.expr.data_type(schema))
+        .map(|e| e.expr.data_type(&schema))
         .collect::<Result<Vec<_>>>()?;
 
     let ordering_fields = ordering_fields(ordering_req, &ordering_types);
@@ -538,13 +539,13 @@ impl AggregateExpr for AggregateFunctionExpr {
         else {
             return Ok(None);
         };
-        create_aggregate_expr(
+        create_aggregate_expr_with_dfschema(
             &updated_fn,
             &self.args,
             &self.logical_args,
             &self.sort_exprs,
             &self.ordering_req,
-            &self.schema,
+            &self.dfschema,
             self.name(),
             self.ignore_nulls,
             self.is_distinct,
@@ -584,7 +585,6 @@ impl AggregateExpr for AggregateFunctionExpr {
                     &self.logical_args,
                     &reverse_sort_exprs,
                     &reverse_ordering_req,
-                    &self.schema,
                     &self.dfschema,
                     name,
                     self.ignore_nulls,

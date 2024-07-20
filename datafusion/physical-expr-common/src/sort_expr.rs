@@ -299,6 +299,8 @@ pub fn limited_convert_logical_sort_exprs_to_physical(
     Ok(sort_exprs)
 }
 
+/// Converts each [`Expr::Sort`] into a corresponding [`PhysicalSortExpr`].
+/// Returns an error if the given logical expression is not a [`Expr::Sort`].
 pub fn limited_convert_logical_sort_exprs_to_physical_with_dfschema(
     exprs: &[Expr],
     dfschema: &DFSchema,

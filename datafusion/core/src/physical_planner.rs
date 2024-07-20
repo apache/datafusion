@@ -1903,35 +1903,18 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         physical_sort_exprs.clone().unwrap_or(vec![]);
 
-                    let agg_expr = if fun.name() == "ARRAY_AGG" && !sort_exprs.is_empty()
-                    {
-                        udaf::create_aggregate_expr_with_dfschema(
-                            fun,
-                            &physical_args,
-                            args,
-                            &sort_exprs,
-                            &ordering_reqs,
-                            physical_input_schema,
-                            logical_input_schema,
-                            name,
-                            ignore_nulls,
-                            *distinct,
-                            false,
-                        )?
-                    } else {
-                        udaf::create_aggregate_expr(
-                            fun,
-                            &physical_args,
-                            args,
-                            &sort_exprs,
-                            &ordering_reqs,
-                            physical_input_schema,
-                            name,
-                            ignore_nulls,
-                            *distinct,
-                            false,
-                        )?
-                    };
+                    let agg_expr = udaf::create_aggregate_expr_with_dfschema(
+                        fun,
+                        &physical_args,
+                        args,
+                        &sort_exprs,
+                        &ordering_reqs,
+                        logical_input_schema,
+                        name,
+                        ignore_nulls,
+                        *distinct,
+                        false,
+                    )?;
 
                     (agg_expr, filter, physical_sort_exprs)
                 }
