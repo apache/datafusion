@@ -1016,6 +1016,15 @@ impl ScalarValue {
         }
     }
 
+    /// Returns a [`ScalarValue`] representing -PI
+    pub fn new_neg_pi(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::Float32(Some(-std::f32::consts::PI))),
+            DataType::Float64 => Ok(ScalarValue::Float64(Some(-std::f64::consts::PI))),
+            _ => _internal_err!("-PI is not supported for data type: {:?}", datatype),
+        }
+    }
+
     /// Returns a [`ScalarValue`] representing PI/2
     pub fn new_frac_pi_2(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {

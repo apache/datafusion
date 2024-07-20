@@ -79,7 +79,7 @@ make_math_unary_udf!(
     atan,
     atan,
     super::atan_order,
-    super::bounds::evaluate_bounds
+    super::bounds::atan_bounds
 );
 make_math_unary_udf!(
     AtanhFunc,
@@ -87,7 +87,7 @@ make_math_unary_udf!(
     atanh,
     atanh,
     super::atanh_order,
-    super::bounds::evaluate_bounds
+    super::bounds::atanh_bounds
 );
 make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, super::atan2_order);
 make_math_unary_udf!(
@@ -120,7 +120,7 @@ make_math_unary_udf!(
     cosh,
     cosh,
     super::cosh_order,
-    super::bounds::evaluate_bounds
+    super::bounds::cosh_bounds
 );
 make_udf_function!(cot::CotFunc, COT, cot);
 make_math_unary_udf!(
@@ -137,7 +137,7 @@ make_math_unary_udf!(
     exp,
     exp,
     super::exp_order,
-    super::bounds::evaluate_bounds
+    super::bounds::exp_bounds
 );
 make_udf_function!(factorial::FactorialFunc, FACTORIAL, factorial);
 make_math_unary_udf!(
@@ -159,7 +159,7 @@ make_math_unary_udf!(
     ln,
     ln,
     super::ln_order,
-    super::bounds::evaluate_bounds
+    super::bounds::ln_bounds
 );
 make_math_unary_udf!(
     Log2Func,
@@ -167,7 +167,7 @@ make_math_unary_udf!(
     log2,
     log2,
     super::log2_order,
-    super::bounds::evaluate_bounds
+    super::bounds::log2_bounds
 );
 make_math_unary_udf!(
     Log10Func,
@@ -175,7 +175,7 @@ make_math_unary_udf!(
     log10,
     log10,
     super::log10_order,
-    super::bounds::evaluate_bounds
+    super::bounds::log10_bounds
 );
 make_udf_function!(nanvl::NanvlFunc, NANVL, nanvl);
 make_udf_function!(pi::PiFunc, PI, pi);
@@ -186,7 +186,7 @@ make_math_unary_udf!(
     radians,
     to_radians,
     super::radians_order,
-    super::bounds::evaluate_bounds
+    super::bounds::radians_bounds
 );
 make_udf_function!(random::RandomFunc, RANDOM, random);
 make_udf_function!(round::RoundFunc, ROUND, round);
@@ -213,7 +213,7 @@ make_math_unary_udf!(
     sqrt,
     sqrt,
     super::sqrt_order,
-    super::bounds::evaluate_bounds
+    super::bounds::sqrt_bounds
 );
 make_math_unary_udf!(
     TanFunc,
@@ -229,7 +229,7 @@ make_math_unary_udf!(
     tanh,
     tanh,
     super::tanh_order,
-    super::bounds::evaluate_bounds
+    super::bounds::tanh_bounds
 );
 make_udf_function!(trunc::TruncFunc, TRUNC, trunc);
 
