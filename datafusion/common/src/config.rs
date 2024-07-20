@@ -324,6 +324,15 @@ config_namespace! {
 
         /// Should DataFusion keep the columns used for partition_by in the output RecordBatches
         pub keep_partition_by_columns: bool, default = false
+
+        /// Aggregation ratio (number of distinct groups / number of input rows)
+        /// threshold for skipping partial aggregation. If the value is greater
+        /// then partial aggregation will skip aggregation for further input
+        pub skip_partial_aggregation_probe_ratio_threshold: f64, default = 0.8
+
+        /// Number of input rows partial aggregation partition should process, before
+        /// aggregation ratio check and trying to switch to skipping aggregation mode
+        pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
     }
 }
 
