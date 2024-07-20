@@ -116,6 +116,55 @@ fn distribute_by() -> Result<()> {
 }
 
 #[test]
+fn semi_join_with_join_filter() -> Result<()> {
+    // regression test for https://github.com/apache/datafusion/issues/2888
+    let sql = "SELECT col_utf8 FROM test WHERE EXISTS (\
+               SELECT col_utf8 FROM test t2 WHERE test.col_int32 = t2.col_int32 \
+               AND test.col_uint32 != t2.col_uint32)";
+    let plan = test_sql(sql)?;
+    let expected = "Projection: test.col_utf8\
+                    \n  LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32 Filter: test.col_uint32 != __correlated_sq_1.col_uint32\
+                    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
+                    \n    SubqueryAlias: __correlated_sq_1\
+                    \n      SubqueryAlias: t2\
+                    \n        TableScan: test projection=[col_int32, col_uint32]";
+    assert_eq!(expected, format!("{plan:?}"));
+    Ok(())
+}
+
+#[test]
+fn anti_join_with_join_filter() -> Result<()> {
+    // regression test for https://github.com/apache/datafusion/issues/2888
+    let sql = "SELECT col_utf8 FROM test WHERE NOT EXISTS (\
+               SELECT col_utf8 FROM test t2 WHERE test.col_int32 = t2.col_int32 \
+               AND test.col_uint32 != t2.col_uint32)";
+    let plan = test_sql(sql)?;
+    let expected = "Projection: test.col_utf8\
+    \n  LeftAnti Join: test.col_int32 = __correlated_sq_1.col_int32 Filter: test.col_uint32 != __correlated_sq_1.col_uint32\
+    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
+    \n    SubqueryAlias: __correlated_sq_1\
+    \n      SubqueryAlias: t2\
+    \n        TableScan: test projection=[col_int32, col_uint32]";
+    assert_eq!(expected, format!("{plan:?}"));
+    Ok(())
+}
+
+#[test]
+fn where_exists_distinct() -> Result<()> {
+    let sql = "SELECT col_int32 FROM test WHERE EXISTS (\
+               SELECT DISTINCT col_int32 FROM test t2 WHERE test.col_int32 = t2.col_int32)";
+    let plan = test_sql(sql)?;
+    let expected = "LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32\
+    \n  TableScan: test projection=[col_int32]\
+    \n  SubqueryAlias: __correlated_sq_1\
+    \n    Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]\
+    \n      SubqueryAlias: t2\
+    \n        TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{plan:?}"));
+    Ok(())
+}
+
+#[test]
 fn intersect() -> Result<()> {
     let sql = "SELECT col_int32, col_utf8 FROM test \
     INTERSECT SELECT col_int32, col_utf8 FROM test \
@@ -162,6 +211,50 @@ fn between_date64_plus_interval() -> Result<()> {
 }
 
 #[test]
+fn propagate_empty_relation() {
+    let sql = "SELECT test.col_int32 FROM test JOIN ( SELECT col_int32 FROM test WHERE false ) AS ta1 ON test.col_int32 = ta1.col_int32;";
+    let plan = test_sql(sql).unwrap();
+    // when children exist EmptyRelation, it will bottom-up propagate.
+    let expected = "EmptyRelation";
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
+#[test]
+fn join_keys_in_subquery_alias() {
+    let sql = "SELECT * FROM test AS A, ( SELECT col_int32 as key FROM test ) AS B where A.col_int32 = B.key;";
+    let plan = test_sql(sql).unwrap();
+    let expected = "Inner Join: a.col_int32 = b.key\
+    \n  SubqueryAlias: a\
+    \n    Filter: test.col_int32 IS NOT NULL\
+    \n      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
+    \n  SubqueryAlias: b\
+    \n    Projection: test.col_int32 AS key\
+    \n      Filter: test.col_int32 IS NOT NULL\
+    \n        TableScan: test projection=[col_int32]";
+
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
+#[test]
+fn join_keys_in_subquery_alias_1() {
+    let sql = "SELECT * FROM test AS A, ( SELECT test.col_int32 AS key FROM test JOIN test AS C on test.col_int32 = C.col_int32 ) AS B where A.col_int32 = B.key;";
+    let plan = test_sql(sql).unwrap();
+    let expected = "Inner Join: a.col_int32 = b.key\
+    \n  SubqueryAlias: a\
+    \n    Filter: test.col_int32 IS NOT NULL\
+    \n      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
+    \n  SubqueryAlias: b\
+    \n    Projection: test.col_int32 AS key\
+    \n      Inner Join: test.col_int32 = c.col_int32\
+    \n        Filter: test.col_int32 IS NOT NULL\
+    \n          TableScan: test projection=[col_int32]\
+    \n        SubqueryAlias: c\
+    \n          Filter: test.col_int32 IS NOT NULL\
+    \n            TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
+#[test]
 fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
@@ -169,6 +262,20 @@ fn push_down_filter_groupby_expr_contains_alias() {
     \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(Int64(1)) AS count(*)]]\
     \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
+#[test]
+// issue: https://github.com/apache/datafusion/issues/5334
+fn test_same_name_but_not_ambiguous() {
+    let sql = "SELECT t1.col_int32 AS col_int32 FROM test t1 intersect SELECT col_int32 FROM test t2";
+    let plan = test_sql(sql).unwrap();
+    let expected = "LeftSemi Join: t1.col_int32 = t2.col_int32\
+    \n  Aggregate: groupBy=[[t1.col_int32]], aggr=[[]]\
+    \n    SubqueryAlias: t1\
+    \n      TableScan: test projection=[col_int32]\
+    \n  SubqueryAlias: t2\
+    \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));
 }
 
@@ -198,6 +305,32 @@ fn eliminate_redundant_null_check_on_count() {
     let expected = "\
         Projection: test.col_int32, count(*) AS c\
         \n  Aggregate: groupBy=[[test.col_int32]], aggr=[[count(Int64(1)) AS count(*)]]\
+        \n    TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
+#[test]
+fn test_propagate_empty_relation_inner_join_and_unions() {
+    let sql = "\
+        SELECT A.col_int32 FROM test AS A \
+        INNER JOIN ( \
+          SELECT col_int32 FROM test WHERE 1 = 0 \
+        ) AS B ON A.col_int32 = B.col_int32 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 1 = 1 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 0 = 0 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE test.col_int32 < 0 \
+        UNION ALL \
+        SELECT test.col_int32 FROM test WHERE 1 = 0";
+
+    let plan = test_sql(sql).unwrap();
+    let expected = "\
+        Union\
+        \n  TableScan: test projection=[col_int32]\
+        \n  TableScan: test projection=[col_int32]\
+        \n  Filter: test.col_int32 < Int32(0)\
         \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));
 }
