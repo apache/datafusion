@@ -318,3 +318,160 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         trunc(),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::DataType;
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::interval_arithmetic::Interval;
+
+    fn unbounded_interval(data_type: &DataType) -> Interval {
+        Interval::make_unbounded(data_type).unwrap()
+    }
+
+    fn symmetric_unit_interval(data_type: &DataType) -> Interval {
+        Interval::make_symmetric_unit_interval(data_type).unwrap()
+    }
+
+    fn symmetric_pi_interval(data_type: &DataType) -> Interval {
+        Interval::try_new(
+            ScalarValue::new_neg_pi(data_type).unwrap(),
+            ScalarValue::new_pi(data_type).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn symmetric_frac_pi_2_interval(data_type: &DataType) -> Interval {
+        Interval::try_new(
+            ScalarValue::new_neg_frac_pi_2(data_type).unwrap(),
+            ScalarValue::new_frac_pi_2(data_type).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn zero_to_inf_interval(data_type: &DataType) -> Interval {
+        Interval::try_new(
+            ScalarValue::new_zero(data_type).unwrap(),
+            ScalarValue::new_infinity(data_type).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn one_to_inf_interval(data_type: &DataType) -> Interval {
+        Interval::try_new(
+            ScalarValue::new_one(data_type).unwrap(),
+            ScalarValue::new_infinity(data_type).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn zero_to_pi_interval(data_type: &DataType) -> Interval {
+        Interval::try_new(
+            ScalarValue::new_zero(data_type).unwrap(),
+            ScalarValue::new_pi(data_type).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn assert_udf_evaluates_to_bounds(
+        udf: &datafusion_expr::ScalarUDF,
+        interval: Interval,
+        expected: Interval,
+    ) {
+        let input = vec![&interval];
+        let result = udf.evaluate_bounds(&input).unwrap();
+        assert_eq!(
+            result,
+            expected,
+            "Bounds check failed on UDF: {:?}",
+            udf.name()
+        );
+    }
+
+    #[test]
+    fn test_cases() -> crate::Result<()> {
+        let cases = vec![
+            (
+                super::acos(),
+                unbounded_interval(&DataType::Float64),
+                zero_to_pi_interval(&DataType::Float64),
+            ),
+            (
+                super::acosh(),
+                unbounded_interval(&DataType::Float64),
+                zero_to_inf_interval(&DataType::Float64),
+            ),
+            (
+                super::asin(),
+                unbounded_interval(&DataType::Float64),
+                symmetric_frac_pi_2_interval(&DataType::Float64),
+            ),
+            (
+                super::atan(),
+                unbounded_interval(&DataType::Float64),
+                symmetric_frac_pi_2_interval(&DataType::Float64),
+            ),
+            (
+                super::atanh(),
+                unbounded_interval(&DataType::Float64),
+                symmetric_unit_interval(&DataType::Float64),
+            ),
+            (
+                super::cos(),
+                unbounded_interval(&DataType::Float64),
+                symmetric_unit_interval(&DataType::Float64),
+            ),
+            (
+                super::cosh(),
+                unbounded_interval(&DataType::Float64),
+                one_to_inf_interval(&DataType::Float64),
+            ),
+            (
+                super::sin(),
+                unbounded_interval(&DataType::Float64),
+                symmetric_unit_interval(&DataType::Float64),
+            ),
+            (
+                super::exp(),
+                unbounded_interval(&DataType::Float64),
+                zero_to_inf_interval(&DataType::Float64),
+            ),
+            (
+                super::ln(),
+                unbounded_interval(&DataType::Float64),
+                zero_to_inf_interval(&DataType::Float64),
+            ),
+            (
+                super::log2(),
+                unbounded_interval(&DataType::Float64),
+                zero_to_inf_interval(&DataType::Float64),
+            ),
+            (
+                super::log10(),
+                unbounded_interval(&DataType::Float64),
+                zero_to_inf_interval(&DataType::Float64),
+            ),
+            (
+                super::sqrt(),
+                unbounded_interval(&DataType::Float64),
+                zero_to_inf_interval(&DataType::Float64),
+            ),
+            (
+                super::radians(),
+                unbounded_interval(&DataType::Float64),
+                symmetric_pi_interval(&DataType::Float64),
+            ),
+            (
+                super::sqrt(),
+                unbounded_interval(&DataType::Float64),
+                zero_to_inf_interval(&DataType::Float64),
+            ),
+        ];
+
+        for (udf, interval, expected) in cases {
+            assert_udf_evaluates_to_bounds(&udf, interval, expected);
+        }
+
+        Ok(())
+    }
+}

@@ -172,25 +172,3 @@ pub(super) fn tanh_bounds(input: &[&Interval]) -> crate::Result<Interval> {
 
     Interval::make_symmetric_unit_interval(&data_type)
 }
-
-#[cfg(test)]
-mod tests {
-
-    fn unbounded_interval(data_type: &super::DataType) -> super::Interval {
-        super::Interval::make_unbounded(data_type).unwrap()
-    }
-
-    fn test_tanh_bounds() {
-        let unbounded = unbounded_interval(&super::DataType::Float64);
-        let bounds = super::tanh_bounds(&[&unbounded]).unwrap();
-
-        assert_eq!(
-            bounds,
-            super::Interval::try_new(
-                super::ScalarValue::from(-1.0),
-                super::ScalarValue::from(1.0),
-            )
-            .unwrap()
-        );
-    }
-}

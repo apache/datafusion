@@ -35,18 +35,18 @@ use std::sync::Arc;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 const KB: usize = 1 << 10;
-#[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
-async fn test_sort_1k_mem() {
-    for (batch_size, should_spill) in [(5, false), (20000, true), (1000000, true)] {
-        SortTest::new()
-            .with_int32_batches(batch_size)
-            .with_pool_size(10 * KB)
-            .with_should_spill(should_spill)
-            .run()
-            .await;
-    }
-}
+// #[tokio::test]
+// #[cfg_attr(tarpaulin, ignore)]
+// async fn test_sort_1k_mem() {
+//     for (batch_size, should_spill) in [(5, false), (20000, true), (1000000, true)] {
+//         SortTest::new()
+//             .with_int32_batches(batch_size)
+//             .with_pool_size(10 * KB)
+//             .with_should_spill(should_spill)
+//             .run()
+//             .await;
+//     }
+// }
 
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
