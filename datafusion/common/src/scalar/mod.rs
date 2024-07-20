@@ -1007,6 +1007,66 @@ impl ScalarValue {
         }
     }
 
+    /// Returns a [`ScalarValue`] representing PI
+    pub fn new_pi(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::Float32(Some(std::f32::consts::PI))),
+            DataType::Float64 => Ok(ScalarValue::Float64(Some(std::f64::consts::PI))),
+            _ => _internal_err!("PI is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing PI/2
+    pub fn new_frac_pi_2(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => {
+                Ok(ScalarValue::Float32(Some(std::f32::consts::FRAC_PI_2)))
+            }
+            DataType::Float64 => {
+                Ok(ScalarValue::Float64(Some(std::f64::consts::FRAC_PI_2)))
+            }
+            _ => _internal_err!("PI/2 is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing -PI/2
+    pub fn new_neg_frac_pi_2(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => {
+                Ok(ScalarValue::Float32(Some(-std::f32::consts::FRAC_PI_2)))
+            }
+            DataType::Float64 => {
+                Ok(ScalarValue::Float64(Some(-std::f64::consts::FRAC_PI_2)))
+            }
+            _ => _internal_err!("-PI/2 is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing infinity
+    pub fn new_infinity(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::Float32(Some(f32::INFINITY))),
+            DataType::Float64 => Ok(ScalarValue::Float64(Some(f64::INFINITY))),
+            _ => {
+                _internal_err!("Infinity is not supported for data type: {:?}", datatype)
+            }
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing negative infinity
+    pub fn new_neg_infinity(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::Float32(Some(f32::NEG_INFINITY))),
+            DataType::Float64 => Ok(ScalarValue::Float64(Some(f64::NEG_INFINITY))),
+            _ => {
+                _internal_err!(
+                    "Negative Infinity is not supported for data type: {:?}",
+                    datatype
+                )
+            }
+        }
+    }
+
     /// Create a zero value in the given type.
     pub fn new_zero(datatype: &DataType) -> Result<ScalarValue> {
         Ok(match datatype {
