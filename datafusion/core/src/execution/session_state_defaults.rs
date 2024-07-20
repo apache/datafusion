@@ -21,11 +21,14 @@ use crate::datasource::file_format::arrow::ArrowFormatFactory;
 use crate::datasource::file_format::avro::AvroFormatFactory;
 use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::json::JsonFormatFactory;
+#[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormatFactory;
 use crate::datasource::file_format::FileFormatFactory;
 use crate::datasource::provider::{DefaultTableFactory, TableProviderFactory};
 use crate::execution::context::SessionState;
-use crate::{functions, functions_aggregate, functions_array};
+#[cfg(feature = "array_expressions")]
+use crate::functions_array;
+use crate::{functions, functions_aggregate};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
