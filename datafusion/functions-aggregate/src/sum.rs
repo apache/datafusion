@@ -119,7 +119,7 @@ impl AggregateUDFImpl for Sum {
                 DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
                     Ok(data_type.clone())
                 }
-                dt if dt.is_signed_integer() || dt.is_null() => Ok(DataType::Int64),
+                dt if dt.is_signed_integer() => Ok(DataType::Int64),
                 dt if dt.is_unsigned_integer() => Ok(DataType::UInt64),
                 dt if dt.is_floating() => Ok(DataType::Float64),
                 _ => exec_err!("Sum not supported for {}", data_type),
@@ -131,7 +131,7 @@ impl AggregateUDFImpl for Sum {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            DataType::Int64 | DataType::Null => Ok(DataType::Int64),
+            DataType::Int64 => Ok(DataType::Int64),
             DataType::UInt64 => Ok(DataType::UInt64),
             DataType::Float64 => Ok(DataType::Float64),
             DataType::Decimal128(precision, scale) => {
