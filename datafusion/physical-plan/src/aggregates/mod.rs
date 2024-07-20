@@ -1355,6 +1355,7 @@ mod tests {
             "COUNT(1)",
             false,
             false,
+            false,
         )?];
 
         let task_ctx = if spill {
@@ -1502,6 +1503,7 @@ mod tests {
             &[],
             &input_schema,
             "AVG(b)",
+            false,
             false,
             false,
         )?];
@@ -1808,6 +1810,7 @@ mod tests {
             "MEDIAN(a)",
             false,
             false,
+            false,
         )
     }
 
@@ -1842,6 +1845,7 @@ mod tests {
             &[],
             &input_schema,
             "AVG(b)",
+            false,
             false,
             false,
         )?];
@@ -1908,6 +1912,7 @@ mod tests {
             "AVG(a)",
             false,
             false,
+            false,
         )?];
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
@@ -1950,6 +1955,7 @@ mod tests {
             &[],
             &schema,
             "AVG(b)",
+            false,
             false,
             false,
         )?];
@@ -2022,6 +2028,7 @@ mod tests {
             "FIRST_VALUE(b)",
             false,
             false,
+            false,
         )
     }
 
@@ -2052,6 +2059,7 @@ mod tests {
             &ordering_req,
             schema,
             "LAST_VALUE(b)",
+            false,
             false,
             false,
         )
@@ -2328,6 +2336,7 @@ mod tests {
             &[],
             schema.as_ref(),
             "1",
+            false,
             false,
             false,
         )?];

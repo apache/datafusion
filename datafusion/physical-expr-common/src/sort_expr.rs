@@ -22,12 +22,15 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
-use crate::utils::limited_convert_logical_expr_to_physical_expr;
+use crate::utils::{
+    limited_convert_logical_expr_to_physical_expr,
+    limited_convert_logical_expr_to_physical_expr_with_dfschema,
+};
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, DFSchema, Result};
 use datafusion_expr::{ColumnarValue, Expr};
 
 /// Represents Sort operation for a column in a RecordBatch
@@ -287,6 +290,30 @@ pub fn limited_convert_logical_sort_exprs_to_physical(
         };
         sort_exprs.push(PhysicalSortExpr::new(
             limited_convert_logical_expr_to_physical_expr(sort.expr.as_ref(), schema)?,
+            SortOptions {
+                descending: !sort.asc,
+                nulls_first: sort.nulls_first,
+            },
+        ))
+    }
+    Ok(sort_exprs)
+}
+
+pub fn limited_convert_logical_sort_exprs_to_physical_with_dfschema(
+    exprs: &[Expr],
+    dfschema: &DFSchema,
+) -> Result<Vec<PhysicalSortExpr>> {
+    // Construct PhysicalSortExpr objects from Expr objects:
+    let mut sort_exprs = vec![];
+    for expr in exprs {
+        let Expr::Sort(sort) = expr else {
+            return exec_err!("Expects to receive sort expression");
+        };
+        sort_exprs.push(PhysicalSortExpr::new(
+            limited_convert_logical_expr_to_physical_expr_with_dfschema(
+                sort.expr.as_ref(),
+                dfschema,
+            )?,
             SortOptions {
                 descending: !sort.asc,
                 nulls_first: sort.nulls_first,

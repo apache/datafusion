@@ -1842,7 +1842,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             // TODO: Remove this after array_agg are all udafs
             let (agg_expr, filter, order_by) = match func_def {
                 AggregateFunctionDefinition::UDF(udf)
-                    if udf.name() == "ARRAY_AGG" && order_by.is_some() =>
+                    if udf.name() == "ARRAY_cAGG" && order_by.is_some() =>
                 {
                     // not yet support UDAF, fallback to builtin
                     let physical_sort_exprs = match order_by {
@@ -1899,19 +1899,40 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         )?),
                         None => None,
                     };
+
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         physical_sort_exprs.clone().unwrap_or(vec![]);
-                    let agg_expr = udaf::create_aggregate_expr(
-                        fun,
-                        &physical_args,
-                        args,
-                        &sort_exprs,
-                        &ordering_reqs,
-                        physical_input_schema,
-                        name,
-                        ignore_nulls,
-                        *distinct,
-                    )?;
+
+                    let agg_expr = if fun.name() == "ARRAY_AGG" && !sort_exprs.is_empty()
+                    {
+                        udaf::create_aggregate_expr_with_dfschema(
+                            fun,
+                            &physical_args,
+                            args,
+                            &sort_exprs,
+                            &ordering_reqs,
+                            physical_input_schema,
+                            logical_input_schema,
+                            name,
+                            ignore_nulls,
+                            *distinct,
+                            false,
+                        )?
+                    } else {
+                        udaf::create_aggregate_expr(
+                            fun,
+                            &physical_args,
+                            args,
+                            &sort_exprs,
+                            &ordering_reqs,
+                            physical_input_schema,
+                            name,
+                            ignore_nulls,
+                            *distinct,
+                            false,
+                        )?
+                    };
+
                     (agg_expr, filter, physical_sort_exprs)
                 }
             };

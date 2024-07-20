@@ -93,13 +93,19 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        OrderSensitiveArrayAggAccumulator::try_new(
+        println!("create order");
+
+        let res = OrderSensitiveArrayAggAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
             self.reverse,
         )
-        .map(|acc| Box::new(acc) as _)
+        .map(|acc| Box::new(acc) as _);
+
+        println!("res not get");
+
+        res
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -134,13 +140,21 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        let reverse_order_req = reverse_order_bys(&self.ordering_req);
+        // reverse_order_req: [PhysicalSortExpr { expr: Column { name: "c", index: 2 }, options: SortOptions { descending: false, nulls_first: false } }]
+        // reverse: true
+        println!("reverse_order_req: {:?}", reverse_order_req);
+        println!("reverse: {:?}", !self.reverse);
+        let name = self.name.to_string();
+        println!("name: {:?}", name);
+
         Some(Arc::new(Self {
-            name: self.name.to_string(),
+            name,
             input_data_type: self.input_data_type.clone(),
             expr: Arc::clone(&self.expr),
             order_by_data_types: self.order_by_data_types.clone(),
             // Reverse requirement:
-            ordering_req: reverse_order_bys(&self.ordering_req),
+            ordering_req: reverse_order_req,
             reverse: !self.reverse,
         }))
     }
