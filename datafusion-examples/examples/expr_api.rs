@@ -205,7 +205,7 @@ fn simplify_demo() -> Result<()> {
     );
 
     // String --> Date simplification
-    // `cast('2020-09-01' as date)` --> 18500
+    // `cast('2020-09-01' as date)` --> 18506 # number of days since epoch 1970-01-01
     assert_eq!(
         simplifier.simplify(lit("2020-09-01").cast_to(&DataType::Date32, &schema)?)?,
         lit(ScalarValue::Date32(Some(18506)))
