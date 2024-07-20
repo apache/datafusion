@@ -261,7 +261,7 @@ fn test_nested_schema_nullability() {
         vec![Some("table_name".into()), None],
         &Arc::new(schema),
     )
-        .unwrap();
+    .unwrap();
 
     let expr = col("parent").field("child");
     assert!(expr.nullable(&dfschema).unwrap());
@@ -334,9 +334,9 @@ fn test_inequalities_non_null_bounded() {
 }
 
 fn validate_simplified_cases<T>(rewriter: &mut GuaranteeRewriter, cases: &[(Expr, T)])
-    where
-        ScalarValue: From<T>,
-        T: Clone,
+where
+    ScalarValue: From<T>,
+    T: Clone,
 {
     for (expr, expected_value) in cases {
         let output = expr.clone().rewrite(rewriter).data().unwrap();
