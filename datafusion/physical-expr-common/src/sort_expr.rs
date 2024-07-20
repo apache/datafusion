@@ -22,10 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
-use crate::utils::{
-    limited_convert_logical_expr_to_physical_expr,
-    limited_convert_logical_expr_to_physical_expr_with_dfschema,
-};
+use crate::utils::limited_convert_logical_expr_to_physical_expr_with_dfschema;
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
@@ -275,29 +272,6 @@ pub type LexRequirement = Vec<PhysicalSortRequirement>;
 ///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
 /// represents a reference to a lexicographical ordering requirement.
 pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];
-
-/// Converts each [`Expr::Sort`] into a corresponding [`PhysicalSortExpr`].
-/// Returns an error if the given logical expression is not a [`Expr::Sort`].
-pub fn limited_convert_logical_sort_exprs_to_physical(
-    exprs: &[Expr],
-    schema: &Schema,
-) -> Result<Vec<PhysicalSortExpr>> {
-    // Construct PhysicalSortExpr objects from Expr objects:
-    let mut sort_exprs = vec![];
-    for expr in exprs {
-        let Expr::Sort(sort) = expr else {
-            return exec_err!("Expects to receive sort expression");
-        };
-        sort_exprs.push(PhysicalSortExpr::new(
-            limited_convert_logical_expr_to_physical_expr(sort.expr.as_ref(), schema)?,
-            SortOptions {
-                descending: !sort.asc,
-                nulls_first: sort.nulls_first,
-            },
-        ))
-    }
-    Ok(sort_exprs)
-}
 
 /// Converts each [`Expr::Sort`] into a corresponding [`PhysicalSortExpr`].
 /// Returns an error if the given logical expression is not a [`Expr::Sort`].
