@@ -28,14 +28,7 @@ use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
 use std::sync::Arc;
 
-/// Should the output be a String or Binary?
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutputType {
-    /// `StringViewArray`
-    Utf8View,
-    /// `BinaryViewArray`
-    BinaryView,
-}
+use crate::binary_map::OutputType;
 
 /// HashSet optimized for storing string or binary values that can produce that
 /// the final set as a `GenericBinaryViewArray` with minimal copies.
@@ -53,6 +46,14 @@ impl ArrowBytesViewSet {
         fn observe_payload_fn(_payload: ()) {}
         self.0
             .insert_if_new(values, make_payload_fn, observe_payload_fn);
+    }
+
+    /// Return the contents of this map and replace it with a new empty map with
+    /// the same output type
+    pub fn take(&mut self) -> Self {
+        let mut new_self = Self::new(self.0.output_type);
+        std::mem::swap(self, &mut new_self);
+        new_self
     }
 
     /// Converts this set into a `StringViewArray` or `BinaryViewArray`
@@ -216,6 +217,7 @@ where
                     observe_payload_fn,
                 )
             }
+            _ => unreachable!("Utf8/Binary should use `ArrowBytesSet`"),
         };
     }
 
@@ -326,6 +328,9 @@ where
                 let array = builder.finish();
                 let array = unsafe { array.to_string_view_unchecked() };
                 Arc::new(array)
+            }
+            _ => {
+                unreachable!("Utf8/Binary should use `ArrowBytesMap`")
             }
         }
     }

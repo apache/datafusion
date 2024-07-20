@@ -18,6 +18,7 @@
 use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
 use arrow_schema::{DataType, SchemaRef};
+use bytes_view::GroupValuesBytesView;
 use datafusion_common::Result;
 
 pub(crate) mod primitive;
@@ -28,6 +29,7 @@ mod row;
 use row::GroupValuesRows;
 
 mod bytes;
+mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
@@ -67,17 +69,26 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
             _ => {}
         }
 
-        if let DataType::Utf8 = d {
-            return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Utf8)));
-        }
-        if let DataType::LargeUtf8 = d {
-            return Ok(Box::new(GroupValuesByes::<i64>::new(OutputType::Utf8)));
-        }
-        if let DataType::Binary = d {
-            return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Binary)));
-        }
-        if let DataType::LargeBinary = d {
-            return Ok(Box::new(GroupValuesByes::<i64>::new(OutputType::Binary)));
+        match d {
+            DataType::Utf8 => {
+                return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Utf8)));
+            }
+            DataType::LargeUtf8 => {
+                return Ok(Box::new(GroupValuesByes::<i64>::new(OutputType::Utf8)));
+            }
+            DataType::Utf8View => {
+                return Ok(Box::new(GroupValuesBytesView::new(OutputType::Utf8View)));
+            }
+            DataType::Binary => {
+                return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Binary)));
+            }
+            DataType::LargeBinary => {
+                return Ok(Box::new(GroupValuesByes::<i64>::new(OutputType::Binary)));
+            }
+            DataType::BinaryView => {
+                return Ok(Box::new(GroupValuesBytesView::new(OutputType::BinaryView)));
+            }
+            _ => {}
         }
     }
 
