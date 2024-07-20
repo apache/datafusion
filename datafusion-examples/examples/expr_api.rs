@@ -177,11 +177,7 @@ fn simplify_demo() -> Result<()> {
     );
 
     // here are some other examples of what DataFusion is capable of
-    let schema = Schema::new(vec![
-        make_field("i", DataType::Int64),
-        make_field("b", DataType::Boolean),
-    ])
-    .to_dfschema_ref()?;
+    let schema = Schema::new(vec![make_field("i", DataType::Int64)]).to_dfschema_ref()?;
     let context = SimplifyContext::new(&props).with_schema(schema.clone());
     let simplifier = ExprSimplifier::new(context);
 
