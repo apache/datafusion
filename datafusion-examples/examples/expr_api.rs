@@ -186,7 +186,7 @@ fn simplify_demo() -> Result<()> {
     let simplifier = ExprSimplifier::new(context);
 
     // basic arithmetic simplification
-    // i + 1 + 2 => a + 3
+    // i + 1 + 2 => i + 3
     // (note this is not done if the expr is (col("i") + (lit(1) + lit(2))))
     assert_eq!(
         simplifier.simplify(col("i") + (lit(1) + lit(2)))?,
