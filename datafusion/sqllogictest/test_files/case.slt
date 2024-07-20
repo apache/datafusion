@@ -15,30 +15,38 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Miscellaneous tests that should eventually live elsewhere
+# create test data
+statement ok
+create table foo (a int, b int) as values (1, 2), (3, 4), (5, 6);
 
-# Show string normalization working
-# '' --> (empty)
-# '' --> NULL
-query TT?
-select 'foo', '', NULL
+# CASE WHEN with condition
+query T
+SELECT CASE a WHEN 1 THEN 'one' WHEN 3 THEN 'three' ELSE '?' END FROM foo
 ----
-foo (empty) NULL
+one
+three
+?
 
-# Where clause accept NULL literal
+# CASE WHEN with no condition
 query I
-select 1 where NULL
+SELECT CASE WHEN a > 2 THEN a ELSE b END FROM foo
 ----
+2
+3
+5
 
-# Where clause does not accept non boolean and has nice error message
-query error Cannot create filter with non\-boolean predicate 'Utf8\("foo"\)' returning Utf8
-select 1 where 'foo'
-
+# column or explicit null
 query I
-select 1 where NULL and 1 = 1
+SELECT CASE WHEN a > 2 THEN b ELSE null END FROM foo
 ----
+NULL
+4
+6
 
+# column or implicit null
 query I
-select 1 where NULL or 1 = 1
+SELECT CASE WHEN a > 2 THEN b END FROM foo
 ----
-1
+NULL
+4
+6

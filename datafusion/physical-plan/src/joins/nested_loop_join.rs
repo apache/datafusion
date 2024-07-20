@@ -160,7 +160,7 @@ pub struct NestedLoopJoinExec {
 }
 
 impl NestedLoopJoinExec {
-    /// Try to create a nwe [`NestedLoopJoinExec`]
+    /// Try to create a new [`NestedLoopJoinExec`]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,

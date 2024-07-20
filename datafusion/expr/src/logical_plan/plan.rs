@@ -263,7 +263,7 @@ pub enum LogicalPlan {
     /// Prepare a statement and find any bind parameters
     /// (e.g. `?`). This is used to implement SQL-prepared statements.
     Prepare(Prepare),
-    /// Data Manipulaton Language (DML): Insert / Update / Delete
+    /// Data Manipulation Language (DML): Insert / Update / Delete
     Dml(DmlStatement),
     /// Data Definition Language (DDL): CREATE / DROP TABLES / VIEWS / SCHEMAS
     Ddl(DdlStatement),
@@ -1598,8 +1598,8 @@ impl LogicalPlan {
                             })
                             .collect();
 
-                        let elipse = if values.len() > 5 { "..." } else { "" };
-                        write!(f, "Values: {}{}", str_values.join(", "), elipse)
+                        let eclipse = if values.len() > 5 { "..." } else { "" };
+                        write!(f, "Values: {}{}", str_values.join(", "), eclipse)
                     }
 
                     LogicalPlan::TableScan(TableScan {

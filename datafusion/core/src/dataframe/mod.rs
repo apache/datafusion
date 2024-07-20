@@ -1696,10 +1696,10 @@ mod tests {
     use datafusion_common::{Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        array_agg, cast, create_udf, expr, lit, BuiltInWindowFunction,
-        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFunctionDefinition,
+        cast, create_udf, expr, lit, BuiltInWindowFunction, ScalarFunctionImplementation,
+        Volatility, WindowFrame, WindowFunctionDefinition,
     };
-    use datafusion_functions_aggregate::expr_fn::count_distinct;
+    use datafusion_functions_aggregate::expr_fn::{array_agg, count_distinct};
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 

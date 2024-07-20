@@ -893,7 +893,7 @@ mod tests {
         DataType::Timestamp(TimeUnit::Nanosecond, utc)
     }
 
-    // a dictonary type for storing string tags
+    // a dictionary type for storing string tags
     fn dictionary_tag_type() -> DataType {
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
     }
