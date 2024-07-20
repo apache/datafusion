@@ -1201,11 +1201,12 @@ mod tests {
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::expr::Sort;
+    use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
     use datafusion_functions_aggregate::median::median_udaf;
-    use datafusion_physical_expr::expressions::{lit, OrderSensitiveArrayAgg};
+    use datafusion_physical_expr::expressions::lit;
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use crate::common::collect;
@@ -2186,7 +2187,7 @@ mod tests {
         let col_a = &col("a", &test_schema)?;
         let col_b = &col("b", &test_schema)?;
         let col_c = &col("c", &test_schema)?;
-        let mut eq_properties = EquivalenceProperties::new(test_schema);
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
         // Columns a and b are equal.
         eq_properties.add_equal_conditions(col_a, col_b)?;
         // Aggregate requirements are
@@ -2222,6 +2223,46 @@ mod tests {
                 },
             ]),
         ];
+        let col_expr_a = Box::new(datafusion_expr::col("a"));
+        let col_expr_b = Box::new(datafusion_expr::col("b"));
+        let col_expr_c = Box::new(datafusion_expr::col("c"));
+        let sort_exprs = vec![
+            None,
+            Some(vec![datafusion_expr::Expr::Sort(Sort::new(
+                col_expr_a.clone(),
+                options1.descending,
+                options1.nulls_first,
+            ))]),
+            Some(vec![
+                datafusion_expr::Expr::Sort(Sort::new(
+                    col_expr_a.clone(),
+                    options1.descending,
+                    options1.nulls_first,
+                )),
+                datafusion_expr::Expr::Sort(Sort::new(
+                    col_expr_b.clone(),
+                    options1.descending,
+                    options1.nulls_first,
+                )),
+                datafusion_expr::Expr::Sort(Sort::new(
+                    col_expr_c,
+                    options1.descending,
+                    options1.nulls_first,
+                )),
+            ]),
+            Some(vec![
+                datafusion_expr::Expr::Sort(Sort::new(
+                    col_expr_a,
+                    options1.descending,
+                    options1.nulls_first,
+                )),
+                datafusion_expr::Expr::Sort(Sort::new(
+                    col_expr_b,
+                    options1.descending,
+                    options1.nulls_first,
+                )),
+            ]),
+        ];
         let common_requirement = vec![
             PhysicalSortExpr {
                 expr: Arc::clone(col_a),
@@ -2234,14 +2275,23 @@ mod tests {
         ];
         let mut aggr_exprs = order_by_exprs
             .into_iter()
-            .map(|order_by_expr| {
-                Arc::new(OrderSensitiveArrayAgg::new(
-                    Arc::clone(col_a),
+            .zip(sort_exprs.into_iter())
+            .map(|(order_by_expr, sort_exprs)| {
+                let ordering_req = order_by_expr.unwrap_or_default();
+                let sort_exprs = sort_exprs.unwrap_or_default();
+                create_aggregate_expr(
+                    &array_agg_udaf(),
+                    &[Arc::clone(col_a)],
+                    &[],
+                    &sort_exprs,
+                    &ordering_req,
+                    &test_schema,
                     "array_agg",
-                    DataType::Int32,
-                    vec![],
-                    order_by_expr.unwrap_or_default(),
-                )) as _
+                    false,
+                    false,
+                    false,
+                )
+                .unwrap()
             })
             .collect::<Vec<_>>();
         let group_by = PhysicalGroupBy::new_single(vec![]);

@@ -53,7 +53,8 @@ use datafusion_expr::utils::AggregateOrderSensitivity;
 /// if you don't need them it is fine to pass empty slice `&[]`.
 ///
 /// `is_reversed` is used to indicate whether the aggregation is running in reverse order,
-/// normally it is used if you are reversing expressoin, most of the case you can just set to false
+/// it could be used to hint Accumulator to accumulate in the reversed order,
+/// you can just set to false if you are not reversing expression
 #[allow(clippy::too_many_arguments)]
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,

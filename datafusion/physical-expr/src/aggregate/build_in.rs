@@ -42,7 +42,7 @@ pub fn create_aggregate_expr(
     fun: &AggregateFunction,
     distinct: bool,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    ordering_req: &[PhysicalSortExpr],
+    _ordering_req: &[PhysicalSortExpr],
     input_schema: &Schema,
     name: impl Into<String>,
     _ignore_nulls: bool,
@@ -54,29 +54,9 @@ pub fn create_aggregate_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
     let data_type = input_phy_types[0].clone();
-    let ordering_types = ordering_req
-        .iter()
-        .map(|e| e.expr.data_type(input_schema))
-        .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::ArrayAgg, _) => {
-            let expr = Arc::clone(&input_phy_exprs[0]);
-
-            if ordering_req.is_empty() {
-                return internal_err!(
-                    "ArrayAgg without ordering should be handled as UDAF"
-                );
-            } else {
-                Arc::new(expressions::OrderSensitiveArrayAgg::new(
-                    expr,
-                    name,
-                    data_type,
-                    ordering_types,
-                    ordering_req.to_vec(),
-                ))
-            }
-        }
+        (AggregateFunction::ArrayAgg, _) => return internal_err!("not reachable"),
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             Arc::clone(&input_phy_exprs[0]),
             name,
