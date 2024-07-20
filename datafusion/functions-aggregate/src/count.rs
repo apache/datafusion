@@ -34,7 +34,7 @@ use arrow::{
 };
 
 use arrow::{
-    array::{Array, BooleanArray, Int64Array, PrimitiveArray},
+    array::{Array, BooleanArray, Int64Array, Int64Builder, PrimitiveArray},
     buffer::BooleanBuffer,
 };
 use datafusion_common::{
@@ -438,6 +438,49 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         let counts = emit_to.take_needed(&mut self.counts);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
         Ok(vec![Arc::new(counts) as ArrayRef])
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let values = &values[0];
+
+        let state_array = match (values.logical_nulls(), opt_filter) {
+            (Some(nulls), None) => {
+                let mut builder = Int64Builder::with_capacity(values.len());
+                nulls
+                    .into_iter()
+                    .for_each(|is_valid| builder.append_value(is_valid as i64));
+                builder.finish()
+            }
+            (Some(nulls), Some(filter)) => {
+                let mut builder = Int64Builder::with_capacity(values.len());
+                nulls.into_iter().zip(filter.iter()).for_each(
+                    |(is_valid, filter_value)| {
+                        builder.append_value(
+                            (is_valid && filter_value.is_some_and(|val| val)) as i64,
+                        )
+                    },
+                );
+                builder.finish()
+            }
+            (None, Some(filter)) => {
+                let mut builder = Int64Builder::with_capacity(values.len());
+                filter.into_iter().for_each(|filter_value| {
+                    builder.append_value(filter_value.is_some_and(|val| val) as i64)
+                });
+                builder.finish()
+            }
+            (None, None) => Int64Array::from_value(1, values.len()),
+        };
+
+        Ok(vec![Arc::new(state_array)])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

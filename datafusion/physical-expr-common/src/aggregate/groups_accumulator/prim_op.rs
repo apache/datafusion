@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray, PrimitiveBuilder};
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -132,6 +132,46 @@ where
     ) -> Result<()> {
         // update / merge are the same
         self.update_batch(values, group_indices, opt_filter, total_num_groups)
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let values = values[0].as_primitive::<T>();
+        let mut state = PrimitiveBuilder::<T>::with_capacity(values.len())
+            .with_data_type(self.data_type.clone());
+
+        match opt_filter {
+            Some(filter) => {
+                values
+                    .iter()
+                    .zip(filter.iter())
+                    .for_each(|(val, filter_val)| match (val, filter_val) {
+                        (Some(val), Some(true)) => {
+                            let mut state_val = self.starting_value;
+                            (self.prim_fn)(&mut state_val, val);
+                            state.append_value(state_val);
+                        }
+                        (_, _) => state.append_null(),
+                    })
+            }
+            None => values.iter().for_each(|val| match val {
+                Some(val) => {
+                    let mut state_val = self.starting_value;
+                    (self.prim_fn)(&mut state_val, val);
+                    state.append_value(state_val);
+                }
+                None => state.append_null(),
+            }),
+        };
+
+        Ok(vec![Arc::new(state.finish())])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

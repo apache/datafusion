@@ -18,7 +18,7 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow_array::{ArrayRef, BooleanArray};
-use datafusion_common::Result;
+use datafusion_common::{not_impl_err, Result};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy)]
@@ -157,6 +157,24 @@ pub trait GroupsAccumulator: Send {
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()>;
+
+    /// Converts input batch to intermediate aggregate state,
+    /// without grouping (each input row considered as a separate
+    /// group).
+    fn convert_to_state(
+        &self,
+        _values: &[ArrayRef],
+        _opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        not_impl_err!("Input batch conversion to state not implemented")
+    }
+
+    /// Returns `true` is groups accumulator supports input batch
+    /// to intermediate aggregate state conversion (`convert_to_state`
+    /// method is implemented).
+    fn supports_convert_to_state(&self) -> bool {
+        false
+    }
 
     /// Amount of memory used to store the state of this accumulator,
     /// in bytes. This function is called once per batch, so it should
