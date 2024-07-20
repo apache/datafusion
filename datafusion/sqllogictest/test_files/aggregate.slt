@@ -5422,13 +5422,14 @@ DROP TABLE t;
 statement ok
 CREATE TABLE example(data double precision);
 
-query RR
+query RRI
 SELECT
     sum(CASE WHEN data is NULL THEN NULL ELSE data+1 END) as then_null,
-    sum(CASE WHEN data is NULL THEN data+1 ELSE NULL END) as else_null
+    sum(CASE WHEN data is NULL THEN data+1 ELSE NULL END) as else_null,
+    sum(CASE WHEN NULL THEN NULL ELSE NULL END) as both_null
 FROM example;
 ----
-NULL NULL
+NULL NULL NULL
 
 statement ok
 drop table example;
