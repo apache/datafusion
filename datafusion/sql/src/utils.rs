@@ -17,6 +17,7 @@
 
 //! SQL Utility Functions
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use arrow_schema::{
@@ -263,6 +264,117 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
     }
 }
 
+pub(crate) fn transform_bottom_unnest_v2(
+    input: &LogicalPlan,
+    unnest_placeholder_columns: &mut Vec<String>,
+    inner_projection_exprs: &mut Vec<Expr>,
+    memo: &mut HashMap<Expr, Vec<Expr>>,
+    original_expr: &Expr,
+) -> Result<Vec<Expr>> {
+    // TODO: depth first search to rewrite the bottom most unnest expressions
+    // until all the leave branches having at least one transformation
+    let mut transform =
+        |unnest_expr: &Expr, expr_in_unnest: &Expr| -> Result<Vec<Expr>> {
+            if let Some(previou_transformed) = memo.get(unnest_expr) {
+                return Ok(previou_transformed.clone());
+            }
+            // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
+            // inside unnest execution, each column inside the inner projection
+            // will be transformed into new columns. Thus we need to keep track of these placeholding column names
+            let placeholder_name = unnest_expr.display_name()?;
+
+            unnest_placeholder_columns.push(placeholder_name.clone());
+            // Add alias for the argument expression, to avoid naming conflicts
+            // with other expressions in the select list. For example: `select unnest(col1), col1 from t`.
+            // this extra projection is used to unnest transforming
+            inner_projection_exprs
+                .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
+            let schema = input.schema();
+
+            let (data_type, _) = expr_in_unnest.data_type_and_nullable(schema)?;
+
+            let outer_projection_columns =
+                get_unnested_columns(&placeholder_name, &data_type)?;
+            let expr = outer_projection_columns
+                .iter()
+                .map(|col| Expr::Column(col.0.clone()))
+                .collect::<Vec<_>>();
+
+            memo.insert(unnest_expr.clone(), expr.clone());
+            Ok(expr)
+        };
+    // let mut stack = vec![];
+    // let mut unnest_visitted = HashSet::new();
+    let latest_visited = RefCell::new(None);
+    // we need to mark only the latest unnest expr that was visitted during the down traversal
+    let transform_down = |expr: Expr| -> Result<Transformed<Expr>> {
+        if let Expr::Unnest(Unnest { .. }) = expr {
+            *latest_visited.borrow_mut() = Some(expr.clone());
+            Ok(Transformed::no(expr))
+        } else {
+            Ok(Transformed::no(expr))
+        }
+    };
+    let transform_up = |expr: Expr| -> Result<Transformed<Expr>> {
+        if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
+            // only transform the bottom most unnest expr
+            if let Some(ref mut last_visitted_expr) = *latest_visited.borrow_mut() {
+                if last_visitted_expr != &expr {
+                    return Ok(Transformed::no(expr));
+                }
+                // this is (one of) the bottom most unnest expr
+                let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
+                if &expr != original_expr {
+                    if let DataType::Struct(_) = data_type {
+                        return internal_err!("unnest on struct can ony be applied at the root level of select expression");
+                    }
+                }
+
+                let mut transformed_exprs = transform(&expr, arg)?;
+                // root_expr.push(transformed_exprs[0].clone());
+                return Ok(Transformed::new(
+                    transformed_exprs.swap_remove(0),
+                    true,
+                    TreeNodeRecursion::Continue,
+                ));
+            }
+        }
+        Ok(Transformed::no(expr))
+    };
+
+    // This transformation is only done for list unnest
+    // struct unnest is done at the root level, and at the later stage
+    // because the syntax of TreeNode only support transform into 1 Expr, while
+    // Unnest struct will be transformed into multiple Exprs
+    // TODO: This can be resolved after this issue is resolved: https://github.com/apache/datafusion/issues/10102
+    //
+    // The transformation looks like:
+    // - unnest(array_col) will be transformed into unnest(array_col)
+    // - unnest(array_col) + 1 will be transformed into unnest(array_col) + 1
+    let Transformed {
+        data: transformed_expr,
+        transformed,
+        tnr: _,
+    } = original_expr
+        .clone()
+        .transform_down_up(transform_down, transform_up)?;
+
+    if !transformed {
+        if matches!(&transformed_expr, Expr::Column(_)) {
+            inner_projection_exprs.push(transformed_expr.clone());
+            Ok(vec![transformed_expr])
+        } else {
+            // We need to evaluate the expr in the inner projection,
+            // outer projection just select its name
+            let column_name = transformed_expr.display_name()?;
+            inner_projection_exprs.push(transformed_expr);
+            Ok(vec![Expr::Column(Column::from_name(column_name))])
+        }
+    } else {
+        Ok(vec![transformed_expr])
+    }
+}
+
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
 /// Given an expression which contains unnest expr as one of its children,
 /// Try transform depends on unnest type
@@ -367,7 +479,7 @@ pub(crate) fn transform_bottom_unnest(
 // write test for recursive_transform_unnest
 #[cfg(test)]
 mod tests {
-    use std::{ops::Add, sync::Arc};
+    use std::{collections::HashMap, ops::Add, sync::Arc};
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
@@ -376,7 +488,72 @@ mod tests {
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
 
-    use crate::utils::{resolve_positions_to_exprs, transform_bottom_unnest};
+    use crate::utils::{
+        resolve_positions_to_exprs, transform_bottom_unnest, transform_bottom_unnest_v2,
+    };
+
+    #[test]
+    fn test_transform_bottom_unnest_v2() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new(
+                "struct_col",
+                ArrowDataType::Struct(Fields::from(vec![
+                    Field::new("field1", ArrowDataType::Int32, false),
+                    Field::new("field2", ArrowDataType::Int32, false),
+                ])),
+                false,
+            ),
+            Field::new(
+                "3d_col",
+                ArrowDataType::List(Arc::new(Field::new(
+                    "2d_col",
+                    ArrowDataType::List(Arc::new(Field::new(
+                        "elements",
+                        ArrowDataType::Int64,
+                        true,
+                    ))),
+                    true,
+                ))),
+                true,
+            ),
+            Field::new("int_col", ArrowDataType::Int32, false),
+        ]);
+
+        let dfschema = DFSchema::try_from(schema)?;
+
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(dfschema),
+        });
+
+        let mut unnest_placeholder_columns = vec![];
+        let mut inner_projection_exprs = vec![];
+
+        // unnest(struct_col)
+        let original_expr =
+            unnest(unnest(col("3d_col"))).add(unnest(unnest(col("3d_col"))));
+        let mut memo = HashMap::new();
+        let transformed_exprs = transform_bottom_unnest_v2(
+            &input,
+            &mut unnest_placeholder_columns,
+            &mut inner_projection_exprs,
+            &mut memo,
+            &original_expr,
+        )?;
+        assert_eq!(
+            transformed_exprs,
+            vec![unnest(col("unnest(3d_col)")).add(unnest(col("unnest(3d_col)")))]
+        );
+        assert_eq!(unnest_placeholder_columns, vec!["unnest(array_col)"]);
+        // still reference struct_col in original schema but with alias,
+        // to avoid colliding with the projection on the column itself if any
+        assert_eq!(
+            inner_projection_exprs,
+            vec![col("array_col").alias("unnest(array_col)"),]
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_transform_bottom_unnest() -> Result<()> {

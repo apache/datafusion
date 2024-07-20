@@ -165,6 +165,9 @@ select unnest(column1), column1 from unnest_table;
 6 [6]
 12 [12]
 
+query I?
+select unnest(column1) + unnest(column1) from unnest_table;
+
 ## unnest as children of other expr
 query I?
 select unnest(column1) + 1 , column1 from unnest_table;
@@ -500,6 +503,30 @@ select unnest(column1) from (select * from (values([1,2,3]), ([4,5,6])) limit 1 
 query error DataFusion error: Error during planning: Projections require unique expression names but the expression "UNNEST\(Column\(Column \{ relation: Some\(Bare \{ table: "unnest_table" \}\), name: "column1" \}\)\)" at position 0 and "UNNEST\(Column\(Column \{ relation: Some\(Bare \{ table: "unnest_table" \}\), name: "column1" \}\)\)" at position 1 have the same name. Consider aliasing \("AS"\) one of them.
 select unnest(column1), unnest(column1) from unnest_table;
 
+
+## the same unnest expr is referened multiple times
+query ??II
+select unnest(column2), unnest(unnest(column2)), unnest(unnest(unnest(column2))), unnest(unnest(unnest(column2))) + 1 from recursive_unnest_table;
+----
+[[1], [2]] [1] 1 2
+[[1], [2]] [2] 2 3
+[[1, 1]] [1, 1] 1 2
+[[1, 1]] [1, 1] 1 2
+[[3, 4], [5]] [3, 4] 3 4
+[[3, 4], [5]] [3, 4] 4 5
+[[3, 4], [5]] [5] 5 6
+[[, 6], , [7, 8]] [, 6] NULL NULL
+[[, 6], , [7, 8]] [, 6] 6 7
+[[, 6], , [7, 8]] [7, 8] 7 8
+[[, 6], , [7, 8]] [7, 8] 8 9
+
+
+query ??II
+select unnest(column3), unnest(column3)['c0'], unnest(unnest(column3)['c0']), unnest(unnest(column3)['c0']) + unnest(unnest(column3)['c0'])  from recursive_unnest_table;
+
+## (struct([1], 'a'), [[[1],[2]],[[1,1]]], [struct([1],[[1,2]])]),
+
+
 statement ok
 drop table unnest_table;
 
@@ -537,12 +564,13 @@ NULL [[[3, 4], [5]], [[, 6], , [7, 8]]]
 
 
 
+
 query TT
-explain select unnest(unnest(unnest(column3)['c1'])), column3 from recursive_unnest_table;
+explain select unnest(unnest(unnest(column3)['c1'])), unnest(unnest(column3)['c1']), column3 from recursive_unnest_table;
 ----
 logical_plan
 01)Unnest: lists[unnest(unnest(unnest(recursive_unnest_table.column3)[c1]))] structs[]
-02)--Projection: unnest(unnest(recursive_unnest_table.column3)[c1]) AS unnest(unnest(unnest(recursive_unnest_table.column3)[c1])), recursive_unnest_table.column3
+02)--Projection: unnest(unnest(recursive_unnest_table.column3)[c1]) AS unnest(unnest(unnest(recursive_unnest_table.column3)[c1])), unnest(unnest(recursive_unnest_table.column3)[c1]), recursive_unnest_table.column3
 03)----Unnest: lists[unnest(unnest(recursive_unnest_table.column3)[c1])] structs[]
 04)------Projection: get_field(unnest(recursive_unnest_table.column3), Utf8("c1")) AS unnest(unnest(recursive_unnest_table.column3)[c1]), recursive_unnest_table.column3
 05)--------Unnest: lists[unnest(recursive_unnest_table.column3)] structs[]
@@ -550,7 +578,7 @@ logical_plan
 07)------------TableScan: recursive_unnest_table projection=[column3]
 physical_plan
 01)UnnestExec
-02)--ProjectionExec: expr=[unnest(unnest(recursive_unnest_table.column3)[c1])@0 as unnest(unnest(unnest(recursive_unnest_table.column3)[c1])), column3@1 as column3]
+02)--ProjectionExec: expr=[unnest(unnest(recursive_unnest_table.column3)[c1])@0 as unnest(unnest(unnest(recursive_unnest_table.column3)[c1])), unnest(unnest(recursive_unnest_table.column3)[c1])@0 as unnest(unnest(recursive_unnest_table.column3)[c1]), column3@1 as column3]
 03)----UnnestExec
 04)------ProjectionExec: expr=[get_field(unnest(recursive_unnest_table.column3)@0, c1) as unnest(unnest(recursive_unnest_table.column3)[c1]), column3@1 as column3]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::planner::{
@@ -23,7 +23,7 @@ use crate::planner::{
 };
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnest,
+    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnest_v2,
 };
 
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
@@ -302,6 +302,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Each expr in select_exprs can contains multiple unnest stage
         // The transformation happen bottom up, one at a time for each iteration
         // Ony exaust the loop if no more unnest transformation is found
+        let mut memo = HashMap::new();
         for i in 0.. {
             let mut unnest_columns = vec![];
             // from which column used for projection, before the unnest happen
@@ -316,10 +317,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let outer_projection_exprs: Vec<Expr> = intermediate_select_exprs
                 .iter()
                 .map(|expr| {
-                    transform_bottom_unnest(
+                    transform_bottom_unnest_v2(
                         &intermediate_plan,
                         &mut unnest_columns,
                         &mut inner_projection_exprs,
+                        &mut memo,
                         expr,
                     )
                 })
@@ -341,10 +343,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+                // deduplicate expr in inner_projection_exprs
+                inner_projection_exprs.dedup_by(|a, b| -> bool {
+                    a.display_name().unwrap() == b.display_name().unwrap()
+                });
+
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(inner_projection_exprs)?
                     .unnest_columns_with_options(columns, unnest_options)?
                     .build()?;
+                println!(
+                    "intermediate plan {:?}\n, selected exprs {:?}",
+                    plan, outer_projection_exprs
+                );
                 intermediate_plan = plan;
                 intermediate_select_exprs = outer_projection_exprs;
             }
