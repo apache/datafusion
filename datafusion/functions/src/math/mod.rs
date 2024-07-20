@@ -87,7 +87,7 @@ make_math_unary_udf!(
     atanh,
     atanh,
     super::atanh_order,
-    super::bounds::atanh_bounds
+    super::bounds::evaluate_bounds
 );
 make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, super::atan2_order);
 make_math_unary_udf!(
@@ -390,83 +390,84 @@ mod tests {
 
     #[test]
     fn test_cases() -> crate::Result<()> {
-        let cases = vec![
-            (
-                super::acos(),
-                unbounded_interval(&DataType::Float64),
-                zero_to_pi_interval(&DataType::Float64),
-            ),
-            (
-                super::acosh(),
-                unbounded_interval(&DataType::Float64),
-                zero_to_inf_interval(&DataType::Float64),
-            ),
-            (
-                super::asin(),
-                unbounded_interval(&DataType::Float64),
-                symmetric_frac_pi_2_interval(&DataType::Float64),
-            ),
-            (
-                super::atan(),
-                unbounded_interval(&DataType::Float64),
-                symmetric_frac_pi_2_interval(&DataType::Float64),
-            ),
-            (
-                super::atanh(),
-                unbounded_interval(&DataType::Float64),
-                symmetric_unit_interval(&DataType::Float64),
-            ),
-            (
-                super::cos(),
-                unbounded_interval(&DataType::Float64),
-                symmetric_unit_interval(&DataType::Float64),
-            ),
-            (
-                super::cosh(),
-                unbounded_interval(&DataType::Float64),
-                one_to_inf_interval(&DataType::Float64),
-            ),
-            (
-                super::sin(),
-                unbounded_interval(&DataType::Float64),
-                symmetric_unit_interval(&DataType::Float64),
-            ),
-            (
-                super::exp(),
-                unbounded_interval(&DataType::Float64),
-                zero_to_inf_interval(&DataType::Float64),
-            ),
-            (
-                super::ln(),
-                unbounded_interval(&DataType::Float64),
-                zero_to_inf_interval(&DataType::Float64),
-            ),
-            (
-                super::log2(),
-                unbounded_interval(&DataType::Float64),
-                zero_to_inf_interval(&DataType::Float64),
-            ),
-            (
-                super::log10(),
-                unbounded_interval(&DataType::Float64),
-                zero_to_inf_interval(&DataType::Float64),
-            ),
-            (
-                super::sqrt(),
-                unbounded_interval(&DataType::Float64),
-                zero_to_inf_interval(&DataType::Float64),
-            ),
-            (
-                super::radians(),
-                unbounded_interval(&DataType::Float64),
-                symmetric_pi_interval(&DataType::Float64),
-            ),
-            (
-                super::sqrt(),
-                unbounded_interval(&DataType::Float64),
-                zero_to_inf_interval(&DataType::Float64),
-            ),
-        ];
+        let datatypes = [DataType::Float32, DataType::Float64];
+        let cases = datatypes
+            .iter()
+            .flat_map(|data_type| {
+                vec![
+                    (
+                        super::acos(),
+                        unbounded_interval(data_type),
+                        zero_to_pi_interval(data_type),
+                    ),
+                    (
+                        super::acosh(),
+                        unbounded_interval(data_type),
+                        zero_to_inf_interval(data_type),
+                    ),
+                    (
+                        super::asin(),
+                        unbounded_interval(data_type),
+                        symmetric_frac_pi_2_interval(data_type),
+                    ),
+                    (
+                        super::atan(),
+                        unbounded_interval(data_type),
+                        symmetric_frac_pi_2_interval(data_type),
+                    ),
+                    (
+                        super::cos(),
+                        unbounded_interval(data_type),
+                        symmetric_unit_interval(data_type),
+                    ),
+                    (
+                        super::cosh(),
+                        unbounded_interval(data_type),
+                        one_to_inf_interval(data_type),
+                    ),
+                    (
+                        super::sin(),
+                        unbounded_interval(data_type),
+                        symmetric_unit_interval(data_type),
+                    ),
+                    (
+                        super::exp(),
+                        unbounded_interval(data_type),
+                        zero_to_inf_interval(data_type),
+                    ),
+                    (
+                        super::ln(),
+                        unbounded_interval(data_type),
+                        zero_to_inf_interval(data_type),
+                    ),
+                    (
+                        super::log2(),
+                        unbounded_interval(data_type),
+                        zero_to_inf_interval(data_type),
+                    ),
+                    (
+                        super::log10(),
+                        unbounded_interval(data_type),
+                        zero_to_inf_interval(data_type),
+                    ),
+                    (
+                        super::sqrt(),
+                        unbounded_interval(data_type),
+                        zero_to_inf_interval(data_type),
+                    ),
+                    (
+                        super::radians(),
+                        unbounded_interval(data_type),
+                        symmetric_pi_interval(data_type),
+                    ),
+                    (
+                        super::sqrt(),
+                        unbounded_interval(data_type),
+                        zero_to_inf_interval(data_type),
+                    ),
+                ]
+            })
+            .collect::<Vec<_>>();
 
         for (udf, interval, expected) in cases {
             assert_udf_evaluates_to_bounds(&udf, interval, expected);

@@ -55,13 +55,6 @@ pub(super) fn atan_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     )
 }
 
-pub(super) fn atanh_bounds(input: &[&Interval]) -> crate::Result<Interval> {
-    // atanh(x) is bounded by (-1, 1)
-    let data_type = unary_interval_datatype(input[0]);
-
-    Interval::make_symmetric_unit_interval(&data_type)
-}
-
 pub(super) fn acos_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     // acos(x) is bounded by [0, π]
     let data_type = unary_interval_datatype(input[0]);
