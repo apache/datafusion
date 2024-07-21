@@ -38,8 +38,7 @@ use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
 
-use crate::utils::make_decimal_type;
-
+use crate::utils::{make_decimal_type, value_to_string};
 pub use datafusion_expr::planner::ContextProvider;
 
 /// SQL parser options
@@ -105,14 +104,11 @@ impl ValueNormalizer {
         Self { normalize }
     }
 
-    pub fn normalize(&self, value: Value) -> Result<String> {
-        if self.normalize {
-            crate::utils::normalize_value(&value)
-        } else {
-            match crate::utils::value_to_string(&value) {
-                Some(s) => Ok(s),
-                None => internal_err!("Unsupport value type to string: {:?}", value),
-            }
+    pub fn normalize(&self, value: Value) -> Option<String> {
+        match (value_to_string(&value), self.normalize) {
+            (Some(s), true) => Some(s.to_ascii_lowercase()),
+            (Some(s), false) => Some(s),
+            (None, _) => None,
         }
     }
 }

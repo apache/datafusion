@@ -263,13 +263,6 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
     }
 }
 
-pub(crate) fn normalize_value(value: &Value) -> Result<String> {
-    match value_to_string(value) {
-        Some(s) => Ok(s.to_ascii_lowercase()),
-        None => exec_err!("Unsupported value to normalize: {:?}", value),
-    }
-}
-
 pub(crate) fn value_to_string(value: &Value) -> Option<String> {
     match value {
         Value::SingleQuotedString(s) => Some(s.to_string()),

@@ -857,8 +857,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        let options_map: HashMap<String, String> =
-            self.parse_options_map(statement.options, true)?;
+        let options_map = self.parse_options_map(statement.options, true)?;
 
         let maybe_file_type = if let Some(stored_as) = &statement.stored_as {
             if let Ok(ext_file_type) = self.context_provider.get_file_type(stored_as) {
@@ -1029,7 +1028,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return plan_err!("Option {key} is specified multiple times");
             }
 
-            let value_string = self.value_normalizer.normalize(value)?;
+            let Some(value_string) = self.value_normalizer.normalize(value.clone())
+            else {
+                return plan_err!("Unsupported Value {}", value);
+            };
 
             if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
