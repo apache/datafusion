@@ -222,4 +222,3 @@ name = "parquet_statistic"
 harness = false
 name = "map_query_sql"
 required-features = ["array_expressions"]
-
