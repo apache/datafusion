@@ -318,93 +318,96 @@ config_namespace! {
 }
 
 config_namespace! {
-    /// Options related to parquet files
+    /// Options for reading and writing parquet files
     ///
     /// See also: [`SessionConfig`]
     ///
     /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct ParquetOptions {
-        /// If true, reads the Parquet data page level metadata (the
+        // The following options affect reading parquet files
+
+        /// (reading) If true, reads the Parquet data page level metadata (the
         /// Page Index), if present, to reduce the I/O and number of
         /// rows decoded.
         pub enable_page_index: bool, default = true
 
-        /// If true, the parquet reader attempts to skip entire row groups based
+        /// (reading) If true, the parquet reader attempts to skip entire row groups based
         /// on the predicate in the query and the metadata (min/max values) stored in
         /// the parquet file
         pub pruning: bool, default = true
 
-        /// If true, the parquet reader skip the optional embedded metadata that may be in
+        /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
         /// the file Schema. This setting can help avoid schema conflicts when querying
         /// multiple parquet files with schemas containing compatible types but different metadata
         pub skip_metadata: bool, default = true
 
-        /// If specified, the parquet reader will try and fetch the last `size_hint`
+        /// (reading) If specified, the parquet reader will try and fetch the last `size_hint`
         /// bytes of the parquet file optimistically. If not specified, two reads are required:
         /// One read to fetch the 8-byte parquet footer and
         /// another to fetch the metadata length encoded in the footer
         pub metadata_size_hint: Option<usize>, default = None
 
-        /// If true, filter expressions are be applied during the parquet decoding operation to
+        /// (reading) If true, filter expressions are be applied during the parquet decoding operation to
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
         pub pushdown_filters: bool, default = false
 
-        /// If true, filter expressions evaluated during the parquet decoding operation
+        /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
 
-        // The following map to parquet::file::properties::WriterProperties
+        // The following options affect writing to parquet files
+        // and map to parquet::file::properties::WriterProperties
 
-        /// Sets best effort maximum size of data page in bytes
+        /// (writing) Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = 1024 * 1024
 
-        /// Sets write_batch_size in bytes
+        /// (writing) Sets write_batch_size in bytes
         pub write_batch_size: usize, default = 1024
 
-        /// Sets parquet writer version
+        /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
         pub writer_version: String, default = "1.0".into()
 
-        /// Sets default parquet compression codec
+        /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub compression: Option<String>, default = Some("zstd(3)".into())
 
-        /// Sets if dictionary encoding is enabled. If NULL, uses
+        /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
         pub dictionary_enabled: Option<bool>, default = None
 
-        /// Sets best effort maximum dictionary page size, in bytes
+        /// (writing) Sets best effort maximum dictionary page size, in bytes
         pub dictionary_page_size_limit: usize, default = 1024 * 1024
 
-        /// Sets if statistics are enabled for any column
+        /// (writing) Sets if statistics are enabled for any column
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub statistics_enabled: Option<String>, default = None
 
-        /// Sets max statistics size for any column. If NULL, uses
+        /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
         pub max_statistics_size: Option<usize>, default = None
 
-        /// Target maximum number of rows in each row group (defaults to 1M
+        /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
         /// can get better compression and be faster to read.
         pub max_row_group_size: usize, default = 1024 * 1024
 
-        /// Sets "created by" property
+        /// (writing) Sets "created by" property
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
 
-        /// Sets column index truncate length
+        /// (writing) Sets column index truncate length
         pub column_index_truncate_length: Option<usize>, default = None
 
-        /// Sets best effort maximum number of rows in data page
+        /// (writing) Sets best effort maximum number of rows in data page
         pub data_page_row_count_limit: usize, default = usize::MAX
 
-        /// Sets default encoding for any column
+        /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
@@ -412,27 +415,27 @@ config_namespace! {
         /// default parquet writer setting
         pub encoding: Option<String>, default = None
 
-        /// Use any available bloom filters when reading parquet files
+        /// (writing) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
-        /// Write bloom filters for all columns when creating parquet files
+        /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
 
-        /// Sets bloom filter false positive probability. If NULL, uses
+        /// (writing) Sets bloom filter false positive probability. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_fpp: Option<f64>, default = None
 
-        /// Sets bloom filter number of distinct values. If NULL, uses
+        /// (writing) Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
 
-        /// Controls whether DataFusion will attempt to speed up writing
+        /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
         /// in each row group in each output file are serialized in parallel
         /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
         pub allow_single_file_parallelism: bool, default = true
 
-        /// By default parallel parquet writer is tuned for minimum
+        /// (writing) By default parallel parquet writer is tuned for minimum
         /// memory usage in a streaming execution plan. You may see
         /// a performance benefit when writing large parquet files
         /// by increasing maximum_parallel_row_group_writers and
@@ -443,7 +446,7 @@ config_namespace! {
         /// data frame.
         pub maximum_parallel_row_group_writers: usize, default = 1
 
-        /// By default parallel parquet writer is tuned for minimum
+        /// (writing) By default parallel parquet writer is tuned for minimum
         /// memory usage in a streaming execution plan. You may see
         /// a performance benefit when writing large parquet files
         /// by increasing maximum_parallel_row_group_writers and
@@ -453,7 +456,6 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
-
     }
 }
 
@@ -1537,6 +1539,9 @@ macro_rules! config_namespace_with_hashmap {
 }
 
 config_namespace_with_hashmap! {
+    /// Options controlling parquet format for individual columns.
+    ///
+    /// See [`ParquetOptions`] for more details
     pub struct ColumnOptions {
         /// Sets if bloom filter is enabled for the column path.
         pub bloom_filter_enabled: Option<bool>, default = None

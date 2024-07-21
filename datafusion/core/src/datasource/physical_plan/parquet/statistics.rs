@@ -1136,6 +1136,16 @@ pub struct StatisticsConverter<'a> {
 }
 
 impl<'a> StatisticsConverter<'a> {
+    /// Return the index of the column in the parquet file, if any
+    pub fn parquet_index(&self) -> Option<usize> {
+        self.parquet_index
+    }
+
+    /// Return the arrow field of the column in the arrow schema
+    pub fn arrow_field(&self) -> &'a Field {
+        self.arrow_field
+    }
+
     /// Returns a [`UInt64Array`] with row counts for each row group
     ///
     /// # Return Value

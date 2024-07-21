@@ -393,7 +393,7 @@ impl ExecutionPlan for LocalLimitExec {
                 ..
             } if nr <= self.fetch => input_stats,
             // if the input is greater than the limit, the num_row will be greater
-            // than the limit because the partitions will be limited separatly
+            // than the limit because the partitions will be limited separately
             // the statistic
             Statistics {
                 num_rows: Precision::Exact(nr),

@@ -1212,7 +1212,7 @@ fn select_aggregate_with_group_by_with_having_that_reuses_aggregate_multiple_tim
 }
 
 #[test]
-fn select_aggregate_with_group_by_with_having_using_aggreagate_not_in_select() {
+fn select_aggregate_with_group_by_with_having_using_aggregate_not_in_select() {
     let sql = "SELECT first_name, MAX(age)
                    FROM person
                    GROUP BY first_name
@@ -1253,7 +1253,7 @@ fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compo
 }
 
 #[test]
-fn select_aggregate_with_group_by_with_having_using_derived_column_aggreagate_not_in_select(
+fn select_aggregate_with_group_by_with_having_using_derived_column_aggregate_not_in_select(
 ) {
     let sql = "SELECT first_name, MAX(age)
                    FROM person

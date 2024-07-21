@@ -155,7 +155,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
         })
     })
     .data()
-    .expect("Unnormalize is infallable")
+    .expect("Unnormalize is infallible")
 }
 
 /// Create a Column from the Scalar Expr
@@ -201,7 +201,7 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
         })
     })
     .data()
-    .expect("strip_outer_reference is infallable")
+    .expect("strip_outer_reference is infallible")
 }
 
 /// Returns plan with expressions coerced to types compatible with

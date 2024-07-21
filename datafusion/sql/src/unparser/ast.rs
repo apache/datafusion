@@ -497,7 +497,7 @@ impl Default for DerivedRelationBuilder {
 pub(super) struct UninitializedFieldError(&'static str);
 
 impl UninitializedFieldError {
-    /// Create a new `UnitializedFieldError` for the specified field name.
+    /// Create a new `UninitializedFieldError` for the specified field name.
     pub fn new(field_name: &'static str) -> Self {
         UninitializedFieldError(field_name)
     }

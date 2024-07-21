@@ -356,7 +356,7 @@ pub(crate) fn transform_bottom_unnest(
             let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
 
             if let DataType::Struct(_) = data_type {
-                return internal_err!("unnest on struct can ony be applied at the root level of select expression");
+                return internal_err!("unnest on struct can only be applied at the root level of select expression");
             }
 
             let mut transformed_exprs = transform(&expr, arg)?;

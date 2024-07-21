@@ -53,6 +53,7 @@ datafusion-functions-aggregate = { workspace = true }
 itertools = { version = "0.12", features = ["use_std"] }
 log = { workspace = true }
 paste = "1.0.14"
+rand = "0.8.5"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
@@ -60,3 +61,7 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 [[bench]]
 harness = false
 name = "array_expression"
+
+[[bench]]
+harness = false
+name = "map"
