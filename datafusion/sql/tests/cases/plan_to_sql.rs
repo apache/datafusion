@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
@@ -28,6 +29,7 @@ use datafusion_sql::unparser::dialect::{
 };
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 
+use datafusion_functions::core::planner::CoreFunctionPlanner;
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
@@ -155,7 +157,8 @@ fn roundtrip_statement() -> Result<()> {
 
         let context = MockContextProvider::default()
             .with_udaf(sum_udaf())
-            .with_udaf(count_udaf());
+            .with_udaf(count_udaf())
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
@@ -184,7 +187,8 @@ fn roundtrip_crossjoin() -> Result<()> {
         .try_with_sql(query)?
         .parse_statement()?;
 
-    let context = MockContextProvider::default();
+    let context = MockContextProvider::default()
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
@@ -276,7 +280,8 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             .try_with_sql(query.sql)?
             .parse_statement()?;
 
-        let context = MockContextProvider::default();
+        let context = MockContextProvider::default()
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel
             .sql_statement_to_plan(statement)
