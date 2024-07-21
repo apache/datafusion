@@ -1054,3 +1054,45 @@ DROP TABLE t1;
 
 statement ok
 DROP TABLE t2;
+
+# Join Using Issue with Cast Expr
+# Found issue: https://github.com/apache/datafusion/issues/11412
+
+statement ok
+/*DML*/CREATE TABLE t60(v0 BIGINT, v1 BIGINT, v2 BOOLEAN, v3 BOOLEAN);
+
+statement ok
+/*DML*/CREATE TABLE t0(v0 DOUBLE, v1 BIGINT);
+
+statement ok
+/*DML*/CREATE TABLE t1(v0 DOUBLE);
+
+query I
+SELECT COUNT(*)
+FROM t1
+NATURAL JOIN t60
+INNER JOIN t0
+ON t60.v1 = t0.v0
+AND t0.v1 > t60.v1;
+----
+0
+
+query I
+SELECT COUNT(*)
+FROM t1
+JOIN t60
+USING (v0)
+INNER JOIN t0
+ON t60.v1 = t0.v0
+AND t0.v1 > t60.v1;
+----
+0
+
+statement ok
+DROP TABLE t60;
+
+statement ok
+DROP TABLE t0;
+
+statement ok
+DROP TABLE t1;

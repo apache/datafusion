@@ -35,9 +35,7 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
-    CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
-    TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
+    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction, Cast, CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator, TableProviderFilterPushDown, TableSource, WindowFunctionDefinition
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -496,16 +494,8 @@ impl LogicalPlan {
                 // The join keys in using-join must be columns.
                 let columns =
                     on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
-                        let Some(l) = l.try_as_col().cloned() else {
-                            return internal_err!(
-                                "Invalid join key. Expected column, found {l:?}"
-                            );
-                        };
-                        let Some(r) = r.try_as_col().cloned() else {
-                            return internal_err!(
-                                "Invalid join key. Expected column, found {r:?}"
-                            );
-                        };
+                        let l = Self::as_col(l.clone())?;
+                        let r = Self::as_col(r.clone())?;
                         accumu.insert(l);
                         accumu.insert(r);
                         Result::<_, DataFusionError>::Ok(accumu)
@@ -516,6 +506,14 @@ impl LogicalPlan {
         })?;
 
         Ok(using_columns)
+    }
+
+    fn as_col(expr: Expr) -> Result<Column> {
+        match expr {
+            Expr::Column(c) => Ok(c),
+            Expr::Cast(Cast { expr, .. }) => Self::as_col(*expr),
+            _ => internal_err!("Invalid join key. Expected column, found {expr:?}"),
+        }
     }
 
     /// returns the first output expression of this `LogicalPlan` node.
