@@ -24,7 +24,6 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::output_requirements::OutputRequirementExec;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
@@ -56,6 +55,7 @@ use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAg
 use datafusion_physical_plan::ExecutionPlanProperties;
 
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -1290,7 +1290,7 @@ pub(crate) mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
-    use crate::physical_optimizer::output_requirements::OutputRequirements;
+    use datafusion_physical_optimizer::output_requirements::OutputRequirements;
     use crate::physical_optimizer::test_utils::{
         check_integrity, coalesce_partitions_exec, repartition_exec,
     };

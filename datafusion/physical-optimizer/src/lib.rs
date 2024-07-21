@@ -18,5 +18,6 @@
 #![deny(clippy::clone_on_ref_ptr)]
 
 mod optimizer;
+pub mod output_requirements;
 
 pub use optimizer::PhysicalOptimizerRule;

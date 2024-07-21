@@ -24,16 +24,18 @@
 
 use std::sync::Arc;
 
-use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_execution::TaskContext;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlanProperties, PlanProperties};
+
+use crate::PhysicalOptimizerRule;
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
 /// plan according to its `mode` attribute, which is set by the constructors
@@ -86,7 +88,7 @@ enum RuleMode {
 ///
 /// See [`OutputRequirements`] for more details
 #[derive(Debug)]
-pub(crate) struct OutputRequirementExec {
+pub struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
     order_requirement: Option<LexRequirement>,
     dist_requirement: Distribution,
@@ -94,7 +96,7 @@ pub(crate) struct OutputRequirementExec {
 }
 
 impl OutputRequirementExec {
-    pub(crate) fn new(
+    pub fn new(
         input: Arc<dyn ExecutionPlan>,
         requirements: Option<LexRequirement>,
         dist_requirement: Distribution,
@@ -108,7 +110,7 @@ impl OutputRequirementExec {
         }
     }
 
-    pub(crate) fn input(&self) -> Arc<dyn ExecutionPlan> {
+    pub fn input(&self) -> Arc<dyn ExecutionPlan> {
         self.input.clone()
     }
 
@@ -179,8 +181,8 @@ impl ExecutionPlan for OutputRequirementExec {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<crate::execution::context::TaskContext>,
-    ) -> Result<crate::physical_plan::SendableRecordBatchStream> {
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
         unreachable!();
     }
 
