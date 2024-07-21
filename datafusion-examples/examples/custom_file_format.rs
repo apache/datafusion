@@ -131,7 +131,7 @@ impl FileFormat for TSVFileFormat {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 /// Factory for creating TSV file formats
 ///
 /// This factory is a wrapper around the CSV file format factory
