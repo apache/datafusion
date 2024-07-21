@@ -264,6 +264,14 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
     }
 }
 
+/// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
+/// Given an expression which contains unnest expr as one of its children,
+/// Try transform depends on unnest type
+/// - For list column: unnest(col) with type list -> unnest(col) with type list::item
+/// - For struct column: unnest(struct(field1, field2)) -> unnest(struct).field1, unnest(struct).field2
+/// The transformed exprs will be used in the outer projection
+/// If along the path from root to bottom, there are multiple unnest expressions, the transformation
+/// is done only for the bottom expression
 pub(crate) fn transform_bottom_unnest_v2(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<String>,
@@ -271,8 +279,6 @@ pub(crate) fn transform_bottom_unnest_v2(
     memo: &mut HashMap<Expr, Vec<Expr>>,
     original_expr: &Expr,
 ) -> Result<Vec<Expr>> {
-    // TODO: depth first search to rewrite the bottom most unnest expressions
-    // until all the leave branches having at least one transformation
     let mut transform =
         |unnest_expr: &Expr, expr_in_unnest: &Expr| -> Result<Vec<Expr>> {
             if let Some(previou_transformed) = memo.get(unnest_expr) {
@@ -303,8 +309,6 @@ pub(crate) fn transform_bottom_unnest_v2(
             memo.insert(unnest_expr.clone(), expr.clone());
             Ok(expr)
         };
-    // let mut stack = vec![];
-    // let mut unnest_visitted = HashSet::new();
     let latest_visited = RefCell::new(None);
     // we need to mark only the latest unnest expr that was visitted during the down traversal
     let transform_down = |expr: Expr| -> Result<Transformed<Expr>> {
@@ -317,17 +321,20 @@ pub(crate) fn transform_bottom_unnest_v2(
     };
     let transform_up = |expr: Expr| -> Result<Transformed<Expr>> {
         if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
-            // only transform the bottom most unnest expr
+            // only transform the first unnest expr(s) from the bottom up
+            // if the expr tree contains mulitple unnest exprs, as long as neither of them
+            // is the direct ancestor of one another, we do all the transformation
             if let Some(ref mut last_visitted_expr) = *latest_visited.borrow_mut() {
                 if last_visitted_expr != &expr {
                     return Ok(Transformed::no(expr));
                 }
                 // this is (one of) the bottom most unnest expr
                 let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
-                if &expr != original_expr {
-                    if let DataType::Struct(_) = data_type {
-                        return internal_err!("unnest on struct can ony be applied at the root level of select expression");
-                    }
+                if &expr == original_expr {
+                    return Ok(Transformed::no(expr));
+                }
+                if let DataType::Struct(_) = data_type {
+                    return internal_err!("unnest on struct can ony be applied at the root level of select expression");
                 }
 
                 let mut transformed_exprs = transform(&expr, arg)?;
@@ -360,6 +367,13 @@ pub(crate) fn transform_bottom_unnest_v2(
         .transform_down_up(transform_down, transform_up)?;
 
     if !transformed {
+        // Because root expr need to transform separately
+        // unnest struct is only possible here
+        // The transformation looks like
+        // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
+        if let Expr::Unnest(Unnest { expr: ref arg }) = transformed_expr {
+            return transform(&transformed_expr, arg);
+        }
         if matches!(&transformed_expr, Expr::Column(_)) {
             inner_projection_exprs.push(transformed_expr.clone());
             Ok(vec![transformed_expr])

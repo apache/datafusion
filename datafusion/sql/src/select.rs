@@ -299,9 +299,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let mut intermediate_plan = input;
         let mut intermediate_select_exprs = select_exprs;
-        // Each expr in select_exprs can contains multiple unnest stage
-        // The transformation happen bottom up, one at a time for each iteration
-        // Ony exaust the loop if no more unnest transformation is found
+
+        // impl memoization to store all previous unnest transformation
         let mut memo = HashMap::new();
         for i in 0.. {
             let mut unnest_columns = vec![];
@@ -352,10 +351,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .project(inner_projection_exprs)?
                     .unnest_columns_with_options(columns, unnest_options)?
                     .build()?;
-                println!(
-                    "intermediate plan {:?}\n, selected exprs {:?}",
-                    plan, outer_projection_exprs
-                );
                 intermediate_plan = plan;
                 intermediate_select_exprs = outer_projection_exprs;
             }
