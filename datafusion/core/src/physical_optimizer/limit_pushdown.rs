@@ -128,8 +128,7 @@ pub fn push_down_limits(
         let child = limit_exec.input();
         if let Some(child_limit) = child.as_any().downcast_ref::<LocalLimitExec>() {
             let merged = try_merge_limits(&limit_exec, child_limit)?;
-            // Recurse in case of consecutive limits
-            // NOTE: There might be a better way to handle this
+            // Revisit current node in case of consecutive pushdowns
             Some(push_down_limits(merged)?.data)
         } else if child.supports_limit_pushdown() {
             try_push_down_limit(&limit_exec, child.clone())?
