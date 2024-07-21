@@ -26,7 +26,9 @@ use std::sync::Arc;
 
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
+};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -111,7 +113,7 @@ impl OutputRequirementExec {
     }
 
     pub fn input(&self) -> Arc<dyn ExecutionPlan> {
-        self.input.clone()
+        Arc::clone(&self.input)
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -277,7 +279,7 @@ fn require_top_ordering_helper(
         // When an operator requires an ordering, any `SortExec` below can not
         // be responsible for (i.e. the originator of) the global ordering.
         let (new_child, is_changed) =
-            require_top_ordering_helper(children.swap_remove(0).clone())?;
+            require_top_ordering_helper(Arc::clone(children.swap_remove(0)))?;
         Ok((plan.with_new_children(vec![new_child])?, is_changed))
     } else {
         // Stop searching, there is no global ordering desired for the query.
