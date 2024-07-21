@@ -2348,6 +2348,21 @@ select NULL % column2 from (VALUES (1, 2.3), (2, 5.4)) as t;
 NULL
 NULL
 
+# negative zero
+query B
+select -0.0 = 0.0;
+----
+true
+
+query B
+select -0.0 < 0.0;
+----
+false
+
+query B
+select -0 = 0;
+----
+true
 
 # query_binary_eq
 

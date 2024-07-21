@@ -24,6 +24,7 @@ use std::sync::Arc;
 use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 
 use arrow::{
+    array::ArrowNativeTypeOp,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
@@ -71,7 +72,21 @@ impl PhysicalExpr for Literal {
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        Ok(ColumnarValue::Scalar(self.value.clone()))
+        match &self.value {
+            // evaluate -0.0 to 0.0
+            ScalarValue::Float64(Some(v)) if v.is_zero() && v.is_sign_negative() => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(-v))))
+            }
+            // evaluate -0.0 to 0.0
+            ScalarValue::Float32(Some(v)) if v.is_zero() && v.is_sign_negative() => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(-v))))
+            }
+            // evaluate -0.0 to 0.0
+            ScalarValue::Float16(Some(v)) if v.is_zero() && v.is_sign_negative() => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float16(Some(-v))))
+            }
+            v => Ok(ColumnarValue::Scalar(v.clone())),
+        }
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
