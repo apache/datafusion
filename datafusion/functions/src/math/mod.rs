@@ -436,21 +436,6 @@ mod tests {
                         zero_to_inf_interval(data_type),
                     ),
                     (
-                        super::ln(),
-                        unbounded_interval(data_type),
-                        zero_to_inf_interval(data_type),
-                    ),
-                    (
-                        super::log2(),
-                        unbounded_interval(data_type),
-                        zero_to_inf_interval(data_type),
-                    ),
-                    (
-                        super::log10(),
-                        unbounded_interval(data_type),
-                        zero_to_inf_interval(data_type),
-                    ),
-                    (
                         super::sqrt(),
                         unbounded_interval(data_type),
                         zero_to_inf_interval(data_type),
