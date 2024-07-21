@@ -23,7 +23,7 @@ fn unary_interval_datatype(interval: &Interval) -> DataType {
     interval.lower().data_type()
 }
 
-pub(super) fn evaluate_bounds(_input: &[&Interval]) -> crate::Result<Interval> {
+pub(super) fn unbounded(_input: &[&Interval]) -> crate::Result<Interval> {
     // We cannot assume the input datatype is the same of output type.
     Interval::make_unbounded(&DataType::Null)
 }
@@ -94,36 +94,6 @@ pub(super) fn cosh_bounds(input: &[&Interval]) -> crate::Result<Interval> {
 
 pub(super) fn exp_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     // exp(x) is bounded by [0, ∞)
-    let data_type = unary_interval_datatype(input[0]);
-
-    Interval::try_new(
-        ScalarValue::new_zero(&data_type)?,
-        ScalarValue::new_infinity(&data_type)?,
-    )
-}
-
-pub(super) fn ln_bounds(input: &[&Interval]) -> crate::Result<Interval> {
-    // ln(x) is bounded by (0, ∞)
-    let data_type = unary_interval_datatype(input[0]);
-
-    Interval::try_new(
-        ScalarValue::new_zero(&data_type)?,
-        ScalarValue::new_infinity(&data_type)?,
-    )
-}
-
-pub(super) fn log2_bounds(input: &[&Interval]) -> crate::Result<Interval> {
-    // log2(x) is bounded by (0, ∞)
-    let data_type = unary_interval_datatype(input[0]);
-
-    Interval::try_new(
-        ScalarValue::new_zero(&data_type)?,
-        ScalarValue::new_infinity(&data_type)?,
-    )
-}
-
-pub(super) fn log10_bounds(input: &[&Interval]) -> crate::Result<Interval> {
-    // log10(x) is bounded by (0, ∞)
     let data_type = unary_interval_datatype(input[0]);
 
     Interval::try_new(
