@@ -838,7 +838,7 @@ mod tests {
                         assert!(array.values().get(i) >= a.values().get(i))
                     }
                 }
-                _ => assert!(false),
+                _ => unreachable!(),
             }
         }
     }
@@ -854,9 +854,9 @@ mod tests {
         let mut vec: Vec<i32> = Vec::with_capacity(size * formats.len());
         let mut fmt_vec: Vec<&str> = Vec::with_capacity(size * formats.len());
         for i in 0..size {
-            for j in 0..formats.len() {
+            for fmt_value in &formats {
                 vec.push(i as i32 * 1_000_001);
-                fmt_vec.push(formats[j]);
+                fmt_vec.push(fmt_value);
             }
         }
 
@@ -928,7 +928,7 @@ mod tests {
                 )
             }
         } else {
-            assert!(false)
+            unreachable!()
         }
         if let Ok(a) = date_trunc_array_fmt_dyn(&array_dict, &fmt_array) {
             for i in 0..array.len() {
@@ -937,7 +937,7 @@ mod tests {
                 )
             }
         } else {
-            assert!(false)
+            unreachable!()
         }
         if let Ok(a) = date_trunc_array_fmt_dyn(&array, &fmt_dict) {
             for i in 0..array.len() {
@@ -946,7 +946,7 @@ mod tests {
                 )
             }
         } else {
-            assert!(false)
+            unreachable!()
         }
         if let Ok(a) = date_trunc_array_fmt_dyn(&array_dict, &fmt_dict) {
             for i in 0..array.len() {
@@ -955,7 +955,7 @@ mod tests {
                 )
             }
         } else {
-            assert!(false)
+            unreachable!()
         }
     }
 
@@ -991,7 +991,7 @@ mod tests {
                         assert!(array.values().get(i) >= a.values().get(i))
                     }
                 }
-                _ => assert!(false),
+                _ => unreachable!(),
             }
         }
     }
@@ -1023,9 +1023,9 @@ mod tests {
         let mut vec: Vec<i64> = Vec::with_capacity(size * formats.len());
         let mut fmt_vec: Vec<&str> = Vec::with_capacity(size * formats.len());
         for i in 0..size {
-            for j in 0..formats.len() {
+            for fmt_value in &formats {
                 vec.push(i as i64 * 1_000_000_001);
-                fmt_vec.push(formats[j]);
+                fmt_vec.push(fmt_value);
             }
         }
 
@@ -1103,7 +1103,7 @@ mod tests {
                 )
             }
         } else {
-            assert!(false)
+            unreachable!()
         }
         if let Ok(a) = timestamp_trunc_array_fmt_dyn(&array_dict, &fmt_array) {
             for i in 0..array.len() {
@@ -1116,7 +1116,7 @@ mod tests {
                 )
             }
         } else {
-            assert!(false)
+            unreachable!()
         }
         if let Ok(a) = timestamp_trunc_array_fmt_dyn(&array, &fmt_dict) {
             for i in 0..array.len() {
@@ -1129,7 +1129,7 @@ mod tests {
                 )
             }
         } else {
-            assert!(false)
+            unreachable!()
         }
         if let Ok(a) = timestamp_trunc_array_fmt_dyn(&array_dict, &fmt_dict) {
             for i in 0..array.len() {
@@ -1142,7 +1142,7 @@ mod tests {
                 )
             }
         } else {
-            assert!(false)
+            unreachable!()
         }
     }
 }

@@ -1854,7 +1854,7 @@ mod tests {
             "2020-01-01T",
         ] {
             for eval_mode in &[EvalMode::Legacy, EvalMode::Ansi, EvalMode::Try] {
-                assert_eq!(date_parser(*date, *eval_mode).unwrap(), Some(18262));
+                assert_eq!(date_parser(date, *eval_mode).unwrap(), Some(18262));
             }
         }
 
@@ -1875,14 +1875,14 @@ mod tests {
             "--262143-12-31 ",
         ] {
             for eval_mode in &[EvalMode::Legacy, EvalMode::Try] {
-                assert_eq!(date_parser(*date, *eval_mode).unwrap(), None);
+                assert_eq!(date_parser(date, *eval_mode).unwrap(), None);
             }
-            assert!(date_parser(*date, EvalMode::Ansi).is_err());
+            assert!(date_parser(date, EvalMode::Ansi).is_err());
         }
 
         for date in &["-3638-5"] {
             for eval_mode in &[EvalMode::Legacy, EvalMode::Try, EvalMode::Ansi] {
-                assert_eq!(date_parser(*date, *eval_mode).unwrap(), Some(-2048160));
+                assert_eq!(date_parser(date, *eval_mode).unwrap(), Some(-2048160));
             }
         }
 
@@ -1898,7 +1898,7 @@ mod tests {
             "-0973250",
         ] {
             for eval_mode in &[EvalMode::Legacy, EvalMode::Try, EvalMode::Ansi] {
-                assert_eq!(date_parser(*date, *eval_mode).unwrap(), None);
+                assert_eq!(date_parser(date, *eval_mode).unwrap(), None);
             }
         }
     }
