@@ -23,8 +23,9 @@ use crate::physical_plan::ExecutionPlan;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_datafusion_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::ExecutionPlanProperties;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -205,8 +206,8 @@ fn try_push_down_limit(
     let grandchildren = child.children();
     if let Some(&grandchild) = grandchildren.first() {
         // GlobalLimitExec and LocalLimitExec must have an input after pushdown
-        if grandchild.output_partitioning().partition_count() > 1 {
-            // There are multiple input partitions, we still need a LocalLimitExec after the child
+        if combines_input_partitions(&child) {
+            // We still need a LocalLimitExec after the child
             if let Some(fetch) = global_or_local.fetch() {
                 let new_local_limit = Arc::new(LocalLimitExec::new(
                     grandchild.clone(),
@@ -230,6 +231,11 @@ fn try_push_down_limit(
             global_or_local
         ))
     }
+}
+
+fn combines_input_partitions(exec: &Arc<dyn ExecutionPlan>) -> bool {
+    let exec = exec.as_any();
+    return exec.is::<CoalescePartitionsExec>() || exec.is::<SortPreservingMergeExec>();
 }
 
 /// Transforms child to the fetching version if supported. Removes the parent if
