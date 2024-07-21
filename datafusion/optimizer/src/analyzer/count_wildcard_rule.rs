@@ -101,7 +101,6 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
-    use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
         col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
         out_ref_col, scalar_subquery, wildcard, WindowFrame, WindowFrameBound,
@@ -225,13 +224,12 @@ mod tests {
                 WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 vec![wildcard()],
             ))
-            .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+            .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])?
             .window_frame(WindowFrame::new_bounds(
                 WindowFrameUnits::Range,
                 WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
                 WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-            ))
-            .build()?])?
+            ))?])?
             .project(vec![count(wildcard())])?
             .build()?;
 

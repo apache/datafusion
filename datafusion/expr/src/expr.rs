@@ -803,9 +803,9 @@ pub struct WindowFunction {
     /// List of partition by expressions
     pub partition_by: Vec<Expr>,
     /// List of order by expressions
-    pub order_by: Vec<Expr>,
+    pub order_by: Option<Vec<Expr>>,
     /// Window frame
-    pub window_frame: window_frame::WindowFrame,
+    pub window_frame: Option<window_frame::WindowFrame>,
     /// Specifies how NULL value is treated: ignore or respect
     pub null_treatment: Option<NullTreatment>,
 }
@@ -817,9 +817,16 @@ impl WindowFunction {
             fun: fun.into(),
             args,
             partition_by: Vec::default(),
-            order_by: Vec::default(),
-            window_frame: WindowFrame::new(None),
+            order_by: None,
+            window_frame: None,
             null_treatment: None,
+        }
+    }
+
+    pub fn get_frame_or_default(&self) -> WindowFrame {
+        match &self.window_frame {
+            Some(frame) => frame.clone(),
+            None => WindowFrame::new(self.order_by.as_ref().map(|exprs| !exprs.is_empty()))
         }
     }
 }
@@ -1833,14 +1840,15 @@ impl fmt::Display for Expr {
             Expr::ScalarFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
-            }) => {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    null_treatment,
+                    ..
+                } = window_fun;
                 fmt_function(f, &fun.to_string(), false, args, true)?;
 
                 if let Some(nt) = null_treatment {
@@ -1850,13 +1858,16 @@ impl fmt::Display for Expr {
                 if !partition_by.is_empty() {
                     write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
                 }
-                if !order_by.is_empty() {
-                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
+                if let Some(o) = order_by {
+                    if !o.is_empty() {
+                        write!(f, " ORDER BY [{}]", expr_vec_fmt!(o))?;
+                    }
                 }
+                let frame = window_fun.get_frame_or_default();
                 write!(
                     f,
                     " {} BETWEEN {} AND {}",
-                    window_frame.units, window_frame.start_bound, window_frame.end_bound
+                    frame.units, frame.start_bound, frame.end_bound
                 )?;
                 Ok(())
             }
@@ -2155,14 +2166,15 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         Expr::ScalarFunction(fun) => {
             w.write_str(fun.func.display_name(&fun.args)?.as_str())?;
         }
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            args,
-            window_frame,
-            partition_by,
-            order_by,
-            null_treatment,
-        }) => {
+        Expr::WindowFunction(window_fun) => {
+            let WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                null_treatment,
+                ..
+            } = window_fun;
             write_function_name(w, &fun.to_string(), false, args)?;
 
             if let Some(nt) = null_treatment {
@@ -2173,12 +2185,15 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
                 w.write_str(" ")?;
                 write!(w, "PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
             }
-            if !order_by.is_empty() {
-                w.write_str(" ")?;
-                write!(w, "ORDER BY [{}]", expr_vec_fmt!(order_by))?;
+            if let Some(o) = order_by {
+                if !o.is_empty() {
+                    w.write_str(" ")?;
+                    write!(w, "ORDER BY [{}]", expr_vec_fmt!(o))?;
+                }
             }
+            let frame = window_fun.get_frame_or_default();
             w.write_str(" ")?;
-            write!(w, "{window_frame}")?;
+            write!(w, "{frame}")?;
         }
         Expr::AggregateFunction(AggregateFunction {
             func_def,
@@ -2192,8 +2207,8 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             if let Some(fe) = filter {
                 write!(w, " FILTER (WHERE {fe})")?;
             };
-            if let Some(order_by) = order_by {
-                write!(w, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
+            if let Some(o) = order_by {
+                write!(w, " ORDER BY [{}]", expr_vec_fmt!(o))?;
             };
             if let Some(nt) = null_treatment {
                 write!(w, " {}", nt)?;

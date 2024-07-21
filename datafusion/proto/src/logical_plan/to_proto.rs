@@ -310,15 +310,16 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::SimilarTo(pb)),
             }
         }
-        Expr::WindowFunction(expr::WindowFunction {
-            ref fun,
-            ref args,
-            ref partition_by,
-            ref order_by,
-            ref window_frame,
-            // TODO: support null treatment in proto
-            null_treatment: _,
-        }) => {
+        Expr::WindowFunction(window_fun) => {
+            let window_frame = window_fun.get_frame_or_default();
+            let expr::WindowFunction {
+                ref fun,
+                ref args,
+                ref partition_by,
+                ref order_by,
+                // TODO: support null treatment in proto
+                ..
+            } = window_fun;
             let (window_function, fun_definition) = match fun {
                 WindowFunctionDefinition::AggregateFunction(fun) => (
                     protobuf::window_expr_node::WindowFunction::AggrFunction(
@@ -360,10 +361,10 @@ pub fn serialize_expr(
                 None
             };
             let partition_by = serialize_exprs(partition_by, codec)?;
-            let order_by = serialize_exprs(order_by, codec)?;
+            let order_by = serialize_exprs(order_by.as_ref().unwrap_or(&vec![]), codec)?;
 
             let window_frame: Option<protobuf::WindowFrame> =
-                Some(window_frame.try_into()?);
+                Some((&window_frame).try_into()?);
             let window_expr = Box::new(protobuf::WindowExprNode {
                 expr: arg_expr,
                 window_function: Some(window_function),

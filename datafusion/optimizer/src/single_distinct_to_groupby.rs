@@ -354,7 +354,6 @@ mod tests {
     use super::*;
     use crate::test::*;
     use datafusion_expr::expr::{self, GroupingSet};
-    use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
         lit, logical_plan::builder::LogicalPlanBuilder, max, min, AggregateFunction,
     };
@@ -675,9 +674,8 @@ mod tests {
         // count(DISTINCT a) FILTER (WHERE a > 5)
         let expr = count_udaf()
             .call(vec![col("a")])
-            .distinct()
-            .filter(col("a").gt(lit(5)))
-            .build()?;
+            .distinct()?
+            .filter(col("a").gt(lit(5)))?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
             .build()?;
@@ -718,9 +716,8 @@ mod tests {
         // count(DISTINCT a ORDER BY a)
         let expr = count_udaf()
             .call(vec![col("a")])
-            .distinct()
-            .order_by(vec![col("a").sort(true, false)])
-            .build()?;
+            .distinct()?
+            .order_by(vec![col("a").sort(true, false)])?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
             .build()?;
@@ -738,10 +735,9 @@ mod tests {
         // count(DISTINCT a ORDER BY a) FILTER (WHERE a > 5)
         let expr = count_udaf()
             .call(vec![col("a")])
-            .distinct()
-            .filter(col("a").gt(lit(5)))
-            .order_by(vec![col("a").sort(true, false)])
-            .build()?;
+            .distinct()?
+            .filter(col("a").gt(lit(5)))?
+            .order_by(vec![col("a").sort(true, false)])?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
             .build()?;

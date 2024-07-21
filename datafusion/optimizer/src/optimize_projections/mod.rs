@@ -806,7 +806,6 @@ mod tests {
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
     };
-    use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
         binary_expr, build_join_schema,
         builder::table_scan_with_filters,
@@ -1880,8 +1879,7 @@ mod tests {
         let table_scan = test_table_scan()?;
         let aggr_with_filter = count_udaf()
             .call(vec![col("b")])
-            .filter(col("c").gt(lit(42)))
-            .build()?;
+            .filter(col("c").gt(lit(42)))?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],
@@ -1920,9 +1918,7 @@ mod tests {
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("test.a")],
         ))
-        .partition_by(vec![col("test.b")])
-        .build()
-        .unwrap();
+        .partition_by(vec![col("test.b")])?;
 
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),

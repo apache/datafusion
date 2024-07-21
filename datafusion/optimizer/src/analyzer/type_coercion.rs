@@ -47,7 +47,7 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprFunctionExt, ExprSchemable,
+    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
     LogicalPlan, Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
 };
@@ -429,14 +429,16 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     )))
                 }
             },
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
-            }) => {
+            Expr::WindowFunction(window_fun) => {
+                let window_frame = window_fun.get_frame_or_default();
+                let WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    null_treatment,
+                    ..
+                } = window_fun;
                 let window_frame =
                     coerce_window_frame(window_frame, self.schema, &order_by)?;
 
@@ -461,11 +463,10 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
 
                 Ok(Transformed::yes(
                     Expr::WindowFunction(WindowFunction::new(fun, args))
-                        .partition_by(partition_by)
-                        .order_by(order_by)
-                        .window_frame(window_frame)
-                        .null_treatment(null_treatment)
-                        .build()?,
+                        .partition_by(partition_by)?
+                        .order_by(order_by)?
+                        .window_frame(window_frame)?
+                        .null_treatment(null_treatment)?
                 ))
             }
             Expr::Alias(_)
@@ -563,12 +564,13 @@ fn coerce_frame_bound(
 // Coerces the given `window_frame` to use appropriate natural types.
 // For example, ROWS and GROUPS frames use `UInt64` during calculations.
 fn coerce_window_frame(
-    window_frame: WindowFrame,
+    mut window_frame: WindowFrame,
     schema: &DFSchema,
-    expressions: &[Expr],
+    expressions: &Option<Vec<Expr>>,
 ) -> Result<WindowFrame> {
-    let mut window_frame = window_frame;
     let current_types = expressions
+        .as_ref()
+        .unwrap_or(&vec![])
         .iter()
         .map(|e| e.get_type(schema))
         .collect::<Result<Vec<_>>>()?;

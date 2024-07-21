@@ -22,7 +22,7 @@ use crate::expr::{
     Cast, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, Sort,
     TryCast, Unnest, WindowFunction,
 };
-use crate::{Expr, ExprFunctionExt};
+use crate::Expr;
 
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
@@ -111,7 +111,9 @@ impl TreeNode for Expr {
             }) => {
                 let mut expr_vec = args.iter().collect::<Vec<_>>();
                 expr_vec.extend(partition_by);
-                expr_vec.extend(order_by);
+                if let Some(o) = order_by {
+                    expr_vec.extend(o);
+                }
                 expr_vec
             }
             Expr::InList(InList { expr, list, .. }) => {
@@ -279,29 +281,31 @@ impl TreeNode for Expr {
                     )))
                 })?
             }
-            Expr::WindowFunction(WindowFunction {
-                args,
-                fun,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
-            }) => map_until_stop_and_collect!(
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    args,
+                    fun,
+                    partition_by,
+                    order_by,
+                    null_treatment,
+                    window_frame,
+                } = window_fun;
+                map_until_stop_and_collect!(
                 transform_vec(args, &mut f),
                 partition_by,
                 transform_vec(partition_by, &mut f),
                 order_by,
-                transform_vec(order_by, &mut f)
+                transform_option_vec(order_by, &mut f)
             )?
             .update_data(|(new_args, new_partition_by, new_order_by)| {
-                Expr::WindowFunction(WindowFunction::new(fun, new_args))
-                    .partition_by(new_partition_by)
-                    .order_by(new_order_by)
-                    .window_frame(window_frame)
-                    .null_treatment(null_treatment)
-                    .build()
-                    .unwrap()
-            }),
+                Expr::WindowFunction(WindowFunction {
+                    fun,
+                    args: new_args,
+                    partition_by: new_partition_by,
+                    order_by: new_order_by,
+                    window_frame: window_frame,
+                    null_treatment: null_treatment,
+            })})}
             Expr::AggregateFunction(AggregateFunction {
                 args,
                 func_def,

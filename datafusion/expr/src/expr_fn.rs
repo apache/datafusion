@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WindowFunction,
+    Placeholder, TryCast, Unnest,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -707,235 +707,243 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// # Ok(())
 /// # }
 /// ```
-pub trait ExprFunctionExt {
-    /// Add `ORDER BY <order_by>`
-    ///
-    /// Note: `order_by` must be [`Expr::Sort`]
-    fn order_by(self, order_by: Vec<Expr>) -> ExprFuncBuilder;
-    /// Add `FILTER <filter>`
-    fn filter(self, filter: Expr) -> ExprFuncBuilder;
-    /// Add `DISTINCT`
-    fn distinct(self) -> ExprFuncBuilder;
-    /// Add `RESPECT NULLS` or `IGNORE NULLS`
-    fn null_treatment(
-        self,
-        null_treatment: impl Into<Option<NullTreatment>>,
-    ) -> ExprFuncBuilder;
-    // Add `PARTITION BY`
-    fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder;
-    // Add appropriate window frame conditions
-    fn window_frame(self, window_frame: WindowFrame) -> ExprFuncBuilder;
-}
+// pub trait ExprFunctionExt {
+//     /// Add `ORDER BY <order_by>`
+//     ///
+//     /// Note: `order_by` must be [`Expr::Sort`]
+//     fn order_by(self, order_by: Vec<Expr>) -> ExprFuncBuilder;
+//     /// Add `FILTER <filter>`
+//     fn filter(self, filter: Expr) -> ExprFuncBuilder;
+//     /// Add `DISTINCT`
+//     fn distinct(self) -> ExprFuncBuilder;
+//     /// Add `RESPECT NULLS` or `IGNORE NULLS`
+//     fn null_treatment(
+//         self,
+//         null_treatment: impl Into<Option<NullTreatment>>,
+//     ) -> ExprFuncBuilder;
+//     // Add `PARTITION BY`
+//     fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder;
+//     // Add appropriate window frame conditions
+//     fn window_frame(self, window_frame: WindowFrame) -> ExprFuncBuilder;
+// }
 
-#[derive(Debug, Clone)]
-pub enum ExprFuncKind {
-    Aggregate(AggregateFunction),
-    Window(WindowFunction),
-}
+// #[derive(Debug, Clone)]
+// pub enum ExprFuncKind {
+//     Aggregate(AggregateFunction),
+//     Window(WindowFunction),
+// }
 
-/// Implementation of [`ExprFunctionExt`].
-///
-/// See [`ExprFunctionExt`] for usage and examples
-#[derive(Debug, Clone)]
-pub struct ExprFuncBuilder {
-    fun: Option<ExprFuncKind>,
-    order_by: Option<Vec<Expr>>,
-    filter: Option<Expr>,
-    distinct: bool,
-    null_treatment: Option<NullTreatment>,
-    partition_by: Option<Vec<Expr>>,
-    window_frame: Option<WindowFrame>,
-}
+// /// Implementation of [`ExprFunctionExt`].
+// ///
+// /// See [`ExprFunctionExt`] for usage and examples
+// #[derive(Debug, Clone)]
+// pub struct ExprFuncBuilder {
+//     fun: Option<ExprFuncKind>,
+//     order_by: Option<Vec<Expr>>,
+//     filter: Option<Expr>,
+//     distinct: bool,
+//     null_treatment: Option<NullTreatment>,
+//     partition_by: Option<Vec<Expr>>,
+//     window_frame: Option<WindowFrame>,
+// }
 
-impl ExprFuncBuilder {
-    /// Create a new `ExprFuncBuilder`, see [`ExprFunctionExt`]
+// impl ExprFuncBuilder {
+//     /// Create a new `ExprFuncBuilder`, see [`ExprFunctionExt`]
 
-    fn new(fun: Option<ExprFuncKind>) -> Self {
-        Self {
-            fun,
-            order_by: None,
-            filter: None,
-            distinct: false,
-            null_treatment: None,
-            partition_by: None,
-            window_frame: None,
-        }
-    }
+//     fn new(fun: Option<ExprFuncKind>) -> Self {
+//         Self {
+//             fun,
+//             order_by: None,
+//             filter: None,
+//             distinct: false,
+//             null_treatment: None,
+//             partition_by: None,
+//             window_frame: None,
+//         }
+//     }
 
-    /// Updates and returns the in progress [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
-    ///
-    /// # Errors:
-    ///
-    /// Returns an error of this builder  [`ExprFunctionExt`] was used with an
-    /// `Expr` variant other than [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
-    pub fn build(self) -> Result<Expr> {
-        let Self {
-            fun,
-            order_by,
-            filter,
-            distinct,
-            null_treatment,
-            partition_by,
-            window_frame,
-        } = self;
+//     /// Updates and returns the in progress [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
+//     ///
+//     /// # Errors:
+//     ///
+//     /// Returns an error of this builder  [`ExprFunctionExt`] was used with an
+//     /// `Expr` variant other than [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
+//     pub fn build(self) -> Result<Expr> {
+//         let Self {
+//             fun,
+//             order_by,
+//             filter,
+//             distinct,
+//             null_treatment,
+//             partition_by,
+//             window_frame,
+//         } = self;
 
-        let Some(fun) = fun else {
-            return plan_err!(
-                "ExprFunctionExt can only be used with Expr::AggregateFunction or Expr::WindowFunction"
-            );
-        };
+//         let Some(fun) = fun else {
+//             return plan_err!(
+//                 "ExprFunctionExt can only be used with Expr::AggregateFunction or Expr::WindowFunction"
+//             );
+//         };
 
-        if let Some(order_by) = &order_by {
-            for expr in order_by.iter() {
-                if !matches!(expr, Expr::Sort(_)) {
-                    return plan_err!(
-                        "ORDER BY expressions must be Expr::Sort, found {expr:?}"
-                    );
-                }
+//         if let Some(order_by) = &order_by {
+//             for expr in order_by.iter() {
+//                 if !matches!(expr, Expr::Sort(_)) {
+//                     return plan_err!(
+//                         "ORDER BY expressions must be Expr::Sort, found {expr:?}"
+//                     );
+//                 }
+//             }
+//         }
+
+//         let fun_expr = match fun {
+//             ExprFuncKind::Aggregate(mut udaf) => {
+//                 udaf.order_by = order_by;
+//                 udaf.filter = filter.map(Box::new);
+//                 udaf.distinct = distinct;
+//                 udaf.null_treatment = null_treatment;
+//                 Expr::AggregateFunction(udaf)
+//             }
+//             ExprFuncKind::Window(mut udwf) => {
+//                 let has_order_by = order_by.as_ref().map(|o| o.len() > 0);
+//                 udwf.order_by = order_by.unwrap_or_default();
+//                 udwf.partition_by = partition_by.unwrap_or_default();
+//                 udwf.window_frame =
+//                     window_frame.unwrap_or(WindowFrame::new(has_order_by));
+//                 udwf.null_treatment = null_treatment;
+//                 Expr::WindowFunction(udwf)
+//             }
+//         };
+
+//         Ok(fun_expr)
+//     }
+// }
+
+// impl ExprFunctionExt for ExprFuncBuilder {
+//     /// Add `ORDER BY <order_by>`
+//     ///
+//     /// Note: `order_by` must be [`Expr::Sort`]
+//     fn order_by(mut self, order_by: Vec<Expr>) -> ExprFuncBuilder {
+//         self.order_by = Some(order_by);
+//         self
+//     }
+
+//     /// Add `FILTER <filter>`
+//     fn filter(mut self, filter: Expr) -> ExprFuncBuilder {
+//         self.filter = Some(filter);
+//         self
+//     }
+
+//     /// Add `DISTINCT`
+//     fn distinct(mut self) -> ExprFuncBuilder {
+//         self.distinct = true;
+//         self
+//     }
+
+//     /// Add `RESPECT NULLS` or `IGNORE NULLS`
+//     fn null_treatment(
+//         mut self,
+//         null_treatment: impl Into<Option<NullTreatment>>,
+//     ) -> ExprFuncBuilder {
+//         self.null_treatment = null_treatment.into();
+//         self
+//     }
+
+//     fn partition_by(mut self, partition_by: Vec<Expr>) -> ExprFuncBuilder {
+//         self.partition_by = Some(partition_by);
+//         self
+//     }
+
+//     fn window_frame(mut self, window_frame: WindowFrame) -> ExprFuncBuilder {
+//         self.window_frame = Some(window_frame);
+//         self
+//     }
+// }
+
+impl Expr {
+    pub fn order_by(mut self, order_by: impl Into<Option<Vec<Expr>>>) -> Result<Expr> {
+        let order_by = order_by.into();
+        if let Some(exprs) = &order_by {
+            if let Some(expr) = exprs.iter().find(|expr| !matches!(expr, Expr::Sort(_))) {
+                return plan_err!("ORDER BY expressions must be Expr::Sort, found {expr:?}");
             }
         }
 
-        let fun_expr = match fun {
-            ExprFuncKind::Aggregate(mut udaf) => {
+        match &mut self {
+            Expr::AggregateFunction(udaf) => {
                 udaf.order_by = order_by;
-                udaf.filter = filter.map(Box::new);
-                udaf.distinct = distinct;
-                udaf.null_treatment = null_treatment;
-                Expr::AggregateFunction(udaf)
             }
-            ExprFuncKind::Window(mut udwf) => {
-                let has_order_by = order_by.as_ref().map(|o| o.len() > 0);
-                udwf.order_by = order_by.unwrap_or_default();
-                udwf.partition_by = partition_by.unwrap_or_default();
-                udwf.window_frame =
-                    window_frame.unwrap_or(WindowFrame::new(has_order_by));
-                udwf.null_treatment = null_treatment;
-                Expr::WindowFunction(udwf)
+            Expr::WindowFunction(udwf) => {
+                udwf.order_by = order_by;
             }
-        };
-
-        Ok(fun_expr)
+            _ => {
+                return plan_err!("order_by can only be used with AggregateFunction or WindowFunction expressions.")
+            }
+        }
+        Ok(self)
     }
-}
-
-impl ExprFunctionExt for ExprFuncBuilder {
-    /// Add `ORDER BY <order_by>`
-    ///
-    /// Note: `order_by` must be [`Expr::Sort`]
-    fn order_by(mut self, order_by: Vec<Expr>) -> ExprFuncBuilder {
-        self.order_by = Some(order_by);
-        self
+    pub fn filter(mut self, filter: Expr) -> Result<Expr> {
+        match &mut self {
+            Expr::AggregateFunction(udaf) => {
+                udaf.filter = Some(Box::new(filter));
+            }
+            _ => {
+                return plan_err!("filter can only be used with AggregateFunction expressions.")
+            }
+        }
+        Ok(self)
     }
-
-    /// Add `FILTER <filter>`
-    fn filter(mut self, filter: Expr) -> ExprFuncBuilder {
-        self.filter = Some(filter);
-        self
+    pub fn distinct(mut self) -> Result<Expr> {
+        match &mut self {
+            Expr::AggregateFunction(udaf) => {
+                udaf.distinct = true;
+            }
+            _ => {
+                return plan_err!("distinct can only be used with AggregateFunction expressions.")
+            }
+        }
+        Ok(self)
     }
-
-    /// Add `DISTINCT`
-    fn distinct(mut self) -> ExprFuncBuilder {
-        self.distinct = true;
-        self
-    }
-
-    /// Add `RESPECT NULLS` or `IGNORE NULLS`
-    fn null_treatment(
+    pub fn null_treatment(
         mut self,
         null_treatment: impl Into<Option<NullTreatment>>,
-    ) -> ExprFuncBuilder {
-        self.null_treatment = null_treatment.into();
-        self
-    }
-
-    fn partition_by(mut self, partition_by: Vec<Expr>) -> ExprFuncBuilder {
-        self.partition_by = Some(partition_by);
-        self
-    }
-
-    fn window_frame(mut self, window_frame: WindowFrame) -> ExprFuncBuilder {
-        self.window_frame = Some(window_frame);
-        self
-    }
-}
-
-impl ExprFunctionExt for Expr {
-    fn order_by(self, order_by: Vec<Expr>) -> ExprFuncBuilder {
-        let mut builder = match self {
+    ) -> Result<Expr> {
+        match &mut self {
             Expr::AggregateFunction(udaf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
+                udaf.null_treatment = null_treatment.into();
+                // ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
             }
             Expr::WindowFunction(udwf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
+                udwf.null_treatment = null_treatment.into();
             }
-            _ => ExprFuncBuilder::new(None),
-        };
-        if builder.fun.is_some() {
-            builder.order_by = Some(order_by);
+            _ => {
+                return plan_err!("null_treatment can only be used with AggregateFunction or WindowFunction expressions.")
+            }
         }
-        builder
-    }
-    fn filter(self, filter: Expr) -> ExprFuncBuilder {
-        match self {
-            Expr::AggregateFunction(udaf) => {
-                let mut builder =
-                    ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
-                builder.filter = Some(filter);
-                builder
-            }
-            _ => ExprFuncBuilder::new(None),
-        }
-    }
-    fn distinct(self) -> ExprFuncBuilder {
-        match self {
-            Expr::AggregateFunction(udaf) => {
-                let mut builder =
-                    ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
-                builder.distinct = true;
-                builder
-            }
-            _ => ExprFuncBuilder::new(None),
-        }
-    }
-    fn null_treatment(
-        self,
-        null_treatment: impl Into<Option<NullTreatment>>,
-    ) -> ExprFuncBuilder {
-        let mut builder = match self {
-            Expr::AggregateFunction(udaf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
-            }
-            Expr::WindowFunction(udwf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
-            }
-            _ => ExprFuncBuilder::new(None),
-        };
-        if builder.fun.is_some() {
-            builder.null_treatment = null_treatment.into();
-        }
-        builder
+        Ok(self)
     }
 
-    fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder {
-        match self {
+    pub fn partition_by(mut self, partition_by: Vec<Expr>) -> Result<Expr> {
+        match &mut self {
             Expr::WindowFunction(udwf) => {
-                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)));
-                builder.partition_by = Some(partition_by);
-                builder
+                udwf.partition_by = partition_by;
             }
-            _ => ExprFuncBuilder::new(None),
+            _ => {
+                return plan_err!("partition_by can only be used with WindowFunction expressions.")
+            }
         }
+        Ok(self)
     }
 
-    fn window_frame(self, window_frame: WindowFrame) -> ExprFuncBuilder {
-        match self {
+    pub fn window_frame(mut self, window_frame: WindowFrame) -> Result<Expr> {
+        match &mut self {
             Expr::WindowFunction(udwf) => {
-                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)));
-                builder.window_frame = Some(window_frame);
-                builder
+                udwf.window_frame = Some(window_frame);
             }
-            _ => ExprFuncBuilder::new(None),
+            _ => {
+                return plan_err!("window_frame can only be used with WindowFunction expressions.")
+            }
         }
+        Ok(self)
     }
 }
 

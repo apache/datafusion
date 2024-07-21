@@ -55,7 +55,7 @@ use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     array_agg, cast, col, exists, expr, in_subquery, lit, max, out_ref_col, placeholder,
-    scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, WindowFrame,
+    scalar_subquery, when, wildcard, Expr, ExprSchemable, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_functions_aggregate::expr_fn::{avg, count, sum};
@@ -184,14 +184,12 @@ async fn test_count_wildcard_on_window() -> Result<()> {
             WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![wildcard()],
         ))
-        .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+        .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])?
         .window_frame(WindowFrame::new_bounds(
             WindowFrameUnits::Range,
             WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
             WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-        ))
-        .build()
-        .unwrap()])?
+        ))?])?
         .explain(false, false)?
         .collect()
         .await?;

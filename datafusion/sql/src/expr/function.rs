@@ -23,7 +23,7 @@ use datafusion_common::{
 };
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    expr, AggregateFunction, Expr, ExprFunctionExt, ExprSchemable, WindowFrame,
+    expr, AggregateFunction, Expr, ExprSchemable, WindowFrame,
     WindowFunctionDefinition,
 };
 use datafusion_expr::{
@@ -319,23 +319,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             WindowFunctionDefinition::AggregateFunction(aggregate_fun),
                             args,
                         ))
-                        .partition_by(partition_by)
-                        .order_by(order_by)
-                        .window_frame(window_frame)
-                        .null_treatment(null_treatment)
-                        .build()
-                        .unwrap()
+                        .partition_by(partition_by)?
+                        .order_by(order_by)?
+                        .window_frame(window_frame)?
+                        .null_treatment(null_treatment)?
                     }
                     _ => Expr::WindowFunction(expr::WindowFunction::new(
                         fun,
                         self.function_args_to_expr(args, schema, planner_context)?,
                     ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .null_treatment(null_treatment)
-                    .build()
-                    .unwrap(),
+                    .partition_by(partition_by)?
+                    .order_by(order_by)?
+                    .window_frame(window_frame)?
+                    .null_treatment(null_treatment)?
                 };
                 return Ok(expr);
             }

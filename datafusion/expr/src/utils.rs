@@ -464,8 +464,10 @@ type WindowSortKey = Vec<(Expr, bool)>;
 /// Generate a sort key for a given window expr's partition_by and order_bu expr
 pub fn generate_sort_key(
     partition_by: &[Expr],
-    order_by: &[Expr],
+    order_by: &Option<Vec<Expr>>,
 ) -> Result<WindowSortKey> {
+    let empty_vec = vec![];
+    let order_by = order_by.as_ref().unwrap_or(&empty_vec);
     let normalized_order_by_keys = order_by
         .iter()
         .map(|e| match e {
@@ -1252,9 +1254,7 @@ impl AggregateOrderSensitivity {
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup,
-        test::function_stub::sum_udaf, AggregateFunction, Cast, ExprFunctionExt,
-        WindowFrame, WindowFunctionDefinition,
+        col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup, test::function_stub::sum_udaf, AggregateFunction, Cast, WindowFrame, WindowFunctionDefinition
     };
 
     #[test]
@@ -1302,9 +1302,7 @@ mod tests {
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
         ))
-        .order_by(vec![age_asc.clone(), name_desc.clone()])
-        .build()
-        .unwrap();
+        .order_by(vec![age_asc.clone(), name_desc.clone()])?;
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
@@ -1313,9 +1311,7 @@ mod tests {
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
             vec![col("name")],
         ))
-        .order_by(vec![age_asc.clone(), name_desc.clone()])
-        .build()
-        .unwrap();
+        .order_by(vec![age_asc.clone(), name_desc.clone()])?;
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
@@ -1324,9 +1320,7 @@ mod tests {
             name_desc.clone(),
             age_asc.clone(),
             created_at_desc.clone(),
-        ])
-        .build()
-        .unwrap();
+        ])?;
         // FIXME use as_ref
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
         let result = group_window_expr_by_sort_keys(exprs.to_vec())?;
@@ -1358,10 +1352,8 @@ mod tests {
             .order_by(vec![
                 Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
                 Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
-            ])
-            .window_frame(WindowFrame::new(Some(false)))
-            .build()
-            .unwrap(),
+            ])?
+            .window_frame(WindowFrame::new(Some(false)))?,
             Expr::WindowFunction(expr::WindowFunction::new(
                 WindowFunctionDefinition::AggregateUDF(sum_udaf()),
                 vec![col("age")],
@@ -1370,10 +1362,8 @@ mod tests {
                 Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
                 Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
                 Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true)),
-            ])
-            .window_frame(WindowFrame::new(Some(false)))
-            .build()
-            .unwrap(),
+            ])?
+            .window_frame(WindowFrame::new(Some(false)))?,
         ];
         let expected = vec![
             Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
@@ -1392,7 +1382,7 @@ mod tests {
         let partition_by = &[col("age"), col("name"), col("created_at")];
         for asc_ in asc_or_desc {
             for nulls_first_ in nulls_first_or_last {
-                let order_by = &[
+                let order_by = Some(vec![
                     Expr::Sort(Sort {
                         expr: Box::new(col("age")),
                         asc: asc_,
@@ -1403,7 +1393,7 @@ mod tests {
                         asc: asc_,
                         nulls_first: nulls_first_,
                     }),
-                ];
+                ]);
 
                 let expected = vec![
                     (
@@ -1431,7 +1421,7 @@ mod tests {
                         true,
                     ),
                 ];
-                let result = generate_sort_key(partition_by, order_by)?;
+                let result = generate_sort_key(partition_by, &order_by)?;
                 assert_eq!(expected, result);
             }
         }

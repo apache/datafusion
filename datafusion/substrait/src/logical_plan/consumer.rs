@@ -1234,12 +1234,12 @@ pub async fn from_substrait_rex(
                     extensions,
                 )
                 .await?,
-                order_by,
-                window_frame: datafusion::logical_expr::WindowFrame::new_bounds(
+                order_by: Some(order_by),
+                window_frame: Some(datafusion::logical_expr::WindowFrame::new_bounds(
                     bound_units,
                     from_substrait_bound(&window.lower_bound, true)?,
                     from_substrait_bound(&window.upper_bound, false)?,
-                ),
+                )),
                 null_treatment: None,
             }))
         }

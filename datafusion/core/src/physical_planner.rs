@@ -101,7 +101,7 @@ fn create_function_physical_name(
     fun: &str,
     distinct: bool,
     args: &[Expr],
-    order_by: Option<&Vec<Expr>>,
+    order_by: &Option<Vec<Expr>>,
 ) -> Result<String> {
     let names: Vec<String> = args
         .iter()
@@ -115,7 +115,7 @@ fn create_function_physical_name(
 
     let phys_name = format!("{}({}{})", fun, distinct_str, names.join(","));
 
-    Ok(order_by
+    Ok(order_by.as_ref()
         .map(|order_by| format!("{} ORDER BY [{}]", phys_name, expr_vec_fmt!(order_by)))
         .unwrap_or(phys_name))
 }
@@ -220,7 +220,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             order_by,
             ..
         }) => {
-            create_function_physical_name(&fun.to_string(), false, args, Some(order_by))
+            create_function_physical_name(&fun.to_string(), false, args, order_by)
         }
         Expr::AggregateFunction(AggregateFunction {
             func_def,
@@ -233,7 +233,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             func_def.name(),
             *distinct,
             args,
-            order_by.as_ref(),
+            order_by,
         ),
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(
@@ -1744,22 +1744,25 @@ pub fn create_window_expr_with_name(
     let name = name.into();
     let physical_schema: &Schema = &logical_schema.into();
     match e {
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment,
-        }) => {
+        Expr::WindowFunction(window_fun) => {
+            let window_frame = window_fun.get_frame_or_default();
+            let WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                null_treatment,
+                ..
+            } = window_fun;
+
             let physical_args =
                 create_physical_exprs(args, logical_schema, execution_props)?;
             let partition_by =
                 create_physical_exprs(partition_by, logical_schema, execution_props)?;
             let order_by =
-                create_physical_sort_exprs(order_by, logical_schema, execution_props)?;
+                create_physical_sort_exprs(order_by.as_ref().unwrap_or(&vec![]), logical_schema, execution_props)?;
 
-            if !is_window_frame_bound_valid(window_frame) {
+            if !is_window_frame_bound_valid(&window_frame) {
                 return plan_err!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound

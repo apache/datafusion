@@ -23,8 +23,9 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::{col, ExprFunctionExt, LogicalPlanBuilder};
+use datafusion_expr::{col, LogicalPlanBuilder};
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
+use itertools::Itertools;
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///
@@ -96,18 +97,15 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 // Construct the aggregation expression to be used to fetch the selected expressions.
                 let first_value_udaf: std::sync::Arc<datafusion_expr::AggregateUDF> =
                     config.function_registry().unwrap().udaf("first_value")?;
-                let aggr_expr = select_expr.into_iter().map(|e| {
+                let aggr_expr: Vec<Expr> = select_expr.into_iter().map(|e| {
                     if let Some(order_by) = &sort_expr {
                         first_value_udaf
                             .call(vec![e])
                             .order_by(order_by.clone())
-                            .build()
-                            // guaranteed to be `Expr::AggregateFunction`
-                            .unwrap()
                     } else {
-                        first_value_udaf.call(vec![e])
+                        Ok(first_value_udaf.call(vec![e]))
                     }
-                });
+                }).try_collect()?;
 
                 let aggr_expr = normalize_cols(aggr_expr, input.as_ref())?;
                 let group_expr = normalize_cols(on_expr, input.as_ref())?;

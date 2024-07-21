@@ -1238,14 +1238,15 @@ pub fn to_substrait_rex(
         Expr::Alias(Alias { expr, .. }) => {
             to_substrait_rex(ctx, expr, schema, col_ref_offset, extension_info)
         }
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment: _,
-        }) => {
+        Expr::WindowFunction(window_fun) => {
+            let window_frame = window_fun.get_frame_or_default();
+            let WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                ..
+            } = window_fun;
             // function reference
             let function_anchor = register_function(fun.to_string(), extension_info);
             // arguments
@@ -1268,12 +1269,14 @@ pub fn to_substrait_rex(
                 .collect::<Result<Vec<_>>>()?;
             // order by expressions
             let order_by = order_by
+                .as_ref()
+                .unwrap_or(&vec![])
                 .iter()
                 .map(|e| substrait_sort_field(ctx, e, schema, extension_info))
                 .collect::<Result<Vec<_>>>()?;
             // window frame
-            let bounds = to_substrait_bounds(window_frame)?;
-            let bound_type = to_substrait_bound_type(window_frame)?;
+            let bounds = to_substrait_bounds(&window_frame)?;
+            let bound_type = to_substrait_bound_type(&window_frame)?;
             Ok(make_substrait_window_function(
                 function_anchor,
                 arguments,

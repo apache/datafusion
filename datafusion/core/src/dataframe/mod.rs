@@ -1696,7 +1696,7 @@ mod tests {
     use datafusion_common::{Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        array_agg, cast, create_udf, expr, lit, BuiltInWindowFunction, ExprFunctionExt,
+        array_agg, cast, create_udf, expr, lit, BuiltInWindowFunction,
         ScalarFunctionImplementation, Volatility, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::expr_fn::count_distinct;
@@ -1868,9 +1868,7 @@ mod tests {
             ),
             vec![col("aggregate_test_100.c1")],
         ))
-        .partition_by(vec![col("aggregate_test_100.c2")])
-        .build()
-        .unwrap();
+        .partition_by(vec![col("aggregate_test_100.c2")])?;
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
 

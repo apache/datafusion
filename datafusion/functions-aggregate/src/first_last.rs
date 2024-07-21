@@ -31,7 +31,7 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, ExprFunctionExt,
+    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr,
     Signature, TypeSignature, Volatility,
 };
 use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
@@ -42,16 +42,13 @@ use datafusion_physical_expr_common::sort_expr::{
 create_func!(FirstValue, first_value_udaf);
 
 /// Returns the first value in a group of values.
-pub fn first_value(expression: Expr, order_by: Option<Vec<Expr>>) -> Expr {
+pub fn first_value(expression: Expr, order_by: Option<Vec<Expr>>) -> Result<Expr> {
     if let Some(order_by) = order_by {
         first_value_udaf()
             .call(vec![expression])
-            .order_by(order_by)
-            .build()
-            // guaranteed to be `Expr::AggregateFunction`
-            .unwrap()
+            .order_by(order_by.clone())
     } else {
-        first_value_udaf().call(vec![expression])
+        Ok(first_value_udaf().call(vec![expression]))
     }
 }
 

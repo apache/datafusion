@@ -25,7 +25,6 @@ use datafusion_common::{
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
-use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::{
     expr::{self, InList, Sort, WindowFunction},
     logical_plan::{PlanType, StringifiedPlan},
@@ -316,11 +315,9 @@ pub fn parse_expr(
                             codec,
                         )?],
                     ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .build()
-                    .unwrap())
+                    .partition_by(partition_by)?
+                    .order_by(order_by)?
+                    .window_frame(window_frame)?)
                 }
                 window_expr_node::WindowFunction::BuiltInFunction(i) => {
                     let built_in_function = protobuf::BuiltInWindowFunction::try_from(*i)
@@ -338,11 +335,9 @@ pub fn parse_expr(
                         ),
                         args,
                     ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .build()
-                    .unwrap())
+                    .partition_by(partition_by)?
+                    .order_by(order_by)?
+                    .window_frame(window_frame)?)
                 }
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
@@ -358,11 +353,9 @@ pub fn parse_expr(
                         expr::WindowFunctionDefinition::AggregateUDF(udaf_function),
                         args,
                     ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .build()
-                    .unwrap())
+                    .partition_by(partition_by)?
+                    .order_by(order_by)?
+                    .window_frame(window_frame)?)
                 }
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
                     let udwf_function = match &expr.fun_definition {
@@ -378,11 +371,9 @@ pub fn parse_expr(
                         expr::WindowFunctionDefinition::WindowUDF(udwf_function),
                         args,
                     ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .build()
-                    .unwrap())
+                    .partition_by(partition_by)?
+                    .order_by(order_by)?
+                    .window_frame(window_frame)?)
                 }
             }
         }

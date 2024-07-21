@@ -141,8 +141,8 @@ impl WindowUDF {
             fun,
             args,
             partition_by,
-            order_by,
-            window_frame,
+            order_by: Some(order_by),
+            window_frame: Some(window_frame),
             null_treatment: None,
         })
     }

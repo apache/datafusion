@@ -249,14 +249,15 @@ impl Unparser<'_> {
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment: _,
-            }) => {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    ..
+                } = window_fun;
+                let window_frame = window_fun.get_frame_or_default();
                 let func_name = fun.name();
 
                 let args = self.function_args_to_sql(args)?;
@@ -273,6 +274,8 @@ impl Unparser<'_> {
                     }
                 };
                 let order_by: Vec<ast::OrderByExpr> = order_by
+                    .as_ref()
+                    .unwrap_or(&vec![])
                     .iter()
                     .map(|expr| expr_to_unparsed(expr)?.into_order_by_expr())
                     .collect::<Result<Vec<_>>>()?;
@@ -1342,7 +1345,7 @@ mod tests {
         table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
-    use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
+    use datafusion_expr::interval_month_day_nano_lit;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
 
@@ -1583,17 +1586,13 @@ mod tests {
             (
                 count_udaf()
                     .call(vec![Expr::Wildcard { qualifier: None }])
-                    .distinct()
-                    .build()
-                    .unwrap(),
+                    .distinct()?,
                 "count(DISTINCT *)",
             ),
             (
                 count_udaf()
                     .call(vec![Expr::Wildcard { qualifier: None }])
-                    .filter(lit(true))
-                    .build()
-                    .unwrap(),
+                    .filter(lit(true))?,
                 "count(*) FILTER (WHERE true)",
             ),
             (
@@ -1603,8 +1602,8 @@ mod tests {
                     ),
                     args: vec![col("col")],
                     partition_by: vec![],
-                    order_by: vec![],
-                    window_frame: WindowFrame::new(None),
+                    order_by: Some(vec![]),
+                    window_frame: Some(WindowFrame::new(None)),
                     null_treatment: None,
                 }),
                 r#"ROW_NUMBER(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
@@ -1614,12 +1613,12 @@ mod tests {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     args: vec![wildcard()],
                     partition_by: vec![],
-                    order_by: vec![Expr::Sort(Sort::new(
+                    order_by: Some(vec![Expr::Sort(Sort::new(
                         Box::new(col("a")),
                         false,
                         true,
-                    ))],
-                    window_frame: WindowFrame::new_bounds(
+                    ))]),
+                    window_frame: Some(WindowFrame::new_bounds(
                         datafusion_expr::WindowFrameUnits::Range,
                         datafusion_expr::WindowFrameBound::Preceding(
                             ScalarValue::UInt32(Some(6)),
@@ -1627,7 +1626,7 @@ mod tests {
                         datafusion_expr::WindowFrameBound::Following(
                             ScalarValue::UInt32(Some(2)),
                         ),
-                    ),
+                    )),
                     null_treatment: None,
                 }),
                 r#"count(*) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
