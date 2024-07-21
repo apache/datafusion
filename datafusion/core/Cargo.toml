@@ -217,3 +217,9 @@ name = "topk_aggregate"
 [[bench]]
 harness = false
 name = "parquet_statistic"
+
+[[bench]]
+harness = false
+name = "map_query_sql"
+required-features = ["array_expressions"]
+
