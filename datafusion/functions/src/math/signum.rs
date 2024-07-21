@@ -22,7 +22,7 @@ use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Float32, Float64};
 
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -69,11 +69,7 @@ impl ScalarUDFImpl for SignumFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
             Float32 => Ok(Float32),
-            Float64 => Ok(Float64),
-            _ => not_impl_err!(
-                "Unsupported data type {} for function signum",
-                arg_types[0].to_string()
-            ),
+            _ => Ok(Float64),
         }
     }
 
