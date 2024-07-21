@@ -165,8 +165,16 @@ select unnest(column1), column1 from unnest_table;
 6 [6]
 12 [12]
 
-query I?
+query I
 select unnest(column1) + unnest(column1) from unnest_table;
+----
+2
+4
+6
+8
+10
+12
+24
 
 ## unnest as children of other expr
 query I?
@@ -504,7 +512,7 @@ query error DataFusion error: Error during planning: Projections require unique 
 select unnest(column1), unnest(column1) from unnest_table;
 
 
-## the same unnest expr is referened multiple times
+## the same unnest expr is referened multiple times (unnest is the bottom-most expr)
 query ??II
 select unnest(column2), unnest(unnest(column2)), unnest(unnest(unnest(column2))), unnest(unnest(unnest(column2))) + 1 from recursive_unnest_table;
 ----
@@ -521,10 +529,12 @@ select unnest(column2), unnest(unnest(column2)), unnest(unnest(unnest(column2)))
 [[, 6], , [7, 8]] [7, 8] 8 9
 
 
+## the same unnest expr is referened multiple times (unnest is not the bottom-most expr)
 query ??II
 select unnest(column3), unnest(column3)['c0'], unnest(unnest(column3)['c0']), unnest(unnest(column3)['c0']) + unnest(unnest(column3)['c0'])  from recursive_unnest_table;
-
-## (struct([1], 'a'), [[[1],[2]],[[1,1]]], [struct([1],[[1,2]])]),
+----
+{c0: [1], c1: [[1, 2]]} [1] 1 2
+{c0: [2], c1: [[3], [4]]} [2] 2 4
 
 
 statement ok

@@ -23,7 +23,7 @@ use crate::planner::{
 };
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnest_v2,
+    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnest,
 };
 
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
@@ -316,7 +316,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let outer_projection_exprs: Vec<Expr> = intermediate_select_exprs
                 .iter()
                 .map(|expr| {
-                    transform_bottom_unnest_v2(
+                    transform_bottom_unnest(
                         &intermediate_plan,
                         &mut unnest_columns,
                         &mut inner_projection_exprs,
@@ -343,9 +343,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
                 // deduplicate expr in inner_projection_exprs
-                inner_projection_exprs.dedup_by(|a, b| -> bool {
-                    a.display_name().unwrap() == b.display_name().unwrap()
-                });
+                inner_projection_exprs.dedup_by(|a, b| -> bool { a == b });
 
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(inner_projection_exprs)?
