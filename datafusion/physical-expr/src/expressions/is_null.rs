@@ -77,8 +77,17 @@ impl PhysicalExpr for IsNullExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let arg = self.arg.evaluate(batch)?;
         match arg {
-            ColumnarValue::Array(array) => {
+            ColumnarValue::Array(array) if array.as_any().is::<UnionArray>() => {
                 Ok(ColumnarValue::Array(Arc::new(compute_is_null(array)?)))
+            }
+            ColumnarValue::Array(array) => {
+                if array.null_count() == 0 {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))))
+                } else if array.null_count() == array.len() {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))))
+                } else {
+                    Ok(ColumnarValue::Array(Arc::new(compute_is_null(array)?)))
+                }
             }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Boolean(Some(scalar.is_null())),
@@ -120,8 +129,12 @@ pub(crate) fn compute_is_null(array: ArrayRef) -> Result<BooleanArray> {
 /// workaround <https://github.com/apache/arrow-rs/issues/6017>,
 /// this can be replaced with a direct call to `arrow::compute::is_not_null` once it's fixed.
 pub(crate) fn compute_is_not_null(array: ArrayRef) -> Result<BooleanArray> {
-    if array.as_any().is::<UnionArray>() {
-        let is_null = compute_is_null(array)?;
+    if let Some(union_array) = array.as_any().downcast_ref::<UnionArray>() {
+        let is_null = if let Some(offsets) = union_array.offsets() {
+            dense_union_is_null(union_array, offsets)?
+        } else {
+            sparse_union_is_null(union_array)?
+        };
         compute::not(&is_null).map_err(Into::into)
     } else {
         compute::is_not_null(array.as_ref()).map_err(Into::into)
