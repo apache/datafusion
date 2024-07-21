@@ -2364,6 +2364,26 @@ select -0 = 0;
 ----
 true
 
+statement ok
+CREATE TABLE negative_zero(
+	a DOUBLE,
+	b DOUBLE) AS VALUES 
+	(-0.1, -0.0),
+	(-0.1, 0.0),
+	(-0.0, -0.0),
+	(0.1, 0.0),
+	(-0.0, 0.0);
+
+query RRRBB rowsort
+select a, b, ROUND(a), ROUND(a) = b as f64, CAST(ROUND(a) AS FLOAT) = CAST(b AS FLOAT) AS f32
+FROM negative_zero;
+----
+-0.1 0 0 true true
+-0.1 0 0 true true
+0 0 0 true true
+0 0 0 true true
+0.1 0 0 true true
+
 # query_binary_eq
 
 statement ok

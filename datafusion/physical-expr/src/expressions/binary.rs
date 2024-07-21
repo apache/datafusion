@@ -40,7 +40,7 @@ use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
-
+use datafusion_physical_expr_common::float::normalize_floating_zeros;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -274,8 +274,8 @@ impl PhysicalExpr for BinaryExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         use arrow::compute::kernels::numeric::*;
 
-        let lhs = self.left.evaluate(batch)?;
-        let rhs = self.right.evaluate(batch)?;
+        let mut lhs = self.left.evaluate(batch)?;
+        let mut rhs = self.right.evaluate(batch)?;
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
 
@@ -287,6 +287,14 @@ impl PhysicalExpr for BinaryExpr {
                 return internal_err!("type mismatch");
             }
             return apply_cmp_for_nested(self.op, &lhs, &rhs);
+        }
+
+        if left_data_type.is_floating() {
+            lhs = normalize_floating_zeros(lhs, &left_data_type)?;
+        };
+
+        if right_data_type.is_floating() {
+            rhs = normalize_floating_zeros(rhs, &right_data_type)?;
         }
 
         match self.op {

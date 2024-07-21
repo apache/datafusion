@@ -1,8 +1,7 @@
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
+// regarding copyright ownership.  The ASF licenses this file to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
@@ -72,21 +71,7 @@ impl PhysicalExpr for Literal {
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        match &self.value {
-            // evaluate -0.0 to 0.0
-            ScalarValue::Float64(Some(v)) if v.is_zero() && v.is_sign_negative() => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(-v))))
-            }
-            // evaluate -0.0 to 0.0
-            ScalarValue::Float32(Some(v)) if v.is_zero() && v.is_sign_negative() => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(-v))))
-            }
-            // evaluate -0.0 to 0.0
-            ScalarValue::Float16(Some(v)) if v.is_zero() && v.is_sign_negative() => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Float16(Some(-v))))
-            }
-            v => Ok(ColumnarValue::Scalar(v.clone())),
-        }
+        Ok(ColumnarValue::Scalar(self.value.clone()))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
