@@ -36,6 +36,7 @@ pub mod power;
 pub mod random;
 pub mod round;
 pub mod trunc;
+pub mod signum;
 
 // Create UDFs
 make_udf_function!(abs::AbsFunc, ABS, abs);
@@ -81,7 +82,7 @@ make_math_unary_udf!(
 );
 make_udf_function!(random::RandomFunc, RANDOM, random);
 make_udf_function!(round::RoundFunc, ROUND, round);
-make_math_unary_udf!(SignumFunc, SIGNUM, signum, signum, super::signum_order);
+make_udf_function!(signum::SignumFunc, SIGNUM, signum);
 make_math_unary_udf!(SinFunc, SIN, sin, sin, super::sin_order);
 make_math_unary_udf!(SinhFunc, SINH, sinh, sinh, super::sinh_order);
 make_math_unary_udf!(SqrtFunc, SQRT, sqrt, sqrt, super::sqrt_order);
@@ -176,65 +177,3 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
 }
 
 
-#[cfg(test)]
-mod test {
-    use std::sync::Arc;
-
-    use arrow::array::{Float32Array, Float64Array};
-    use datafusion_common::cast::{as_float32_array, as_float64_array};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
-
-    use crate::math::signum::SignumFunc;
-
-    #[test]
-    fn test_signum_f32() {
-        let args = [ColumnarValue::Array(Arc::new(Float32Array::from(vec![-1.0, -0.0, 0.0, 1.0])))];
-
-        let result = SignumFunc::new()
-            .invoke(&args)
-            .expect("failed to initialize function signum");
-
-        match result {
-            ColumnarValue::Array(arr) => {
-                let floats = as_float32_array(&arr)
-                    .expect("failed to convert result to a Float32Array");
-
-                assert_eq!(floats.len(), 4);
-                assert_eq!(floats.value(0), -1.0);
-                assert_eq!(floats.value(1), 0.0);
-                assert_eq!(floats.value(2), 0.0);
-                assert_eq!(floats.value(3), 1.0);
-            }
-            ColumnarValue::Scalar(_) => {
-                panic!("Expected an array value")
-            }
-        }
-    }
-
-    #[test]
-    fn test_signum_f64() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Float64Array::from(vec![-1.0, -0.0, 0.0, 1.0]))), // base
-        ];
-
-        let result = SignumFunc::new()
-            .invoke(&args)
-            .expect("failed to initialize function signum");
-
-        match result {
-            ColumnarValue::Array(arr) => {
-                let floats = as_float64_array(&arr)
-                    .expect("failed to convert result to a Float32Array");
-
-                assert_eq!(floats.len(), 4);
-                assert_eq!(floats.value(0), -1.0);
-                assert_eq!(floats.value(1), 0.0);
-                assert_eq!(floats.value(2), 0.0);
-                assert_eq!(floats.value(3), 1.0);
-            }
-            ColumnarValue::Scalar(_) => {
-                panic!("Expected an array value")
-            }
-        }
-    }
-}
