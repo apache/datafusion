@@ -58,7 +58,8 @@ use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore}
 #[derive(Default)]
 /// Factory struct used to create [CsvFormatFactory]
 pub struct CsvFormatFactory {
-    options: Option<CsvOptions>,
+    /// the options for csv file read
+    pub options: Option<CsvOptions>,
 }
 
 impl CsvFormatFactory {
@@ -72,6 +73,14 @@ impl CsvFormatFactory {
         Self {
             options: Some(options),
         }
+    }
+}
+
+impl fmt::Debug for CsvFormatFactory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CsvFormatFactory")
+            .field("options", &self.options)
+            .finish()
     }
 }
 
@@ -102,6 +111,10 @@ impl FileFormatFactory for CsvFormatFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(CsvFormat::default())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

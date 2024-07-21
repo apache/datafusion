@@ -18,18 +18,120 @@
 use std::sync::Arc;
 
 use datafusion::{
+    config::CsvOptions,
     datasource::file_format::{
         arrow::ArrowFormatFactory, csv::CsvFormatFactory, json::JsonFormatFactory,
         parquet::ParquetFormatFactory, FileFormatFactory,
     },
     prelude::SessionContext,
 };
-use datafusion_common::{not_impl_err, TableReference};
+use datafusion_common::{
+    exec_err, not_impl_err, parsers::CompressionTypeVariant, DataFusionError,
+    TableReference,
+};
+use prost::Message;
+
+use crate::protobuf::CsvOptions as CsvOptionsProto;
 
 use super::LogicalExtensionCodec;
 
 #[derive(Debug)]
 pub struct CsvLogicalExtensionCodec;
+
+impl CsvOptionsProto {
+    fn from_factory(factory: &CsvFormatFactory) -> Self {
+        if let Some(options) = &factory.options {
+            CsvOptionsProto {
+                has_header: options.has_header.map_or(vec![], |v| vec![v as u8]),
+                delimiter: vec![options.delimiter],
+                quote: vec![options.quote],
+                escape: options.escape.map_or(vec![], |v| vec![v]),
+                double_quote: options.double_quote.map_or(vec![], |v| vec![v as u8]),
+                compression: options.compression as i32,
+                schema_infer_max_rec: options.schema_infer_max_rec as u64,
+                date_format: options.date_format.clone().unwrap_or_default(),
+                datetime_format: options.datetime_format.clone().unwrap_or_default(),
+                timestamp_format: options.timestamp_format.clone().unwrap_or_default(),
+                timestamp_tz_format: options
+                    .timestamp_tz_format
+                    .clone()
+                    .unwrap_or_default(),
+                time_format: options.time_format.clone().unwrap_or_default(),
+                null_value: options.null_value.clone().unwrap_or_default(),
+                comment: options.comment.map_or(vec![], |v| vec![v]),
+            }
+        } else {
+            CsvOptionsProto::default()
+        }
+    }
+}
+
+impl From<&CsvOptionsProto> for CsvOptions {
+    fn from(proto: &CsvOptionsProto) -> Self {
+        CsvOptions {
+            has_header: if !proto.has_header.is_empty() {
+                Some(proto.has_header[0] != 0)
+            } else {
+                None
+            },
+            delimiter: proto.delimiter.first().copied().unwrap_or(b','),
+            quote: proto.quote.first().copied().unwrap_or(b'"'),
+            escape: if !proto.escape.is_empty() {
+                Some(proto.escape[0])
+            } else {
+                None
+            },
+            double_quote: if !proto.double_quote.is_empty() {
+                Some(proto.double_quote[0] != 0)
+            } else {
+                None
+            },
+            compression: match proto.compression {
+                0 => CompressionTypeVariant::GZIP,
+                1 => CompressionTypeVariant::BZIP2,
+                2 => CompressionTypeVariant::XZ,
+                3 => CompressionTypeVariant::ZSTD,
+                _ => CompressionTypeVariant::UNCOMPRESSED,
+            },
+            schema_infer_max_rec: proto.schema_infer_max_rec as usize,
+            date_format: if proto.date_format.is_empty() {
+                None
+            } else {
+                Some(proto.date_format.clone())
+            },
+            datetime_format: if proto.datetime_format.is_empty() {
+                None
+            } else {
+                Some(proto.datetime_format.clone())
+            },
+            timestamp_format: if proto.timestamp_format.is_empty() {
+                None
+            } else {
+                Some(proto.timestamp_format.clone())
+            },
+            timestamp_tz_format: if proto.timestamp_tz_format.is_empty() {
+                None
+            } else {
+                Some(proto.timestamp_tz_format.clone())
+            },
+            time_format: if proto.time_format.is_empty() {
+                None
+            } else {
+                Some(proto.time_format.clone())
+            },
+            null_value: if proto.null_value.is_empty() {
+                None
+            } else {
+                Some(proto.null_value.clone())
+            },
+            comment: if !proto.comment.is_empty() {
+                Some(proto.comment[0])
+            } else {
+                None
+            },
+        }
+    }
+}
 
 // TODO! This is a placeholder for now and needs to be implemented for real.
 impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
@@ -73,17 +175,41 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
 
     fn try_decode_file_format(
         &self,
-        __buf: &[u8],
-        __ctx: &SessionContext,
+        buf: &[u8],
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
-        Ok(Arc::new(CsvFormatFactory::new()))
+        let proto = CsvOptionsProto::decode(buf).map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Failed to decode CsvOptionsProto: {:?}",
+                e
+            ))
+        })?;
+        let options: CsvOptions = (&proto).into();
+        Ok(Arc::new(CsvFormatFactory {
+            options: Some(options),
+        }))
     }
 
     fn try_encode_file_format(
         &self,
-        __buf: &[u8],
-        __node: Arc<dyn FileFormatFactory>,
+        buf: &mut Vec<u8>,
+        node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
+        let options =
+            if let Some(csv_factory) = node.as_any().downcast_ref::<CsvFormatFactory>() {
+                csv_factory.options.clone().unwrap_or_default()
+            } else {
+                return exec_err!("{}", "Unsupported FileFormatFactory type".to_string());
+            };
+
+        let proto = CsvOptionsProto::from_factory(&CsvFormatFactory {
+            options: Some(options),
+        });
+
+        proto.encode(buf).map_err(|e| {
+            DataFusionError::Execution(format!("Failed to encode CsvOptions: {:?}", e))
+        })?;
+
         Ok(())
     }
 }
@@ -141,7 +267,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
 
     fn try_encode_file_format(
         &self,
-        __buf: &[u8],
+        __buf: &mut Vec<u8>,
         __node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
         Ok(())
@@ -201,7 +327,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
 
     fn try_encode_file_format(
         &self,
-        __buf: &[u8],
+        __buf: &mut Vec<u8>,
         __node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
         Ok(())
@@ -261,7 +387,7 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
 
     fn try_encode_file_format(
         &self,
-        __buf: &[u8],
+        __buf: &mut Vec<u8>,
         __node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
         Ok(())
@@ -321,7 +447,7 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
 
     fn try_encode_file_format(
         &self,
-        __buf: &[u8],
+        __buf: &mut Vec<u8>,
         __node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
         Ok(())

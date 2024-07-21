@@ -166,6 +166,10 @@ impl FileFormatFactory for TSVFileFactory {
     fn default(&self) -> std::sync::Arc<dyn FileFormat> {
         todo!()
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl GetExt for TSVFileFactory {

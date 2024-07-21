@@ -49,11 +49,11 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use async_trait::async_trait;
 use file_compression_type::FileCompressionType;
 use object_store::{ObjectMeta, ObjectStore};
-
+use std::fmt::Debug;
 /// Factory for creating [`FileFormat`] instances based on session and command level options
 ///
 /// Users can provide their own `FileFormatFactory` to support arbitrary file formats
-pub trait FileFormatFactory: Sync + Send + GetExt {
+pub trait FileFormatFactory: Sync + Send + GetExt + Debug {
     /// Initialize a [FileFormat] and configure based on session and command level options
     fn create(
         &self,
@@ -63,6 +63,10 @@ pub trait FileFormatFactory: Sync + Send + GetExt {
 
     /// Initialize a [FileFormat] with all options set to default values
     fn default(&self) -> Arc<dyn FileFormat>;
+
+    /// Returns the table source as [`Any`] so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// This trait abstracts all the file format specific implementations
@@ -138,6 +142,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 /// The former trait is a superset of the latter trait, which includes execution time
 /// relevant methods. [FileType] is only used in logical planning and only implements
 /// the subset of methods required during logical planning.
+#[derive(Debug)]
 pub struct DefaultFileType {
     file_format_factory: Arc<dyn FileFormatFactory>,
 }
@@ -149,6 +154,11 @@ impl DefaultFileType {
             file_format_factory,
         }
     }
+
+    /// get a [FileFormatFactory] struct
+    pub fn get_format_factory(&self) -> Arc<dyn FileFormatFactory> {
+        self.file_format_factory.clone()
+    }
 }
 
 impl FileType for DefaultFileType {
@@ -159,7 +169,7 @@ impl FileType for DefaultFileType {
 
 impl Display for DefaultFileType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.file_format_factory.default().fmt(f)
+        write!(f, "{:?}", self.file_format_factory)
     }
 }
 
