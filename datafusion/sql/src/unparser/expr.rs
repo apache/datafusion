@@ -1442,13 +1442,8 @@ impl Unparser<'_> {
             }
             DataType::Float32 => Ok(ast::DataType::Float(None)),
             DataType::Float64 => Ok(self.dialect.float64_ast_dtype()),
-            DataType::Timestamp(_, tz) => {
-                let tz_info = match tz {
-                    Some(_) => TimezoneInfo::WithTimeZone,
-                    None => TimezoneInfo::None,
-                };
-
-                Ok(ast::DataType::Timestamp(None, tz_info))
+            DataType::Timestamp(time_unit, tz) => {
+                Ok(self.dialect.timestamp_cast_dtype(time_unit, tz))
             }
             DataType::Date32 => Ok(ast::DataType::Date),
             DataType::Date64 => Ok(self.ast_type_for_date64_in_cast()),
@@ -2307,6 +2302,45 @@ mod tests {
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
                 data_type: DataType::Int64,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_with_teimstamp_cast_dtype() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::new().build();
+        let mysql_dialect = CustomDialectBuilder::new()
+            .with_timestamp_cast_dtype(
+                ast::DataType::Datetime(None),
+                ast::DataType::Datetime(None),
+            )
+            .build();
+
+        let timestamp = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let timestamp_with_tz =
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+08:00".into()));
+
+        for (dialect, data_type, identifier) in [
+            (&default_dialect, &timestamp, "TIMESTAMP"),
+            (
+                &default_dialect,
+                &timestamp_with_tz,
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (&mysql_dialect, &timestamp, "DATETIME"),
+            (&mysql_dialect, &timestamp_with_tz, "DATETIME"),
+        ] {
+            let unparser = Unparser::new(dialect);
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type: data_type.clone(),
             });
             let ast = unparser.expr_to_sql(&expr)?;
 

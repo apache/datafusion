@@ -15,9 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use arrow_schema::TimeUnit;
 use regex::Regex;
 use sqlparser::{
-    ast::{self, Ident, ObjectName},
+    ast::{self, Ident, ObjectName, TimezoneInfo},
     keywords::ALL_KEYWORDS,
 };
 
@@ -75,6 +78,22 @@ pub trait Dialect: Send + Sync {
     // Most dialects use BigInt, but some, like MySQL, require SIGNED
     fn int64_cast_dtype(&self) -> ast::DataType {
         ast::DataType::BigInt(None)
+    }
+
+    // The SQL type to use for Timestamp casting
+    // Most dialects use Timestamp, but some, like MySQL, require Datetime
+    // Some dialects like Dremio does not support WithTimeZone and requires always Timestamp
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        let tz_info = match tz {
+            Some(_) => TimezoneInfo::WithTimeZone,
+            None => TimezoneInfo::None,
+        };
+
+        ast::DataType::Timestamp(None, tz_info)
     }
 }
 
@@ -167,6 +186,14 @@ impl Dialect for MySqlDialect {
     fn int64_cast_dtype(&self) -> ast::DataType {
         ast::DataType::Custom(ObjectName(vec![Ident::new("SIGNED")]), vec![])
     }
+
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        _tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        ast::DataType::Datetime(None)
+    }
 }
 
 pub struct SqliteDialect {}
@@ -187,6 +214,8 @@ pub struct CustomDialect {
     large_utf8_cast_dtype: ast::DataType,
     date_subfield_extract_style: DateFieldExtractStyle,
     int64_cast_dtype: ast::DataType,
+    timestamp_cast_dtype: ast::DataType,
+    timestamp_cast_dtype_tz: ast::DataType,
 }
 
 impl Default for CustomDialect {
@@ -202,6 +231,11 @@ impl Default for CustomDialect {
             use_char_for_utf8_cast: false,
             date_subfield_extract_style: DateFieldExtractStyle::DatePart,
             int64_cast_dtype: ast::DataType::BigInt(None),
+            timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
+            timestamp_cast_dtype_tz: ast::DataType::Timestamp(
+                None,
+                TimezoneInfo::WithTimeZone,
+            ),
         }
     }
 }
@@ -253,6 +287,18 @@ impl Dialect for CustomDialect {
     fn int64_cast_dtype(&self) -> ast::DataType {
         self.int64_cast_dtype.clone()
     }
+
+    fn timestamp_cast_dtype(
+        &self,
+        _time_unit: &TimeUnit,
+        tz: &Option<Arc<str>>,
+    ) -> ast::DataType {
+        if tz.is_some() {
+            self.timestamp_cast_dtype_tz.clone()
+        } else {
+            self.timestamp_cast_dtype.clone()
+        }
+    }
 }
 
 /// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
@@ -279,6 +325,8 @@ pub struct CustomDialectBuilder {
     large_utf8_cast_dtype: ast::DataType,
     date_subfield_extract_style: DateFieldExtractStyle,
     int64_cast_dtype: ast::DataType,
+    timestamp_cast_dtype: ast::DataType,
+    timestamp_cast_dtype_tz: ast::DataType,
 }
 
 impl Default for CustomDialectBuilder {
@@ -299,6 +347,11 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_subfield_extract_style: DateFieldExtractStyle::DatePart,
             int64_cast_dtype: ast::DataType::BigInt(None),
+            timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
+            timestamp_cast_dtype_tz: ast::DataType::Timestamp(
+                None,
+                TimezoneInfo::WithTimeZone,
+            ),
         }
     }
 
@@ -313,6 +366,8 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: self.large_utf8_cast_dtype,
             date_subfield_extract_style: self.date_subfield_extract_style,
             int64_cast_dtype: self.int64_cast_dtype,
+            timestamp_cast_dtype: self.timestamp_cast_dtype,
+            timestamp_cast_dtype_tz: self.timestamp_cast_dtype_tz,
         }
     }
 
@@ -377,6 +432,16 @@ impl CustomDialectBuilder {
 
     pub fn with_int64_cast_dtype(mut self, int64_cast_dtype: ast::DataType) -> Self {
         self.int64_cast_dtype = int64_cast_dtype;
+        self
+    }
+
+    pub fn with_timestamp_cast_dtype(
+        mut self,
+        timestamp_cast_dtype: ast::DataType,
+        timestamp_cast_dtype_tz: ast::DataType,
+    ) -> Self {
+        self.timestamp_cast_dtype = timestamp_cast_dtype;
+        self.timestamp_cast_dtype_tz = timestamp_cast_dtype_tz;
         self
     }
 }
