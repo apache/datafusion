@@ -35,8 +35,8 @@ pub mod pi;
 pub mod power;
 pub mod random;
 pub mod round;
-pub mod trunc;
 pub mod signum;
+pub mod trunc;
 
 // Create UDFs
 make_udf_function!(abs::AbsFunc, ABS, abs);
@@ -175,5 +175,3 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         trunc(),
     ]
 }
-
-

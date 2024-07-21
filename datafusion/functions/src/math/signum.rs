@@ -22,10 +22,10 @@ use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Float32, Float64};
 
-use datafusion_common::{DataFusionError, exec_err, not_impl_err, Result};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr::ColumnarValue;
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
 use crate::utils::make_scalar_function;
 
@@ -77,10 +77,7 @@ impl ScalarUDFImpl for SignumFunc {
         }
     }
 
-    fn output_ordering(
-        &self,
-        input: &[ExprProperties],
-    ) -> Result<SortProperties> {
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // Non-decreasing for all real numbers x.
         Ok(input[0].sort_properties)
     }
@@ -98,7 +95,15 @@ pub fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
             "signum",
             Float64Array,
             Float64Array,
-            { |x: f64| { if x == 0_f64 { 0_f64 } else { x.signum() } } }
+            {
+                |x: f64| {
+                    if x == 0_f64 {
+                        0_f64
+                    } else {
+                        x.signum()
+                    }
+                }
+            }
         )) as ArrayRef),
 
         Float32 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
@@ -106,13 +111,20 @@ pub fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
             "signum",
             Float32Array,
             Float32Array,
-            { |x: f32| { if x == 0_f32 { 0_f32 } else { x.signum() } } }
+            {
+                |x: f32| {
+                    if x == 0_f32 {
+                        0_f32
+                    } else {
+                        x.signum()
+                    }
+                }
+            }
         )) as ArrayRef),
 
         other => exec_err!("Unsupported data type {other:?} for function signum"),
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -127,9 +139,17 @@ mod test {
 
     #[test]
     fn test_signum_f32() {
-        let args = [ColumnarValue::Array(Arc::new(Float32Array::from(
-            vec![-1.0, -0.0, 0.0, 1.0, -0.01, 0.01, f32::NAN, f32::INFINITY, f32::NEG_INFINITY]
-        )))];
+        let args = [ColumnarValue::Array(Arc::new(Float32Array::from(vec![
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            -0.01,
+            0.01,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ])))];
 
         let result = SignumFunc::new()
             .invoke(&args)
@@ -159,10 +179,17 @@ mod test {
 
     #[test]
     fn test_signum_f64() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Float64Array::from(
-                vec![-1.0, -0.0, 0.0, 1.0, -0.01, 0.01, f64::NAN, f64::INFINITY, f64::NEG_INFINITY]
-            )))];
+        let args = [ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            -0.01,
+            0.01,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ])))];
 
         let result = SignumFunc::new()
             .invoke(&args)
