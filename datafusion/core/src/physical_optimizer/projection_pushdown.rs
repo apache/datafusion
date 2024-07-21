@@ -186,6 +186,7 @@ fn try_swapping_with_csv(
             csv.quote(),
             csv.escape(),
             csv.comment(),
+            csv.newlines_in_values(),
             csv.file_compression_type,
         )) as _
     })
@@ -1700,6 +1701,7 @@ mod tests {
             0,
             None,
             None,
+            false,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -1723,6 +1725,7 @@ mod tests {
             0,
             None,
             None,
+            false,
             FileCompressionType::UNCOMPRESSED,
         ))
     }

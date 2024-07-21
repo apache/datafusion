@@ -900,6 +900,9 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             quote: vec![opts.quote],
             escape: opts.escape.map_or_else(Vec::new, |e| vec![e]),
             double_quote: opts.double_quote.map_or_else(Vec::new, |h| vec![h as u8]),
+            newlines_in_values: opts
+                .newlines_in_values
+                .map_or_else(Vec::new, |h| vec![h as u8]),
             compression: compression.into(),
             schema_infer_max_rec: opts.schema_infer_max_rec as u64,
             date_format: opts.date_format.clone().unwrap_or_default(),

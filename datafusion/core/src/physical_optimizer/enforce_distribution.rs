@@ -1472,6 +1472,7 @@ pub(crate) mod tests {
             b'"',
             None,
             None,
+            false,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -1496,6 +1497,7 @@ pub(crate) mod tests {
             b'"',
             None,
             None,
+            false,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -3770,6 +3772,7 @@ pub(crate) mod tests {
                     b'"',
                     None,
                     None,
+                    false,
                     compression_type,
                 )),
                 vec![("a".to_string(), "a".to_string())],

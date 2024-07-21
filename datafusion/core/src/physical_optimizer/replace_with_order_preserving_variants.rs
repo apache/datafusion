@@ -1503,6 +1503,7 @@ mod tests {
             b'"',
             None,
             None,
+            false,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
