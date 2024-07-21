@@ -1884,6 +1884,9 @@ impl serde::Serialize for CsvOptions {
         if !self.double_quote.is_empty() {
             len += 1;
         }
+        if !self.newlines_in_values.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1936,6 +1939,10 @@ impl serde::Serialize for CsvOptions {
             #[allow(clippy::needless_borrow)]
             struct_ser.serialize_field("doubleQuote", pbjson::private::base64::encode(&self.double_quote).as_str())?;
         }
+        if !self.newlines_in_values.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("newlinesInValues", pbjson::private::base64::encode(&self.newlines_in_values).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1969,6 +1976,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "comment",
             "double_quote",
             "doubleQuote",
+            "newlines_in_values",
+            "newlinesInValues",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1987,6 +1996,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             NullValue,
             Comment,
             DoubleQuote,
+            NewlinesInValues,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2022,6 +2032,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "nullValue" | "null_value" => Ok(GeneratedField::NullValue),
                             "comment" => Ok(GeneratedField::Comment),
                             "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
+                            "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2055,6 +2066,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut null_value__ = None;
                 let mut comment__ = None;
                 let mut double_quote__ = None;
+                let mut newlines_in_values__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -2155,6 +2167,14 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::NewlinesInValues => {
+                            if newlines_in_values__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("newlinesInValues"));
+                            }
+                            newlines_in_values__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvOptions {
@@ -2172,6 +2192,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     null_value: null_value__.unwrap_or_default(),
                     comment: comment__.unwrap_or_default(),
                     double_quote: double_quote__.unwrap_or_default(),
+                    newlines_in_values: newlines_in_values__.unwrap_or_default(),
                 })
             }
         }
