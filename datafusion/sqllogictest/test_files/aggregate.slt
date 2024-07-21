@@ -5422,13 +5422,26 @@ DROP TABLE t;
 statement ok
 CREATE TABLE example(data double precision);
 
+statement ok
+INSERT INTO example VALUES (1), (2), (NULL), (4);
+
 query RR
 SELECT
     sum(CASE WHEN data is NULL THEN NULL ELSE data+1 END) as then_null,
     sum(CASE WHEN data is NULL THEN data+1 ELSE NULL END) as else_null
 FROM example;
 ----
-NULL NULL
+10 NULL
+
+query I
+SELECT
+   CASE data WHEN 1 THEN NULL WHEN 2 THEN 3.3 ELSE NULL END as case_null
+FROM example;
+----
+NULL
+3.3
+NULL
+NULL
 
 statement ok
 drop table example;
