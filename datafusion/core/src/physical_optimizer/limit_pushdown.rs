@@ -219,12 +219,8 @@ fn try_push_down_limit(
             }
         } else {
             // Swap current with child
-            let new_global_limit = Arc::new(GlobalLimitExec::new(
-                grandchild.clone(),
-                global_or_local.skip(),
-                global_or_local.fetch(),
-            ));
-            let new_child = child.clone().with_new_children(vec![new_global_limit])?;
+            let new_limit = global_or_local.with_child(grandchild.clone());
+            let new_child = child.clone().with_new_children(vec![new_limit.into()])?;
             Ok(Some(new_child))
         }
     } else {
