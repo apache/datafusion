@@ -77,17 +77,8 @@ impl PhysicalExpr for IsNullExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let arg = self.arg.evaluate(batch)?;
         match arg {
-            ColumnarValue::Array(array) if array.as_any().is::<UnionArray>() => {
-                Ok(ColumnarValue::Array(Arc::new(compute_is_null(array)?)))
-            }
             ColumnarValue::Array(array) => {
-                if array.null_count() == 0 {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))))
-                } else if array.null_count() == array.len() {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))))
-                } else {
-                    Ok(ColumnarValue::Array(Arc::new(compute_is_null(array)?)))
-                }
+                Ok(ColumnarValue::Array(Arc::new(compute_is_null(array)?)))
             }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Boolean(Some(scalar.is_null())),
