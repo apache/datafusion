@@ -174,3 +174,67 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         trunc(),
     ]
 }
+
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use arrow::array::{Float32Array, Float64Array};
+    use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    use crate::math::signum::SignumFunc;
+
+    #[test]
+    fn test_signum_f32() {
+        let args = [ColumnarValue::Array(Arc::new(Float32Array::from(vec![-1.0, -0.0, 0.0, 1.0])))];
+
+        let result = SignumFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function signum");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float32_array(&arr)
+                    .expect("failed to convert result to a Float32Array");
+
+                assert_eq!(floats.len(), 4);
+                assert_eq!(floats.value(0), -1.0);
+                assert_eq!(floats.value(1), 0.0);
+                assert_eq!(floats.value(2), 0.0);
+                assert_eq!(floats.value(3), 1.0);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_signum_f64() {
+        let args = [
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![-1.0, -0.0, 0.0, 1.0]))), // base
+        ];
+
+        let result = SignumFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function signum");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float32Array");
+
+                assert_eq!(floats.len(), 4);
+                assert_eq!(floats.value(0), -1.0);
+                assert_eq!(floats.value(1), 0.0);
+                assert_eq!(floats.value(2), 0.0);
+                assert_eq!(floats.value(3), 1.0);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+}
