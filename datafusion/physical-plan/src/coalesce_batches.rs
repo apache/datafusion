@@ -244,10 +244,10 @@ impl CoalesceBatchesStream {
 
                                         Arc::new(gc_string)
                                     } else {
-                                        c.clone()
+                                        Arc::clone(c)
                                     }
                                 } else {
-                                    c.clone()
+                                    Arc::clone(c)
                                 }
                             })
                             .collect();
