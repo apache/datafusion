@@ -333,9 +333,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if unnest_columns.is_empty() {
                 // The original expr does not contain any unnest
                 if i == 0 {
-                    return LogicalPlanBuilder::from(intermediate_plan)
-                        .project(inner_projection_exprs)?
-                        .build();
+                    return Ok(intermediate_plan);
+                    // return LogicalPlanBuilder::from(intermediate_plan)
+                    //     .project(inner_projection_exprs)?
+                    //     .build();
                 }
                 break;
             } else {
@@ -343,19 +344,41 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
                 // deduplicate expr in inner_projection_exprs
-                inner_projection_exprs.dedup_by(|a, b| -> bool { a == b });
+                // BIGTODO: retain projection order instead of sorting
+                let mut checklist = HashSet::new();
+                inner_projection_exprs.retain(|expr| -> bool {
+                    if checklist.get(&expr.display_name().unwrap()).is_some() {
+                        false
+                    } else {
+                        checklist.insert(expr.display_name().unwrap());
+                        true
+                    }
+                });
 
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
-                    .project(inner_projection_exprs)?
+                    .project(inner_projection_exprs.clone())?
                     .unnest_columns_with_options(columns, unnest_options)?
                     .build()?;
                 intermediate_plan = plan;
                 intermediate_select_exprs = outer_projection_exprs;
             }
         }
-        LogicalPlanBuilder::from(intermediate_plan)
+
+        let mut checklist = HashSet::new();
+        intermediate_select_exprs.retain(|expr| -> bool {
+            if checklist.get(&expr.display_name().unwrap()).is_some() {
+                false
+            } else {
+                checklist.insert(expr.display_name().unwrap());
+                true
+            }
+        });
+
+        let ret = LogicalPlanBuilder::from(intermediate_plan)
             .project(intermediate_select_exprs)?
-            .build()
+            .build()?;
+
+        Ok(ret)
     }
 
     fn plan_selection(

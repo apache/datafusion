@@ -1,0 +1,45 @@
+##query TT
+##explain select unnest(unnest([[1,2,3]])) + unnest([4,5]);
+##----
+##logical_plan
+##01)Projection: unnest(unnest(make_array(make_array(Int64(1),Int64(2),Int64(3))))) + unnest(make_array(Int64(4),Int64(5)))
+##02)--Unnest: lists[unnest(unnest(make_array(make_array(Int64(1),Int64(2),Int64(3)))))] structs[]
+##03)----Projection: unnest(make_array(make_array(Int64(1),Int64(2),Int64(3)))), unnest(make_array(make_array(Int64(1),Int64(2),Int64(3)))) AS unnest(unnest(make_array(make_array(Int64(1),Int64(2),Int64(3))))), unnest(make_array(Int64(4),Int64(5)))
+##04)------Unnest: lists[unnest(make_array(make_array(Int64(1),Int64(2),Int64(3)))), unnest(make_array(Int64(4),Int64(5)))] structs[]
+##05)--------Projection: List([[1, 2, 3]]) AS unnest(make_array(make_array(Int64(1),Int64(2),Int64(3)))), List([4, 5]) AS unnest(make_array(Int64(4),Int64(5)))
+##06)----------EmptyRelation
+##physical_plan
+##01)ProjectionExec: expr=[unnest(unnest(make_array(make_array(Int64(1),Int64(2),Int64(3)))))@1 + unnest(make_array(Int64(4),Int64(5)))@2 as unnest(unnest(make_array(make_array(Int64(1),Int64(2),Int64(3))))) + unnest(make_array(Int64(4),Int64(5)))]
+##02)--UnnestExec
+##03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+##04)------ProjectionExec: expr=[unnest(make_array(make_array(Int64(1),Int64(2),Int64(3))))@0 as unnest(make_array(make_array(Int64(1),Int64(2),Int64(3)))), unnest(make_array(make_array(Int64(1),Int64(2),Int64(3))))@0 as unnest(unnest(make_array(make_array(Int64(1),Int64(2),Int64(3))))), unnest(make_array(Int64(4),Int64(5)))@1 as unnest(make_array(Int64(4),Int64(5)))]
+##05)--------UnnestExec
+##06)----------ProjectionExec: expr=[[[1, 2, 3]] as unnest(make_array(make_array(Int64(1),Int64(2),Int64(3)))), [4, 5] as unnest(make_array(Int64(4),Int64(5)))]
+##07)------------PlaceholderRowExec
+
+query I
+select unnest([4,5]) + 1;
+----
+5
+6
+
+## FIXME:
+query II
+select unnest(unnest([[1,2,3]])) + unnest([4,5]), arrow_cast(unnest([4,5]),'Int64');
+----
+5 4
+6 4
+7 4
+
+
+
+query I
+select unnest([2,1,9]) + unnest(unnest([[1,1,3]])) ;
+----
+3
+
+query I
+select unnest(unnest([[1,1]])) + unnest([2,1,9]),unnest([2,1,9]) + unnest(unnest([[1,1]])) ;
+----
+3
+

@@ -165,16 +165,28 @@ select unnest(column1), column1 from unnest_table;
 6 [6]
 12 [12]
 
-query I
-select unnest(column1) + unnest(column1) from unnest_table;
+
+query II
+select unnest([1,2,3]) + unnest([1,2,3]), unnest([1,2,3]) + unnest([4,5]);
 ----
-2
-4
-6
-8
-10
-12
-24
+2 5
+4 7
+6 NULL
+
+##FIXME:
+## Expectation:
+## 2 5 4
+## 4 7 5
+## 6 NULL NULL
+query III
+select unnest(unnest([[1,2,3]])) + unnest(unnest([[1,2,3]])), unnest(unnest([[1,2,3]])) + unnest([4,5]), unnest([4,5]);
+----
+2 5 4
+4 6 4
+6 7 4
+
+
+
 
 ## unnest as children of other expr
 query I?

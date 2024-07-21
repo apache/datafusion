@@ -18,7 +18,7 @@
 //! SQL Utility Functions
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use arrow_schema::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
@@ -264,6 +264,7 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
     }
 }
 
+/// TODO: explain me
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
 /// Given an expression which contains unnest expr as one of its children,
 /// Try transform depends on unnest type
@@ -279,40 +280,53 @@ pub(crate) fn transform_bottom_unnest(
     memo: &mut HashMap<Expr, Vec<Expr>>,
     original_expr: &Expr,
 ) -> Result<Vec<Expr>> {
-    let mut transform =
-        |unnest_expr: &Expr, expr_in_unnest: &Expr| -> Result<Vec<Expr>> {
-            if let Some(previou_transformed) = memo.get(unnest_expr) {
-                return Ok(previou_transformed.clone());
-            }
-            // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
-            // inside unnest execution, each column inside the inner projection
-            // will be transformed into new columns. Thus we need to keep track of these placeholding column names
-            let placeholder_name = unnest_expr.display_name()?;
+    let mut transform = |unnest_expr: &Expr,
+                         expr_in_unnest: &Expr,
+                         inner_projection_exprs: &mut Vec<Expr>|
+     -> Result<Vec<Expr>> {
+        if let Some(previous_transformed) = memo.get(unnest_expr) {
+            return Ok(previous_transformed.clone());
+        }
+        // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
+        // inside unnest execution, each column inside the inner projection
+        // will be transformed into new columns. Thus we need to keep track of these placeholding column names
+        let placeholder_name = unnest_expr.display_name()?;
 
-            unnest_placeholder_columns.push(placeholder_name.clone());
-            // Add alias for the argument expression, to avoid naming conflicts
-            // with other expressions in the select list. For example: `select unnest(col1), col1 from t`.
-            // this extra projection is used to unnest transforming
-            inner_projection_exprs
-                .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
-            let schema = input.schema();
+        unnest_placeholder_columns.push(placeholder_name.clone());
+        // Add alias for the argument expression, to avoid naming conflicts
+        // with other expressions in the select list. For example: `select unnest(col1), col1 from t`.
+        // this extra projection is used to unnest transforming
+        inner_projection_exprs
+            .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
+        let schema = input.schema();
 
-            let (data_type, _) = expr_in_unnest.data_type_and_nullable(schema)?;
+        let (data_type, _) = expr_in_unnest.data_type_and_nullable(schema)?;
 
-            let outer_projection_columns =
-                get_unnested_columns(&placeholder_name, &data_type)?;
-            let expr = outer_projection_columns
-                .iter()
-                .map(|col| Expr::Column(col.0.clone()))
-                .collect::<Vec<_>>();
+        let outer_projection_columns =
+            get_unnested_columns(&placeholder_name, &data_type)?;
+        let expr = outer_projection_columns
+            .iter()
+            .map(|col| Expr::Column(col.0.clone()))
+            .collect::<Vec<_>>();
 
-            memo.insert(unnest_expr.clone(), expr.clone());
-            Ok(expr)
-        };
+        memo.insert(unnest_expr.clone(), expr.clone());
+        Ok(expr)
+    };
     let latest_visited = RefCell::new(None);
+    let column_under_unnest = RefCell::new(HashSet::new());
+    let down_unnest = RefCell::new(None);
     // we need to mark only the latest unnest expr that was visitted during the down traversal
     let transform_down = |expr: Expr| -> Result<Transformed<Expr>> {
-        if let Expr::Unnest(Unnest { .. }) = expr {
+        if let Expr::Unnest(Unnest {
+            expr: ref inner_expr,
+        }) = expr
+        {
+            let mut down_unnest_mut = down_unnest.borrow_mut();
+            if down_unnest_mut.is_none() {
+                *down_unnest_mut = Some(expr.clone());
+            }
+
+            column_under_unnest.borrow_mut().insert(inner_expr.clone());
             *latest_visited.borrow_mut() = Some(expr.clone());
             Ok(Transformed::no(expr))
         } else {
@@ -337,7 +351,8 @@ pub(crate) fn transform_bottom_unnest(
                     return internal_err!("unnest on struct can ony be applied at the root level of select expression");
                 }
 
-                let mut transformed_exprs = transform(&expr, arg)?;
+                let mut transformed_exprs =
+                    transform(&expr, arg, inner_projection_exprs)?;
                 // root_expr.push(transformed_exprs[0].clone());
                 return Ok(Transformed::new(
                     transformed_exprs.swap_remove(0),
@@ -346,6 +361,20 @@ pub(crate) fn transform_bottom_unnest(
                 ));
             }
         }
+        // For column exprs that are not descendants of any unnest node
+        // retain their projection
+        // e.g given expr tree unnest(col_a) + col_b, we have to retain projection of col_b
+        // down_unnest is non means current upward traversal is not descendant of any unnest
+        if matches!(&expr, Expr::Column(_)) && down_unnest.borrow().is_none() {
+            inner_projection_exprs.push(expr.clone());
+        }
+        let mut down_unnest_mut = down_unnest.borrow_mut();
+        // upward traversal has reached the top unnest expr again
+        // reset it to None
+        if *down_unnest_mut == Some(expr.clone()) {
+            down_unnest_mut.take();
+        }
+
         Ok(Transformed::no(expr))
     };
 
@@ -372,7 +401,7 @@ pub(crate) fn transform_bottom_unnest(
         // The transformation looks like
         // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
         if let Expr::Unnest(Unnest { expr: ref arg }) = transformed_expr {
-            return transform(&transformed_expr, arg);
+            return transform(&transformed_expr, arg, inner_projection_exprs);
         }
         if matches!(&transformed_expr, Expr::Column(_)) {
             inner_projection_exprs.push(transformed_expr.clone());
