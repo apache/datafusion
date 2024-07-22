@@ -607,3 +607,52 @@ physical_plan
 06)----------UnnestExec
 07)------------ProjectionExec: expr=[column3@0 as unnest(recursive_unnest_table.column3), column3@0 as column3]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+CREATE TABLE temp2
+AS VALUES 
+    ([1,2,3],4),
+    (null,5),
+    ([1],6)
+;
+
+query II
+select unnest(column1), column2 from temp2
+----
+1 4
+2 5
+3 NULL
+
+statement ok
+CREATE TABLE temp
+AS VALUES 
+    ([[1,2,3]],[4,5])
+;
+
+query II
+select unnest(unnest(column1)), unnest(column2) from temp
+----
+1 4
+2 4
+3 4
+
+##[[1,3,4]]  + [4,5]
+##[1,2,3] 4
+
+
+query TT
+explain select unnest(unnest(column1)), unnest(column2) from temp
+----
+logical_plan
+01)Unnest: lists[unnest(unnest(temp.column1))] structs[]
+02)--Projection: unnest(temp.column1) AS unnest(unnest(temp.column1)), unnest(temp.column2)
+03)----Unnest: lists[unnest(temp.column1), unnest(temp.column2)] structs[]
+04)------Projection: temp.column1 AS unnest(temp.column1), temp.column2 AS unnest(temp.column2)
+05)--------TableScan: temp projection=[column1, column2]
+physical_plan
+01)UnnestExec
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----ProjectionExec: expr=[unnest(temp.column1)@0 as unnest(unnest(temp.column1)), unnest(temp.column2)@1 as unnest(temp.column2)]
+04)------UnnestExec
+05)--------ProjectionExec: expr=[column1@0 as unnest(temp.column1), column2@1 as unnest(temp.column2)]
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
