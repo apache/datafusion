@@ -61,7 +61,8 @@ impl PhysicalOptimizerRule for LimitPushdown {
     }
 }
 
-/// Helper enum to make skip and fetch easier to handle
+/// This enumeration makes `skip` and `fetch` calculations easier by providing
+/// a single API for both local and global limit operators.
 #[derive(Debug)]
 enum LimitExec {
     Global(GlobalLimitExec),
