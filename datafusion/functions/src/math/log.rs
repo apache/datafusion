@@ -89,9 +89,9 @@ impl ScalarUDFImpl for LogFunc {
             (input[0].sort_properties, input[1].sort_properties)
         };
         match (num_sort_properties, base_sort_properties) {
-            (first @ SortProperties::Ordered(value), SortProperties::Ordered(base))
-                if !value.descending && base.descending
-                    || value.descending && !base.descending =>
+            (first @ SortProperties::Ordered(num), SortProperties::Ordered(base))
+                if num.descending != base.descending
+                    && num.nulls_first == base.nulls_first =>
             {
                 Ok(first)
             }
@@ -370,7 +370,7 @@ mod tests {
             assert_eq!(result, order.sort_properties);
         }
 
-        // Test log(base, num)
+        // Test log(base, num), where `nulls_first` is the same
         let mut results = Vec::with_capacity(orders.len() * orders.len());
         for base_order in orders.iter() {
             for num_order in orders.iter().cloned() {
@@ -430,5 +430,23 @@ mod tests {
             SortProperties::Singleton,
         ];
         assert_eq!(results, expected);
+
+        // Test with different `nulls_first`
+        let base_order = ExprProperties::new_unknown().with_order(
+            SortProperties::Ordered(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+        );
+        let num_order = ExprProperties::new_unknown().with_order(
+            SortProperties::Ordered(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+        );
+        assert_eq!(
+            log.output_ordering(&[base_order, num_order]).unwrap(),
+            SortProperties::Unordered
+        );
     }
 }
