@@ -101,7 +101,7 @@ impl SessionStateDefaults {
     pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
         let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
         #[cfg(feature = "nested_expressions")]
-        functions.append(&mut functions_nested::all_default_array_functions());
+        functions.append(&mut functions_nested::all_default_nested_functions());
 
         functions
     }
