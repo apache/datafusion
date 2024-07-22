@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Column expression
+//! UnKnownColumn expression
 
 use std::any::Any;
 use std::hash::{Hash, Hasher};
