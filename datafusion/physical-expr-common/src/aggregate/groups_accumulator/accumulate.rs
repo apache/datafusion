@@ -324,18 +324,6 @@ impl NullState {
         }
     }
 
-    /// Check if the accumulated value for the group at the given `index` is valid,
-    /// meaning that there was at least one value passing the filter for this group.
-    pub fn is_valid(&self, index: usize) -> bool {
-        self.seen_values.get_bit(index)
-    }
-
-    /// Check if the accumulated value for the group at the given `index` is `null`,
-    /// meaning that no values passing the filter were seen yet for this group.
-    pub fn is_null(&self, index: usize) -> bool {
-        !self.is_valid(index)
-    }
-
     /// Creates the a [`NullBuffer`] representing which group_indices
     /// should have null values (because they never saw any values)
     /// for the `emit_to` rows.
@@ -840,12 +828,9 @@ mod test {
 
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
-            for (i, expected) in expected_null_buffer.iter().enumerate() {
-                assert_eq!(expected, null_state.is_valid(i));
-                assert_eq!(!expected, null_state.is_null(i))
-            }
 
             let null_buffer = null_state.build(EmitTo::All);
+
             assert_eq!(null_buffer, expected_null_buffer);
         }
     }
