@@ -118,11 +118,11 @@ impl UnionExec {
         schema: SchemaRef,
     ) -> PlanProperties {
         // Calculate equivalence properties:
-        let children_eqs = inputs
+        let children_eqps = inputs
             .iter()
             .map(|child| child.equivalence_properties())
             .collect::<Vec<_>>();
-        let eq_properties = calculate_union_eq_properties(&children_eqs, schema);
+        let eq_properties = calculate_union(&children_eqps, schema);
 
         // Calculate output partitioning; i.e. sum output partitions of the inputs.
         let num_partitions = inputs
@@ -137,48 +137,54 @@ impl UnionExec {
         PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
-/// Calculates the union `EquivalenceProperties` of the 2 children of the `UnionExec`.
-fn calculate_union_eq_properties_binary(
+
+/// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
+/// of  `lhs` and `rhs` according to the given output `schema` (which need not
+/// be the same with those of `lhs` and `rhs` as details such as nullability
+/// may be different).
+fn calculate_union_binary(
     lhs: &EquivalenceProperties,
     rhs: &EquivalenceProperties,
     schema: SchemaRef,
 ) -> EquivalenceProperties {
-    // Calculate equivalence properties:
     // TODO: In some cases, we should be able to preserve some equivalence
     //       classes. Add support for such cases.
     let mut eq_properties = EquivalenceProperties::new(schema);
-    // Calculate valid constants for union of these 2 children.
-    let constants = lhs.constants().iter().filter_map(|const_expr| {
-        if const_exprs_contains(rhs.constants(), const_expr.expr()) {
-            Some(
-                ConstExpr::new(Arc::clone(const_expr.expr()))
-                    .with_across_partitions(false),
-            )
-        } else {
-            None
-        }
-    });
+    // First, calculate valid constants for the union. A quantity is constant
+    // after the union if it is constant in both sides.
+    let constants = lhs
+        .constants()
+        .iter()
+        .filter(|const_expr| const_exprs_contains(rhs.constants(), const_expr.expr()))
+        .map(|const_expr| {
+            // TODO: When both sides' constants are valid across partitions,
+            //       the union's constant should also be valid if values are
+            //       the same. However, we do not have the capability to
+            //       check this yet.
+            ConstExpr::new(Arc::clone(const_expr.expr())).with_across_partitions(false)
+        });
     eq_properties = eq_properties.add_constants(constants);
 
-    // Calculate valid orderings for union of these 2 children.
+    // Next, calculate valid orderings for the union by searching for prefixes
+    // in both sides.
     let mut orderings = vec![];
     for mut ordering in lhs.normalized_oeq_class().orderings {
+        // Progressively shorten the ordering to search for a satisfied prefix:
         while !rhs.ordering_satisfy(&ordering) {
-            // If not satisfied, pop last ordering and check again
             ordering.pop();
         }
+        // There is a non-trivial satisfied prefix, add it as a valid ordering:
         if !ordering.is_empty() {
-            // There is some non-trivial ordering satisfied. Add it.
             orderings.push(ordering);
         }
     }
     for mut ordering in rhs.normalized_oeq_class().orderings {
+        // Progressively shorten the ordering to search for a satisfied prefix:
         while !lhs.ordering_satisfy(&ordering) {
-            // If not satisfied, pop last ordering and check again
             ordering.pop();
         }
+        // There is a non-trivial satisfied prefix, add it as a valid ordering:
         if !ordering.is_empty() {
-            // There is some non-trivial ordering satisfied. Add it.
             orderings.push(ordering);
         }
     }
@@ -186,18 +192,19 @@ fn calculate_union_eq_properties_binary(
     eq_properties
 }
 
-/// Calculate `EquivalenceProperties` for `UnionExec` from the `EquivalenceProperties`
-/// of its children.
-fn calculate_union_eq_properties(
-    children_eqs: &[&EquivalenceProperties],
+/// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
+/// of the given `EquivalenceProperties` in `eqps` according to the given
+/// output `schema` (which need not be the same with those of `lhs` and `rhs`
+/// as details such as nullability may be different).
+fn calculate_union(
+    eqps: &[&EquivalenceProperties],
     schema: SchemaRef,
 ) -> EquivalenceProperties {
-    children_eqs
-        .iter()
-        .skip(1)
-        .fold(children_eqs[0].clone(), |acc, eq| {
-            calculate_union_eq_properties_binary(&acc, eq, Arc::clone(&schema))
-        })
+    // TODO: In some cases, we should be able to preserve some equivalence
+    //       classes. Add support for such cases.
+    eqps.iter().skip(1).fold(eqps[0].clone(), |acc, eqp| {
+        calculate_union_binary(&acc, eqp, Arc::clone(&schema))
+    })
 }
 
 impl DisplayAs for UnionExec {
@@ -951,8 +958,7 @@ mod tests {
             union_expected_eq = union_expected_eq.add_constants(union_constants);
             union_expected_eq.add_new_orderings(union_expected_orderings);
 
-            let actual_union_eq =
-                calculate_union_eq_properties_binary(&lhs, &rhs, Arc::clone(&schema));
+            let actual_union_eq = calculate_union_binary(&lhs, &rhs, Arc::clone(&schema));
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
                 test_idx, test_cases[test_idx]
