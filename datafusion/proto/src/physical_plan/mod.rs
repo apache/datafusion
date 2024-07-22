@@ -791,7 +791,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         extension_codec,
                     )?);
                 }
-                Ok(Arc::new(UnionExec::try_new(inputs)?))
+                Ok(Arc::new(UnionExec::new(inputs)))
             }
             PhysicalPlanType::Interleave(interleave) => {
                 let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];

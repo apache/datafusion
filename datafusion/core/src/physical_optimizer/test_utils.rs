@@ -300,7 +300,7 @@ pub fn parquet_exec_sorted(
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(UnionExec::try_new(input).unwrap())
+    Arc::new(UnionExec::new(input))
 }
 
 pub fn limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {

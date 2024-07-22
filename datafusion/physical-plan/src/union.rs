@@ -97,14 +97,18 @@ pub struct UnionExec {
 
 impl UnionExec {
     /// Create a new UnionExec
-    pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
+    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
         let schema = union_schema(&inputs);
-        let cache = Self::compute_properties(&inputs, schema)?;
-        Ok(UnionExec {
+        // When the schema of the inputs and union schema is consistent
+        // e.g. - their field lengths are same
+        //      - their fields have same types at the same indices
+        // method below cannot return error.
+        let cache = Self::compute_properties(&inputs, schema).unwrap();
+        UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        })
+        }
     }
 
     /// Get inputs of the execution plan
@@ -203,7 +207,7 @@ impl ExecutionPlan for UnionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(UnionExec::try_new(children)?))
+        Ok(Arc::new(UnionExec::new(children)))
     }
 
     fn execute(
@@ -613,7 +617,7 @@ mod tests {
         let csv = test::scan_partitioned(4);
         let csv2 = test::scan_partitioned(5);
 
-        let union_exec = Arc::new(UnionExec::try_new(vec![csv, csv2])?);
+        let union_exec = Arc::new(UnionExec::new(vec![csv, csv2]));
 
         // Should have 9 partitions and 9 output batches
         assert_eq!(
@@ -795,7 +799,7 @@ mod tests {
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
             union_expected_eq.add_new_orderings(union_expected_orderings);
 
-            let union = UnionExec::try_new(vec![child1, child2])?;
+            let union = UnionExec::new(vec![child1, child2]);
             let union_eq_properties = union.properties().equivalence_properties();
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",

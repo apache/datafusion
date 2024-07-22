@@ -33,11 +33,12 @@ use crate::{
 
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinSide, JoinType, Result};
+use datafusion_common::{exec_err, JoinSide, JoinType, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::expressions::column::Column;
 use datafusion_physical_expr_common::expressions::CastExpr;
+use datafusion_physical_expr_common::physical_expr::with_new_schema;
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
 use indexmap::{IndexMap, IndexSet};
@@ -981,6 +982,76 @@ impl EquivalenceProperties {
             .map(|node| node.data)
             .unwrap_or(ExprProperties::new_unknown())
     }
+
+    pub fn with_new_schema(self, schema: SchemaRef) -> Result<Self> {
+        let EquivalenceProperties {
+            eq_group,
+            oeq_class,
+            constants,
+            schema: old_schema,
+        } = self;
+        // Schemas are aligned, when
+        // - their field length is same
+        // - field at the same index have same type
+        let schema_aligned = (old_schema.fields.len() == schema.fields.len())
+            && old_schema
+                .fields
+                .iter()
+                .zip(schema.fields.iter())
+                .all(|(lhs, rhs)| lhs.data_type().eq(rhs.data_type()));
+        if !schema_aligned {
+            // Rewriting equivalence properties in terms of new schema, is not safe when
+            // schemas are not aligned
+            return exec_err!(
+                "Cannot rewrite old_schema:{:?} with new schema: {:?}",
+                old_schema,
+                schema
+            );
+        }
+        // Rewrite constants according to new schema
+        let new_constants = constants
+            .into_iter()
+            .map(|const_expr| {
+                let across_partitions = const_expr.across_partitions();
+                let new_const_expr = with_new_schema(const_expr.owned_expr(), &schema)?;
+                Ok(ConstExpr::new(new_const_expr)
+                    .with_across_partitions(across_partitions))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Rewrite orderings according to new schema
+        let mut new_orderings = vec![];
+        for ordering in oeq_class.orderings {
+            let new_ordering = ordering
+                .into_iter()
+                .map(|PhysicalSortExpr { expr, options }| {
+                    Ok(PhysicalSortExpr {
+                        expr: with_new_schema(expr, &schema)?,
+                        options,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            new_orderings.push(new_ordering);
+        }
+
+        // Rewrite equivalence classes
+        let mut eq_classes = vec![];
+        for eq_class in eq_group.classes {
+            let new_eq_exprs = eq_class
+                .into_vec()
+                .into_iter()
+                .map(|expr| with_new_schema(expr, &schema))
+                .collect::<Result<Vec<_>>>()?;
+            eq_classes.push(EquivalenceClass::new(new_eq_exprs));
+        }
+        // Construct new equivalence properties
+        let mut result = EquivalenceProperties::new(schema);
+        result = result.add_constants(new_constants);
+        result.add_new_orderings(new_orderings);
+        result.add_equivalence_group(EquivalenceGroup::new(eq_classes));
+
+        Ok(result)
+    }
 }
 
 /// Calculates the properties of a given [`ExprPropertiesNode`].
@@ -1458,93 +1529,6 @@ impl Hash for ExprWrapper {
     }
 }
 
-/// Rewrites an expression according to new schema (e.g. changes columns it refers
-/// with the column name at corresponding index in the new schema.).
-fn rewrite_expr_new_schema(
-    expr: Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(expr
-        .transform_up(|expr| {
-            Ok(if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                let idx = col.index();
-                Transformed::yes(Arc::new(Column::new(schema.fields()[idx].name(), idx))
-                    as Arc<dyn PhysicalExpr>)
-            } else {
-                // Use without modification
-                Transformed::no(expr)
-            })
-        })?
-        .data)
-}
-
-/// Rewrites equivalence properties given according to new schema. (e.g. changes columns it refers
-/// with the column name at corresponding index in the new schema.). This util assumes that,
-/// schema of the `eq_properties` and `schema` given as argument are same in terms of data types
-/// (their name and nullability feature can be different).
-fn rewrite_eq_properties_new_schema(
-    eq_properties: EquivalenceProperties,
-    schema: SchemaRef,
-) -> Result<EquivalenceProperties> {
-    let EquivalenceProperties {
-        eq_group,
-        oeq_class,
-        constants,
-        schema: old_schema,
-    } = eq_properties;
-    // Make sure schemas are in terms of data types.
-    debug_assert_eq!(old_schema.fields.len(), schema.fields.len());
-    debug_assert!(old_schema
-        .fields
-        .iter()
-        .zip(schema.fields.iter())
-        .all(|(lhs, rhs)| { lhs.data_type().eq(rhs.data_type()) }));
-
-    // Rewrite constants according to new schema
-    let new_constants = constants
-        .into_iter()
-        .map(|const_expr| {
-            let across_partitions = const_expr.across_partitions();
-            let new_const_expr =
-                rewrite_expr_new_schema(const_expr.owned_expr(), &schema)?;
-            Ok(ConstExpr::new(new_const_expr).with_across_partitions(across_partitions))
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    // Rewrite orderings according to new schema
-    let mut new_orderings = vec![];
-    for ordering in oeq_class.orderings {
-        let new_ordering = ordering
-            .into_iter()
-            .map(|PhysicalSortExpr { expr, options }| {
-                Ok(PhysicalSortExpr {
-                    expr: rewrite_expr_new_schema(expr, &schema)?,
-                    options,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        new_orderings.push(new_ordering);
-    }
-
-    // Rewrite equivalence classes
-    let mut eq_classes = vec![];
-    for eq_class in eq_group.classes {
-        let new_eq_exprs = eq_class
-            .into_vec()
-            .into_iter()
-            .map(|expr| rewrite_expr_new_schema(expr, &schema))
-            .collect::<Result<Vec<_>>>()?;
-        eq_classes.push(EquivalenceClass::new(new_eq_exprs));
-    }
-    // Construct new equivalence properties
-    let mut result = EquivalenceProperties::new(schema);
-    result = result.add_constants(new_constants);
-    result.add_new_orderings(new_orderings);
-    result.add_equivalence_group(EquivalenceGroup::new(eq_classes));
-
-    Ok(result)
-}
-
 /// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
 /// of  `lhs` and `rhs` according to the given output `schema` (which need not
 /// be the same with those of `lhs` and `rhs` as details such as nullability
@@ -1556,8 +1540,8 @@ fn calculate_union_binary(
 ) -> Result<EquivalenceProperties> {
     // TODO: In some cases, we should be able to preserve some equivalence
     //       classes. Add support for such cases.
-    let lhs = rewrite_eq_properties_new_schema(lhs, Arc::clone(&schema))?;
-    let rhs = rewrite_eq_properties_new_schema(rhs, Arc::clone(&schema))?;
+    let lhs = lhs.with_new_schema(Arc::clone(&schema))?;
+    let rhs = rhs.with_new_schema(Arc::clone(&schema))?;
     let mut eq_properties = EquivalenceProperties::new(schema);
     // First, calculate valid constants for the union. A quantity is constant
     // after the union if it is constant in both sides.

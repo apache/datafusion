@@ -530,7 +530,7 @@ fn try_pushdown_through_union(
         .map(|child| make_with_child(projection, child))
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(Some(Arc::new(UnionExec::try_new(new_children)?)))
+    Ok(Some(Arc::new(UnionExec::new(new_children))))
 }
 
 /// Some projection can't be pushed down left input or right input of hash join because filter or on need may need some columns that won't be used in later.
@@ -2628,7 +2628,7 @@ mod tests {
     fn test_union_after_projection() -> Result<()> {
         let csv = create_simple_csv_exec();
         let union: Arc<dyn ExecutionPlan> =
-            Arc::new(UnionExec::try_new(vec![csv.clone(), csv.clone(), csv])?);
+            Arc::new(UnionExec::new(vec![csv.clone(), csv.clone(), csv]));
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
             vec![
                 (Arc::new(Column::new("c", 2)), "c".to_string()),

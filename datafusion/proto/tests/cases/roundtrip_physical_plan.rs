@@ -1283,7 +1283,7 @@ fn roundtrip_union() -> Result<()> {
     let left = EmptyExec::new(Arc::new(schema_left));
     let right = EmptyExec::new(Arc::new(schema_right));
     let inputs: Vec<Arc<dyn ExecutionPlan>> = vec![Arc::new(left), Arc::new(right)];
-    let union = UnionExec::try_new(inputs)?;
+    let union = UnionExec::new(inputs);
     roundtrip_test(Arc::new(union))
 }
 

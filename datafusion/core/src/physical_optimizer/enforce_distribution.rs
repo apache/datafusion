@@ -1635,7 +1635,7 @@ pub(crate) mod tests {
     }
 
     fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(UnionExec::try_new(input).unwrap())
+        Arc::new(UnionExec::new(input))
     }
 
     fn sort_required_exec_with_req(
@@ -3058,7 +3058,7 @@ pub(crate) mod tests {
         );
 
         //  Union
-        let plan = Arc::new(UnionExec::try_new(vec![left, right])?);
+        let plan = Arc::new(UnionExec::new(vec![left, right]));
 
         // final agg
         let plan =
@@ -3100,7 +3100,7 @@ pub(crate) mod tests {
         );
 
         //  Union
-        let plan = Arc::new(UnionExec::try_new(vec![left, right])?);
+        let plan = Arc::new(UnionExec::new(vec![left, right]));
 
         // final agg
         let plan =
