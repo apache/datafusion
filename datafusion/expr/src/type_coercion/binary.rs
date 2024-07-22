@@ -527,7 +527,7 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
-/// where one is temporal and one is `Utf8`/`LargeUtf8`.
+/// where one is temporal and one is `Utf8View`/`Utf8`/`LargeUtf8`.
 ///
 /// Note this cannot be performed in case of arithmetic as there is insufficient information
 /// to correctly determine the type of argument. Consider
@@ -547,19 +547,21 @@ fn string_temporal_coercion(
 
     fn match_rule(l: &DataType, r: &DataType) -> Option<DataType> {
         match (l, r) {
-            // Coerce Utf8/LargeUtf8 to Date32/Date64/Time32/Time64/Timestamp
-            (Utf8, temporal) | (LargeUtf8, temporal) => match temporal {
-                Date32 | Date64 => Some(temporal.clone()),
-                Time32(_) | Time64(_) => {
-                    if is_time_with_valid_unit(temporal.to_owned()) {
-                        Some(temporal.to_owned())
-                    } else {
-                        None
+            // Coerce Utf8View/Utf8/LargeUtf8 to Date32/Date64/Time32/Time64/Timestamp
+            (Utf8, temporal) | (LargeUtf8, temporal) | (Utf8View, temporal) => {
+                match temporal {
+                    Date32 | Date64 => Some(temporal.clone()),
+                    Time32(_) | Time64(_) => {
+                        if is_time_with_valid_unit(temporal.to_owned()) {
+                            Some(temporal.to_owned())
+                        } else {
+                            None
+                        }
                     }
+                    Timestamp(_, tz) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+                    _ => None,
                 }
-                Timestamp(_, tz) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
-                _ => None,
-            },
+            }
             _ => None,
         }
     }

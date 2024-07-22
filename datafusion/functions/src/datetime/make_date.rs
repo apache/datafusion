@@ -23,7 +23,7 @@ use arrow::array::cast::AsArray;
 use arrow::array::types::{Date32Type, Int32Type};
 use arrow::array::PrimitiveArray;
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Date32, Int32, Int64, UInt32, UInt64, Utf8};
+use arrow::datatypes::DataType::{Date32, Int32, Int64, UInt32, UInt64, Utf8, Utf8View};
 use chrono::prelude::*;
 
 use datafusion_common::{exec_err, Result, ScalarValue};
@@ -45,7 +45,7 @@ impl MakeDateFunc {
         Self {
             signature: Signature::uniform(
                 3,
-                vec![Int32, Int64, UInt32, UInt64, Utf8],
+                vec![Int32, Int64, UInt32, UInt64, Utf8, Utf8View],
                 Volatility::Immutable,
             ),
         }

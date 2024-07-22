@@ -118,9 +118,9 @@ dependencies = [
 
 [[package]]
 name = "arrayref"
-version = "0.3.7"
+version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b4930d2cb77ce62f89ee5d5289b4ac049559b1c45539271f5ed4fdc7db34545"
+checksum = "9d151e35f61089500b617991b791fc8bfd237ae50cd5950803758a179b41e67a"
 
 [[package]]
 name = "arrayvec"
@@ -131,7 +131,7 @@ checksum = "96d30a06541fbafbc7f82ed10c06164cfbd2c401138f6addd8404629c4b16711"
 [[package]]
 name = "arrow"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -151,7 +151,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -165,7 +165,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -181,7 +181,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "bytes",
  "half",
@@ -191,7 +191,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -211,7 +211,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -229,7 +229,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -240,7 +240,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -254,7 +254,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -273,7 +273,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -287,7 +287,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -300,12 +300,12 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 
 [[package]]
 name = "arrow-select"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -318,7 +318,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -348,9 +348,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.11"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd066d0b4ef8ecb03a55319dc13aa6910616d0f44008a045bb1835af830abff5"
+checksum = "fec134f64e2bc57411226dfc4e52dec859ddfc7e711fc5e07b612584f000e4aa"
 dependencies = [
  "bzip2",
  "flate2",
@@ -372,7 +372,7 @@ checksum = "6e0c28dcc82d7c8ead5cb13beb15405b57b8546e93215673ff8ca0349a028107"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -860,9 +860,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "324c74f2155653c90b04f25b2a47a8a631360cb908f92a772695f430c7e31052"
+checksum = "2aba8f4e9906c7ce3c73463f62a7f0c65183ada1a2d47e397cc8810827f9694f"
 dependencies = [
  "jobserver",
  "libc",
@@ -1089,7 +1089,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edb49164822f3ee45b17acd4a208cfc1251410cf0cad9a833234c9890774dd9f"
 dependencies = [
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -1146,7 +1146,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.5",
  "indexmap 2.2.6",
- "itertools",
+ "itertools 0.12.1",
  "log",
  "num-traits",
  "num_cpus",
@@ -1272,7 +1272,7 @@ dependencies = [
  "datafusion-expr",
  "hashbrown 0.14.5",
  "hex",
- "itertools",
+ "itertools 0.12.1",
  "log",
  "md-5",
  "rand",
@@ -1312,7 +1312,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
- "itertools",
+ "itertools 0.12.1",
  "log",
  "paste",
 ]
@@ -1329,7 +1329,7 @@ dependencies = [
  "datafusion-physical-expr",
  "hashbrown 0.14.5",
  "indexmap 2.2.6",
- "itertools",
+ "itertools 0.12.1",
  "log",
  "paste",
  "regex-syntax",
@@ -1356,7 +1356,7 @@ dependencies = [
  "hashbrown 0.14.5",
  "hex",
  "indexmap 2.2.6",
- "itertools",
+ "itertools 0.12.1",
  "log",
  "paste",
  "petgraph",
@@ -1398,7 +1398,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.5",
  "indexmap 2.2.6",
- "itertools",
+ "itertools 0.12.1",
  "log",
  "once_cell",
  "parking_lot",
@@ -1678,7 +1678,7 @@ checksum = "87750cf4b7a4c0625b1529e4c543c2182106e4dedc60a2a6455e00d212c489ac"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -2115,6 +2115,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2484,9 +2493,9 @@ dependencies = [
 
 [[package]]
 name = "object_store"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbebfd32c213ba1907fa7a9c9138015a8de2b43e30c5aa45b18f7deb46786ad6"
+checksum = "e6da452820c715ce78221e8202ccc599b4a52f3e1eb3eedb487b680c81a8e3f3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2495,7 +2504,7 @@ dependencies = [
  "futures",
  "humantime",
  "hyper 1.4.1",
- "itertools",
+ "itertools 0.13.0",
  "md-5",
  "parking_lot",
  "percent-encoding",
@@ -2572,7 +2581,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -2690,7 +2699,7 @@ checksum = "2f38a4412a78282e09a2cf38d195ea5420d15ba0602cb375210efbc877243965"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -2794,9 +2803,9 @@ checksum = "658fa1faf7a4cc5f057c9ee5ef560f717ad9d8dc66d975267f709624d6e1ab88"
 
 [[package]]
 name = "quick-xml"
-version = "0.31.0"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
+checksum = "4091e032efecb09d7b1f711f487b85ab925632a842627e3200fb088382cde32c"
 dependencies = [
  "memchr",
  "serde",
@@ -2838,14 +2847,13 @@ dependencies = [
 
 [[package]]
 name = "quinn-udp"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9096629c45860fc7fb143e125eb826b5e721e10be3263160c7d60ca832cf8c46"
+checksum = "25a78e6f726d84fcf960409f509ae354a32648f090c8d32a2ea8b1a1bc3bab14"
 dependencies = [
  "libc",
  "once_cell",
  "socket2",
- "tracing",
  "windows-sys 0.52.0",
 ]
 
@@ -3302,7 +3310,7 @@ checksum = "e0cd7e117be63d3c3678776753929474f3b04a43a080c744d6b0ae2a8c28e222"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -3437,7 +3445,7 @@ checksum = "01b2e185515564f15375f593fb966b5718bc624ba77fe49fa4616ad619690554"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -3483,7 +3491,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -3496,7 +3504,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -3518,9 +3526,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.71"
+version = "2.0.72"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b146dcf730474b4bcd16c311627b31ede9ab149045db4d6088b3becaea046462"
+checksum = "dc4b9b9bf2add8093d3f2c0204471e951b2285580335de42f9d2534f3ae7a8af"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3568,22 +3576,22 @@ checksum = "23d434d3f8967a09480fb04132ebe0a3e088c173e6d0ee7897abbdf4eab0f8b9"
 
 [[package]]
 name = "thiserror"
-version = "1.0.62"
+version = "1.0.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2675633b1499176c2dff06b0856a27976a8f9d436737b4cf4f312d4d91d8bbb"
+checksum = "c0342370b38b6a11b6cc11d6a805569958d54cfa061a29969c3b5ce2ea405724"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.62"
+version = "1.0.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d20468752b09f49e909e55a5d338caa8bedf615594e9d80bc4c565d30faf798c"
+checksum = "a4558b58466b9ad7ca0f102865eccc95938dca1a74a856f2b57b6629050da261"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -3678,7 +3686,7 @@ checksum = "5f5ae998a069d4b5aba8ee9dad856af7d520c3699e6159b185c2acd48155d39a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -3775,7 +3783,7 @@ checksum = "34704c8d6ebcbc939824180af020566b01a7c01f80641264eba0999f6c2b6be7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -3820,7 +3828,7 @@ checksum = "f03ca4cb38206e2bef0700092660bb74d696f808514dae47fa1467cbfe26e96e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -3974,7 +3982,7 @@ dependencies = [
  "once_cell",
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
  "wasm-bindgen-shared",
 ]
 
@@ -4008,7 +4016,7 @@ checksum = "e94f17b526d0a461a191c78ea52bbce64071ed5c04c9ffe424dcb38f74171bb7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
  "wasm-bindgen-backend",
  "wasm-bindgen-shared",
 ]
@@ -4273,7 +4281,7 @@ checksum = "fa4f8080344d4671fb4e831a13ad1e68092748387dfc4f55e356242fae12ce3e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.71",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -4332,4 +4340,4 @@ dependencies = [
 [[patch.unused]]
 name = "arrow-flight"
 version = "52.1.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=66390ff8ec15bb6ed585f353f67a19574da4375a#66390ff8ec15bb6ed585f353f67a19574da4375a"
+source = "git+https://github.com/apache/arrow-rs.git?rev=8a5be1330e30e6dd7760dba910737550d760e612#8a5be1330e30e6dd7760dba910737550d760e612"

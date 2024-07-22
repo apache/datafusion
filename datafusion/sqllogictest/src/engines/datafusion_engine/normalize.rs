@@ -233,6 +233,11 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
             DataType::Utf8 => {
                 Ok(varchar_to_str(get_row_value!(array::StringArray, col, row)))
             }
+            DataType::Utf8View => Ok(varchar_to_str(get_row_value!(
+                array::StringViewArray,
+                col,
+                row
+            ))),
             _ => {
                 let f = ArrayFormatter::try_new(col.as_ref(), &DEFAULT_FORMAT_OPTIONS);
                 Ok(f.unwrap().value(row).to_string())
