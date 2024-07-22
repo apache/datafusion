@@ -29,6 +29,7 @@ use super::{
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
     rewrite::normalize_union_schema,
+    rewrite::rewrite_plan_for_sort_on_non_projected_fields,
     utils::{find_agg_node_within_select, unproject_window_exprs, AggVariant},
     Unparser,
 };
@@ -199,33 +200,21 @@ impl Unparser<'_> {
         Ok(())
     }
 
-    fn projection_to_sql(
-        &self,
-        plan: &LogicalPlan,
-        p: &Projection,
-        query: &mut Option<QueryBuilder>,
-        select: &mut SelectBuilder,
-        relation: &mut RelationBuilder,
-    ) -> Result<()> {
-        // A second projection implies a derived tablefactor
-        if !select.already_projected() {
-            self.reconstruct_select_statement(plan, p, select)?;
-            self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
-        } else {
-            let mut derived_builder = DerivedRelationBuilder::default();
-            derived_builder.lateral(false).alias(None).subquery({
-                let inner_statement = self.plan_to_sql(plan)?;
-                if let ast::Statement::Query(inner_query) = inner_statement {
-                    inner_query
-                } else {
-                    return internal_err!(
-                        "Subquery must be a Query, but found {inner_statement:?}"
-                    );
-                }
-            });
-            relation.derived(derived_builder);
-            Ok(())
-        }
+    fn derive(&self, plan: &LogicalPlan, relation: &mut RelationBuilder) -> Result<()> {
+        let mut derived_builder = DerivedRelationBuilder::default();
+        derived_builder.lateral(false).alias(None).subquery({
+            let inner_statement = self.plan_to_sql(plan)?;
+            if let ast::Statement::Query(inner_query) = inner_statement {
+                inner_query
+            } else {
+                return internal_err!(
+                    "Subquery must be a Query, but found {inner_statement:?}"
+                );
+            }
+        });
+        relation.derived(derived_builder);
+
+        Ok(())
     }
 
     fn select_to_sql_recursively(
@@ -256,7 +245,17 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::Projection(p) => {
-                self.projection_to_sql(plan, p, query, select, relation)
+                if let Some(new_plan) = rewrite_plan_for_sort_on_non_projected_fields(p) {
+                    return self
+                        .select_to_sql_recursively(&new_plan, query, select, relation);
+                }
+
+                // Projection can be top-level plan for derived table
+                if select.already_projected() {
+                    return self.derive(plan, relation);
+                }
+                self.reconstruct_select_statement(plan, p, select)?;
+                self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
             }
             LogicalPlan::Filter(filter) => {
                 if let Some(AggVariant::Aggregate(agg)) =
@@ -278,6 +277,10 @@ impl Unparser<'_> {
                 )
             }
             LogicalPlan::Limit(limit) => {
+                // Limit can be top-level plan for derived table
+                if select.already_projected() {
+                    return self.derive(plan, relation);
+                }
                 if let Some(fetch) = limit.fetch {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
@@ -298,6 +301,10 @@ impl Unparser<'_> {
                 )
             }
             LogicalPlan::Sort(sort) => {
+                // Sort can be top-level plan for derived table
+                if select.already_projected() {
+                    return self.derive(plan, relation);
+                }
                 if let Some(query_ref) = query {
                     query_ref.order_by(self.sort_to_sql(sort.expr.clone())?);
                 } else {
@@ -323,6 +330,10 @@ impl Unparser<'_> {
                 )
             }
             LogicalPlan::Distinct(distinct) => {
+                // Distinct can be top-level plan for derived table
+                if select.already_projected() {
+                    return self.derive(plan, relation);
+                }
                 let (select_distinct, input) = match distinct {
                     Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
                     Distinct::On(on) => {
