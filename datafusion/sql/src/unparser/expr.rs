@@ -1145,7 +1145,7 @@ impl Unparser<'_> {
     }
 
     /// MySQL requires INTERVAL sql to be in the format: INTERVAL 1 YEAR + INTERVAL 1 MONTH + INTERVAL 1 DAY etc
-    /// https://dev.mysql.com/doc/refman/8.4/en/expressions.html#temporal-intervals
+    /// `<https://dev.mysql.com/doc/refman/8.4/en/expressions.html#temporal-intervals>`
     /// Interval sequence can't be wrapped in brackets - (INTERVAL 1 YEAR + INTERVAL 1 MONTH ...) so we need to generate
     /// a single INTERVAL expression so it works correct for interval substraction cases
     /// MySQL supports the DAY_MICROSECOND unit type (format is DAYS HOURS:MINUTES:SECONDS.MICROSECONDS), but it is not supported by sqlparser
@@ -1266,7 +1266,7 @@ impl Unparser<'_> {
             last_field: None,
             fractional_seconds_precision: None,
         };
-        return Ok(ast::Expr::Interval(interval));
+        Ok(ast::Expr::Interval(interval))
     }
 
     fn interval_scalar_to_sql(&self, v: &ScalarValue) -> Result<ast::Expr> {
@@ -1371,14 +1371,10 @@ impl Unparser<'_> {
             },
             IntervalStyle::MySQL => match v {
                 ScalarValue::IntervalYearMonth(Some(v)) => {
-                    return self.interval_to_mysql_expr(v.clone(), 0, 0);
+                    self.interval_to_mysql_expr(*v, 0, 0)
                 }
                 ScalarValue::IntervalDayTime(Some(v)) => {
-                    return self.interval_to_mysql_expr(
-                        0,
-                        v.days,
-                        v.milliseconds as i64 * 1_000,
-                    );
+                    self.interval_to_mysql_expr(0, v.days, v.milliseconds as i64 * 1_000)
                 }
                 ScalarValue::IntervalMonthDayNano(Some(v)) => {
                     if v.nanoseconds % 1_000 != 0 {
@@ -1386,11 +1382,7 @@ impl Unparser<'_> {
                             "Unsupported IntervalMonthDayNano scalar with nanoseconds precision for IntervalStyle::MySQL"
                         );
                     }
-                    return self.interval_to_mysql_expr(
-                        v.months,
-                        v.days,
-                        v.nanoseconds as i64 / 1_000,
-                    );
+                    self.interval_to_mysql_expr(v.months, v.days, v.nanoseconds / 1_000)
                 }
                 _ => not_impl_err!(
                     "Unsupported ScalarValue for Interval conversion: {v:?}"

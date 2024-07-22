@@ -115,7 +115,7 @@ pub enum IntervalStyle {
 
 /// Datetime subfield extraction style for unparsing
 ///
-/// https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-EXTRACT
+/// `<https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-EXTRACT>`
 /// Different DBMSs follow different standards; popular ones are:
 /// date_part('YEAR', date '2001-02-16')
 /// EXTRACT(YEAR from date '2001-02-16')
