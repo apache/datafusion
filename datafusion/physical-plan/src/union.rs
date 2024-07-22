@@ -855,23 +855,141 @@ mod tests {
                     .with_sort_information(second_orderings),
             );
 
+            let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
+            union_expected_eq.add_new_orderings(union_expected_orderings);
+
             let union = UnionExec::new(vec![child1, child2]);
             let union_eq_properties = union.properties().equivalence_properties();
-            let union_actual_orderings = union_eq_properties.oeq_class();
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
                 test_idx, test_cases[test_idx]
             );
-            assert_eq!(
-                union_actual_orderings.len(),
-                union_expected_orderings.len(),
+            assert_eq_properties_same(union_eq_properties, &union_expected_eq, err_msg);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_union_equivalence_properties2() -> Result<()> {
+        let schema = create_test_schema()?;
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let col_c = &col("c", &schema)?;
+        let options = SortOptions::default();
+        let test_cases = [
+            //-----------TEST CASE 1----------//
+            (
+                (
+                    // First child orderings
+                    vec![
+                        // [a ASC]
+                        (vec![(col_a, options)]),
+                    ],
+                    // First child constants
+                    vec![col_b, col_c],
+                ),
+                (
+                    // Second child orderings
+                    vec![
+                        // [b ASC]
+                        (vec![(col_b, options)]),
+                    ],
+                    // Second child constants
+                    vec![col_a, col_c],
+                ),
+                (
+                    // Union expected orderings
+                    vec![
+                        // [a ASC]
+                        vec![(col_a, options)],
+                        // [b ASC]
+                        vec![(col_b, options)],
+                    ],
+                    // Union
+                    vec![col_c],
+                ),
+            ),
+        ];
+
+        for (
+            test_idx,
+            (
+                (first_child_orderings, first_child_constants),
+                (second_child_orderings, second_child_constants),
+                (union_orderings, union_constants),
+            ),
+        ) in test_cases.iter().enumerate()
+        {
+            let first_orderings = first_child_orderings
+                .iter()
+                .map(|ordering| convert_to_sort_exprs(ordering))
+                .collect::<Vec<_>>();
+            let first_constants = first_child_constants
+                .iter()
+                .map(|expr| ConstExpr::new(Arc::clone(expr)))
+                .collect::<Vec<_>>();
+            let mut lhs = EquivalenceProperties::new(Arc::clone(&schema));
+            lhs = lhs.add_constants(first_constants);
+            lhs.add_new_orderings(first_orderings);
+
+            let second_orderings = second_child_orderings
+                .iter()
+                .map(|ordering| convert_to_sort_exprs(ordering))
+                .collect::<Vec<_>>();
+            let second_constants = second_child_constants
+                .iter()
+                .map(|expr| ConstExpr::new(Arc::clone(expr)))
+                .collect::<Vec<_>>();
+            let mut rhs = EquivalenceProperties::new(Arc::clone(&schema));
+            rhs = rhs.add_constants(second_constants);
+            rhs.add_new_orderings(second_orderings);
+
+            let union_expected_orderings = union_orderings
+                .iter()
+                .map(|ordering| convert_to_sort_exprs(ordering))
+                .collect::<Vec<_>>();
+            let union_constants = union_constants
+                .iter()
+                .map(|expr| ConstExpr::new(Arc::clone(expr)))
+                .collect::<Vec<_>>();
+            let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
+            union_expected_eq = union_expected_eq.add_constants(union_constants);
+            union_expected_eq.add_new_orderings(union_expected_orderings);
+
+            let actual_union_eq =
+                calculate_union_eq_properties2(&lhs, &rhs, Arc::clone(&schema));
+            let err_msg = format!(
+                "Error in test id: {:?}, test case: {:?}",
+                test_idx, test_cases[test_idx]
+            );
+            assert_eq_properties_same(&actual_union_eq, &union_expected_eq, err_msg);
+        }
+        Ok(())
+    }
+
+    fn assert_eq_properties_same(
+        lhs: &EquivalenceProperties,
+        rhs: &EquivalenceProperties,
+        err_msg: String,
+    ) {
+        // Check whether constants are same
+        let lhs_constants = lhs.constants();
+        let rhs_constants = rhs.constants();
+        assert_eq!(lhs_constants.len(), rhs_constants.len(), "{}", err_msg);
+        for rhs_constant in rhs_constants {
+            assert!(
+                const_exprs_contains(lhs_constants, rhs_constant.expr()),
                 "{}",
                 err_msg
             );
-            for expected in &union_expected_orderings {
-                assert!(union_actual_orderings.contains(expected), "{}", err_msg);
-            }
         }
-        Ok(())
+
+        // Check whether orderings are same.
+        let lhs_orderings = lhs.oeq_class();
+        let rhs_orderings = &rhs.oeq_class.orderings;
+        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
+        for rhs_ordering in rhs_orderings {
+            assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
+        }
     }
 }
