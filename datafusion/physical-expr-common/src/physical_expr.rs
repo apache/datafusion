@@ -20,15 +20,15 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::expressions::column::Column;
 use crate::utils::scatter;
 
-use crate::expressions::column::Column;
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::ColumnarValue;
@@ -193,6 +193,33 @@ pub fn with_new_children_if_necessary(
     }
 }
 
+/// Rewrites an expression according to new schema; i.e. changes the columns it
+/// refers to with the column at corresponding index in the new schema. Returns
+/// an error if the given schema has fewer columns than the original schema.
+/// Note that the resulting expression may not be valid if data types in the
+/// new schema is incompatible with expression nodes.
+pub fn with_new_schema(
+    expr: Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(expr
+        .transform_up(|expr| {
+            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                let idx = col.index();
+                let Some(field) = schema.fields().get(idx) else {
+                    return plan_err!(
+                        "New schema has fewer columns than original schema"
+                    );
+                };
+                let new_col = Column::new(field.name(), idx);
+                Ok(Transformed::yes(Arc::new(new_col) as _))
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })?
+        .data)
+}
+
 pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     if any.is::<Arc<dyn PhysicalExpr>>() {
         any.downcast_ref::<Arc<dyn PhysicalExpr>>()
@@ -205,24 +232,4 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     } else {
         any
     }
-}
-
-/// Rewrites an expression according to new schema (e.g. changes columns it refers
-/// with the column name at corresponding index in the new schema.).
-pub fn with_new_schema(
-    expr: Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(expr
-        .transform_up(|expr| {
-            Ok(if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                let idx = col.index();
-                Transformed::yes(Arc::new(Column::new(schema.fields()[idx].name(), idx))
-                    as Arc<dyn PhysicalExpr>)
-            } else {
-                // Use without modification
-                Transformed::no(expr)
-            })
-        })?
-        .data)
 }

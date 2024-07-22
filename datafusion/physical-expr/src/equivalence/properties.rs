@@ -33,7 +33,7 @@ use crate::{
 
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{exec_err, JoinSide, JoinType, Result};
+use datafusion_common::{plan_err, JoinSide, JoinType, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::expressions::column::Column;
@@ -983,6 +983,9 @@ impl EquivalenceProperties {
             .unwrap_or(ExprProperties::new_unknown())
     }
 
+    /// Transforms this `EquivalenceProperties` into a new `EquivalenceProperties`
+    /// by mapping columns in the original schema to columns in the new schema
+    /// by index.
     pub fn with_new_schema(self, schema: SchemaRef) -> Result<Self> {
         let EquivalenceProperties {
             eq_group,
@@ -990,25 +993,25 @@ impl EquivalenceProperties {
             constants,
             schema: old_schema,
         } = self;
-        // Schemas are aligned, when
-        // - their field length is same
-        // - field at the same index have same type
-        let schema_aligned = (old_schema.fields.len() == schema.fields.len())
+        // The new schema and the original schema is aligned when they have the
+        // same number of columns, and fields at the same index have the same
+        // type in both schemas.
+        let schemas_aligned = (old_schema.fields.len() == schema.fields.len())
             && old_schema
                 .fields
                 .iter()
                 .zip(schema.fields.iter())
                 .all(|(lhs, rhs)| lhs.data_type().eq(rhs.data_type()));
-        if !schema_aligned {
-            // Rewriting equivalence properties in terms of new schema, is not safe when
-            // schemas are not aligned
-            return exec_err!(
+        if !schemas_aligned {
+            // Rewriting equivalence properties in terms of new schema is not
+            // safe when schemas are not aligned:
+            return plan_err!(
                 "Cannot rewrite old_schema:{:?} with new schema: {:?}",
                 old_schema,
                 schema
             );
         }
-        // Rewrite constants according to new schema
+        // Rewrite constants according to new schema:
         let new_constants = constants
             .into_iter()
             .map(|const_expr| {
@@ -1019,32 +1022,31 @@ impl EquivalenceProperties {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // Rewrite orderings according to new schema
+        // Rewrite orderings according to new schema:
         let mut new_orderings = vec![];
         for ordering in oeq_class.orderings {
             let new_ordering = ordering
                 .into_iter()
-                .map(|PhysicalSortExpr { expr, options }| {
-                    Ok(PhysicalSortExpr {
-                        expr: with_new_schema(expr, &schema)?,
-                        options,
-                    })
+                .map(|mut sort_expr| {
+                    sort_expr.expr = with_new_schema(sort_expr.expr, &schema)?;
+                    Ok(sort_expr)
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<_>>()?;
             new_orderings.push(new_ordering);
         }
 
-        // Rewrite equivalence classes
+        // Rewrite equivalence classes according to the new schema:
         let mut eq_classes = vec![];
         for eq_class in eq_group.classes {
             let new_eq_exprs = eq_class
                 .into_vec()
                 .into_iter()
                 .map(|expr| with_new_schema(expr, &schema))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<_>>()?;
             eq_classes.push(EquivalenceClass::new(new_eq_exprs));
         }
-        // Construct new equivalence properties
+
+        // Construct the resulting equivalence properties:
         let mut result = EquivalenceProperties::new(schema);
         result = result.add_constants(new_constants);
         result.add_new_orderings(new_orderings);
@@ -1534,14 +1536,21 @@ impl Hash for ExprWrapper {
 /// be the same with those of `lhs` and `rhs` as details such as nullability
 /// may be different).
 fn calculate_union_binary(
-    lhs: EquivalenceProperties,
-    rhs: EquivalenceProperties,
+    mut lhs: EquivalenceProperties,
+    mut rhs: EquivalenceProperties,
     schema: SchemaRef,
 ) -> Result<EquivalenceProperties> {
     // TODO: In some cases, we should be able to preserve some equivalence
     //       classes. Add support for such cases.
-    let lhs = lhs.with_new_schema(Arc::clone(&schema))?;
-    let rhs = rhs.with_new_schema(Arc::clone(&schema))?;
+
+    // Harmonize the schemas of the two sides with the output schema:
+    if !lhs.schema.eq(&schema) {
+        lhs = lhs.with_new_schema(Arc::clone(&schema))?;
+    }
+    if !rhs.schema.eq(&schema) {
+        rhs = rhs.with_new_schema(Arc::clone(&schema))?;
+    }
+
     let mut eq_properties = EquivalenceProperties::new(schema);
     // First, calculate valid constants for the union. A quantity is constant
     // after the union if it is constant in both sides.
