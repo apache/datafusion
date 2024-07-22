@@ -99,10 +99,11 @@ impl UnionExec {
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
         let schema = union_schema(&inputs);
-        // When the schema of the inputs and union schema is consistent
-        // e.g. - their field lengths are same
-        //      - their fields have same types at the same indices
-        // method below cannot return error.
+        // The schema of the inputs and the union schema is consistent when:
+        // - They have the same number of fields, and
+        // - Their fields have same types at the same indices.
+        // Here, we know that schemas are consistent and the call below can
+        // not return an error.
         let cache = Self::compute_properties(&inputs, schema).unwrap();
         UnionExec {
             inputs,

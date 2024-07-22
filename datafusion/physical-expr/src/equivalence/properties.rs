@@ -987,17 +987,12 @@ impl EquivalenceProperties {
     /// by mapping columns in the original schema to columns in the new schema
     /// by index.
     pub fn with_new_schema(self, schema: SchemaRef) -> Result<Self> {
-        let EquivalenceProperties {
-            eq_group,
-            oeq_class,
-            constants,
-            schema: old_schema,
-        } = self;
         // The new schema and the original schema is aligned when they have the
         // same number of columns, and fields at the same index have the same
         // type in both schemas.
-        let schemas_aligned = (old_schema.fields.len() == schema.fields.len())
-            && old_schema
+        let schemas_aligned = (self.schema.fields.len() == schema.fields.len())
+            && self
+                .schema
                 .fields
                 .iter()
                 .zip(schema.fields.iter())
@@ -1007,12 +1002,13 @@ impl EquivalenceProperties {
             // safe when schemas are not aligned:
             return plan_err!(
                 "Cannot rewrite old_schema:{:?} with new schema: {:?}",
-                old_schema,
+                self.schema,
                 schema
             );
         }
         // Rewrite constants according to new schema:
-        let new_constants = constants
+        let new_constants = self
+            .constants
             .into_iter()
             .map(|const_expr| {
                 let across_partitions = const_expr.across_partitions();
@@ -1024,7 +1020,7 @@ impl EquivalenceProperties {
 
         // Rewrite orderings according to new schema:
         let mut new_orderings = vec![];
-        for ordering in oeq_class.orderings {
+        for ordering in self.oeq_class.orderings {
             let new_ordering = ordering
                 .into_iter()
                 .map(|mut sort_expr| {
@@ -1037,7 +1033,7 @@ impl EquivalenceProperties {
 
         // Rewrite equivalence classes according to the new schema:
         let mut eq_classes = vec![];
-        for eq_class in eq_group.classes {
+        for eq_class in self.eq_group.classes {
             let new_eq_exprs = eq_class
                 .into_vec()
                 .into_iter()
@@ -1048,7 +1044,7 @@ impl EquivalenceProperties {
 
         // Construct the resulting equivalence properties:
         let mut result = EquivalenceProperties::new(schema);
-        result = result.add_constants(new_constants);
+        result.constants = new_constants;
         result.add_new_orderings(new_orderings);
         result.add_equivalence_group(EquivalenceGroup::new(eq_classes));
 
@@ -1532,7 +1528,7 @@ impl Hash for ExprWrapper {
 }
 
 /// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
-/// of  `lhs` and `rhs` according to the schema of the `lhs`.
+/// of  `lhs` and `rhs` according to the schema of `lhs`.
 fn calculate_union_binary(
     lhs: EquivalenceProperties,
     mut rhs: EquivalenceProperties,
@@ -1558,7 +1554,7 @@ fn calculate_union_binary(
             //       check this yet.
             ConstExpr::new(Arc::clone(const_expr.expr())).with_across_partitions(false)
         })
-        .collect::<Vec<_>>();
+        .collect();
 
     // Next, calculate valid orderings for the union by searching for prefixes
     // in both sides.
@@ -2614,7 +2610,7 @@ mod tests {
                 .iter()
                 .map(|field| {
                     Field::new(
-                        // Annotate name with1, to change field name.
+                        // Annotate name with `text`:
                         format!("{}{}", field.name(), text),
                         field.data_type().clone(),
                         field.is_nullable(),
