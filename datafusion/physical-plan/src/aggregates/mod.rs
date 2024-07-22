@@ -2008,7 +2008,7 @@ mod tests {
     // FIRST_VALUE(b ORDER BY b <SortOptions>)
     fn test_first_value_agg_expr(
         schema: &Schema,
-        df_schema: &DFSchema,
+        dfschema: &DFSchema,
         sort_options: SortOptions,
     ) -> Result<Arc<dyn AggregateExpr>> {
         let sort_exprs = vec![datafusion_expr::Expr::Sort(Sort {
@@ -2029,7 +2029,7 @@ mod tests {
             &logical_args,
             &sort_exprs,
             &ordering_req,
-            df_schema,
+            dfschema,
             "FIRST_VALUE(b)",
             false,
             false,
@@ -2040,7 +2040,7 @@ mod tests {
     // LAST_VALUE(b ORDER BY b <SortOptions>)
     fn test_last_value_agg_expr(
         schema: &Schema,
-        df_schema: &DFSchema,
+        dfschema: &DFSchema,
         sort_options: SortOptions,
     ) -> Result<Arc<dyn AggregateExpr>> {
         let sort_exprs = vec![datafusion_expr::Expr::Sort(Sort {
@@ -2061,7 +2061,7 @@ mod tests {
             &logical_args,
             &sort_exprs,
             &ordering_req,
-            df_schema,
+            dfschema,
             "LAST_VALUE(b)",
             false,
             false,
