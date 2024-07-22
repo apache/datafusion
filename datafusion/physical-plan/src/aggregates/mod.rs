@@ -75,12 +75,12 @@ pub enum AggregateMode {
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
-    /// This mode requires tha the input is a single partition (like Final)
+    /// This mode requires that the input is a single partition (like Final)
     Single,
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
-    /// This mode requires tha the input is partitioned by group key (like FinalPartitioned)
+    /// This mode requires that the input is partitioned by group key (like FinalPartitioned)
     SinglePartitioned,
 }
 
@@ -733,7 +733,7 @@ impl ExecutionPlan for AggregateExec {
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
         // TODO stats: aggr expression:
-        // - aggregations somtimes also preserve invariants such as min, max...
+        // - aggregations sometimes also preserve invariants such as min, max...
         let column_statistics = Statistics::unknown_column(&self.schema());
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned

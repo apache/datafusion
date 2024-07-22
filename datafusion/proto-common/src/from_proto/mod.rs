@@ -860,6 +860,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             quote: proto_opts.quote[0],
             escape: proto_opts.escape.first().copied(),
             double_quote: proto_opts.has_header.first().map(|h| *h != 0),
+            newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),
             compression: proto_opts.compression().into(),
             schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
             date_format: (!proto_opts.date_format.is_empty())

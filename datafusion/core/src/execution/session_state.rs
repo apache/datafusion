@@ -18,30 +18,17 @@
 //! [`SessionState`]: information required to run queries in a session
 
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
-use crate::catalog::listing_schema::ListingSchemaProvider;
-use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
-use crate::catalog::{
-    CatalogProvider, CatalogProviderList, MemoryCatalogProvider,
-    MemoryCatalogProviderList,
-};
+use crate::catalog::schema::SchemaProvider;
+use crate::catalog::{CatalogProviderList, MemoryCatalogProviderList};
 use crate::datasource::cte_worktable::CteWorkTable;
-use crate::datasource::file_format::arrow::ArrowFormatFactory;
-use crate::datasource::file_format::avro::AvroFormatFactory;
-use crate::datasource::file_format::csv::CsvFormatFactory;
-use crate::datasource::file_format::json::JsonFormatFactory;
-#[cfg(feature = "parquet")]
-use crate::datasource::file_format::parquet::ParquetFormatFactory;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use crate::datasource::function::{TableFunction, TableFunctionImpl};
-use crate::datasource::provider::{DefaultTableFactory, TableProviderFactory};
+use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
-#[cfg(feature = "array_expressions")]
-use crate::functions_array;
+use crate::execution::SessionStateDefaults;
 use crate::physical_optimizer::optimizer::PhysicalOptimizer;
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use crate::{functions, functions_aggregate};
 use arrow_schema::{DataType, SchemaRef};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -55,7 +42,6 @@ use datafusion_common::{
     ResolvedTableReference, TableReference,
 };
 use datafusion_execution::config::SessionConfig;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
@@ -74,6 +60,7 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
@@ -85,7 +72,6 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
-use url::Url;
 use uuid::Uuid;
 
 /// Execution context for registering data sources and executing queries.
@@ -516,7 +502,7 @@ impl SessionState {
             }
         }
 
-        let query = self.build_sql_query_planner(&provider);
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.statement_to_plan(statement)
     }
 
@@ -569,7 +555,7 @@ impl SessionState {
             tables: HashMap::new(),
         };
 
-        let query = self.build_sql_query_planner(&provider);
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
@@ -854,20 +840,6 @@ impl SessionState {
         let udtf = self.table_functions.remove(name);
         Ok(udtf.map(|x| x.function().clone()))
     }
-
-    fn build_sql_query_planner<'a, S>(&self, provider: &'a S) -> SqlToRel<'a, S>
-    where
-        S: ContextProvider,
-    {
-        let mut query = SqlToRel::new_with_options(provider, self.get_parser_options());
-
-        // custom planners are registered first, so they're run first and take precedence over built-in planners
-        for planner in self.expr_planners.iter() {
-            query = query.with_user_defined_planner(planner.clone());
-        }
-
-        query
-    }
 }
 
 /// A builder to be used for building [`SessionState`]'s. Defaults will
@@ -1033,7 +1005,7 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Set tje [`PhysicalOptimizerRule`]s used to optimize plans.
+    /// Set the [`PhysicalOptimizerRule`]s used to optimize plans.
     pub fn with_physical_optimizer_rules(
         mut self,
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
@@ -1434,175 +1406,20 @@ impl From<SessionState> for SessionStateBuilder {
     }
 }
 
-/// Defaults that are used as part of creating a SessionState such as table providers,
-/// file formats, registering of builtin functions, etc.
-pub struct SessionStateDefaults {}
-
-impl SessionStateDefaults {
-    /// returns a map of the default [`TableProviderFactory`]s
-    pub fn default_table_factories() -> HashMap<String, Arc<dyn TableProviderFactory>> {
-        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-            HashMap::new();
-        #[cfg(feature = "parquet")]
-        table_factories.insert("PARQUET".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("CSV".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("JSON".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("NDJSON".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("AVRO".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("ARROW".into(), Arc::new(DefaultTableFactory::new()));
-
-        table_factories
-    }
-
-    /// returns the default MemoryCatalogProvider
-    pub fn default_catalog(
-        config: &SessionConfig,
-        table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
-        runtime: &Arc<RuntimeEnv>,
-    ) -> MemoryCatalogProvider {
-        let default_catalog = MemoryCatalogProvider::new();
-
-        default_catalog
-            .register_schema(
-                &config.options().catalog.default_schema,
-                Arc::new(MemorySchemaProvider::new()),
-            )
-            .expect("memory catalog provider can register schema");
-
-        Self::register_default_schema(config, table_factories, runtime, &default_catalog);
-
-        default_catalog
-    }
-
-    /// returns the list of default [`ExprPlanner`]s
-    pub fn default_expr_planners() -> Vec<Arc<dyn ExprPlanner>> {
-        let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![
-            Arc::new(functions::core::planner::CoreFunctionPlanner::default()),
-            // register crate of array expressions (if enabled)
-            #[cfg(feature = "array_expressions")]
-            Arc::new(functions_array::planner::ArrayFunctionPlanner),
-            #[cfg(feature = "array_expressions")]
-            Arc::new(functions_array::planner::FieldAccessPlanner),
-            #[cfg(any(
-                feature = "datetime_expressions",
-                feature = "unicode_expressions"
-            ))]
-            Arc::new(functions::planner::UserDefinedFunctionPlanner),
-        ];
-
-        expr_planners
-    }
-
-    /// returns the list of default [`ScalarUDF']'s
-    pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
-        let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
-        #[cfg(feature = "array_expressions")]
-        functions.append(&mut functions_array::all_default_array_functions());
-
-        functions
-    }
-
-    /// returns the list of default [`AggregateUDF']'s
-    pub fn default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
-        functions_aggregate::all_default_aggregate_functions()
-    }
-
-    /// returns the list of default [`FileFormatFactory']'s
-    pub fn default_file_formats() -> Vec<Arc<dyn FileFormatFactory>> {
-        let file_formats: Vec<Arc<dyn FileFormatFactory>> = vec![
-            #[cfg(feature = "parquet")]
-            Arc::new(ParquetFormatFactory::new()),
-            Arc::new(JsonFormatFactory::new()),
-            Arc::new(CsvFormatFactory::new()),
-            Arc::new(ArrowFormatFactory::new()),
-            Arc::new(AvroFormatFactory::new()),
-        ];
-
-        file_formats
-    }
-
-    /// registers all builtin functions - scalar, array and aggregate
-    pub fn register_builtin_functions(state: &mut SessionState) {
-        Self::register_scalar_functions(state);
-        Self::register_array_functions(state);
-        Self::register_aggregate_functions(state);
-    }
-
-    /// registers all the builtin scalar functions
-    pub fn register_scalar_functions(state: &mut SessionState) {
-        functions::register_all(state).expect("can not register built in functions");
-    }
-
-    /// registers all the builtin array functions
-    pub fn register_array_functions(state: &mut SessionState) {
-        // register crate of array expressions (if enabled)
-        #[cfg(feature = "array_expressions")]
-        functions_array::register_all(state).expect("can not register array expressions");
-    }
-
-    /// registers all the builtin aggregate functions
-    pub fn register_aggregate_functions(state: &mut SessionState) {
-        functions_aggregate::register_all(state)
-            .expect("can not register aggregate functions");
-    }
-
-    /// registers the default schema
-    pub fn register_default_schema(
-        config: &SessionConfig,
-        table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
-        runtime: &Arc<RuntimeEnv>,
-        default_catalog: &MemoryCatalogProvider,
-    ) {
-        let url = config.options().catalog.location.as_ref();
-        let format = config.options().catalog.format.as_ref();
-        let (url, format) = match (url, format) {
-            (Some(url), Some(format)) => (url, format),
-            _ => return,
-        };
-        let url = url.to_string();
-        let format = format.to_string();
-
-        let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
-        let authority = match url.host_str() {
-            Some(host) => format!("{}://{}", url.scheme(), host),
-            None => format!("{}://", url.scheme()),
-        };
-        let path = &url.as_str()[authority.len()..];
-        let path = object_store::path::Path::parse(path).expect("Can't parse path");
-        let store = ObjectStoreUrl::parse(authority.as_str())
-            .expect("Invalid default catalog url");
-        let store = match runtime.object_store(store) {
-            Ok(store) => store,
-            _ => return,
-        };
-        let factory = match table_factories.get(format.as_str()) {
-            Some(factory) => factory,
-            _ => return,
-        };
-        let schema =
-            ListingSchemaProvider::new(authority, path, factory.clone(), store, format);
-        let _ = default_catalog
-            .register_schema("default", Arc::new(schema))
-            .expect("Failed to register default schema");
-    }
-
-    /// registers the default [`FileFormatFactory`]s
-    pub fn register_default_file_formats(state: &mut SessionState) {
-        let formats = SessionStateDefaults::default_file_formats();
-        for format in formats {
-            if let Err(e) = state.register_file_format(format, false) {
-                log::info!("Unable to register default file format: {e}")
-            };
-        }
-    }
-}
-
+/// Adapter that implements the [`ContextProvider`] trait for a [`SessionState`]
+///
+/// This is used so the SQL planner can access the state of the session without
+/// having a direct dependency on the [`SessionState`] struct (and core crate)
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
     tables: HashMap<String, Arc<dyn TableSource>>,
 }
 
 impl<'a> ContextProvider for SessionContextProvider<'a> {
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.state.expr_planners
+    }
+
     fn get_table_source(
         &self,
         name: TableReference,
@@ -1896,5 +1713,49 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
 
     fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
         expr.get_type(self.df_schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::DFSchema;
+    use datafusion_common::Result;
+    use datafusion_expr::Expr;
+    use datafusion_sql::planner::{PlannerContext, SqlToRel};
+
+    use crate::execution::context::SessionState;
+
+    use super::{SessionContextProvider, SessionStateBuilder};
+
+    #[test]
+    fn test_session_state_with_default_features() {
+        // test array planners with and without builtin planners
+        fn sql_to_expr(state: &SessionState) -> Result<Expr> {
+            let provider = SessionContextProvider {
+                state,
+                tables: HashMap::new(),
+            };
+
+            let sql = "[1,2,3]";
+            let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+            let df_schema = DFSchema::try_from(schema)?;
+            let dialect = state.config.options().sql_parser.dialect.as_str();
+            let sql_expr = state.sql_to_expr(sql, dialect)?;
+
+            let query = SqlToRel::new_with_options(&provider, state.get_parser_options());
+            query.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())
+        }
+
+        let state = SessionStateBuilder::new().with_default_features().build();
+
+        assert!(sql_to_expr(&state).is_ok());
+
+        // if no builtin planners exist, you should register your own, otherwise returns error
+        let state = SessionStateBuilder::new().build();
+
+        assert!(sql_to_expr(&state).is_err())
     }
 }

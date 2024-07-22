@@ -18,13 +18,12 @@
 //! This file implements the `ProjectionPushdown` physical optimization rule.
 //! The function [`remove_unnecessary_projections`] tries to push down all
 //! projections one by one if the operator below is amenable to this. If a
-//! projection reaches a source, it can even dissappear from the plan entirely.
+//! projection reaches a source, it can even disappear from the plan entirely.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::output_requirements::OutputRequirementExec;
-use super::PhysicalOptimizerRule;
 use crate::datasource::physical_plan::CsvExec;
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -55,6 +54,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
@@ -186,6 +186,7 @@ fn try_swapping_with_csv(
             csv.quote(),
             csv.escape(),
             csv.comment(),
+            csv.newlines_in_values(),
             csv.file_compression_type,
         )) as _
     })
@@ -1700,6 +1701,7 @@ mod tests {
             0,
             None,
             None,
+            false,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -1723,6 +1725,7 @@ mod tests {
             0,
             None,
             None,
+            false,
             FileCompressionType::UNCOMPRESSED,
         ))
     }

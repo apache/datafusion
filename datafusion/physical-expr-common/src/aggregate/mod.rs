@@ -346,7 +346,7 @@ impl AggregateExpr for AggregateFunctionExpr {
         let accumulator = self.fun.create_sliding_accumulator(args)?;
 
         // Accumulators that have window frame startings different
-        // than `UNBOUNDED PRECEDING`, such as `1 PRECEEDING`, need to
+        // than `UNBOUNDED PRECEDING`, such as `1 PRECEDING`, need to
         // implement retract_batch method in order to run correctly
         // currently in DataFusion.
         //
@@ -377,7 +377,7 @@ impl AggregateExpr for AggregateFunctionExpr {
         // 3. Third sum we add to the state sum value between `[2, 3)`
         // (`[0, 2)` is already in the state sum).  Also we need to
         // retract values between `[0, 1)` by this way we can obtain sum
-        // between [1, 3) which is indeed the apropriate range.
+        // between [1, 3) which is indeed the appropriate range.
         //
         // When we use `UNBOUNDED PRECEDING` in the query starting
         // index will always be 0 for the desired range, and hence the

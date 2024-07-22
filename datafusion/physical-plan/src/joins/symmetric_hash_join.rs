@@ -215,7 +215,7 @@ impl SymmetricHashJoinExec {
         let left_schema = left.schema();
         let right_schema = right.schema();
 
-        // Error out if no "on" contraints are given:
+        // Error out if no "on" constraints are given:
         if on.is_empty() {
             return plan_err!(
                 "On constraints in SymmetricHashJoinExec should be non-empty"

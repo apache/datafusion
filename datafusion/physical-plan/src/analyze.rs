@@ -206,7 +206,7 @@ impl ExecutionPlan for AnalyzeExec {
     }
 }
 
-/// Creates the ouput of AnalyzeExec as a RecordBatch
+/// Creates the output of AnalyzeExec as a RecordBatch
 fn create_output_batch(
     verbose: bool,
     show_statistics: bool,

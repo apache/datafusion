@@ -283,7 +283,7 @@ impl<'a> GuaranteeBuilder<'a> {
         )
     }
 
-    /// Aggregates a new single column, multi literal term to ths builder
+    /// Aggregates a new single column, multi literal term to this builder
     /// combining with previously known guarantees if possible.
     ///
     /// # Examples

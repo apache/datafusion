@@ -633,6 +633,9 @@ pub struct CsvOptions {
     /// Indicates if quotes are doubled
     #[prost(bytes = "vec", tag = "14")]
     pub double_quote: ::prost::alloc::vec::Vec<u8>,
+    /// Indicates if newlines are supported in values
+    #[prost(bytes = "vec", tag = "15")]
+    pub newlines_in_values: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[allow(clippy::derive_partial_eq_without_eq)]

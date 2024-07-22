@@ -62,7 +62,7 @@ impl std::fmt::Display for ResolvedTableReference {
 /// assert_eq!(table_reference, TableReference::bare("mytable"));
 ///
 /// // Get a table reference to 'MyTable' (note the capitalization) using double quotes
-/// // (programatically it is better to use `TableReference::bare` for this)
+/// // (programmatically it is better to use `TableReference::bare` for this)
 /// let table_reference = TableReference::from(r#""MyTable""#);
 /// assert_eq!(table_reference, TableReference::bare("MyTable"));
 ///

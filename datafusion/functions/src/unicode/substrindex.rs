@@ -122,15 +122,15 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
                 let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
                 let length = if n > 0 {
-                    let splitted = string.split(delimiter);
-                    splitted
+                    let split = string.split(delimiter);
+                    split
                         .take(occurrences)
                         .map(|s| s.len() + delimiter.len())
                         .sum::<usize>()
                         - delimiter.len()
                 } else {
-                    let splitted = string.rsplit(delimiter);
-                    splitted
+                    let split = string.rsplit(delimiter);
+                    split
                         .take(occurrences)
                         .map(|s| s.len() + delimiter.len())
                         .sum::<usize>()

@@ -50,7 +50,7 @@ impl StreamingTable {
             if !schema.contains(partition_schema) {
                 debug!(
                     "target schema does not contain partition schema. \
-                        Target_schema: {schema:?}. Partiton Schema: {partition_schema:?}"
+                        Target_schema: {schema:?}. Partition Schema: {partition_schema:?}"
                 );
                 return plan_err!("Mismatch between schema and batches");
             }

@@ -433,7 +433,7 @@ impl FunctionalDependencies {
     }
 
     /// This function ensures that functional dependencies involving uniquely
-    /// occuring determinant keys cover their entire table in terms of
+    /// occurring determinant keys cover their entire table in terms of
     /// dependent columns.
     pub fn extend_target_indices(&mut self, n_out: usize) {
         self.deps.iter_mut().for_each(
