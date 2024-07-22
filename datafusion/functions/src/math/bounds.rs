@@ -35,20 +35,14 @@ pub(super) fn asin_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     // asin(x) is bounded by [-π/2, π/2]
     let data_type = input[0].data_type();
 
-    Interval::try_new(
-        ScalarValue::new_neg_frac_pi_2(&data_type)?,
-        ScalarValue::new_frac_pi_2(&data_type)?,
-    )
+    Interval::make_symmetric_half_pi_interval(&data_type)
 }
 
 pub(super) fn atan_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     // atan(x) is bounded by [-π/2, π/2]
     let data_type = input[0].data_type();
 
-    Interval::try_new(
-        ScalarValue::new_neg_frac_pi_2(&data_type)?,
-        ScalarValue::new_frac_pi_2(&data_type)?,
-    )
+    Interval::make_symmetric_half_pi_interval(&data_type)
 }
 
 pub(super) fn acos_bounds(input: &[&Interval]) -> crate::Result<Interval> {
@@ -102,10 +96,7 @@ pub(super) fn radians_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     // radians(x) is bounded by (-π, π)
     let data_type = input[0].data_type();
 
-    Interval::try_new(
-        ScalarValue::new_neg_pi(&data_type)?,
-        ScalarValue::new_pi(&data_type)?,
-    )
+    Interval::make_symmetric_pi_interval(&data_type)
 }
 
 pub(super) fn signum_bounds(input: &[&Interval]) -> crate::Result<Interval> {
@@ -119,10 +110,7 @@ pub(super) fn sqrt_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     // sqrt(x) is bounded by [0, ∞)
     let data_type = input[0].data_type();
 
-    Interval::try_new(
-        ScalarValue::new_zero(&data_type)?,
-        ScalarValue::new_infinity(&data_type)?,
-    )
+    Interval::make_non_negative_infinity_interval(&data_type)
 }
 
 pub(super) fn tanh_bounds(input: &[&Interval]) -> crate::Result<Interval> {

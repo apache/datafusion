@@ -1017,7 +1017,7 @@ impl ScalarValue {
     }
 
     /// Returns a [`ScalarValue`] representing -PI
-    pub fn new_neg_pi(datatype: &DataType) -> Result<ScalarValue> {
+    pub fn new_negative_pi(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
             DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::PI)),
             DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::PI)),

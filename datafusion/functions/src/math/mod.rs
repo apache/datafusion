@@ -329,34 +329,6 @@ mod tests {
         Interval::make_unbounded(data_type).unwrap()
     }
 
-    fn symmetric_unit_interval(data_type: &DataType) -> Interval {
-        Interval::make_symmetric_unit_interval(data_type).unwrap()
-    }
-
-    fn symmetric_pi_interval(data_type: &DataType) -> Interval {
-        Interval::try_new(
-            ScalarValue::new_neg_pi(data_type).unwrap(),
-            ScalarValue::new_pi(data_type).unwrap(),
-        )
-        .unwrap()
-    }
-
-    fn symmetric_frac_pi_2_interval(data_type: &DataType) -> Interval {
-        Interval::try_new(
-            ScalarValue::new_neg_frac_pi_2(data_type).unwrap(),
-            ScalarValue::new_frac_pi_2(data_type).unwrap(),
-        )
-        .unwrap()
-    }
-
-    fn zero_to_inf_interval(data_type: &DataType) -> Interval {
-        Interval::try_new(
-            ScalarValue::new_zero(data_type).unwrap(),
-            ScalarValue::new_infinity(data_type).unwrap(),
-        )
-        .unwrap()
-    }
-
     fn one_to_inf_interval(data_type: &DataType) -> Interval {
         Interval::try_new(
             ScalarValue::new_one(data_type).unwrap(),
@@ -403,22 +375,22 @@ mod tests {
                     (
                         super::acosh(),
                         unbounded_interval(data_type),
-                        zero_to_inf_interval(data_type),
+                        Interval::make_non_negative_infinity_interval(data_type).unwrap(),
                     ),
                     (
                         super::asin(),
                         unbounded_interval(data_type),
-                        symmetric_frac_pi_2_interval(data_type),
+                        Interval::make_symmetric_half_pi_interval(data_type).unwrap(),
                     ),
                     (
                         super::atan(),
                         unbounded_interval(data_type),
-                        symmetric_frac_pi_2_interval(data_type),
+                        Interval::make_symmetric_half_pi_interval(data_type).unwrap(),
                     ),
                     (
                         super::cos(),
                         unbounded_interval(data_type),
-                        symmetric_unit_interval(data_type),
+                        Interval::make_symmetric_unit_interval(data_type).unwrap(),
                     ),
                     (
                         super::cosh(),
@@ -428,27 +400,27 @@ mod tests {
                     (
                         super::sin(),
                         unbounded_interval(data_type),
-                        symmetric_unit_interval(data_type),
+                        Interval::make_symmetric_unit_interval(data_type).unwrap(),
                     ),
                     (
                         super::exp(),
                         unbounded_interval(data_type),
-                        zero_to_inf_interval(data_type),
+                        Interval::make_non_negative_infinity_interval(data_type).unwrap(),
                     ),
                     (
                         super::sqrt(),
                         unbounded_interval(data_type),
-                        zero_to_inf_interval(data_type),
+                        Interval::make_non_negative_infinity_interval(data_type).unwrap(),
                     ),
                     (
                         super::radians(),
                         unbounded_interval(data_type),
-                        symmetric_pi_interval(data_type),
+                        Interval::make_symmetric_pi_interval(data_type).unwrap(),
                     ),
                     (
                         super::sqrt(),
                         unbounded_interval(data_type),
-                        zero_to_inf_interval(data_type),
+                        Interval::make_non_negative_infinity_interval(data_type).unwrap(),
                     ),
                 ]
             })
