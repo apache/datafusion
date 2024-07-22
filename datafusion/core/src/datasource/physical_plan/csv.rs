@@ -59,6 +59,7 @@ pub struct CsvExec {
     quote: u8,
     escape: Option<u8>,
     comment: Option<u8>,
+    newlines_in_values: bool,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Compression type of the file associated with CsvExec
@@ -68,6 +69,7 @@ pub struct CsvExec {
 
 impl CsvExec {
     /// Create a new CSV reader execution plan provided base and specific configurations
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         base_config: FileScanConfig,
         has_header: bool,
@@ -75,6 +77,7 @@ impl CsvExec {
         quote: u8,
         escape: Option<u8>,
         comment: Option<u8>,
+        newlines_in_values: bool,
         file_compression_type: FileCompressionType,
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
@@ -91,6 +94,7 @@ impl CsvExec {
             delimiter,
             quote,
             escape,
+            newlines_in_values,
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
             cache,
@@ -124,6 +128,17 @@ impl CsvExec {
     /// The escape character
     pub fn escape(&self) -> Option<u8> {
         self.escape
+    }
+
+    /// Specifies whether newlines in (quoted) values are supported.
+    ///
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
+    pub fn newlines_in_values(&self) -> bool {
+        self.newlines_in_values
     }
 
     fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
@@ -196,15 +211,15 @@ impl ExecutionPlan for CsvExec {
     /// Redistribute files across partitions according to their size
     /// See comments on [`FileGroupPartitioner`] for more detail.
     ///
-    /// Return `None` if can't get repartitioned(empty/compressed file).
+    /// Return `None` if can't get repartitioned (empty, compressed file, or `newlines_in_values` set).
     fn repartitioned(
         &self,
         target_partitions: usize,
         config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let repartition_file_min_size = config.optimizer.repartition_file_min_size;
-        // Parallel execution on compressed CSV file is not supported yet.
-        if self.file_compression_type.is_compressed() {
+        // Parallel execution on compressed CSV files or files that must support newlines in values is not supported yet.
+        if self.file_compression_type.is_compressed() || self.newlines_in_values {
             return Ok(None);
         }
 
@@ -606,6 +621,7 @@ mod tests {
             b'"',
             None,
             None,
+            false,
             file_compression_type.to_owned(),
         );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
@@ -675,6 +691,7 @@ mod tests {
             b'"',
             None,
             None,
+            false,
             file_compression_type.to_owned(),
         );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
@@ -744,6 +761,7 @@ mod tests {
             b'"',
             None,
             None,
+            false,
             file_compression_type.to_owned(),
         );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
@@ -810,6 +828,7 @@ mod tests {
             b'"',
             None,
             None,
+            false,
             file_compression_type.to_owned(),
         );
         assert_eq!(14, csv.base_config.file_schema.fields().len());
@@ -875,6 +894,7 @@ mod tests {
             b'"',
             None,
             None,
+            false,
             file_compression_type.to_owned(),
         );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
@@ -970,6 +990,7 @@ mod tests {
             b'"',
             None,
             None,
+            false,
             file_compression_type.to_owned(),
         );
 

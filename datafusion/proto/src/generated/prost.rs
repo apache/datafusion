@@ -1542,6 +1542,8 @@ pub struct CsvScanExecNode {
     pub delimiter: ::prost::alloc::string::String,
     #[prost(string, tag = "4")]
     pub quote: ::prost::alloc::string::String,
+    #[prost(bool, tag = "7")]
+    pub newlines_in_values: bool,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]

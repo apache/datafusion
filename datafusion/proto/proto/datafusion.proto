@@ -1007,6 +1007,7 @@ message CsvScanExecNode {
   oneof optional_comment {
     string comment = 6;
   }
+  bool newlines_in_values = 7;
 }
 
 message AvroScanExecNode {

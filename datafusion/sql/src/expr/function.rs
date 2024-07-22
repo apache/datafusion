@@ -67,7 +67,7 @@ pub fn suggest_valid_function(
     find_closest_match(valid_funcs, input_function_name)
 }
 
-/// Find the closest matching string to the target string in the candidates list, using edit distance(case insensitve)
+/// Find the closest matching string to the target string in the candidates list, using edit distance(case insensitive)
 /// Input `candidates` must not be empty otherwise it will panic
 fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
     let target = target.to_lowercase();

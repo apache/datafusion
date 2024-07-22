@@ -380,7 +380,7 @@ physical_plan_with_schema ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/pa
 statement ok
 set datafusion.execution.collect_statistics = false;
 
-# Explain ArrayFuncions
+# Explain ArrayFunctions
 
 statement ok
 set datafusion.explain.physical_plan_only = false

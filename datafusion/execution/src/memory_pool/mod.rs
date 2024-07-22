@@ -18,7 +18,7 @@
 //! [`MemoryPool`] for memory management during query execution, [`proxy]` for
 //! help with allocation accounting.
 
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 use std::{cmp::Ordering, sync::Arc};
 
 mod pool;
@@ -218,6 +218,23 @@ impl MemoryReservation {
         let new_size = self.size.checked_sub(capacity).unwrap();
         self.registration.pool.shrink(self, capacity);
         self.size = new_size
+    }
+
+    /// Tries to free `capacity` bytes from this reservation
+    /// if `capacity` does not exceed [`Self::size`]
+    /// Returns new reservation size
+    /// or error if shrinking capacity is more than allocated size
+    pub fn try_shrink(&mut self, capacity: usize) -> Result<usize> {
+        if let Some(new_size) = self.size.checked_sub(capacity) {
+            self.registration.pool.shrink(self, capacity);
+            self.size = new_size;
+            Ok(new_size)
+        } else {
+            internal_err!(
+                "Cannot free the capacity {capacity} out of allocated size {}",
+                self.size
+            )
+        }
     }
 
     /// Sets the size of this reservation to `capacity`

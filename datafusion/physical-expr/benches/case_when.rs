@@ -40,6 +40,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     // create input data
     let mut c1 = Int32Builder::new();
     let mut c2 = StringBuilder::new();
+    let mut c3 = StringBuilder::new();
     for i in 0..1000 {
         c1.append_value(i);
         if i % 7 == 0 {
@@ -47,14 +48,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         } else {
             c2.append_value(&format!("string {i}"));
         }
+        if i % 9 == 0 {
+            c3.append_null();
+        } else {
+            c3.append_value(&format!("other string {i}"));
+        }
     }
     let c1 = Arc::new(c1.finish());
     let c2 = Arc::new(c2.finish());
+    let c3 = Arc::new(c3.finish());
     let schema = Schema::new(vec![
         Field::new("c1", DataType::Int32, true),
         Field::new("c2", DataType::Utf8, true),
+        Field::new("c3", DataType::Utf8, true),
     ]);
-    let batch = RecordBatch::try_new(Arc::new(schema), vec![c1, c2]).unwrap();
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![c1, c2, c3]).unwrap();
 
     // use same predicate for all benchmarks
     let predicate = Arc::new(BinaryExpr::new(
@@ -63,7 +71,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         make_lit_i32(500),
     ));
 
-    // CASE WHEN expr THEN 1 ELSE 0 END
+    // CASE WHEN c1 <= 500 THEN 1 ELSE 0 END
     c.bench_function("case_when: scalar or scalar", |b| {
         let expr = Arc::new(
             CaseExpr::try_new(
@@ -76,13 +84,38 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
     });
 
-    // CASE WHEN expr THEN col ELSE null END
+    // CASE WHEN c1 <= 500 THEN c2 [ELSE NULL] END
     c.bench_function("case_when: column or null", |b| {
+        let expr = Arc::new(
+            CaseExpr::try_new(None, vec![(predicate.clone(), make_col("c2", 1))], None)
+                .unwrap(),
+        );
+        b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+    });
+
+    // CASE WHEN c1 <= 500 THEN c2 ELSE c3 END
+    c.bench_function("case_when: expr or expr", |b| {
         let expr = Arc::new(
             CaseExpr::try_new(
                 None,
                 vec![(predicate.clone(), make_col("c2", 1))],
-                Some(Arc::new(Literal::new(ScalarValue::Utf8(None)))),
+                Some(make_col("c3", 2)),
+            )
+            .unwrap(),
+        );
+        b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+    });
+
+    // CASE c1 WHEN 1 THEN c2 WHEN 2 THEN c3 END
+    c.bench_function("case_when: CASE expr", |b| {
+        let expr = Arc::new(
+            CaseExpr::try_new(
+                Some(make_col("c1", 0)),
+                vec![
+                    (make_lit_i32(1), make_col("c2", 1)),
+                    (make_lit_i32(2), make_col("c3", 2)),
+                ],
+                None,
             )
             .unwrap(),
         );

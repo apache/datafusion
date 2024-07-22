@@ -112,7 +112,7 @@ SELECT iszero(1.0), iszero(0.0), iszero(-0.0), iszero(NULL)
 ----
 false true true NULL
 
-# abs: empty argumnet
+# abs: empty argument
 statement error
 SELECT abs();
 

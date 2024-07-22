@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
@@ -179,6 +179,23 @@ pub trait ExprPlanner: Send + Sync {
     /// Returns origin expression arguments if not possible
     fn plan_make_map(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
+    }
+
+    /// Plans compound identifier eg `db.schema.table` for non-empty nested names
+    ///
+    /// Note:
+    /// Currently compound identifier for outer query schema is not supported.
+    ///
+    /// Returns planned expression
+    fn plan_compound_identifier(
+        &self,
+        _field: &Field,
+        _qualifier: Option<&TableReference>,
+        _nested_names: &[String],
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        not_impl_err!(
+            "Default planner compound identifier hasn't been implemented for ExprPlanner"
+        )
     }
 }
 

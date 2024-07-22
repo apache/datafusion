@@ -246,6 +246,7 @@ mod tests {
     use crate::datasource::schema_adapter::{
         SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
+    #[cfg(feature = "parquet")]
     use parquet::arrow::ArrowWriter;
     use tempfile::TempDir;
 
