@@ -18,10 +18,10 @@
 use core::fmt;
 
 use datafusion_expr::ScalarUDF;
-use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Expr as AstExpr, Function, FunctionArg, Ident, Interval, UnaryOperator,
+    self, BinaryOperator, Expr as AstExpr, Function, FunctionArg, Ident, Interval,
+    TimezoneInfo, UnaryOperator,
 };
 use std::sync::Arc;
 use std::{fmt::Display, vec};
@@ -35,12 +35,6 @@ use arrow_array::types::{
 };
 use arrow_array::{Date32Array, Date64Array, PrimitiveArray};
 use arrow_schema::DataType;
-use sqlparser::ast::Value::SingleQuotedString;
-use sqlparser::ast::{
-    self, BinaryOperator, Expr as AstExpr, Function, FunctionArg, Ident, Interval,
-    TimezoneInfo, UnaryOperator,
-};
-
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
     ScalarValue,
@@ -1392,29 +1386,11 @@ impl Unparser<'_> {
                             "Unsupported IntervalMonthDayNano scalar with nanoseconds precision for IntervalStyle::MySQL"
                         );
                     }
-                    if v.months >= 0 && v.days == 0 && v.nanoseconds == 0 {
-                        // only Month
-                        let interval = Interval {
-                            value: Box::new(ast::Expr::Value(ast::Value::Number(
-                                v.months.to_string(),
-                                false,
-                            ))),
-                            leading_field: Some(ast::DateTimeField::Month),
-                            leading_precision: None,
-                            last_field: None,
-                            fractional_seconds_precision: None,
-                        };
-                        return Ok(ast::Expr::Interval(interval));
-                    } else if v.months == 0 {
-                        // Only Day + Nanoseconds
-                        return self.interval_to_mysql_expr(
-                            0,
-                            v.days,
-                            v.nanoseconds as i64 / 1_000,
-                        );
-                    } else {
-                        not_impl_err!("Unsupported IntervalMonthDayNano scalar with both Month and DayTime for IntervalStyle::SQLStandard")
-                    }
+                    return self.interval_to_mysql_expr(
+                        v.months,
+                        v.days,
+                        v.nanoseconds as i64 / 1_000,
+                    );
                 }
                 _ => not_impl_err!(
                     "Unsupported ScalarValue for Interval conversion: {v:?}"
