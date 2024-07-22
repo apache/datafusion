@@ -1132,3 +1132,10 @@ physical_plan
 02)--ProjectionExec: expr=[CAST(inc_col@0 > desc_col@1 AS Int32) as c]
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC]], has_header=true
+
+# Union a query with the actual data and one with a constant
+query I
+SELECT (SELECT c from ordered_table ORDER BY c LIMIT 1) UNION ALL (SELECT 23 as c from ordered_table ORDER BY c LIMIT 1) ORDER BY c;
+----
+0
+23
