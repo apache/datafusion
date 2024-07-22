@@ -57,6 +57,11 @@ enum EvalMethod {
     ///
     /// CASE WHEN condition THEN column [ELSE NULL] END
     InfallibleExprOrNull,
+    /// This is a specialization for a specific use case where we can take a fast path
+    /// if there is just one when/then pair and both the `then` and `else` expressions
+    /// are literal values
+    /// CASE WHEN condition THEN literal ELSE literal END
+    ScalarOrScalar,
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -140,6 +145,12 @@ impl CaseExpr {
                 && else_expr.is_none()
             {
                 EvalMethod::InfallibleExprOrNull
+            } else if when_then_expr.len() == 1
+                && when_then_expr[0].1.as_any().is::<Literal>()
+                && else_expr.is_some()
+                && else_expr.as_ref().unwrap().as_any().is::<Literal>()
+            {
+                EvalMethod::ScalarOrScalar
             } else {
                 EvalMethod::NoExpression
             };
@@ -344,6 +355,38 @@ impl CaseExpr {
             internal_err!("predicate did not evaluate to an array")
         }
     }
+
+    fn scalar_or_scalar(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let return_type = self.data_type(&batch.schema())?;
+
+        // evaluate when expression
+        let when_value = self.when_then_expr[0].0.evaluate(batch)?;
+        let when_value = when_value.into_array(batch.num_rows())?;
+        let when_value = as_boolean_array(&when_value).map_err(|e| {
+            DataFusionError::Context(
+                "WHEN expression did not return a BooleanArray".to_string(),
+                Box::new(e),
+            )
+        })?;
+
+        // Treat 'NULL' as false value
+        let when_value = match when_value.null_count() {
+            0 => Cow::Borrowed(when_value),
+            _ => Cow::Owned(prep_null_mask_filter(when_value)),
+        };
+
+        // evaluate then_value
+        let then_value = self.when_then_expr[0].1.evaluate(batch)?;
+        let then_value = Scalar::new(then_value.into_array(1)?);
+
+        // keep `else_expr`'s data type and return type consistent
+        let e = self.else_expr.as_ref().unwrap();
+        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
+            .unwrap_or_else(|_| Arc::clone(e));
+        let else_ = Scalar::new(expr.evaluate(batch)?.into_array(1)?);
+
+        Ok(ColumnarValue::Array(zip(&when_value, &then_value, &else_)?))
+    }
 }
 
 impl PhysicalExpr for CaseExpr {
@@ -406,6 +449,7 @@ impl PhysicalExpr for CaseExpr {
                 // Specialization for CASE WHEN expr THEN column [ELSE NULL] END
                 self.case_column_or_null(batch)
             }
+            EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
         }
     }
 
