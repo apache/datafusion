@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This rule optimizes the amount of data transferred by pushing down limits
+//! This rule reduces the amount of data transferred by pushing down limits as much as possible.
 
 use std::fmt::Debug;
 use std::sync::Arc;
