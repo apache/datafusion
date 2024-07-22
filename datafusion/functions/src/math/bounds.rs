@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::interval_arithmetic::Interval;
 
-pub(super) fn unbounded(_input: &[&Interval]) -> crate::Result<Interval> {
-    // We cannot assume the input datatype is the same of output type.
-    Interval::make_unbounded(&DataType::Null)
+pub(super) fn infinity_bounds(input: &[&Interval]) -> crate::Result<Interval> {
+    let data_type = input[0].data_type();
+
+    Interval::make_infinity_interval(&data_type)
 }
 
 pub(super) fn sin_bounds(input: &[&Interval]) -> crate::Result<Interval> {

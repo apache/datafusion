@@ -332,6 +332,14 @@ impl Interval {
         Ok(Self::new(unbounded_endpoint.clone(), unbounded_endpoint))
     }
 
+    /// Creates an interval between -∞ to ∞.
+    pub fn make_infinity_interval(data_type: &DataType) -> Result<Self> {
+        Self::try_new(
+            ScalarValue::new_neg_infinity(data_type)?,
+            ScalarValue::new_infinity(data_type)?,
+        )
+    }
+
     /// Creates an interval between -1 to 1.
     pub fn make_symmetric_unit_interval(data_type: &DataType) -> Result<Self> {
         Self::try_new(
