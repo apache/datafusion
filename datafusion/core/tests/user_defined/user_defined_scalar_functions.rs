@@ -45,7 +45,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, OperateFunctionArg, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility,
 };
-use datafusion_functions_array::range::range_udf;
+use datafusion_functions_nested::range::range_udf;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and

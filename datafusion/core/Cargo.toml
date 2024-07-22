@@ -221,4 +221,4 @@ name = "parquet_statistic"
 [[bench]]
 harness = false
 name = "map_query_sql"
-required-features = ["array_expressions"]
+required-features = ["nested_expressions"]

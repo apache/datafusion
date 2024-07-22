@@ -28,8 +28,8 @@ use std::sync::Arc;
 use datafusion_common::ScalarValue;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{ColumnarValue, Expr};
-use datafusion_functions_array::map::map_udf;
-use datafusion_functions_array::planner::ArrayFunctionPlanner;
+use datafusion_functions_nested::map::map_udf;
+use datafusion_functions_nested::planner::ArrayFunctionPlanner;
 
 fn keys(rng: &mut ThreadRng) -> Vec<String> {
     let mut keys = vec![];
