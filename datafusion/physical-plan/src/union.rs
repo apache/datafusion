@@ -138,7 +138,7 @@ impl UnionExec {
     }
 }
 /// Calculates the union `EquivalenceProperties` of the 2 children of the `UnionExec`.
-fn calculate_union_eq_properties2(
+fn calculate_union_eq_properties_binary(
     lhs: &EquivalenceProperties,
     rhs: &EquivalenceProperties,
     schema: SchemaRef,
@@ -163,7 +163,7 @@ fn calculate_union_eq_properties2(
     // Calculate valid orderings for union of these 2 children.
     let mut orderings = vec![];
     for mut ordering in lhs.normalized_oeq_class().orderings {
-        while !ordering.is_empty() && !rhs.ordering_satisfy(&ordering) {
+        while !rhs.ordering_satisfy(&ordering) {
             // If not satisfied, pop last ordering and check again
             ordering.pop();
         }
@@ -173,7 +173,7 @@ fn calculate_union_eq_properties2(
         }
     }
     for mut ordering in rhs.normalized_oeq_class().orderings {
-        while !ordering.is_empty() && !lhs.ordering_satisfy(&ordering) {
+        while !lhs.ordering_satisfy(&ordering) {
             // If not satisfied, pop last ordering and check again
             ordering.pop();
         }
@@ -192,17 +192,12 @@ fn calculate_union_eq_properties(
     children_eqs: &[&EquivalenceProperties],
     schema: SchemaRef,
 ) -> EquivalenceProperties {
-    let mut eq_properties = children_eqs[0].clone();
-    let mut idx = 1;
-    while idx < children_eqs.len() {
-        eq_properties = calculate_union_eq_properties2(
-            &eq_properties,
-            children_eqs[idx],
-            Arc::clone(&schema),
-        );
-        idx += 1;
-    }
-    eq_properties
+    children_eqs
+        .iter()
+        .skip(1)
+        .fold(children_eqs[0].clone(), |acc, eq| {
+            calculate_union_eq_properties_binary(&acc, eq, Arc::clone(&schema))
+        })
 }
 
 impl DisplayAs for UnionExec {
@@ -870,7 +865,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_union_equivalence_properties2() -> Result<()> {
+    async fn test_union_equivalence_properties_binary() -> Result<()> {
         let schema = create_test_schema()?;
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
@@ -957,7 +952,7 @@ mod tests {
             union_expected_eq.add_new_orderings(union_expected_orderings);
 
             let actual_union_eq =
-                calculate_union_eq_properties2(&lhs, &rhs, Arc::clone(&schema));
+                calculate_union_eq_properties_binary(&lhs, &rhs, Arc::clone(&schema));
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
                 test_idx, test_cases[test_idx]

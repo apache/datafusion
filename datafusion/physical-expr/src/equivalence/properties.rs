@@ -536,33 +536,6 @@ impl EquivalenceProperties {
             .then_some(if lhs.len() >= rhs.len() { lhs } else { rhs })
     }
 
-    /// Calculates the "meet" of the given orderings (`lhs` and `rhs`).
-    /// The meet of a set of orderings is the finest ordering that is satisfied
-    /// by all the orderings in that set. For details, see:
-    ///
-    /// <https://en.wikipedia.org/wiki/Join_and_meet>
-    ///
-    /// If there is no ordering that satisfies both `lhs` and `rhs`, returns
-    /// `None`. As an example, the meet of orderings `[a ASC]` and `[a ASC, b ASC]`
-    /// is `[a ASC]`.
-    pub fn get_meet_ordering(
-        &self,
-        lhs: LexOrderingRef,
-        rhs: LexOrderingRef,
-    ) -> Option<LexOrdering> {
-        let lhs = self.normalize_sort_exprs(lhs);
-        let rhs = self.normalize_sort_exprs(rhs);
-        let mut meet = vec![];
-        for (lhs, rhs) in lhs.into_iter().zip(rhs.into_iter()) {
-            if lhs.eq(&rhs) {
-                meet.push(lhs);
-            } else {
-                break;
-            }
-        }
-        (!meet.is_empty()).then_some(meet)
-    }
-
     /// we substitute the ordering according to input expression type, this is a simplified version
     /// In this case, we just substitute when the expression satisfy the following condition:
     /// I. just have one column and is a CAST expression
@@ -2183,50 +2156,6 @@ mod tests {
             let expected = convert_to_sort_exprs(&expected);
             let (actual, _) = eq_properties.find_longest_permutation(&exprs);
             assert_eq!(actual, expected);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_meet_ordering() -> Result<()> {
-        let schema = create_test_schema()?;
-        let col_a = &col("a", &schema)?;
-        let col_b = &col("b", &schema)?;
-        let eq_properties = EquivalenceProperties::new(schema);
-        let option_asc = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let option_desc = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        let tests_cases = vec![
-            // Get meet ordering between [a ASC] and [a ASC, b ASC]
-            // result should be [a ASC]
-            (
-                vec![(col_a, option_asc)],
-                vec![(col_a, option_asc), (col_b, option_asc)],
-                Some(vec![(col_a, option_asc)]),
-            ),
-            // Get meet ordering between [a ASC] and [a DESC]
-            // result should be None.
-            (vec![(col_a, option_asc)], vec![(col_a, option_desc)], None),
-            // Get meet ordering between [a ASC, b ASC] and [a ASC, b DESC]
-            // result should be [a ASC].
-            (
-                vec![(col_a, option_asc), (col_b, option_asc)],
-                vec![(col_a, option_asc), (col_b, option_desc)],
-                Some(vec![(col_a, option_asc)]),
-            ),
-        ];
-        for (lhs, rhs, expected) in tests_cases {
-            let lhs = convert_to_sort_exprs(&lhs);
-            let rhs = convert_to_sort_exprs(&rhs);
-            let expected = expected.map(|expected| convert_to_sort_exprs(&expected));
-            let finer = eq_properties.get_meet_ordering(&lhs, &rhs);
-            assert_eq!(finer, expected)
         }
 
         Ok(())
