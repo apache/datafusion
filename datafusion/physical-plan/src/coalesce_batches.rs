@@ -197,7 +197,7 @@ struct CoalesceBatchesStream {
     schema: SchemaRef,
     /// Minimum number of rows for coalesces batches
     target_batch_size: usize,
-    /// Maximum number of rows to fetch,
+    /// Maximum number of rows to fetch, `None` means fetching all rows
     fetch: Option<usize>,
     /// Buffered batches
     buffer: Vec<RecordBatch>,
