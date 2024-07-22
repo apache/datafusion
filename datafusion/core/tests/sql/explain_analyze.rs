@@ -86,7 +86,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "CoalesceBatchesExec: target_batch_size=4096, fetch=None",
+        "CoalesceBatchesExec: target_batch_size=4096",
         "metrics=[output_rows=5, elapsed_compute"
     );
     assert_metrics!(
@@ -617,10 +617,10 @@ async fn test_physical_plan_display_indent() {
         "    SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
-        "          CoalesceBatchesExec: target_batch_size=4096, fetch=None",
+        "          CoalesceBatchesExec: target_batch_size=4096",
         "            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
         "              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
-        "                CoalesceBatchesExec: target_batch_size=4096, fetch=None",
+        "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < 10",
         "                    RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
         "                      CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], has_header=true",
@@ -658,13 +658,13 @@ async fn test_physical_plan_display_indent_multi_children() {
     let dataframe = ctx.sql(sql).await.unwrap();
     let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
-		"CoalesceBatchesExec: target_batch_size=4096, fetch=None",
+		"CoalesceBatchesExec: target_batch_size=4096",
     	"  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0]",
-    	"    CoalesceBatchesExec: target_batch_size=4096, fetch=None",
+    	"    CoalesceBatchesExec: target_batch_size=4096",
     	"      RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
     	"        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
     	"          CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
-    	"    CoalesceBatchesExec: target_batch_size=4096, fetch=None",
+    	"    CoalesceBatchesExec: target_batch_size=4096",
     	"      RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000",
     	"        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
     	"          ProjectionExec: expr=[c1@0 as c2]",

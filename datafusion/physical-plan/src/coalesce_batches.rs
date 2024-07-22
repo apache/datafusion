@@ -446,8 +446,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_concat_batches_with_fetch_smaller_less_target_batch_size() -> Result<()>
-    {
+    async fn test_concat_batches_with_fetch_less_target_batch_size() -> Result<()> {
         let schema = test_schema();
         let partition = create_vec_batches(&schema, 10);
         let partitions = vec![partition];

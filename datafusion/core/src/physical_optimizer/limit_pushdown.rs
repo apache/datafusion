@@ -359,7 +359,7 @@ mod tests {
             "GlobalLimitExec: skip=0, fetch=5",
             "  CoalescePartitionsExec",
             "    LocalLimitExec: fetch=5",
-            "      CoalesceBatchesExec: target_batch_size=8192, fetch=None",
+            "      CoalesceBatchesExec: target_batch_size=8192",
             "        FilterExec: c3@2 > 0",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
@@ -426,7 +426,7 @@ mod tests {
         let expected_initial = [
             "GlobalLimitExec: skip=0, fetch=5",
             "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-            "    CoalesceBatchesExec: target_batch_size=8192, fetch=None",
+            "    CoalesceBatchesExec: target_batch_size=8192",
             "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
         ];
 
