@@ -66,9 +66,7 @@ pub use functional_dependencies::{
 };
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use param_value::ParamValues;
-pub use scalar::{
-    deserialize_scalar_value, serialize_scalar_value, ScalarType, ScalarValue,
-};
+pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
