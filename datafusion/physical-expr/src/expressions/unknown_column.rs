@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Column expression
+//! UnKnownColumn expression
 
 use std::any::Any;
 use std::hash::{Hash, Hasher};
@@ -98,51 +98,5 @@ impl PartialEq<dyn Any> for UnKnownColumn {
         // UnknownColumn is not a valid expression, so it should not be equal to any other expression.
         // See https://github.com/apache/datafusion/pull/11536
         false
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::expressions::Column;
-    use crate::PhysicalExpr;
-
-    use arrow::array::StringArray;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
-
-    use std::sync::Arc;
-
-    #[test]
-    fn out_of_bounds_data_type() {
-        let schema = Schema::new(vec![Field::new("foo", DataType::Utf8, true)]);
-        let col = Column::new("id", 9);
-        let error = col.data_type(&schema).expect_err("error").strip_backtrace();
-        assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"].\nThis was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker".starts_with(&error))
-    }
-
-    #[test]
-    fn out_of_bounds_nullable() {
-        let schema = Schema::new(vec![Field::new("foo", DataType::Utf8, true)]);
-        let col = Column::new("id", 9);
-        let error = col.nullable(&schema).expect_err("error").strip_backtrace();
-        assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"].\nThis was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker".starts_with(&error))
-    }
-
-    #[test]
-    fn out_of_bounds_evaluate() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("foo", DataType::Utf8, true)]);
-        let data: StringArray = vec!["data"].into();
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)])?;
-        let col = Column::new("id", 9);
-        let error = col.evaluate(&batch).expect_err("error").strip_backtrace();
-        assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"].\nThis was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker".starts_with(&error));
-        Ok(())
     }
 }
