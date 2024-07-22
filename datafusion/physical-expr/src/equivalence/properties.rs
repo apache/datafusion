@@ -21,7 +21,8 @@ use std::sync::Arc;
 use super::ordering::collapse_lex_ordering;
 use crate::equivalence::class::const_exprs_contains;
 use crate::equivalence::{
-    collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
+    collapse_lex_req, EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass,
+    ProjectionMapping,
 };
 use crate::expressions::Literal;
 use crate::{
@@ -1457,17 +1458,106 @@ impl Hash for ExprWrapper {
     }
 }
 
+/// Rewrites an expression according to new schema (e.g. changes columns it refers
+/// with the column name at corresponding index in the new schema.).
+fn rewrite_expr_new_schema(
+    expr: Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(expr
+        .transform_up(|expr| {
+            Ok(if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                let idx = col.index();
+                Transformed::yes(Arc::new(Column::new(schema.fields()[idx].name(), idx))
+                    as Arc<dyn PhysicalExpr>)
+            } else {
+                // Use without modification
+                Transformed::no(expr)
+            })
+        })?
+        .data)
+}
+
+/// Rewrites equivalence properties given according to new schema. (e.g. changes columns it refers
+/// with the column name at corresponding index in the new schema.). This util assumes that,
+/// schema of the `eq_properties` and `schema` given as argument are same in terms of data types
+/// (their name and nullability feature can be different).
+fn rewrite_eq_properties_new_schema(
+    eq_properties: EquivalenceProperties,
+    schema: SchemaRef,
+) -> Result<EquivalenceProperties> {
+    let EquivalenceProperties {
+        eq_group,
+        oeq_class,
+        constants,
+        schema: old_schema,
+    } = eq_properties;
+    // Make sure schemas are in terms of data types.
+    debug_assert_eq!(old_schema.fields.len(), schema.fields.len());
+    debug_assert!(old_schema
+        .fields
+        .iter()
+        .zip(schema.fields.iter())
+        .all(|(lhs, rhs)| { lhs.data_type().eq(rhs.data_type()) }));
+
+    // Rewrite constants according to new schema
+    let new_constants = constants
+        .into_iter()
+        .map(|const_expr| {
+            let across_partitions = const_expr.across_partitions();
+            let new_const_expr =
+                rewrite_expr_new_schema(const_expr.owned_expr(), &schema)?;
+            Ok(ConstExpr::new(new_const_expr).with_across_partitions(across_partitions))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Rewrite orderings according to new schema
+    let mut new_orderings = vec![];
+    for ordering in oeq_class.orderings {
+        let new_ordering = ordering
+            .into_iter()
+            .map(|PhysicalSortExpr { expr, options }| {
+                Ok(PhysicalSortExpr {
+                    expr: rewrite_expr_new_schema(expr, &schema)?,
+                    options,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        new_orderings.push(new_ordering);
+    }
+
+    // Rewrite equivalence classes
+    let mut eq_classes = vec![];
+    for eq_class in eq_group.classes {
+        let new_eq_exprs = eq_class
+            .into_vec()
+            .into_iter()
+            .map(|expr| rewrite_expr_new_schema(expr, &schema))
+            .collect::<Result<Vec<_>>>()?;
+        eq_classes.push(EquivalenceClass::new(new_eq_exprs));
+    }
+    // Construct new equivalence properties
+    let mut result = EquivalenceProperties::new(schema);
+    result = result.add_constants(new_constants);
+    result.add_new_orderings(new_orderings);
+    result.add_equivalence_group(EquivalenceGroup::new(eq_classes));
+
+    Ok(result)
+}
+
 /// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
 /// of  `lhs` and `rhs` according to the given output `schema` (which need not
 /// be the same with those of `lhs` and `rhs` as details such as nullability
 /// may be different).
 fn calculate_union_binary(
-    lhs: &EquivalenceProperties,
-    rhs: &EquivalenceProperties,
+    lhs: EquivalenceProperties,
+    rhs: EquivalenceProperties,
     schema: SchemaRef,
-) -> EquivalenceProperties {
+) -> Result<EquivalenceProperties> {
     // TODO: In some cases, we should be able to preserve some equivalence
     //       classes. Add support for such cases.
+    let lhs = rewrite_eq_properties_new_schema(lhs, Arc::clone(&schema))?;
+    let rhs = rewrite_eq_properties_new_schema(rhs, Arc::clone(&schema))?;
     let mut eq_properties = EquivalenceProperties::new(schema);
     // First, calculate valid constants for the union. A quantity is constant
     // after the union if it is constant in both sides.
@@ -1508,7 +1598,7 @@ fn calculate_union_binary(
         }
     }
     eq_properties.add_new_orderings(orderings);
-    eq_properties
+    Ok(eq_properties)
 }
 
 /// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
@@ -1516,13 +1606,14 @@ fn calculate_union_binary(
 /// output `schema` (which need not be the same with those of `lhs` and `rhs`
 /// as details such as nullability may be different).
 pub fn calculate_union(
-    eqps: &[&EquivalenceProperties],
+    eqps: Vec<EquivalenceProperties>,
     schema: SchemaRef,
-) -> EquivalenceProperties {
+) -> Result<EquivalenceProperties> {
     // TODO: In some cases, we should be able to preserve some equivalence
     //       classes. Add support for such cases.
-    eqps.iter().skip(1).fold(eqps[0].clone(), |acc, eqp| {
-        calculate_union_binary(&acc, eqp, Arc::clone(&schema))
+    let init = eqps[0].clone();
+    eqps.into_iter().skip(1).try_fold(init, |acc, eqp| {
+        calculate_union_binary(acc, eqp, Arc::clone(&schema))
     })
 }
 
@@ -2527,9 +2618,25 @@ mod tests {
     #[tokio::test]
     async fn test_union_equivalence_properties_binary() -> Result<()> {
         let schema = create_test_schema()?;
+        let schema2 = Schema::new(
+            schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    Field::new(
+                        // Annotate name with1, to change field name.
+                        format!("{}1", field.name()),
+                        field.data_type().clone(),
+                        field.is_nullable(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
+        let col_a1 = &col("a1", &schema2)?;
+        let col_b1 = &col("b1", &schema2)?;
         let options = SortOptions::default();
         let options_desc = !SortOptions::default();
         let test_cases = [
@@ -2624,6 +2731,38 @@ mod tests {
                     vec![],
                 ),
             ),
+            //-----------TEST CASE 4----------//
+            // Meet ordering between [a ASC], [a1 ASC, b1 ASC] should be [a ASC]
+            // Where a, and a1 ath the same index for their corresponding schemas.
+            (
+                (
+                    // First child orderings
+                    vec![
+                        // [a ASC]
+                        vec![(col_a, options)],
+                    ],
+                    // No constant
+                    vec![],
+                ),
+                (
+                    // Second child orderings
+                    vec![
+                        // [a1 ASC, b1 ASC]
+                        vec![(col_a1, options), (col_b1, options)],
+                    ],
+                    // No constant
+                    vec![],
+                ),
+                (
+                    // Union orderings
+                    vec![
+                        // [a ASC]
+                        vec![(col_a, options)],
+                    ],
+                    // No constant
+                    vec![],
+                ),
+            ),
         ];
 
         for (
@@ -2671,7 +2810,7 @@ mod tests {
             union_expected_eq = union_expected_eq.add_constants(union_constants);
             union_expected_eq.add_new_orderings(union_expected_orderings);
 
-            let actual_union_eq = calculate_union_binary(&lhs, &rhs, Arc::clone(&schema));
+            let actual_union_eq = calculate_union_binary(lhs, rhs, Arc::clone(&schema))?;
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
                 test_idx, test_cases[test_idx]

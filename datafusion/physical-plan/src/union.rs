@@ -97,14 +97,14 @@ pub struct UnionExec {
 
 impl UnionExec {
     /// Create a new UnionExec
-    pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
+    pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
         let schema = union_schema(&inputs);
-        let cache = Self::compute_properties(&inputs, schema);
-        UnionExec {
+        let cache = Self::compute_properties(&inputs, schema)?;
+        Ok(UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        }
+        })
     }
 
     /// Get inputs of the execution plan
@@ -116,13 +116,13 @@ impl UnionExec {
     fn compute_properties(
         inputs: &[Arc<dyn ExecutionPlan>],
         schema: SchemaRef,
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let children_eqps = inputs
             .iter()
-            .map(|child| child.equivalence_properties())
+            .map(|child| child.equivalence_properties().clone())
             .collect::<Vec<_>>();
-        let eq_properties = calculate_union(&children_eqps, schema);
+        let eq_properties = calculate_union(children_eqps, schema)?;
 
         // Calculate output partitioning; i.e. sum output partitions of the inputs.
         let num_partitions = inputs
@@ -134,7 +134,11 @@ impl UnionExec {
         // Determine execution mode:
         let mode = execution_mode_from_children(inputs.iter());
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            mode,
+        ))
     }
 }
 
@@ -199,7 +203,7 @@ impl ExecutionPlan for UnionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(UnionExec::new(children)))
+        Ok(Arc::new(UnionExec::try_new(children)?))
     }
 
     fn execute(
@@ -609,7 +613,7 @@ mod tests {
         let csv = test::scan_partitioned(4);
         let csv2 = test::scan_partitioned(5);
 
-        let union_exec = Arc::new(UnionExec::new(vec![csv, csv2]));
+        let union_exec = Arc::new(UnionExec::try_new(vec![csv, csv2])?);
 
         // Should have 9 partitions and 9 output batches
         assert_eq!(
@@ -791,7 +795,7 @@ mod tests {
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
             union_expected_eq.add_new_orderings(union_expected_orderings);
 
-            let union = UnionExec::new(vec![child1, child2]);
+            let union = UnionExec::try_new(vec![child1, child2])?;
             let union_eq_properties = union.properties().equivalence_properties();
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
