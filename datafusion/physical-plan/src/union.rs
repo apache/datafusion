@@ -162,13 +162,23 @@ fn calculate_union_eq_properties2(
 
     // Calculate valid orderings for union of these 2 children.
     let mut orderings = vec![];
-    for ordering in lhs.normalized_oeq_class().orderings {
-        if rhs.ordering_satisfy(&ordering) {
+    for mut ordering in lhs.normalized_oeq_class().orderings {
+        while !ordering.is_empty() && !rhs.ordering_satisfy(&ordering) {
+            // If not satisfied, pop last ordering and check again
+            ordering.pop();
+        }
+        if !ordering.is_empty() {
+            // There is some non-trivial ordering satisfied. Add it.
             orderings.push(ordering);
         }
     }
-    for ordering in rhs.normalized_oeq_class().orderings {
-        if lhs.ordering_satisfy(&ordering) {
+    for mut ordering in rhs.normalized_oeq_class().orderings {
+        while !ordering.is_empty() && !lhs.ordering_satisfy(&ordering) {
+            // If not satisfied, pop last ordering and check again
+            ordering.pop();
+        }
+        if !ordering.is_empty() {
+            // There is some non-trivial ordering satisfied. Add it.
             orderings.push(ordering);
         }
     }
