@@ -41,6 +41,7 @@ pub mod extract;
 pub mod flatten;
 pub mod length;
 pub mod make_array;
+pub mod map;
 pub mod planner;
 pub mod position;
 pub mod range;
@@ -53,6 +54,7 @@ pub mod set_ops;
 pub mod sort;
 pub mod string;
 pub mod utils;
+
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::ScalarUDF;
@@ -140,6 +142,7 @@ pub fn all_default_array_functions() -> Vec<Arc<ScalarUDF>> {
         replace::array_replace_n_udf(),
         replace::array_replace_all_udf(),
         replace::array_replace_udf(),
+        map::map_udf(),
     ]
 }
 

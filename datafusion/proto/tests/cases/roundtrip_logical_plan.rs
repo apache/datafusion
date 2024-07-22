@@ -44,6 +44,7 @@ use datafusion::functions_aggregate::expr_fn::{
     count_distinct, covar_pop, covar_samp, first_value, grouping, median, stddev,
     stddev_pop, sum, var_pop, var_sample,
 };
+use datafusion::functions_array::map::map;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -704,6 +705,10 @@ async fn roundtrip_expr_api() -> Result<()> {
         bool_or(lit(true)),
         array_agg(lit(1)),
         array_agg(lit(1)).distinct().build().unwrap(),
+        map(
+            vec![lit(1), lit(2), lit(3)],
+            vec![lit(10), lit(20), lit(30)],
+        ),
     ];
 
     // ensure expressions created with the expr api can be round tripped
