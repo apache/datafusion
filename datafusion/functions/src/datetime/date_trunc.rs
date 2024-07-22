@@ -141,8 +141,8 @@ impl ScalarUDFImpl for DateTruncFunc {
             granularity
         {
             v.to_lowercase()
-        } else if let ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v))) =
-            granularity {
+        } else if let ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v))) = granularity
+        {
             v.to_lowercase()
         } else {
             return exec_err!("Granularity of `date_trunc` must be non-null scalar Utf8");
