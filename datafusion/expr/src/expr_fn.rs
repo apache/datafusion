@@ -171,18 +171,6 @@ pub fn max(expr: Expr) -> Expr {
     ))
 }
 
-/// Create an expression to represent the array_agg() aggregate function
-pub fn array_agg(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::ArrayAgg,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
 /// Return a new expression with bitwise AND
 pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(

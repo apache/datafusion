@@ -725,7 +725,7 @@ pub struct PanicExec {
     schema: SchemaRef,
 
     /// Number of output partitions. Each partition will produce this
-    /// many empty output record batches prior to panicing
+    /// many empty output record batches prior to panicking
     batches_until_panics: Vec<usize>,
     cache: PlanProperties,
 }

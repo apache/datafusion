@@ -1212,7 +1212,7 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     }
 }
 
-/// Build state name. State is the intermidiate state of the aggregate function.
+/// Build state name. State is the intermediate state of the aggregate function.
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }

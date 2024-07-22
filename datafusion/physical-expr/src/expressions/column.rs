@@ -21,7 +21,6 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::{
@@ -67,7 +66,7 @@ impl PhysicalExpr for UnKnownColumn {
         Ok(DataType::Null)
     }
 
-    /// Decide whehter this expression is nullable, given the schema of the input
+    /// Decide whether this expression is nullable, given the schema of the input
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
         Ok(true)
     }
@@ -95,11 +94,10 @@ impl PhysicalExpr for UnKnownColumn {
 }
 
 impl PartialEq<dyn Any> for UnKnownColumn {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self == x)
-            .unwrap_or(false)
+    fn eq(&self, _other: &dyn Any) -> bool {
+        // UnknownColumn is not a valid expression, so it should not be equal to any other expression.
+        // See https://github.com/apache/datafusion/pull/11536
+        false
     }
 }
 

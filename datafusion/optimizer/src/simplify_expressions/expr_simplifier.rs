@@ -478,7 +478,7 @@ struct ConstEvaluator<'a> {
 #[allow(dead_code)]
 /// The simplify result of ConstEvaluator
 enum ConstSimplifyResult {
-    // Expr was simplifed and contains the new expression
+    // Expr was simplified and contains the new expression
     Simplified(ScalarValue),
     // Expr was not simplified and original value is returned
     NotSimplified(ScalarValue),
@@ -519,7 +519,7 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match self.can_evaluate.pop() {
             // Certain expressions such as `CASE` and `COALESCE` are short circuiting
-            // and may not evalute all their sub expressions. Thus if
+            // and may not evaluate all their sub expressions. Thus if
             // if any error is countered during simplification, return the original
             // so that normal evaluation can occur
             Some(true) => {

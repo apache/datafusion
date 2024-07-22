@@ -159,11 +159,11 @@ fn check_inner_plan(
             let (correlated, _): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()
                 .partition(|e| e.contains_outer());
-            let maybe_unsupport = correlated
+            let maybe_unsupported = correlated
                 .into_iter()
                 .filter(|expr| !can_pullup_over_aggregation(expr))
                 .collect::<Vec<_>>();
-            if is_aggregate && is_scalar && !maybe_unsupport.is_empty() {
+            if is_aggregate && is_scalar && !maybe_unsupported.is_empty() {
                 return plan_err!(
                     "Correlated column is not allowed in predicate: {predicate}"
                 );

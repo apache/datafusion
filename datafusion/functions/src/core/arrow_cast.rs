@@ -444,7 +444,7 @@ fn is_separator(c: char) -> bool {
 }
 
 #[derive(Debug)]
-/// Splits a strings like Dictionary(Int32, Int64) into tokens sutable for parsing
+/// Splits a strings like Dictionary(Int32, Int64) into tokens suitable for parsing
 ///
 /// For example the string "Timestamp(Nanosecond, None)" would be parsed into:
 ///

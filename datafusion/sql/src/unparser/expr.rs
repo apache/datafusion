@@ -1240,7 +1240,7 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
             DataType::Float32 => Ok(ast::DataType::Float(None)),
-            DataType::Float64 => Ok(ast::DataType::Double),
+            DataType::Float64 => Ok(self.dialect.float64_ast_dtype()),
             DataType::Timestamp(_, tz) => {
                 let tz_info = match tz {
                     Some(_) => TimezoneInfo::WithTimeZone,
@@ -1811,6 +1811,34 @@ mod tests {
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
                 data_type: DataType::Date64,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_float64_ast_dtype() -> Result<()> {
+        for (float64_ast_dtype, identifier) in [
+            (sqlparser::ast::DataType::Double, "DOUBLE"),
+            (
+                sqlparser::ast::DataType::DoublePrecision,
+                "DOUBLE PRECISION",
+            ),
+        ] {
+            let dialect = CustomDialectBuilder::new()
+                .with_float64_ast_dtype(float64_ast_dtype)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type: DataType::Float64,
             });
             let ast = unparser.expr_to_sql(&expr)?;
 

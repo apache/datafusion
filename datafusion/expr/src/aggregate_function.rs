@@ -152,8 +152,8 @@ mod tests {
     use strum::IntoEnumIterator;
 
     #[test]
-    // Test for AggregateFuncion's Display and from_str() implementations.
-    // For each variant in AggregateFuncion, it converts the variant to a string
+    // Test for AggregateFunction's Display and from_str() implementations.
+    // For each variant in AggregateFunction, it converts the variant to a string
     // and then back to a variant. The test asserts that the original variant and
     // the reconstructed variant are the same. This assertion is also necessary for
     // function suggestion. See https://github.com/apache/datafusion/issues/8082

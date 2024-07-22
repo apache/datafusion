@@ -211,6 +211,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 } else {
                     None
                 },
+                scan.newlines_in_values,
                 FileCompressionType::UNCOMPRESSED,
             ))),
             #[cfg(feature = "parquet")]
@@ -1579,6 +1580,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         } else {
                             None
                         },
+                        newlines_in_values: exec.newlines_in_values(),
                     },
                 )),
             });

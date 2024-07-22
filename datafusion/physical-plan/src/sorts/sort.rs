@@ -45,7 +45,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use arrow_array::{Array, RecordBatchOptions, UInt32Array};
 use arrow_schema::DataType;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -333,10 +333,7 @@ impl ExternalSorter {
 
             for spill in self.spills.drain(..) {
                 if !spill.path().exists() {
-                    return Err(DataFusionError::Internal(format!(
-                        "Spill file {:?} does not exist",
-                        spill.path()
-                    )));
+                    return internal_err!("Spill file {:?} does not exist", spill.path());
                 }
                 let stream = read_spill_as_stream(spill, Arc::clone(&self.schema), 2)?;
                 streams.push(stream);
@@ -602,7 +599,7 @@ pub fn sort_batch(
         .collect::<Result<Vec<_>>>()?;
 
     let indices = if is_multi_column_with_lists(&sort_columns) {
-        // lex_sort_to_indices doesn't support List with more than one colum
+        // lex_sort_to_indices doesn't support List with more than one column
         // https://github.com/apache/arrow-rs/issues/5454
         lexsort_to_indices_multi_columns(sort_columns, fetch)?
     } else {
@@ -802,12 +799,12 @@ impl DisplayAs for SortExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr = PhysicalSortExpr::format_list(&self.expr);
-                let preserve_partioning = self.preserve_partitioning;
+                let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partioning}]",)
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]",)
                     }
-                    None => write!(f, "SortExec: expr=[{expr}], preserve_partitioning=[{preserve_partioning}]"),
+                    None => write!(f, "SortExec: expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]"),
                 }
             }
         }
