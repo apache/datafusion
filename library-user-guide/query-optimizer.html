@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>DataFusion Query Optimizer &#8212; Apache DataFusion  documentation</title>
+    
+    <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
+    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=c6d785ac" />
+    
+    <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Introduction" href="../contributor-guide/index.html" />
+    <link rel="prev" title="Profiling Cookbook" href="profiling.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  ASF Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://apache.org">
+   Apache Software Foundation
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/licenses/">
+   License
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">
+   Donate
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/thanks.html">
+   Thanks
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/security/">
+   Security
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion">
+   GitHub and Issue Tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://crates.io/crates/datafusion">
+   crates.io
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
+   API Docs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/blog/">
+   Blog
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../download.html">
+   Download
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/crate-configuration.html">
+   Crate Configuration
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../user-guide/cli/index.html">
+   DataFusion CLI
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/overview.html">
+     Overview
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/installation.html">
+     Installation
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/usage.html">
+     Usage
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/datasources.html">
+     Local Files / Directories
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/expressions.html">
+   Expression API
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../user-guide/sql/index.html">
+   SQL Reference
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/dml.html">
+     DML
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/operators.html">
+     Operators
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/window_functions.html">
+     Window Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/scalar_functions.html">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/sql_status.html">
+     Status
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/write_options.html">
+     Write Options
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/configs.html">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Library User Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="using-the-sql-api.html">
+   Using the SQL API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="working-with-exprs.html">
+   Working with
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     Expr
+    </span>
+   </code>
+   s
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="using-the-dataframe-api.html">
+   Using the DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="building-logical-plans.html">
+   Building Logical Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="catalogs.html">
+   Catalogs, Schemas, and Tables
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="adding-udfs.html">
+   Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="custom-table-providers.html">
+   Custom Table Provider
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="extending-operators.html">
+   Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="profiling.html">
+   Profiling Cookbook
+  </a>
+ </li>
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
+   DataFusion Query Optimizer
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/getting_started.html">
+   Getting Started
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/architecture.html">
+   Architecture
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/testing.html">
+   Testing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/howtos.html">
+   HOWTOs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/governance.html">
+   Governance
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/inviting.html">
+   Inviting New Committers and PMC Members
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../contributor-guide/specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../contributor-guide/specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  DataFusion Subprojects
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://arrow.apache.org/ballista/">
+   DataFusion Ballista
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/comet/">
+   DataFusion Comet
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/python/">
+   DataFusion Python
+  </a>
+ </li>
+</ul>
+
+    
+  </div>
+
+  <a class="navbar-brand" href="../index.html">
+    <img src="../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
+  </a>
+</nav>
+
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
+
+<nav id="bd-toc-nav">
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#running-the-optimizer">
+   Running the Optimizer
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#providing-custom-rules">
+   Providing Custom Rules
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#writing-optimization-rules">
+   Writing Optimization Rules
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#general-guidelines">
+     General Guidelines
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#expression-naming">
+     Expression Naming
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#implication">
+     Implication
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#building-expression-names">
+     Building Expression Names
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#utilities">
+     Utilities
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#exprvisitor">
+     ExprVisitor
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rewriting-expressions">
+     Rewriting Expressions
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#optimize-children">
+     optimize_children
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#writing-tests">
+     Writing Tests
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#debugging">
+     Debugging
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/query-optimizer.md">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="datafusion-query-optimizer">
+<h1>DataFusion Query Optimizer<a class="headerlink" href="#datafusion-query-optimizer" title="Link to this heading">¶</a></h1>
+<p><a class="reference external" href="https://crates.io/crates/datafusion">DataFusion</a> is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory
+format.</p>
+<p>DataFusion has modular design, allowing individual crates to be re-used in other projects.</p>
+<p>This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
+contains an extensive set of OptimizerRules that may rewrite the plan and/or its expressions so
+they execute more quickly while still computing the same result.</p>
+<section id="running-the-optimizer">
+<h2>Running the Optimizer<a class="headerlink" href="#running-the-optimizer" title="Link to this heading">¶</a></h2>
+<p>The following code demonstrates the basic flow of creating the optimizer with a default set of optimization rules
+and applying it to a logical plan to produce an optimized logical plan.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// We need a logical plan as the starting point. There are many ways to build a logical plan:</span>
+<span class="c1">//</span>
+<span class="c1">// The `datafusion-expr` crate provides a LogicalPlanBuilder</span>
+<span class="c1">// The `datafusion-sql` crate provides a SQL query planner that can create a LogicalPlan from SQL</span>
+<span class="c1">// The `datafusion` crate provides a DataFrame API that can create a LogicalPlan</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">logical_plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">OptimizerContext</span><span class="p">::</span><span class="n">default</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">optimizer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="o">&amp;</span><span class="n">config</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">optimized_plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">optimizer</span><span class="p">.</span><span class="n">optimize</span><span class="p">(</span><span class="o">&amp;</span><span class="n">logical_plan</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">config</span><span class="p">,</span><span class="w"> </span><span class="n">observe</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">observe</span><span class="p">(</span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span><span class="w"> </span><span class="n">rule</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;After applying rule &#39;{}&#39;:</span><span class="se">\n</span><span class="s">{}&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">rule</span><span class="p">.</span><span class="n">name</span><span class="p">(),</span>
+<span class="w">        </span><span class="n">plan</span><span class="p">.</span><span class="n">display_indent</span><span class="p">()</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="providing-custom-rules">
+<h2>Providing Custom Rules<a class="headerlink" href="#providing-custom-rules" title="Link to this heading">¶</a></h2>
+<p>The optimizer can be created with a custom set of rules.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">optimizer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">::</span><span class="n">with_rules</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyRule</span><span class="w"> </span><span class="p">{})</span>
+<span class="p">]);</span>
+</pre></div>
+</div>
+</section>
+<section id="writing-optimization-rules">
+<h2>Writing Optimization Rules<a class="headerlink" href="#writing-optimization-rules" title="Link to this heading">¶</a></h2>
+<p>Please refer to the
+<a class="reference internal" href="#../../datafusion-examples/examples/optimizer_rule.rs"><span class="xref myst">optimizer_rule.rs</span></a>
+example to learn more about the general approach to writing optimizer rules and
+then move onto studying the existing rules.</p>
+<p>All rules must implement the <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> trait.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="sd">/// `OptimizerRule` transforms one [&#39;LogicalPlan&#39;] into another which</span>
+<span class="sd">/// computes the same results, but in a potentially more efficient</span>
+<span class="sd">/// way. If there are no suitable transformations for the input plan,</span>
+<span class="sd">/// the optimizer can simply return it as is.</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Rewrite `plan` to an optimized form</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">optimize</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span>
+<span class="w">        </span><span class="n">config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="w">    </span><span class="sd">/// A human readable name for this optimizer rule</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<section id="general-guidelines">
+<h3>General Guidelines<a class="headerlink" href="#general-guidelines" title="Link to this heading">¶</a></h3>
+<p>Rules typical walk the logical plan and walk the expression trees inside operators and selectively mutate
+individual operators or expressions.</p>
+<p>Sometimes there is an initial pass that visits the plan and builds state that is used in a second pass that performs
+the actual optimization. This approach is used in projection push down and filter push down.</p>
+</section>
+<section id="expression-naming">
+<h3>Expression Naming<a class="headerlink" href="#expression-naming" title="Link to this heading">¶</a></h3>
+<p>Every expression in DataFusion has a name, which is used as the column name. For example, in this example the output
+contains a single column with the name <code class="docutils literal notranslate"><span class="pre">&quot;COUNT(aggregate_test_100.c9)&quot;</span></code>:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; select count(c9) from aggregate_test_100;
++------------------------------+
+| COUNT(aggregate_test_100.c9) |
++------------------------------+
+| 100                          |
++------------------------------+
+</pre></div>
+</div>
+<p>These names are used to refer to the columns in both subqueries as well as internally from one stage of the LogicalPlan
+to another. For example:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; select &quot;COUNT(aggregate_test_100.c9)&quot; + 1 from (select count(c9) from aggregate_test_100) as sq;
++--------------------------------------------+
+| sq.COUNT(aggregate_test_100.c9) + Int64(1) |
++--------------------------------------------+
+| 101                                        |
++--------------------------------------------+
+</pre></div>
+</div>
+</section>
+<section id="implication">
+<h3>Implication<a class="headerlink" href="#implication" title="Link to this heading">¶</a></h3>
+<p>Because DataFusion identifies columns using a string name, it means it is critical that the names of expressions are
+not changed by the optimizer when it rewrites expressions. This is typically accomplished by renaming a rewritten
+expression by adding an alias.</p>
+<p>Here is a simple example of such a rewrite. The expression <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">+</span> <span class="pre">2</span></code> can be internally simplified to 3 but must still be
+displayed the same as <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">+</span> <span class="pre">2</span></code>:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; select 1 + 2;
++---------------------+
+| Int64(1) + Int64(2) |
++---------------------+
+| 3                   |
++---------------------+
+</pre></div>
+</div>
+<p>Looking at the <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> output we can see that the optimizer has effectively rewritten <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">+</span> <span class="pre">2</span></code> into effectively
+<code class="docutils literal notranslate"><span class="pre">3</span> <span class="pre">as</span> <span class="pre">&quot;1</span> <span class="pre">+</span> <span class="pre">2&quot;</span></code>:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; explain select 1 + 2;
++---------------+-------------------------------------------------+
+| plan_type     | plan                                            |
++---------------+-------------------------------------------------+
+| logical_plan  | Projection: Int64(3) AS Int64(1) + Int64(2)     |
+|               |   EmptyRelation                                 |
+| physical_plan | ProjectionExec: expr=[3 as Int64(1) + Int64(2)] |
+|               |   PlaceholderRowExec                            |
+|               |                                                 |
++---------------+-------------------------------------------------+
+</pre></div>
+</div>
+<p>If the expression name is not preserved, bugs such as <a class="reference external" href="https://github.com/apache/datafusion/issues/3704">#3704</a>
+and <a class="reference external" href="https://github.com/apache/datafusion/issues/3555">#3555</a> occur where the expected columns can not be found.</p>
+</section>
+<section id="building-expression-names">
+<h3>Building Expression Names<a class="headerlink" href="#building-expression-names" title="Link to this heading">¶</a></h3>
+<p>There are currently two ways to create a name for an expression in the logical plan.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">Expr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Returns the name of this expression as it should appear in a schema. This name</span>
+<span class="w">    </span><span class="sd">/// will not include any CAST expressions.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">display_name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">create_name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="sd">/// Returns a full and complete string representation of this expression.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">canonical_name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>When comparing expressions to determine if they are equivalent, <code class="docutils literal notranslate"><span class="pre">canonical_name</span></code> should be used, and when creating a
+name to be used in a schema, <code class="docutils literal notranslate"><span class="pre">display_name</span></code> should be used.</p>
+</section>
+<section id="utilities">
+<h3>Utilities<a class="headerlink" href="#utilities" title="Link to this heading">¶</a></h3>
+<p>There are a number of utility methods provided that take care of some common tasks.</p>
+</section>
+<section id="exprvisitor">
+<h3>ExprVisitor<a class="headerlink" href="#exprvisitor" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">ExprVisitor</span></code> and <code class="docutils literal notranslate"><span class="pre">ExprVisitable</span></code> traits provide a mechanism for applying a visitor pattern to an expression tree.</p>
+<p>Here is an example that demonstrates this.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">extract_subquery_filters</span><span class="p">(</span><span class="n">expression</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">,</span><span class="w"> </span><span class="n">extracted</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">InSubqueryVisitor</span><span class="o">&lt;&#39;</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">accum</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="o">&#39;</span><span class="na">a</span><span class="w"> </span><span class="nc">mut</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">impl</span><span class="w"> </span><span class="n">ExpressionVisitor</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">InSubqueryVisitor</span><span class="o">&lt;&#39;</span><span class="nb">_</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">fn</span><span class="w"> </span><span class="nf">pre_visit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Recursion</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="n">Expr</span><span class="p">::</span><span class="n">InSubquery</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="bp">self</span><span class="p">.</span><span class="n">accum</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">to_owned</span><span class="p">());</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Recursion</span><span class="p">::</span><span class="n">Continue</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">expression</span><span class="p">.</span><span class="n">accept</span><span class="p">(</span><span class="n">InSubqueryVisitor</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">accum</span><span class="p">:</span><span class="w"> </span><span class="nc">extracted</span><span class="w"> </span><span class="p">})</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="rewriting-expressions">
+<h3>Rewriting Expressions<a class="headerlink" href="#rewriting-expressions" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">MyExprRewriter</span></code> trait can be implemented to provide a way to rewrite expressions. This rule can then be applied
+to an expression by calling <code class="docutils literal notranslate"><span class="pre">Expr::rewrite</span></code> (from the <code class="docutils literal notranslate"><span class="pre">ExprRewritable</span></code> trait).</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">rewrite</span></code> method will perform a depth first walk of the expression and its children to rewrite an expression,
+consuming <code class="docutils literal notranslate"><span class="pre">self</span></code> producing a new expression.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">expr_rewriter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MyExprRewriter</span><span class="w"> </span><span class="p">{};</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">expr</span><span class="p">.</span><span class="n">rewrite</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">expr_rewriter</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Here is an example implementation which will rewrite <code class="docutils literal notranslate"><span class="pre">expr</span> <span class="pre">BETWEEN</span> <span class="pre">a</span> <span class="pre">AND</span> <span class="pre">b</span></code> as <code class="docutils literal notranslate"><span class="pre">expr</span> <span class="pre">&gt;=</span> <span class="pre">a</span> <span class="pre">AND</span> <span class="pre">expr</span> <span class="pre">&lt;=</span> <span class="pre">b</span></code>. Note that the
+implementation does not need to perform any recursion since this is handled by the <code class="docutils literal notranslate"><span class="pre">rewrite</span></code> method.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">MyExprRewriter</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">ExprRewriter</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyExprRewriter</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">mutate</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">Expr</span><span class="p">::</span><span class="n">Between</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">negated</span><span class="p">,</span>
+<span class="w">                </span><span class="n">expr</span><span class="p">,</span>
+<span class="w">                </span><span class="n">low</span><span class="p">,</span>
+<span class="w">                </span><span class="n">high</span><span class="p">,</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">expr</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">clone</span><span class="p">();</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">low</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">low</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">clone</span><span class="p">();</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">high</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">high</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">clone</span><span class="p">();</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="n">negated</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">lt</span><span class="p">(</span><span class="n">low</span><span class="p">).</span><span class="n">or</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">gt</span><span class="p">(</span><span class="n">high</span><span class="p">)))</span>
+<span class="w">                </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">gt_eq</span><span class="p">(</span><span class="n">low</span><span class="p">).</span><span class="n">and</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">lt_eq</span><span class="p">(</span><span class="n">high</span><span class="p">)))</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">()),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="optimize-children">
+<h3>optimize_children<a class="headerlink" href="#optimize-children" title="Link to this heading">¶</a></h3>
+<p>Typically a rule is applied recursively to all operators within a query plan. Rather than duplicate
+that logic in each rule, an <code class="docutils literal notranslate"><span class="pre">optimize_children</span></code> method is provided. This recursively invokes the <code class="docutils literal notranslate"><span class="pre">optimize</span></code> method on
+the plan’s children and then returns a node of the same type.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">optimize</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span>
+<span class="w">    </span><span class="n">_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// recurse down and optimize children first</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">utils</span><span class="p">::</span><span class="n">optimize_children</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">,</span><span class="w"> </span><span class="n">_config</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="writing-tests">
+<h3>Writing Tests<a class="headerlink" href="#writing-tests" title="Link to this heading">¶</a></h3>
+<p>There should be unit tests in the same file as the new rule that test the effect of the rule being applied to a plan
+in isolation (without any other rule being applied).</p>
+<p>There should also be a test in <code class="docutils literal notranslate"><span class="pre">integration-tests.rs</span></code> that tests the rule as part of the overall optimization process.</p>
+</section>
+<section id="debugging">
+<h3>Debugging<a class="headerlink" href="#debugging" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code> command can be used to show the effect of each optimization rule on a query.</p>
+<p>In the following example, the <code class="docutils literal notranslate"><span class="pre">type_coercion</span></code> and <code class="docutils literal notranslate"><span class="pre">simplify_expressions</span></code> passes have simplified the plan so that it returns the constant <code class="docutils literal notranslate"><span class="pre">&quot;3.2&quot;</span></code> rather than doing a computation at execution time.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; explain verbose select cast(1 + 2.2 as string) as foo;
++------------------------------------------------------------+---------------------------------------------------------------------------+
+| plan_type                                                  | plan                                                                      |
++------------------------------------------------------------+---------------------------------------------------------------------------+
+| initial_logical_plan                                       | Projection: CAST(Int64(1) + Float64(2.2) AS Utf8) AS foo                  |
+|                                                            |   EmptyRelation                                                           |
+| logical_plan after type_coercion                           | Projection: CAST(CAST(Int64(1) AS Float64) + Float64(2.2) AS Utf8) AS foo |
+|                                                            |   EmptyRelation                                                           |
+| logical_plan after simplify_expressions                    | Projection: Utf8(&quot;3.2&quot;) AS foo                                            |
+|                                                            |   EmptyRelation                                                           |
+| logical_plan after unwrap_cast_in_comparison               | SAME TEXT AS ABOVE                                                        |
+| logical_plan after decorrelate_where_exists                | SAME TEXT AS ABOVE                                                        |
+| logical_plan after decorrelate_where_in                    | SAME TEXT AS ABOVE                                                        |
+| logical_plan after scalar_subquery_to_join                 | SAME TEXT AS ABOVE                                                        |
+| logical_plan after subquery_filter_to_join                 | SAME TEXT AS ABOVE                                                        |
+| logical_plan after simplify_expressions                    | SAME TEXT AS ABOVE                                                        |
+| logical_plan after eliminate_filter                        | SAME TEXT AS ABOVE                                                        |
+| logical_plan after reduce_cross_join                       | SAME TEXT AS ABOVE                                                        |
+| logical_plan after common_sub_expression_eliminate         | SAME TEXT AS ABOVE                                                        |
+| logical_plan after eliminate_limit                         | SAME TEXT AS ABOVE                                                        |
+| logical_plan after projection_push_down                    | SAME TEXT AS ABOVE                                                        |
+| logical_plan after rewrite_disjunctive_predicate           | SAME TEXT AS ABOVE                                                        |
+| logical_plan after reduce_outer_join                       | SAME TEXT AS ABOVE                                                        |
+| logical_plan after filter_push_down                        | SAME TEXT AS ABOVE                                                        |
+| logical_plan after limit_push_down                         | SAME TEXT AS ABOVE                                                        |
+| logical_plan after single_distinct_aggregation_to_group_by | SAME TEXT AS ABOVE                                                        |
+| logical_plan                                               | Projection: Utf8(&quot;3.2&quot;) AS foo                                            |
+|                                                            |   EmptyRelation                                                           |
+| initial_physical_plan                                      | ProjectionExec: expr=[3.2 as foo]                                         |
+|                                                            |   PlaceholderRowExec                                                      |
+|                                                            |                                                                           |
+| physical_plan after aggregate_statistics                   | SAME TEXT AS ABOVE                                                        |
+| physical_plan after join_selection                         | SAME TEXT AS ABOVE                                                        |
+| physical_plan after coalesce_batches                       | SAME TEXT AS ABOVE                                                        |
+| physical_plan after repartition                            | SAME TEXT AS ABOVE                                                        |
+| physical_plan after add_merge_exec                         | SAME TEXT AS ABOVE                                                        |
+| physical_plan                                              | ProjectionExec: expr=[3.2 as foo]                                         |
+|                                                            |   PlaceholderRowExec                                                      |
+|                                                            |                                                                           |
++------------------------------------------------------------+---------------------------------------------------------------------------+
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="profiling.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">Profiling Cookbook</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="../contributor-guide/index.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Introduction</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2019-2024, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.4.7.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>
