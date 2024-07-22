@@ -2531,6 +2531,7 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let options = SortOptions::default();
+        let options_desc = !SortOptions::default();
         let test_cases = [
             //-----------TEST CASE 1----------//
             (
@@ -2562,6 +2563,65 @@ mod tests {
                     ],
                     // Union
                     vec![col_c],
+                ),
+            ),
+            //-----------TEST CASE 2----------//
+            // Meet ordering between [a ASC], [a ASC, b ASC] should be [a ASC]
+            (
+                (
+                    // First child orderings
+                    vec![
+                        // [a ASC]
+                        vec![(col_a, options)],
+                    ],
+                    // No constant
+                    vec![],
+                ),
+                (
+                    // Second child orderings
+                    vec![
+                        // [a ASC, b ASC]
+                        vec![(col_a, options), (col_b, options)],
+                    ],
+                    // No constant
+                    vec![],
+                ),
+                (
+                    // Union orderings
+                    vec![
+                        // [a ASC]
+                        vec![(col_a, options)],
+                    ],
+                    // No constant
+                    vec![],
+                ),
+            ),
+            //-----------TEST CASE 3----------//
+            // Meet ordering between [a ASC], [a DESC] should be []
+            (
+                (
+                    // First child orderings
+                    vec![
+                        // [a ASC]
+                        vec![(col_a, options)],
+                    ],
+                    // No constant
+                    vec![],
+                ),
+                (
+                    // Second child orderings
+                    vec![
+                        // [a DESC]
+                        vec![(col_a, options_desc)],
+                    ],
+                    // No constant
+                    vec![],
+                ),
+                (
+                    // Union doesn't have any ordering
+                    vec![],
+                    // No constant
+                    vec![],
                 ),
             ),
         ];
