@@ -44,7 +44,7 @@ use datafusion::functions_aggregate::expr_fn::{
     count_distinct, covar_pop, covar_samp, first_value, grouping, median, stddev,
     stddev_pop, sum, var_pop, var_sample,
 };
-use datafusion::functions_array::map::map;
+use datafusion::functions_nested::map::map;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;

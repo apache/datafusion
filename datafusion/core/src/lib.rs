@@ -569,10 +569,10 @@ pub mod functions {
     pub use datafusion_functions::*;
 }
 
-/// re-export of [`datafusion_functions_array`] crate, if "array_expressions" feature is enabled
-pub mod functions_array {
-    #[cfg(feature = "array_expressions")]
-    pub use datafusion_functions_array::*;
+/// re-export of [`datafusion_functions_nested`] crate, if "nested_expressions" feature is enabled
+pub mod functions_nested {
+    #[cfg(feature = "nested_expressions")]
+    pub use datafusion_functions_nested::*;
 }
 
 /// re-export of [`datafusion_functions_aggregate`] crate
