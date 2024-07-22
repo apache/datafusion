@@ -40,7 +40,7 @@ EXPLAIN SELECT SUM(x) FROM table GROUP BY b;
 |               |     TableScan: table projection=[x, b]                                                                                                                           |
 | physical_plan | ProjectionExec: expr=[SUM(table.x)@1 as SUM(table.x)]                                                                                                              |
 |               |   AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[SUM(table.x)]                                                                                      |
-|               |     CoalesceBatchesExec: target_batch_size=4096, fetch=None                                                                                                                |
+|               |     CoalesceBatchesExec: target_batch_size=4096                                                                                                                |
 |               |       RepartitionExec: partitioning=Hash([Column { name: "b", index: 0 }], 16)                                                                                 |
 |               |         AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[SUM(table.x)]                                                                                         |
 |               |           RepartitionExec: partitioning=RoundRobinBatch(16)                                                                                                    |
@@ -62,7 +62,7 @@ EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
 | Plan with Metrics | CoalescePartitionsExec, metrics=[]                                                                                                                        |
 |                   |   ProjectionExec: expr=[SUM(table.x)@1 as SUM(x)], metrics=[]                                                                                             |
 |                   |     HashAggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[SUM(x)], metrics=[outputRows=2]                                                       |
-|                   |       CoalesceBatchesExec: target_batch_size=4096, fetch=None, metrics=[]                                                                                             |
+|                   |       CoalesceBatchesExec: target_batch_size=4096, metrics=[]                                                                                             |
 |                   |         RepartitionExec: partitioning=Hash([Column { name: "b", index: 0 }], 16), metrics=[sendTime=839560, fetchTime=122528525, repartitionTime=5327877] |
 |                   |           HashAggregateExec: mode=Partial, gby=[b@1 as b], aggr=[SUM(x)], metrics=[outputRows=2]                                                          |
 |                   |             RepartitionExec: partitioning=RoundRobinBatch(16), metrics=[fetchTime=5660489, repartitionTime=0, sendTime=8012]                              |

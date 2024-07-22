@@ -2060,7 +2060,7 @@ mod tests {
     // This function either constructs the physical plan below,
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
-    // "  CoalesceBatchesExec: target_batch_size=1024, fetch=None",
+    // "  CoalesceBatchesExec: target_batch_size=1024",
     // "    CoalescePartitionsExec",
     // "      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
     // "        MemoryExec: partitions=4, partition_sizes=[1, 1, 1, 1]",

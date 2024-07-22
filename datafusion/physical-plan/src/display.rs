@@ -106,7 +106,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     ///
     /// ```text
     /// ProjectionExec: expr=[a]
-    ///   CoalesceBatchesExec: target_batch_size=8192, fetch=None
+    ///   CoalesceBatchesExec: target_batch_size=8192
     ///     FilterExec: a < 5
     ///       RepartitionExec: partitioning=RoundRobinBatch(16)
     ///         CsvExec: source=...",
