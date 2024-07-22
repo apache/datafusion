@@ -45,7 +45,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use arrow_array::{Array, RecordBatchOptions, UInt32Array};
 use arrow_schema::DataType;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -333,10 +333,7 @@ impl ExternalSorter {
 
             for spill in self.spills.drain(..) {
                 if !spill.path().exists() {
-                    return Err(DataFusionError::Internal(format!(
-                        "Spill file {:?} does not exist",
-                        spill.path()
-                    )));
+                    return internal_err!("Spill file {:?} does not exist", spill.path());
                 }
                 let stream = read_spill_as_stream(spill, Arc::clone(&self.schema), 2)?;
                 streams.push(stream);
