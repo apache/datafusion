@@ -246,38 +246,32 @@ impl CoalesceBatchesStream {
             match input_batch {
                 Poll::Ready(x) => match x {
                     Some(Ok(batch)) => {
-                        // handle fetch limit
+                        // Handle fetch limit:
                         if let Some(fetch) = self.fetch {
                             if self.total_rows + batch.num_rows() >= fetch {
-                                // we have reached the fetch limit
+                                // We have reached the fetch limit.
                                 let remaining_rows = fetch - self.total_rows;
-                                // Shouldn't be empty
                                 debug_assert!(remaining_rows > 0);
 
                                 self.is_closed = true;
                                 self.total_rows = fetch;
-                                // trim the batch
+                                // Trim the batch and add to buffered batches:
                                 let batch = batch.slice(0, remaining_rows);
-                                // add to the buffered batches
                                 self.buffered_rows += batch.num_rows();
                                 self.buffer.push(batch);
-                                // combine the batches and return
+                                // Combine buffered batches:
                                 let batch = concat_batches(
                                     &self.schema,
                                     &self.buffer,
                                     self.buffered_rows,
                                 )?;
-                                // reset buffer state
+                                // Reset the buffer state and return final batch:
                                 self.buffer.clear();
                                 self.buffered_rows = 0;
-                                // return batch
                                 return Poll::Ready(Some(Ok(batch)));
-                            } else {
-                                self.total_rows += batch.num_rows();
                             }
-                        } else {
-                            self.total_rows += batch.num_rows();
                         }
+                        self.total_rows += batch.num_rows();
 
                         if batch.num_rows() >= self.target_batch_size
                             && self.buffer.is_empty()
