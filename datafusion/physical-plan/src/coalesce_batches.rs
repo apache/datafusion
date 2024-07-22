@@ -294,7 +294,7 @@ pub fn concat_batches(
     arrow::compute::concat_batches(schema, batches)
 }
 
-/// [`StringViewArray`] reference to the raw parquet decoded buffer, which reduces copy but prevents those buffer from being released.
+/// `StringViewArray` reference to the raw parquet decoded buffer, which reduces copy but prevents those buffer from being released.
 /// When `StringViewArray`'s cardinality significantly drops (e.g., after `FilterExec` or `HashJoinExec` or many others),
 /// we should consider consolidating it so that we can release the buffer to reduce memory usage and improve string locality for better performance.
 fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
