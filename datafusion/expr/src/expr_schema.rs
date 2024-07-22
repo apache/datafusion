@@ -120,15 +120,9 @@ impl ExprSchemable for Expr {
                         return Ok(then_type);
                     }
                 }
-
-                let else_type = case
-                    .else_expr
+                case.else_expr
                     .as_ref()
-                    .map_or(Ok(DataType::Null), |e| e.get_type(schema))?;
-                if !else_type.is_null() {
-                    return Ok(else_type);
-                }
-                Ok(DataType::Int64)
+                    .map_or(Ok(DataType::Null), |e| e.get_type(schema))
             }
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
