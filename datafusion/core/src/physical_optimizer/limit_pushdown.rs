@@ -234,7 +234,7 @@ fn try_push_down_limit(
 
 fn combines_input_partitions(exec: &Arc<dyn ExecutionPlan>) -> bool {
     let exec = exec.as_any();
-    return exec.is::<CoalescePartitionsExec>() || exec.is::<SortPreservingMergeExec>();
+    exec.is::<CoalescePartitionsExec>() || exec.is::<SortPreservingMergeExec>()
 }
 
 /// Transforms child to the fetching version if supported. Removes the parent if
