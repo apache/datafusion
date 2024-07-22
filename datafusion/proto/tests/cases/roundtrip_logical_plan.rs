@@ -488,7 +488,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
                 .downcast_ref::<DefaultFileType>()
                 .unwrap();
 
-            let format_factory = file_type.get_format_factory();
+            let format_factory = file_type.as_format_factory();
             let csv_factory = format_factory
                 .as_ref()
                 .as_any()

@@ -155,9 +155,9 @@ impl DefaultFileType {
         }
     }
 
-    /// get a [FileFormatFactory] struct
-    pub fn get_format_factory(&self) -> Arc<dyn FileFormatFactory> {
-        self.file_format_factory.clone()
+    /// get a reference to the inner [FileFormatFactory] struct
+    pub fn as_format_factory(&self) -> &Arc<dyn FileFormatFactory> {
+        &self.file_format_factory
     }
 }
 
