@@ -114,9 +114,11 @@ impl ExprSchemable for Expr {
             Expr::Literal(l) => Ok(l.data_type()),
             // Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
             Expr::Case(case) => {
-                let then_type = case.when_then_expr[0].1.get_type(schema)?;
-                if !then_type.is_null() {
-                    return Ok(then_type);
+                for (_, then_expr) in &case.when_then_expr {
+                    let then_type = then_expr.get_type(schema)?;
+                    if !then_type.is_null() {
+                        return Ok(then_type);
+                    }
                 }
 
                 let else_type = case
