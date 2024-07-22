@@ -100,8 +100,8 @@ impl PhysicalOptimizer {
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
             // The LimitPushdown rule tries to push limits down as far as possible,
-            // replacing ExecutionPlans with fetching versions or adding limits
-            // past ExecutionPlans that support limit pushdown.
+            // replacing operators with fetching variants, or adding limits
+            // past operators that support limit pushdown.
             Arc::new(LimitPushdown::new()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
