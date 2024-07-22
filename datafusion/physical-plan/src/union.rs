@@ -41,7 +41,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{const_exprs_contains, ConstExpr, EquivalenceProperties};
+use datafusion_physical_expr::{calculate_union, EquivalenceProperties};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -136,75 +136,6 @@ impl UnionExec {
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
     }
-}
-
-/// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
-/// of  `lhs` and `rhs` according to the given output `schema` (which need not
-/// be the same with those of `lhs` and `rhs` as details such as nullability
-/// may be different).
-fn calculate_union_binary(
-    lhs: &EquivalenceProperties,
-    rhs: &EquivalenceProperties,
-    schema: SchemaRef,
-) -> EquivalenceProperties {
-    // TODO: In some cases, we should be able to preserve some equivalence
-    //       classes. Add support for such cases.
-    let mut eq_properties = EquivalenceProperties::new(schema);
-    // First, calculate valid constants for the union. A quantity is constant
-    // after the union if it is constant in both sides.
-    let constants = lhs
-        .constants()
-        .iter()
-        .filter(|const_expr| const_exprs_contains(rhs.constants(), const_expr.expr()))
-        .map(|const_expr| {
-            // TODO: When both sides' constants are valid across partitions,
-            //       the union's constant should also be valid if values are
-            //       the same. However, we do not have the capability to
-            //       check this yet.
-            ConstExpr::new(Arc::clone(const_expr.expr())).with_across_partitions(false)
-        });
-    eq_properties = eq_properties.add_constants(constants);
-
-    // Next, calculate valid orderings for the union by searching for prefixes
-    // in both sides.
-    let mut orderings = vec![];
-    for mut ordering in lhs.normalized_oeq_class().orderings {
-        // Progressively shorten the ordering to search for a satisfied prefix:
-        while !rhs.ordering_satisfy(&ordering) {
-            ordering.pop();
-        }
-        // There is a non-trivial satisfied prefix, add it as a valid ordering:
-        if !ordering.is_empty() {
-            orderings.push(ordering);
-        }
-    }
-    for mut ordering in rhs.normalized_oeq_class().orderings {
-        // Progressively shorten the ordering to search for a satisfied prefix:
-        while !lhs.ordering_satisfy(&ordering) {
-            ordering.pop();
-        }
-        // There is a non-trivial satisfied prefix, add it as a valid ordering:
-        if !ordering.is_empty() {
-            orderings.push(ordering);
-        }
-    }
-    eq_properties.add_new_orderings(orderings);
-    eq_properties
-}
-
-/// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
-/// of the given `EquivalenceProperties` in `eqps` according to the given
-/// output `schema` (which need not be the same with those of `lhs` and `rhs`
-/// as details such as nullability may be different).
-fn calculate_union(
-    eqps: &[&EquivalenceProperties],
-    schema: SchemaRef,
-) -> EquivalenceProperties {
-    // TODO: In some cases, we should be able to preserve some equivalence
-    //       classes. Add support for such cases.
-    eqps.iter().skip(1).fold(eqps[0].clone(), |acc, eqp| {
-        calculate_union_binary(&acc, eqp, Arc::clone(&schema))
-    })
 }
 
 impl DisplayAs for UnionExec {
@@ -640,8 +571,8 @@ mod tests {
 
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;
-    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+    use datafusion_physical_expr_common::expressions::column::col;
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -871,120 +802,11 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_union_equivalence_properties_binary() -> Result<()> {
-        let schema = create_test_schema()?;
-        let col_a = &col("a", &schema)?;
-        let col_b = &col("b", &schema)?;
-        let col_c = &col("c", &schema)?;
-        let options = SortOptions::default();
-        let test_cases = [
-            //-----------TEST CASE 1----------//
-            (
-                (
-                    // First child orderings
-                    vec![
-                        // [a ASC]
-                        (vec![(col_a, options)]),
-                    ],
-                    // First child constants
-                    vec![col_b, col_c],
-                ),
-                (
-                    // Second child orderings
-                    vec![
-                        // [b ASC]
-                        (vec![(col_b, options)]),
-                    ],
-                    // Second child constants
-                    vec![col_a, col_c],
-                ),
-                (
-                    // Union expected orderings
-                    vec![
-                        // [a ASC]
-                        vec![(col_a, options)],
-                        // [b ASC]
-                        vec![(col_b, options)],
-                    ],
-                    // Union
-                    vec![col_c],
-                ),
-            ),
-        ];
-
-        for (
-            test_idx,
-            (
-                (first_child_orderings, first_child_constants),
-                (second_child_orderings, second_child_constants),
-                (union_orderings, union_constants),
-            ),
-        ) in test_cases.iter().enumerate()
-        {
-            let first_orderings = first_child_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
-            let first_constants = first_child_constants
-                .iter()
-                .map(|expr| ConstExpr::new(Arc::clone(expr)))
-                .collect::<Vec<_>>();
-            let mut lhs = EquivalenceProperties::new(Arc::clone(&schema));
-            lhs = lhs.add_constants(first_constants);
-            lhs.add_new_orderings(first_orderings);
-
-            let second_orderings = second_child_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
-            let second_constants = second_child_constants
-                .iter()
-                .map(|expr| ConstExpr::new(Arc::clone(expr)))
-                .collect::<Vec<_>>();
-            let mut rhs = EquivalenceProperties::new(Arc::clone(&schema));
-            rhs = rhs.add_constants(second_constants);
-            rhs.add_new_orderings(second_orderings);
-
-            let union_expected_orderings = union_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
-            let union_constants = union_constants
-                .iter()
-                .map(|expr| ConstExpr::new(Arc::clone(expr)))
-                .collect::<Vec<_>>();
-            let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
-            union_expected_eq = union_expected_eq.add_constants(union_constants);
-            union_expected_eq.add_new_orderings(union_expected_orderings);
-
-            let actual_union_eq = calculate_union_binary(&lhs, &rhs, Arc::clone(&schema));
-            let err_msg = format!(
-                "Error in test id: {:?}, test case: {:?}",
-                test_idx, test_cases[test_idx]
-            );
-            assert_eq_properties_same(&actual_union_eq, &union_expected_eq, err_msg);
-        }
-        Ok(())
-    }
-
     fn assert_eq_properties_same(
         lhs: &EquivalenceProperties,
         rhs: &EquivalenceProperties,
         err_msg: String,
     ) {
-        // Check whether constants are same
-        let lhs_constants = lhs.constants();
-        let rhs_constants = rhs.constants();
-        assert_eq!(lhs_constants.len(), rhs_constants.len(), "{}", err_msg);
-        for rhs_constant in rhs_constants {
-            assert!(
-                const_exprs_contains(lhs_constants, rhs_constant.expr()),
-                "{}",
-                err_msg
-            );
-        }
-
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
         let rhs_orderings = &rhs.oeq_class.orderings;
