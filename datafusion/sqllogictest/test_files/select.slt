@@ -613,6 +613,33 @@ END;
 ----
 2
 
+# select case when type is null
+query I
+select CASE
+  WHEN NULL THEN 1
+  ELSE 2
+END;
+----
+2
+
+# select case then type is null
+query I
+select CASE
+  WHEN 10 > 5 THEN NULL
+  ELSE 2
+END;
+----
+NULL
+
+# select case else type is null
+query I
+select CASE
+  WHEN 10 = 5 THEN 1
+  ELSE NULL
+END;
+----
+NULL
+
 # Binary Expression for LargeUtf8
 # issue: https://github.com/apache/datafusion/issues/5893
 statement ok

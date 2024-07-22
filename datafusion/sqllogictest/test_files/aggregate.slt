@@ -5418,6 +5418,34 @@ SELECT LAST_VALUE(column1 ORDER BY column2 DESC) IGNORE NULLS FROM t;
 statement ok
 DROP TABLE t;
 
+# Test for CASE with NULL in aggregate function
+statement ok
+CREATE TABLE example(data double precision);
+
+statement ok
+INSERT INTO example VALUES (1), (2), (NULL), (4);
+
+query RR
+SELECT
+    sum(CASE WHEN data is NULL THEN NULL ELSE data+1 END) as then_null,
+    sum(CASE WHEN data is NULL THEN data+1 ELSE NULL END) as else_null
+FROM example;
+----
+10 NULL
+
+query R
+SELECT
+   CASE data WHEN 1 THEN NULL WHEN 2 THEN 3.3 ELSE NULL END as case_null
+FROM example;
+----
+NULL
+3.3
+NULL
+NULL
+
+statement ok
+drop table example;
+
 # Test Convert FirstLast optimizer rule
 statement ok
 CREATE EXTERNAL TABLE convert_first_last_table (
