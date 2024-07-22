@@ -288,6 +288,7 @@ impl ExecutionPlan for CsvExec {
             quote: self.quote,
             escape: self.escape,
             comment: self.comment,
+            newlines_in_values: self.newlines_in_values,
             metrics: self.metrics.clone(),
             file_compression_type: self.file_compression_type,
             cache: self.cache.clone(),
