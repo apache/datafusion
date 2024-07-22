@@ -33,7 +33,7 @@ use arrow::array::{AsArray, StringViewBuilder};
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
+use arrow_array::{Array, ArrayRef};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
@@ -218,40 +218,7 @@ impl CoalesceBatchesStream {
             match input_batch {
                 Poll::Ready(x) => match x {
                     Some(Ok(batch)) => {
-                        let new_columns: Vec<Arc<dyn Array>> = batch
-                            .columns()
-                            .iter()
-                            .map(|c| {
-                                // Try to re-create the `StringViewArray` to prevent holding the underlying buffer too long.
-                                if let Some(s) = c.as_string_view_opt() {
-                                    let view_cnt = s.views().len();
-                                    let buffer_size = s.get_buffer_memory_size();
-
-                                    // Re-creating the array copies data and can be time consuming.
-                                    // We only do it if the array is sparse, below is a heuristic to determine if the array is sparse.
-                                    if buffer_size > (view_cnt * 32) {
-                                        // We use a block size of 2MB (instead of 8KB) to reduce the number of buffers to track.
-                                        // See https://github.com/apache/arrow-rs/issues/6094 for more details.
-                                        let mut builder =
-                                            StringViewBuilder::with_capacity(s.len())
-                                                .with_block_size(1024 * 1024 * 2);
-
-                                        for v in s.iter() {
-                                            builder.append_option(v);
-                                        }
-
-                                        let gc_string = builder.finish();
-
-                                        Arc::new(gc_string)
-                                    } else {
-                                        Arc::clone(c)
-                                    }
-                                } else {
-                                    Arc::clone(c)
-                                }
-                            })
-                            .collect();
-                        let batch = RecordBatch::try_new(batch.schema(), new_columns)?;
+                        let batch = gc_string_view_batch(&batch);
 
                         if batch.num_rows() >= self.target_batch_size
                             && self.buffer.is_empty()
@@ -325,6 +292,46 @@ pub fn concat_batches(
         row_count
     );
     arrow::compute::concat_batches(schema, batches)
+}
+
+/// [`StringViewArray`] reference to the raw parquet decoded buffer, which reduces copy but prevents those buffer from being released.
+/// When `StringViewArray`'s cardinality significantly drops (e.g., after `FilterExec` or `HashJoinExec` or many others),
+/// we should consider consolidating it so that we can release the buffer to reduce memory usage and improve string locality for better performance.
+fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
+    let new_columns: Vec<ArrayRef> = batch
+        .columns()
+        .iter()
+        .map(|c| {
+            // Try to re-create the `StringViewArray` to prevent holding the underlying buffer too long.
+            if let Some(s) = c.as_string_view_opt() {
+                let view_cnt = s.views().len();
+                let buffer_size = s.get_buffer_memory_size();
+
+                // Re-creating the array copies data and can be time consuming.
+                // We only do it if the array is sparse, below is a heuristic to determine if the array is sparse.
+                if buffer_size > (view_cnt * 32) {
+                    // We use a block size of 2MB (instead of 8KB) to reduce the number of buffers to track.
+                    // See https://github.com/apache/arrow-rs/issues/6094 for more details.
+                    let mut builder = StringViewBuilder::with_capacity(s.len())
+                        .with_block_size(1024 * 1024 * 2);
+
+                    for v in s.iter() {
+                        builder.append_option(v);
+                    }
+
+                    let gc_string = builder.finish();
+
+                    Arc::new(gc_string)
+                } else {
+                    Arc::clone(c)
+                }
+            } else {
+                Arc::clone(c)
+            }
+        })
+        .collect();
+    RecordBatch::try_new(batch.schema(), new_columns)
+        .expect("Failed to re-create the gc'ed record batch")
 }
 
 #[cfg(test)]
