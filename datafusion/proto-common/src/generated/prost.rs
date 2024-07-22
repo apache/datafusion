@@ -140,6 +140,14 @@ pub struct Decimal {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decimal256Type {
+    #[prost(uint32, tag = "3")]
+    pub precision: u32,
+    #[prost(int32, tag = "4")]
+    pub scale: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct List {
     #[prost(message, optional, boxed, tag = "1")]
     pub field_type: ::core::option::Option<::prost::alloc::boxed::Box<Field>>,
@@ -446,7 +454,7 @@ pub struct Decimal256 {
 pub struct ArrowType {
     #[prost(
         oneof = "arrow_type::ArrowTypeEnum",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 36, 25, 26, 27, 28, 29, 30, 33"
     )]
     pub arrow_type_enum: ::core::option::Option<arrow_type::ArrowTypeEnum>,
 }
@@ -516,6 +524,8 @@ pub mod arrow_type {
         Interval(i32),
         #[prost(message, tag = "24")]
         Decimal(super::Decimal),
+        #[prost(message, tag = "36")]
+        Decimal256(super::Decimal256Type),
         #[prost(message, tag = "25")]
         List(::prost::alloc::boxed::Box<super::List>),
         #[prost(message, tag = "26")]

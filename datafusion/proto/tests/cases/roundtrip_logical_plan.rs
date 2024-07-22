@@ -27,6 +27,7 @@ use arrow::array::{
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
+    DECIMAL256_MAX_PRECISION,
 };
 use prost::Message;
 
@@ -1379,6 +1380,7 @@ fn round_trip_datatype() {
         DataType::Utf8,
         DataType::LargeUtf8,
         DataType::Decimal128(7, 12),
+        DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
         // Recursive list tests
         DataType::List(new_arc_field("Level1", DataType::Binary, true)),
         DataType::List(new_arc_field(
