@@ -268,7 +268,7 @@ datafusion.execution.parquet.bloom_filter_ndv NULL (writing) Sets bloom filter n
 datafusion.execution.parquet.bloom_filter_on_read true (writing) Use any available bloom filters when reading parquet files
 datafusion.execution.parquet.bloom_filter_on_write false (writing) Write bloom filters for all columns when creating parquet files
 datafusion.execution.parquet.column_index_truncate_length 64 (writing) Sets column index truncate length
-datafusion.execution.parquet.compression zstd(3) (writing) Sets default parquet compression codec. Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.compression zstd(3) (writing) Sets default parquet compression codec. Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting Note that this default setting is not the same as the default parquet writer setting.
 datafusion.execution.parquet.created_by datafusion (writing) Sets "created by" property
 datafusion.execution.parquet.data_page_row_count_limit 20000 (writing) Sets best effort maximum number of rows in data page
 datafusion.execution.parquet.data_pagesize_limit 1048576 (writing) Sets best effort maximum size of data page in bytes
