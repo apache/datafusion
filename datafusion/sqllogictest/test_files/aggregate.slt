@@ -5433,7 +5433,7 @@ FROM example;
 ----
 10 NULL
 
-query I
+query R
 SELECT
    CASE data WHEN 1 THEN NULL WHEN 2 THEN 3.3 ELSE NULL END as case_null
 FROM example;
