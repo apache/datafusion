@@ -141,7 +141,8 @@ impl SessionStateDefaults {
     pub fn register_array_functions(state: &mut SessionState) {
         // register crate of array expressions (if enabled)
         #[cfg(feature = "nested_expressions")]
-        functions_nested::register_all(state).expect("can not register array expressions");
+        functions_nested::register_all(state)
+            .expect("can not register nested expressions");
     }
 
     /// registers all the builtin aggregate functions
