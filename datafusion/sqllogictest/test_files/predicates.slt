@@ -668,17 +668,17 @@ logical_plan
 05)----Filter: (part.p_brand = Utf8("Brand#12") AND part.p_size <= Int32(5) OR part.p_brand = Utf8("Brand#23") AND part.p_size <= Int32(10) OR part.p_brand = Utf8("Brand#34") AND part.p_size <= Int32(15)) AND part.p_size >= Int32(1)
 06)------TableScan: part projection=[p_partkey, p_brand, p_size], partial_filters=[part.p_size >= Int32(1), part.p_brand = Utf8("Brand#12") AND part.p_size <= Int32(5) OR part.p_brand = Utf8("Brand#23") AND part.p_size <= Int32(10) OR part.p_brand = Utf8("Brand#34") AND part.p_size <= Int32(15)]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192, fetch=None
+01)CoalesceBatchesExec: target_batch_size=8192
 02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_partkey@0, p_partkey@0)], filter=p_brand@1 = Brand#12 AND l_quantity@0 >= Some(100),15,2 AND l_quantity@0 <= Some(1100),15,2 AND p_size@2 <= 5 OR p_brand@1 = Brand#23 AND l_quantity@0 >= Some(1000),15,2 AND l_quantity@0 <= Some(2000),15,2 AND p_size@2 <= 10 OR p_brand@1 = Brand#34 AND l_quantity@0 >= Some(2000),15,2 AND l_quantity@0 <= Some(3000),15,2 AND p_size@2 <= 15, projection=[l_partkey@0]
-03)----CoalesceBatchesExec: target_batch_size=8192, fetch=None
+03)----CoalesceBatchesExec: target_batch_size=8192
 04)------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=4
-05)--------CoalesceBatchesExec: target_batch_size=8192, fetch=None
+05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------FilterExec: l_quantity@1 >= Some(100),15,2 AND l_quantity@1 <= Some(1100),15,2 OR l_quantity@1 >= Some(1000),15,2 AND l_quantity@1 <= Some(2000),15,2 OR l_quantity@1 >= Some(2000),15,2 AND l_quantity@1 <= Some(3000),15,2
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_quantity], has_header=true
-09)----CoalesceBatchesExec: target_batch_size=8192, fetch=None
+09)----CoalesceBatchesExec: target_batch_size=8192
 10)------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
-11)--------CoalesceBatchesExec: target_batch_size=8192, fetch=None
+11)--------CoalesceBatchesExec: target_batch_size=8192
 12)----------FilterExec: (p_brand@1 = Brand#12 AND p_size@2 <= 5 OR p_brand@1 = Brand#23 AND p_size@2 <= 10 OR p_brand@1 = Brand#34 AND p_size@2 <= 15) AND p_size@2 >= 1
 13)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 14)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand, p_size], has_header=true
@@ -760,22 +760,22 @@ logical_plan
 10)------TableScan: partsupp projection=[ps_partkey, ps_suppkey]
 physical_plan
 01)AggregateExec: mode=SinglePartitioned, gby=[p_partkey@2 as p_partkey], aggr=[sum(lineitem.l_extendedprice), avg(lineitem.l_discount), count(DISTINCT partsupp.ps_suppkey)]
-02)--CoalesceBatchesExec: target_batch_size=8192, fetch=None
+02)--CoalesceBatchesExec: target_batch_size=8192
 03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(p_partkey@2, ps_partkey@0)], projection=[l_extendedprice@0, l_discount@1, p_partkey@2, ps_suppkey@4]
-04)------CoalesceBatchesExec: target_batch_size=8192, fetch=None
+04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_partkey@0, p_partkey@0)], projection=[l_extendedprice@1, l_discount@2, p_partkey@3]
-06)----------CoalesceBatchesExec: target_batch_size=8192, fetch=None
+06)----------CoalesceBatchesExec: target_batch_size=8192
 07)------------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=4
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_extendedprice, l_discount], has_header=true
-10)----------CoalesceBatchesExec: target_batch_size=8192, fetch=None
+10)----------CoalesceBatchesExec: target_batch_size=8192
 11)------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 12)--------------ProjectionExec: expr=[p_partkey@0 as p_partkey]
-13)----------------CoalesceBatchesExec: target_batch_size=8192, fetch=None
+13)----------------CoalesceBatchesExec: target_batch_size=8192
 14)------------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23
 15)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 16)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], has_header=true
-17)------CoalesceBatchesExec: target_batch_size=8192, fetch=None
+17)------CoalesceBatchesExec: target_batch_size=8192
 18)--------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=1
 19)----------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -803,7 +803,7 @@ logical_plan
 01)Filter: t.x = Int32(5)
 02)--TableScan: t projection=[x]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192, fetch=None
+01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: x@0 = 5
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 

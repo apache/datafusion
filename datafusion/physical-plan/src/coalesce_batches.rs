@@ -105,10 +105,14 @@ impl DisplayAs for CoalesceBatchesExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "CoalesceBatchesExec: target_batch_size={}, fetch={}",
+                    "CoalesceBatchesExec: target_batch_size={}",
                     self.target_batch_size,
-                    self.fetch.map_or("None".to_string(), |x| x.to_string())
-                )
+                )?;
+                if let Some(fetch) = self.fetch {
+                    write!(f, ", fetch={fetch}")?;
+                };
+
+                Ok(())
             }
         }
     }

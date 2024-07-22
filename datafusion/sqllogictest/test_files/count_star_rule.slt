@@ -46,7 +46,7 @@ logical_plan
 02)--TableScan: t1 projection=[a]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count()]
-02)--CoalesceBatchesExec: target_batch_size=8192, fetch=None
+02)--CoalesceBatchesExec: target_batch_size=8192
 03)----RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count()]
@@ -62,10 +62,10 @@ logical_plan
 04)------TableScan: t1 projection=[a]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, count()@1 as cnt]
-02)--CoalesceBatchesExec: target_batch_size=8192, fetch=None
+02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: count()@1 > 0
 04)------AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count()]
-05)--------CoalesceBatchesExec: target_batch_size=8192, fetch=None
+05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)--------------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count()]
@@ -87,7 +87,7 @@ physical_plan
 01)ProjectionExec: expr=[a@0 as a, count() PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as count_a]
 02)--WindowAggExec: wdw=[count() PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count() PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 03)----SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------CoalesceBatchesExec: target_batch_size=8192, fetch=None
+04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
 06)----------MemoryExec: partitions=1, partition_sizes=[1]
 
