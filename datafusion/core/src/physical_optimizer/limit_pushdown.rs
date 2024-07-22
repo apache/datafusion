@@ -17,17 +17,19 @@
 
 //! This rule optimizes the amount of data transferred by pushing down limits
 
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::ExecutionPlan;
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_datafusion_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
@@ -124,7 +126,7 @@ impl From<LimitExec> for Arc<dyn ExecutionPlan> {
 pub fn push_down_limits(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let maybe_modified = if let Some(limit_exec) = extract_limit(plan.clone()) {
+    let maybe_modified = if let Some(limit_exec) = extract_limit(&plan) {
         let child = limit_exec.input();
         if let Some(child_limit) = child.as_any().downcast_ref::<LocalLimitExec>() {
             let merged = try_merge_limits(&limit_exec, child_limit)?;
@@ -144,7 +146,7 @@ pub fn push_down_limits(
 
 /// Transforms the [`ExecutionPlan`] into a [`LimitExec`] if it is a
 /// [`GlobalLimitExec`] or a [`LocalLimitExec`].
-fn extract_limit(plan: Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
+fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
     if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
         Some(LimitExec::Global(GlobalLimitExec::new(
             global_limit.input().clone(),
@@ -224,10 +226,10 @@ fn try_push_down_limit(
             Ok(Some(new_child))
         }
     } else {
-        // The LimitExec would not have an input, which should be impossible
+        // Operators supporting limit push down must have a child.
         Err(plan_datafusion_err!(
-            "{:#?} does not have a grandchild",
-            limit_exec
+            "{:#?} must have a child to push down limit",
+            child
         ))
     }
 }
