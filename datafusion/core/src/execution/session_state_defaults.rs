@@ -84,7 +84,7 @@ impl SessionStateDefaults {
             Arc::new(functions::core::planner::CoreFunctionPlanner::default()),
             // register crate of nested expressions (if enabled)
             #[cfg(feature = "nested_expressions")]
-            Arc::new(functions_nested::planner::ArrayFunctionPlanner),
+            Arc::new(functions_nested::planner::NestedFunctionPlanner),
             #[cfg(feature = "nested_expressions")]
             Arc::new(functions_nested::planner::FieldAccessPlanner),
             #[cfg(any(
