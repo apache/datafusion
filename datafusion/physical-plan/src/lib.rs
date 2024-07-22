@@ -435,7 +435,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         false
     }
 
-    /// Returns a fetching version of this `ExecutionPlan` node, if it supports
+    /// Returns a fetching variant of this `ExecutionPlan` node, if it supports
     /// fetch limits. Returns `None` otherwise.
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         None
