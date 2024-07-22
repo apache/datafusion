@@ -41,7 +41,7 @@ path = "src/lib.rs"
 
 [features]
 # Used to enable the avro format
-array_expressions = ["datafusion-functions-array"]
+array_expressions = ["datafusion-functions-nested"]
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
@@ -102,7 +102,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
-datafusion-functions-array = { workspace = true, optional = true }
+datafusion-functions-nested = { workspace = true, optional = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
