@@ -741,30 +741,30 @@ mod tests {
         // Row 0
         builder.keys().append_value("key1");
         builder.keys().append_value("key2");
-        builder.values().append_value(10);
-        builder.values().append_value(11);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
         builder.append(true).unwrap();
         // Row 1
         builder.keys().append_value("key1");
         builder.keys().append_value("key2");
-        builder.values().append_value(10);
-        builder.values().append_value(11);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
         builder.append(true).unwrap();
         // Row 2
         builder.keys().append_value("key1");
         builder.keys().append_value("key2");
-        builder.values().append_value(10);
-        builder.values().append_value(12);
+        builder.values().append_value(1);
+        builder.values().append_value(3);
         builder.append(true).unwrap();
         // Row 3
         builder.keys().append_value("key1");
         builder.keys().append_value("key3");
-        builder.values().append_value(10);
-        builder.values().append_value(11);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
         builder.append(true).unwrap();
         // Row 4
         builder.keys().append_value("key1");
-        builder.values().append_value(10);
+        builder.values().append_value(1);
         builder.append(true).unwrap();
         // Row 5
         builder.keys().append_value("key1");
@@ -774,7 +774,7 @@ mod tests {
         builder.append(true).unwrap();
         // Row 7
         builder.keys().append_value("key1");
-        builder.values().append_value(10);
+        builder.values().append_value(1);
         builder.append(false).unwrap();
 
         let array = Arc::new(builder.finish()) as ArrayRef;
@@ -783,8 +783,8 @@ mod tests {
         let mut hashes = vec![0; array.len()];
         create_hashes(&[array], &random_state, &mut hashes).unwrap();
         assert_eq!(hashes[0], hashes[1]); // same value
-        assert_ne!(hashes[0], hashes[2]); // different key
-        assert_ne!(hashes[0], hashes[3]); // different value
+        assert_ne!(hashes[0], hashes[2]); // different value
+        assert_ne!(hashes[0], hashes[3]); // different key
         assert_ne!(hashes[0], hashes[4]); // missing an entry
         assert_ne!(hashes[4], hashes[5]); // filled vs null value
         assert_eq!(hashes[6], hashes[7]); // empty vs null map
