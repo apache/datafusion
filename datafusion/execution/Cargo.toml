@@ -47,5 +47,6 @@ log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
+rocksdb = "0.22.0"
 tempfile = { workspace = true }
 url = { workspace = true }
