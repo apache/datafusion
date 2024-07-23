@@ -18,10 +18,10 @@
 use datafusion_common::ScalarValue;
 use datafusion_expr::interval_arithmetic::Interval;
 
-pub(super) fn infinity_bounds(input: &[&Interval]) -> crate::Result<Interval> {
+pub(super) fn unbounded_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     let data_type = input[0].data_type();
 
-    Interval::make_infinity_interval(&data_type)
+    Interval::make_unbounded(&data_type)
 }
 
 pub(super) fn sin_bounds(input: &[&Interval]) -> crate::Result<Interval> {
@@ -59,10 +59,7 @@ pub(super) fn acosh_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     // acosh(x) is bounded by [0, ∞)
     let data_type = input[0].data_type();
 
-    Interval::try_new(
-        ScalarValue::new_zero(&data_type)?,
-        ScalarValue::new_infinity(&data_type)?,
-    )
+    Interval::make_non_negative_infinity_interval(&data_type)
 }
 
 pub(super) fn cos_bounds(input: &[&Interval]) -> crate::Result<Interval> {
@@ -78,7 +75,7 @@ pub(super) fn cosh_bounds(input: &[&Interval]) -> crate::Result<Interval> {
 
     Interval::try_new(
         ScalarValue::new_one(&data_type)?,
-        ScalarValue::new_infinity(&data_type)?,
+        ScalarValue::try_from(&data_type)?,
     )
 }
 
@@ -86,10 +83,7 @@ pub(super) fn exp_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     // exp(x) is bounded by [0, ∞)
     let data_type = input[0].data_type();
 
-    Interval::try_new(
-        ScalarValue::new_zero(&data_type)?,
-        ScalarValue::new_infinity(&data_type)?,
-    )
+    Interval::make_non_negative_infinity_interval(&data_type)
 }
 
 pub(super) fn radians_bounds(input: &[&Interval]) -> crate::Result<Interval> {

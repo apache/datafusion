@@ -71,7 +71,7 @@ make_math_unary_udf!(
     asinh,
     asinh,
     super::asinh_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_math_unary_udf!(
     AtanFunc,
@@ -87,7 +87,7 @@ make_math_unary_udf!(
     atanh,
     atanh,
     super::atanh_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, super::atan2_order);
 make_math_unary_udf!(
@@ -96,7 +96,7 @@ make_math_unary_udf!(
     cbrt,
     cbrt,
     super::cbrt_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_math_unary_udf!(
     CeilFunc,
@@ -104,7 +104,7 @@ make_math_unary_udf!(
     ceil,
     ceil,
     super::ceil_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_math_unary_udf!(
     CosFunc,
@@ -129,7 +129,7 @@ make_math_unary_udf!(
     degrees,
     to_degrees,
     super::degrees_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_math_unary_udf!(
     ExpFunc,
@@ -146,7 +146,7 @@ make_math_unary_udf!(
     floor,
     floor,
     super::floor_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_udf_function!(log::LogFunc, LOG, log);
 make_udf_function!(gcd::GcdFunc, GCD, gcd);
@@ -159,7 +159,7 @@ make_math_unary_udf!(
     ln,
     ln,
     super::ln_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_math_unary_udf!(
     Log2Func,
@@ -167,7 +167,7 @@ make_math_unary_udf!(
     log2,
     log2,
     super::log2_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_math_unary_udf!(
     Log10Func,
@@ -175,7 +175,7 @@ make_math_unary_udf!(
     log10,
     log10,
     super::log10_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_udf_function!(nanvl::NanvlFunc, NANVL, nanvl);
 make_udf_function!(pi::PiFunc, PI, pi);
@@ -205,7 +205,7 @@ make_math_unary_udf!(
     sinh,
     sinh,
     super::sinh_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_math_unary_udf!(
     SqrtFunc,
@@ -221,7 +221,7 @@ make_math_unary_udf!(
     tan,
     tan,
     super::tan_order,
-    super::bounds::infinity_bounds
+    super::bounds::unbounded_bounds
 );
 make_math_unary_udf!(
     TanhFunc,
@@ -326,13 +326,13 @@ mod tests {
     use datafusion_expr::interval_arithmetic::Interval;
 
     fn unbounded_interval(data_type: &DataType) -> Interval {
-        Interval::make_infinity_interval(data_type).unwrap()
+        Interval::make_unbounded(data_type).unwrap()
     }
 
     fn one_to_inf_interval(data_type: &DataType) -> Interval {
         Interval::try_new(
             ScalarValue::new_one(data_type).unwrap(),
-            ScalarValue::new_infinity(data_type).unwrap(),
+            ScalarValue::try_from(data_type).unwrap(),
         )
         .unwrap()
     }
