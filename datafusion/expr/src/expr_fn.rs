@@ -667,32 +667,39 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
     Expr::Literal(ScalarValue::IntervalMonthDayNano(interval))
 }
 
-/// Extensions for configuring [`Expr::AggregateFunction`]
+/// Extensions for configuring [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
 ///
-/// Adds methods to [`Expr`] that make it easy to set optional aggregate options
+/// Adds methods to [`Expr`] that make it easy to set optional options
 /// such as `ORDER BY`, `FILTER` and `DISTINCT`
 ///
 /// # Example
 /// ```no_run
-/// # use datafusion_common::Result;
-/// # use datafusion_expr::{AggregateUDF, col, Expr, lit};
-/// # use sqlparser::ast::NullTreatment;
-/// # fn count(arg: Expr) -> Expr { todo!{} }
-/// # fn first_value(arg: Expr) -> Expr { todo!{} }
-/// # fn main() -> Result<()> {
-/// use datafusion_expr::ExprFunctionExt;
+/// # use datafusion::{
+/// #     common::Result,
+/// #     functions_aggregate::{count::count, expr_fn::first_value},
+/// #     logical_expr::window_function::percent_rank,
+/// #     prelude::{col, lit, ExprFunctionExt},
+/// #     sql::sqlparser::ast::NullTreatment,
+/// # };
 ///
-/// // Create COUNT(x FILTER y > 5)
-/// let agg = count(col("x"))
-///    .filter(col("y").gt(lit(5)))
-///    .build()?;
-///  // Create FIRST_VALUE(x ORDER BY y IGNORE NULLS)
-/// let sort_expr = col("y").sort(true, true);
-/// let agg = first_value(col("x"))
-///   .order_by(vec![sort_expr])
-///   .null_treatment(NullTreatment::IgnoreNulls)
-///   .build()?;
-/// # Ok(())
+/// # fn main() -> Result<()> {
+///     // Create an aggregate count, filtering on column y > 5
+///     let agg = count(col("x")).filter(col("y").gt(lit(5))).build()?;
+///
+///     // Find the first value in an aggregate sorted by column y
+///     let sort_expr = col("y").sort(true, true);
+///     let agg = first_value(col("x"), None)
+///         .order_by(vec![sort_expr])
+///         .null_treatment(NullTreatment::IgnoreNulls)
+///         .build()?;
+///
+///     // Create a window expression for percent rank partitioned on column a
+///     let window = percent_rank()
+///         .partition_by(vec![col("a")])
+///         .order_by(vec![col("b")])
+///         .null_treatment(NullTreatment::IgnoreNulls)
+///         .build()?;
+/// #     Ok(())
 /// # }
 /// ```
 pub trait ExprFunctionExt {
