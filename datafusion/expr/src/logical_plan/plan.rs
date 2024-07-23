@@ -35,7 +35,7 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction, Cast,
+    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
     CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
     TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
@@ -496,10 +496,18 @@ impl LogicalPlan {
                 // The join keys in using-join must be columns.
                 let columns =
                     on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
-                        let l = Self::as_col(l.clone())?;
-                        let r = Self::as_col(r.clone())?;
-                        accumu.insert(l);
-                        accumu.insert(r);
+                        let Some(l) = l.get_as_join_column() else {
+                            return internal_err!(
+                                "Invalid join key. Expected column, found {l:?}"
+                            );
+                        };
+                        let Some(r) = r.get_as_join_column() else {
+                            return internal_err!(
+                                "Invalid join key. Expected column, found {r:?}"
+                            );
+                        };
+                        accumu.insert(l.to_owned());
+                        accumu.insert(r.to_owned());
                         Result::<_, DataFusionError>::Ok(accumu)
                     })?;
                 using_columns.push(columns);
@@ -508,14 +516,6 @@ impl LogicalPlan {
         })?;
 
         Ok(using_columns)
-    }
-
-    fn as_col(expr: Expr) -> Result<Column> {
-        match expr {
-            Expr::Column(c) => Ok(c),
-            Expr::Cast(Cast { expr, .. }) => Self::as_col(*expr),
-            _ => internal_err!("Invalid join key. Expected column, found {expr:?}"),
-        }
     }
 
     /// returns the first output expression of this `LogicalPlan` node.
