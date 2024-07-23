@@ -133,7 +133,7 @@ In order to run the sqllogictests running against a previously running Postgres 
 PG_COMPAT=true PG_URI="postgresql://postgres@127.0.0.1/postgres" cargo test --features=postgres --test sqllogictests
 ```
 
-The environemnt variables:
+The environment variables:
 
 1. `PG_COMPAT` instructs sqllogictest to run against Postgres (not DataFusion)
 2. `PG_URI` contains a `libpq` style connection string, whose format is described in

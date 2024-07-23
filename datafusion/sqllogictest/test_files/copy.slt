@@ -271,7 +271,7 @@ select * from validate_struct_with_array;
 {c0: foo, c1: [1, 2, 3], c2: {c0: bar, c1: [2, 3, 4]}}
 
 
-# Copy parquet with all supported statment overrides
+# Copy parquet with all supported statement overrides
 query IT
 COPY source_table
 TO 'test_files/scratch/copy/table_with_options/'

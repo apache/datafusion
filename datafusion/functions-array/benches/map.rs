@@ -17,13 +17,18 @@
 
 extern crate criterion;
 
+use arrow_array::{Int32Array, ListArray, StringArray};
+use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+use arrow_schema::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::prelude::ThreadRng;
 use rand::Rng;
+use std::sync::Arc;
 
 use datafusion_common::ScalarValue;
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::Expr;
+use datafusion_expr::{ColumnarValue, Expr};
+use datafusion_functions_array::map::map_udf;
 use datafusion_functions_array::planner::ArrayFunctionPlanner;
 
 fn keys(rng: &mut ThreadRng) -> Vec<String> {
@@ -59,6 +64,36 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 planner
                     .plan_make_map(buffer.clone())
+                    .expect("map should work on valid values"),
+            );
+        });
+    });
+
+    c.bench_function("map_1000", |b| {
+        let mut rng = rand::thread_rng();
+        let field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
+        let key_list = ListArray::new(
+            field,
+            offsets,
+            Arc::new(StringArray::from(keys(&mut rng))),
+            None,
+        );
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
+        let value_list = ListArray::new(
+            field,
+            offsets,
+            Arc::new(Int32Array::from(values(&mut rng))),
+            None,
+        );
+        let keys = ColumnarValue::Scalar(ScalarValue::List(Arc::new(key_list)));
+        let values = ColumnarValue::Scalar(ScalarValue::List(Arc::new(value_list)));
+
+        b.iter(|| {
+            black_box(
+                map_udf()
+                    .invoke(&[keys.clone(), values.clone()])
                     .expect("map should work on valid values"),
             );
         });

@@ -157,6 +157,7 @@ pub fn create_window_expr(
                 name,
                 ignore_nulls,
                 false,
+                false,
             )?;
             window_expr_from_aggregate_expr(
                 partition_by,

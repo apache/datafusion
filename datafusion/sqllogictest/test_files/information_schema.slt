@@ -168,6 +168,7 @@ datafusion.catalog.format NULL
 datafusion.catalog.has_header false
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
+datafusion.catalog.newlines_in_values false
 datafusion.execution.aggregate.scalar_update_factor 10
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
@@ -252,6 +253,7 @@ datafusion.catalog.format NULL Type of `TableProvider` to use when loading `defa
 datafusion.catalog.has_header false Default value for `format.has_header` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement.
 datafusion.catalog.information_schema true Should DataFusion provide access to `information_schema` virtual tables for displaying schema information
 datafusion.catalog.location NULL Location scanned to load tables for `default` schema
+datafusion.catalog.newlines_in_values false Specifies whether newlines in (quoted) CSV values are supported. This is the default value for `format.newlines_in_values` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement. Parsing newlines in quoted values may be affected by execution behaviour such as parallel file scanning. Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
 datafusion.execution.aggregate.scalar_update_factor 10 Specifies the threshold for using `ScalarValue`s to update accumulators during high-cardinality aggregations for each input batch. The aggregation is considered high-cardinality if the number of affected groups is greater than or equal to `batch_size / scalar_update_factor`. In such cases, `ScalarValue`s are utilized for updating accumulators, rather than the default batch-slice approach. This can lead to performance improvements. By adjusting the `scalar_update_factor`, you can balance the trade-off between more efficient accumulator updates and the number of groups affected.
 datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
@@ -368,9 +370,12 @@ datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g.
 
 
 # show empty verbose
-query TTT
+statement error DataFusion error: Error during planning: '' is not a variable which can be viewed with 'SHOW'
 SHOW VERBOSE
-----
+
+# show nonsense verbose
+statement error DataFusion error: Error during planning: 'nonsense' is not a variable which can be viewed with 'SHOW'
+SHOW NONSENSE VERBOSE
 
 # information_schema_describe_table
 
@@ -506,9 +511,7 @@ SHOW columns from datafusion.public.t2
 
 
 # show_non_existing_variable
-# FIXME
-# currently we cannot know whether a variable exists, this will output 0 row instead
-statement ok
+statement error DataFusion error: Error during planning: 'something_unknown' is not a variable which can be viewed with 'SHOW'
 SHOW SOMETHING_UNKNOWN;
 
 statement ok

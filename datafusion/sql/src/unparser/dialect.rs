@@ -27,7 +27,7 @@ use sqlparser::{ast, keywords::ALL_KEYWORDS};
 ///
 /// See <https://github.com/sqlparser-rs/sqlparser-rs/pull/1170>
 /// See also the discussion in <https://github.com/apache/datafusion/pull/10625>
-pub trait Dialect {
+pub trait Dialect: Send + Sync {
     /// Return the character used to quote identifiers.
     fn identifier_quote_style(&self, _identifier: &str) -> Option<char>;
 
@@ -46,11 +46,18 @@ pub trait Dialect {
         IntervalStyle::PostgresVerbose
     }
 
+    // Does the dialect use DOUBLE PRECISION to represent Float64 rather than DOUBLE?
+    // E.g. Postgres uses DOUBLE PRECISION instead of DOUBLE
+    fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
+        sqlparser::ast::DataType::Double
+    }
+
     // The SQL type to use for Arrow Utf8 unparsing
     // Most dialects use VARCHAR, but some, like MySQL, require CHAR
     fn utf8_cast_dtype(&self) -> ast::DataType {
         ast::DataType::Varchar(None)
     }
+
     // The SQL type to use for Arrow LargeUtf8 unparsing
     // Most dialects use TEXT, but some, like MySQL, require CHAR
     fn large_utf8_cast_dtype(&self) -> ast::DataType {
@@ -98,6 +105,10 @@ impl Dialect for PostgreSqlDialect {
     fn interval_style(&self) -> IntervalStyle {
         IntervalStyle::PostgresVerbose
     }
+
+    fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
+        sqlparser::ast::DataType::DoublePrecision
+    }
 }
 
 pub struct MySqlDialect {}
@@ -137,6 +148,7 @@ pub struct CustomDialect {
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
+    float64_ast_dtype: sqlparser::ast::DataType,
     utf8_cast_dtype: ast::DataType,
     large_utf8_cast_dtype: ast::DataType,
 }
@@ -148,6 +160,7 @@ impl Default for CustomDialect {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::SQLStandard,
+            float64_ast_dtype: sqlparser::ast::DataType::Double,
             utf8_cast_dtype: ast::DataType::Varchar(None),
             large_utf8_cast_dtype: ast::DataType::Text,
         }
@@ -182,6 +195,10 @@ impl Dialect for CustomDialect {
         self.interval_style
     }
 
+    fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
+        self.float64_ast_dtype.clone()
+    }
+
     fn utf8_cast_dtype(&self) -> ast::DataType {
         self.utf8_cast_dtype.clone()
     }
@@ -210,6 +227,7 @@ pub struct CustomDialectBuilder {
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
+    float64_ast_dtype: sqlparser::ast::DataType,
     utf8_cast_dtype: ast::DataType,
     large_utf8_cast_dtype: ast::DataType,
 }
@@ -227,6 +245,7 @@ impl CustomDialectBuilder {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::PostgresVerbose,
+            float64_ast_dtype: sqlparser::ast::DataType::Double,
             utf8_cast_dtype: ast::DataType::Varchar(None),
             large_utf8_cast_dtype: ast::DataType::Text,
         }
@@ -238,6 +257,7 @@ impl CustomDialectBuilder {
             supports_nulls_first_in_sort: self.supports_nulls_first_in_sort,
             use_timestamp_for_date64: self.use_timestamp_for_date64,
             interval_style: self.interval_style,
+            float64_ast_dtype: self.float64_ast_dtype,
             utf8_cast_dtype: self.utf8_cast_dtype,
             large_utf8_cast_dtype: self.large_utf8_cast_dtype,
         }
@@ -270,6 +290,14 @@ impl CustomDialectBuilder {
     /// Customize the dialect with a specific interval style listed in `IntervalStyle`
     pub fn with_interval_style(mut self, interval_style: IntervalStyle) -> Self {
         self.interval_style = interval_style;
+        self
+    }
+
+    pub fn with_float64_ast_dtype(
+        mut self,
+        float64_ast_dtype: sqlparser::ast::DataType,
+    ) -> Self {
+        self.float64_ast_dtype = float64_ast_dtype;
         self
     }
 

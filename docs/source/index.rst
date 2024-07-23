@@ -107,7 +107,7 @@ To get started, see
    library-user-guide/custom-table-providers
    library-user-guide/extending-operators
    library-user-guide/profiling
-
+   library-user-guide/query-optimizer
 .. _toc.contributor-guide:
 
 .. toctree::

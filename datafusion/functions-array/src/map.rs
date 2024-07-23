@@ -15,17 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::make_array::make_array;
+use arrow::array::ArrayData;
+use arrow_array::{Array, ArrayRef, MapArray, StructArray};
+use arrow_buffer::{Buffer, ToByteSlice};
+use arrow_schema::{DataType, Field, SchemaBuilder};
+use datafusion_common::{exec_err, ScalarValue};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayData, ArrayRef, MapArray, StructArray};
-use arrow::datatypes::{DataType, Field, SchemaBuilder};
-use arrow_buffer::{Buffer, ToByteSlice};
+/// Returns a map created from a key list and a value list
+pub fn map(keys: Vec<Expr>, values: Vec<Expr>) -> Expr {
+    let keys = make_array(keys);
+    let values = make_array(values);
+    Expr::ScalarFunction(ScalarFunction::new_udf(map_udf(), vec![keys, values]))
+}
 
-use datafusion_common::Result;
-use datafusion_common::{exec_err, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+create_func!(MapFunc, map_udf);
 
 /// Check if we can evaluate the expr to constant directly.
 ///
@@ -39,7 +48,7 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
     if args.len() != 2 {
         return exec_err!(
             "make_map requires exactly 2 arguments, got {} instead",
@@ -54,7 +63,9 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     make_map_batch_internal(key, value, can_evaluate_to_const)
 }
 
-fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
+fn get_first_array_ref(
+    columnar_value: &ColumnarValue,
+) -> datafusion_common::Result<ArrayRef> {
     match columnar_value {
         ColumnarValue::Scalar(value) => match value {
             ScalarValue::List(array) => Ok(array.value(0)),
@@ -70,7 +81,7 @@ fn make_map_batch_internal(
     keys: ArrayRef,
     values: ArrayRef,
     can_evaluate_to_const: bool,
-) -> Result<ColumnarValue> {
+) -> datafusion_common::Result<ColumnarValue> {
     if keys.null_count() > 0 {
         return exec_err!("map key cannot be null");
     }
@@ -150,7 +161,7 @@ impl ScalarUDFImpl for MapFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
         if arg_types.len() % 2 != 0 {
             return exec_err!(
                 "map requires an even number of arguments, got {} instead",
@@ -175,12 +186,12 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
         make_map_batch(args)
     }
 }
 
-fn get_element_type(data_type: &DataType) -> Result<&DataType> {
+fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType> {
     match data_type {
         DataType::List(element) => Ok(element.data_type()),
         DataType::LargeList(element) => Ok(element.data_type()),

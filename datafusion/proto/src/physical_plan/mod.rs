@@ -211,6 +211,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 } else {
                     None
                 },
+                scan.newlines_in_values,
                 FileCompressionType::UNCOMPRESSED,
             ))),
             #[cfg(feature = "parquet")]
@@ -506,7 +507,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                             // TODO: `order by` is not supported for UDAF yet
                                             let sort_exprs = &[];
                                             let ordering_req = &[];
-                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, logical_exprs, sort_exprs, ordering_req, &physical_schema, name, agg_node.ignore_nulls, agg_node.distinct)
+                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, logical_exprs, sort_exprs, ordering_req, &physical_schema, name, agg_node.ignore_nulls, agg_node.distinct, false)
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {
@@ -1579,6 +1580,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         } else {
                             None
                         },
+                        newlines_in_values: exec.newlines_in_values(),
                     },
                 )),
             });

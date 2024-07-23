@@ -36,7 +36,8 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
 use datafusion_physical_expr_common::sort_expr::{
-    limited_convert_logical_sort_exprs_to_physical, LexOrdering, PhysicalSortExpr,
+    limited_convert_logical_sort_exprs_to_physical_with_dfschema, LexOrdering,
+    PhysicalSortExpr,
 };
 
 create_func!(FirstValue, first_value_udaf);
@@ -116,9 +117,9 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let ordering_req = limited_convert_logical_sort_exprs_to_physical(
+        let ordering_req = limited_convert_logical_sort_exprs_to_physical_with_dfschema(
             acc_args.sort_exprs,
-            acc_args.schema,
+            acc_args.dfschema,
         )?;
 
         let ordering_dtypes = ordering_req
@@ -415,9 +416,9 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let ordering_req = limited_convert_logical_sort_exprs_to_physical(
+        let ordering_req = limited_convert_logical_sort_exprs_to_physical_with_dfschema(
             acc_args.sort_exprs,
-            acc_args.schema,
+            acc_args.dfschema,
         )?;
 
         let ordering_dtypes = ordering_req
