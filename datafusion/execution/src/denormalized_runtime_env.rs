@@ -1,15 +1,24 @@
-use rocksdb::DB as RocksDB;
 use std::sync::Arc;
+
+use datafusion_common::{DataFusionError, Result};
+
+use crate::{
+    rocksdb_backend::RocksDBBackend,
+    runtime_env::{RuntimeConfig, RuntimeEnv},
+};
 
 pub struct DenormalizedRuntimeEnv {
     // Inherit all fields from RuntimeEnv
     runtime_env: RuntimeEnv,
     // Add RocksDB connection
-    rocksdb: Arc<RocksDB>,
+    rocksdb: Arc<RocksDBBackend>,
 }
 
 impl DenormalizedRuntimeEnv {
-    pub fn new(config: RuntimeConfig, rocksdb: Arc<RocksDB>) -> Result<Self> {
+    pub fn new(
+        config: RuntimeConfig,
+        rocksdb: Arc<RocksDBBackend>,
+    ) -> Result<Self, DataFusionError> {
         let runtime_env = RuntimeEnv::new(config)?;
         Ok(Self {
             runtime_env,
@@ -18,7 +27,7 @@ impl DenormalizedRuntimeEnv {
     }
 
     // Getter for RocksDB connection
-    pub fn rocksdb(&self) -> &Arc<RocksDB> {
+    pub fn rocksdb(&self) -> &Arc<RocksDBBackend> {
         &self.rocksdb
     }
 }
