@@ -343,16 +343,16 @@ impl Interval {
     /// Create an interval from -π to π.
     pub fn make_symmetric_pi_interval(data_type: &DataType) -> Result<Self> {
         Self::try_new(
-            ScalarValue::new_negative_pi(data_type)?,
-            ScalarValue::new_pi(data_type)?,
+            ScalarValue::new_negative_pi_lower(data_type)?,
+            ScalarValue::new_pi_upper(data_type)?,
         )
     }
 
     /// Create an interval from -π/2 to π/2.
     pub fn make_symmetric_half_pi_interval(data_type: &DataType) -> Result<Self> {
         Self::try_new(
-            ScalarValue::new_neg_frac_pi_2(data_type)?,
-            ScalarValue::new_frac_pi_2(data_type)?,
+            ScalarValue::new_neg_frac_pi_2_lower(data_type)?,
+            ScalarValue::new_frac_pi_2_upper(data_type)?,
         )
     }
 

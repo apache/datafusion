@@ -340,7 +340,7 @@ mod tests {
     fn zero_to_pi_interval(data_type: &DataType) -> Interval {
         Interval::try_new(
             ScalarValue::new_zero(data_type).unwrap(),
-            ScalarValue::new_pi(data_type).unwrap(),
+            ScalarValue::new_pi_upper(data_type).unwrap(),
         )
         .unwrap()
     }

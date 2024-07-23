@@ -51,7 +51,7 @@ pub(super) fn acos_bounds(input: &[&Interval]) -> crate::Result<Interval> {
 
     Interval::try_new(
         ScalarValue::new_zero(&data_type)?,
-        ScalarValue::new_pi(&data_type)?,
+        ScalarValue::new_pi_upper(&data_type)?,
     )
 }
 
