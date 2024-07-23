@@ -122,7 +122,6 @@ mod tests {
                             result_agg_phy_exprs.field().unwrap()
                         );
                     }
-                    _ => {}
                 };
             }
         }
