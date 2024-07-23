@@ -132,12 +132,17 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        // The data type of the "item" in the list is equivalent to the
+        // data type of the first argument.
+        //
+        // However, `nullable` is set to `true` regardless of how it is
+        // set in the schema of the first argument. This ensures that
+        // the aggregate computation works even when null values are
+        // present in the list.
+        //
+        // This eliminates the need for special treatment of nulls.
         let mut fields = vec![Field::new_list(
             format_state_name(self.name(), "nth_value"),
-            // TODO: The nullability of the list element should be configurable.
-            // The hard-coded `true` should be changed once the field for
-            // nullability is added to `StateFieldArgs` struct.
-            // See: https://github.com/apache/datafusion/pull/11063
             Field::new("item", args.input_type.clone(), true),
             false,
         )];

@@ -198,6 +198,15 @@ impl AggregateUDFImpl for BitwiseOperation {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         if self.operation == BitwiseOperationType::Xor && args.is_distinct {
+            // The data type of the "item" in the list is equivalent to the
+            // data type of the returned value.
+            //
+            // However, `nullable` is set to `true` regardless of how it is
+            // set in the schema of the returned value. This ensures that
+            // the aggregate computation works even when null values are
+            // present in the list.
+            //
+            // This eliminates the need for special treatment of nulls.
             Ok(vec![Field::new_list(
                 format_state_name(
                     args.name,
