@@ -575,6 +575,13 @@ pub mod functions_nested {
     pub use datafusion_functions_nested::*;
 }
 
+/// re-export of [`datafusion_functions_nested`] crate as [`functions_array`] for backward compatibility, if "nested_expressions" feature is enabled
+#[deprecated(since = "41.0.0", note = "use datafusion-functions-nested instead")]
+pub mod functions_array {
+    #[cfg(feature = "nested_expressions")]
+    pub use datafusion_functions_nested::*;
+}
+
 /// re-export of [`datafusion_functions_aggregate`] crate
 pub mod functions_aggregate {
     pub use datafusion_functions_aggregate::*;

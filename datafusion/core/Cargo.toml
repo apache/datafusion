@@ -40,8 +40,10 @@ name = "datafusion"
 path = "src/lib.rs"
 
 [features]
-# Used to enable the avro format
 nested_expressions = ["datafusion-functions-nested"]
+# This feature is deprecated. Use the `nested_expressions` feature instead.
+array_expressions = ["nested_expressions"]
+# Used to enable the avro format
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
