@@ -131,7 +131,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
 
     fn try_encode_file_format(
         &self,
-        _buf: &[u8],
+        _buf: &mut Vec<u8>,
         _node: Arc<dyn FileFormatFactory>,
     ) -> Result<()> {
         Ok(())
@@ -1666,10 +1666,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     input,
                     extension_codec,
                 )?;
-
-                let buf = Vec::new();
+                let mut buf = Vec::new();
                 extension_codec
-                    .try_encode_file_format(&buf, file_type_to_format(file_type)?)?;
+                    .try_encode_file_format(&mut buf, file_type_to_format(file_type)?)?;
 
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CopyTo(Box::new(
