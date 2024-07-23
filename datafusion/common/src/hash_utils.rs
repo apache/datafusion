@@ -610,6 +610,7 @@ mod tests {
             Some(vec![Some(3), None, Some(5)]),
             None,
             Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![]),
         ];
         let list_array =
             Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
@@ -619,6 +620,7 @@ mod tests {
         assert_eq!(hashes[0], hashes[5]);
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
     }
 
     #[test]
@@ -734,42 +736,58 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_map_arrays() {
-        let value_array = Int32Array::from(vec![
-            Some(10),
-            Some(11),
-            Some(10),
-            Some(11),
-            Some(10),
-            Some(12),
-            Some(10),
-            Some(11),
-            Some(11),
-            None,
-        ]);
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        // Row 0
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key2");
+        builder.values().append_value(10);
+        builder.values().append_value(11);
+        builder.append(true).unwrap();
+        // Row 1
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key2");
+        builder.values().append_value(10);
+        builder.values().append_value(11);
+        builder.append(true).unwrap();
+        // Row 2
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key2");
+        builder.values().append_value(10);
+        builder.values().append_value(12);
+        builder.append(true).unwrap();
+        // Row 3
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key3");
+        builder.values().append_value(10);
+        builder.values().append_value(11);
+        builder.append(true).unwrap();
+        // Row 4
+        builder.keys().append_value("key1");
+        builder.values().append_value(10);
+        builder.append(true).unwrap();
+        // Row 5
+        builder.keys().append_value("key1");
+        builder.values().append_null();
+        builder.append(true).unwrap();
+        // Row 6
+        builder.append(true).unwrap();
+        // Row 7
+        builder.keys().append_value("key1");
+        builder.values().append_value(10);
+        builder.append(false).unwrap();
 
-        let map_array = MapArray::new_from_strings(
-            vec![
-                "key1", "key2", "key1", "key2", "key1", "key2", "key1", "key3", "key1",
-                "key1",
-            ]
-            .into_iter(),
-            &value_array,
-            &[0, 2, 4, 6, 8, 9, 9, 9, 10],
-        )
-        .expect("failed to create map array");
-
-        let array = Arc::new(map_array) as ArrayRef;
+        let array = Arc::new(builder.finish()) as ArrayRef;
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let mut hashes = vec![0; array.len()];
         create_hashes(&[array], &random_state, &mut hashes).unwrap();
-        assert_eq!(hashes[0], hashes[1]);
+        assert_eq!(hashes[0], hashes[1]); // same value
         assert_ne!(hashes[0], hashes[2]); // different key
         assert_ne!(hashes[0], hashes[3]); // different value
         assert_ne!(hashes[0], hashes[4]); // missing an entry
-        assert_eq!(hashes[5], hashes[6]); // both empty
-        assert_ne!(hashes[5], hashes[7]); // empty vs null value
-        assert_ne!(hashes[4], hashes[7]); // filled vs null value
+        assert_ne!(hashes[4], hashes[5]); // filled vs null value
+        assert_eq!(hashes[6], hashes[7]); // empty vs null map
     }
 
     #[test]
