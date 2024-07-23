@@ -1018,7 +1018,7 @@ impl ScalarValue {
         }
     }
 
-    /// Returns a [`ScalarFunction`] representing PI's upper bound
+    /// Returns a [`ScalarValue`] representing PI's upper bound
     pub fn new_pi_upper(datatype: &DataType) -> Result<ScalarValue> {
         // TODO: replace the constants with next_up/next_down when
         // they are stabilized: https://doc.rust-lang.org/std/primitive.f64.html#method.next_up
