@@ -34,7 +34,6 @@ mod unknown_column;
 pub mod helpers {
     pub use crate::aggregate::min_max::{max, min};
 }
-pub use crate::aggregate::array_agg_ordered::OrderSensitiveArrayAgg;
 pub use crate::aggregate::build_in::create_aggregate_expr;
 pub use crate::aggregate::min_max::{Max, MaxAccumulator, Min, MinAccumulator};
 pub use crate::aggregate::stats::StatsType;
