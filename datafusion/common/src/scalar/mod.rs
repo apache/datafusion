@@ -17,7 +17,9 @@
 
 //! [`ScalarValue`]: stores single  values
 
+mod consts;
 mod struct_builder;
+
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
@@ -1018,16 +1020,11 @@ impl ScalarValue {
 
     /// Returns a [`ScalarFunction`] representing PI's upper bound
     pub fn new_pi_upper(datatype: &DataType) -> Result<ScalarValue> {
-        // TODO: replace the upper/lower functions with https://doc.rust-lang.org/std/primitive.f64.html#method.next_up
+        // TODO: replace the constants with next_up/next_down when
+        // they are stabilized: https://doc.rust-lang.org/std/primitive.f64.html#method.next_up
         match datatype {
-            DataType::Float32 => {
-                // PI ~ 3.1415927 in f32
-                Ok(ScalarValue::from(3.141593 as f32))
-            }
-            DataType::Float64 => Ok(
-                // PI ~ 3.141592653589793 in f64
-                ScalarValue::from(3.141592653589794 as f64),
-            ),
+            DataType::Float32 => Ok(ScalarValue::from(consts::PI_UPPER_F32)),
+            DataType::Float64 => Ok(ScalarValue::from(consts::PI_UPPER_F64)),
             _ => {
                 _internal_err!("PI_UPPER is not supported for data type: {:?}", datatype)
             }
@@ -1037,14 +1034,8 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing -PI's lower bound
     pub fn new_negative_pi_lower(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
-            DataType::Float32 => {
-                // -PI ~ -3.1415927 in f32
-                Ok(ScalarValue::from(-3.141593 as f32))
-            }
-            DataType::Float64 => {
-                // -PI ~ -3.141592653589793 in f64
-                Ok(ScalarValue::from(-3.141592653589794 as f64))
-            }
+            DataType::Float32 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F32)),
+            DataType::Float64 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F64)),
             _ => {
                 _internal_err!("-PI_LOWER is not supported for data type: {:?}", datatype)
             }
@@ -1054,14 +1045,8 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing FRAC_PI_2's upper bound
     pub fn new_frac_pi_2_upper(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
-            DataType::Float32 => {
-                // PI/2 ~ 1.5707964 in f32
-                Ok(ScalarValue::from(1.5707965 as f32))
-            }
-            DataType::Float64 => {
-                // PI/2 ~ 1.5707963267948966 in f64
-                Ok(ScalarValue::from(1.5707963267948967 as f64))
-            }
+            DataType::Float32 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F32)),
+            DataType::Float64 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F64)),
             _ => {
                 _internal_err!(
                     "PI_UPPER/2 is not supported for data type: {:?}",
@@ -1076,11 +1061,10 @@ impl ScalarValue {
         match datatype {
             DataType::Float32 => {
                 // -PI/2 ~ -1.5707964 in f32
-                Ok(ScalarValue::from(-1.5707965 as f32))
+                Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F32))
             }
             DataType::Float64 => {
-                // -PI/2 ~ -1.5707963267948966 in f64
-                Ok(ScalarValue::from(-1.5707963267948967 as f64))
+                Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F64))
             }
             _ => {
                 _internal_err!(
