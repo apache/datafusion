@@ -429,6 +429,7 @@ pub(crate) mod tests {
                 self.column_name(),
                 false,
                 false,
+                false,
             )
             .unwrap()
         }

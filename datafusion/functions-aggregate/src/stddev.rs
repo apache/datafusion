@@ -273,6 +273,7 @@ mod tests {
 
     use arrow::{array::*, datatypes::*};
 
+    use datafusion_common::DFSchema;
     use datafusion_expr::AggregateUDF;
     use datafusion_physical_expr_common::aggregate::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr_common::expressions::column::col;
@@ -324,13 +325,16 @@ mod tests {
         agg2: Arc<AggregateUDF>,
         schema: &Schema,
     ) -> Result<ScalarValue> {
+        let dfschema = DFSchema::empty();
         let args1 = AccumulatorArgs {
             data_type: &DataType::Float64,
             schema,
+            dfschema: &dfschema,
             ignore_nulls: false,
             sort_exprs: &[],
             name: "a",
             is_distinct: false,
+            is_reversed: false,
             input_type: &DataType::Float64,
             input_exprs: &[datafusion_expr::col("a")],
         };
@@ -338,10 +342,12 @@ mod tests {
         let args2 = AccumulatorArgs {
             data_type: &DataType::Float64,
             schema,
+            dfschema: &dfschema,
             ignore_nulls: false,
             sort_exprs: &[],
             name: "a",
             is_distinct: false,
+            is_reversed: false,
             input_type: &DataType::Float64,
             input_exprs: &[datafusion_expr::col("a")],
         };

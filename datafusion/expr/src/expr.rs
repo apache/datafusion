@@ -109,7 +109,7 @@ use sqlparser::ast::NullTreatment;
 /// ## Binary Expressions
 ///
 /// Exprs implement traits that allow easy to understand construction of more
-/// complex expresions. For example, to create `c1 + c2` to add columns "c1" and
+/// complex expressions. For example, to create `c1 + c2` to add columns "c1" and
 /// "c2" together
 ///
 /// ```
@@ -1398,7 +1398,7 @@ impl Expr {
             }
             Ok(TreeNodeRecursion::Continue)
         })
-        .expect("traversal is infallable");
+        .expect("traversal is infallible");
     }
 
     /// Return all references to columns and their occurrence counts in the expression.
@@ -1433,7 +1433,7 @@ impl Expr {
             }
             Ok(TreeNodeRecursion::Continue)
         })
-        .expect("traversal is infallable");
+        .expect("traversal is infallible");
     }
 
     /// Returns true if there are any column references in this Expr

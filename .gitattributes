@@ -1,3 +1,4 @@
 .github/ export-ignore
+datafusion/core/tests/data/newlines_in_values.csv text eol=lf
 datafusion/proto/src/generated/prost.rs linguist-generated
 datafusion/proto/src/generated/pbjson.rs linguist-generated

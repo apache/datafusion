@@ -1872,22 +1872,27 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         )?),
                         None => None,
                     };
+
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         physical_sort_exprs.clone().unwrap_or(vec![]);
-                    let agg_expr = udaf::create_aggregate_expr(
+
+                    let agg_expr = udaf::create_aggregate_expr_with_dfschema(
                         fun,
                         &physical_args,
                         args,
                         &sort_exprs,
                         &ordering_reqs,
-                        physical_input_schema,
+                        logical_input_schema,
                         name,
                         ignore_nulls,
                         *distinct,
+                        false,
                     )?;
+
                     (agg_expr, filter, physical_sort_exprs)
                 }
             };
+
             Ok((agg_expr, filter, order_by))
         }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),

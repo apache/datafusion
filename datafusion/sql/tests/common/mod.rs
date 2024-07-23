@@ -25,6 +25,7 @@ use arrow_schema::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{plan_err, GetExt, Result, TableReference};
+use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 use datafusion_sql::planner::ContextProvider;
 
@@ -53,10 +54,11 @@ pub(crate) struct MockContextProvider {
     options: ConfigOptions,
     udfs: HashMap<String, Arc<ScalarUDF>>,
     udafs: HashMap<String, Arc<AggregateUDF>>,
+    expr_planners: Vec<Arc<dyn ExprPlanner>>,
 }
 
 impl MockContextProvider {
-    // Surpressing dead code warning, as this is used in integration test crates
+    // Suppressing dead code warning, as this is used in integration test crates
     #[allow(dead_code)]
     pub(crate) fn options_mut(&mut self) -> &mut ConfigOptions {
         &mut self.options
@@ -71,6 +73,11 @@ impl MockContextProvider {
     pub(crate) fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
         // TODO: change to to_string() if all the function name is converted to lowercase
         self.udafs.insert(udaf.name().to_lowercase(), udaf);
+        self
+    }
+
+    pub(crate) fn with_expr_planner(mut self, planner: Arc<dyn ExprPlanner>) -> Self {
+        self.expr_planners.push(planner);
         self
     }
 }
@@ -239,6 +246,10 @@ impl ContextProvider for MockContextProvider {
 
     fn udwf_names(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.expr_planners
     }
 }
 

@@ -228,7 +228,7 @@ fn array_remove_internal(
     }
 }
 
-/// For each element of `list_array[i]`, removed up to `arr_n[i]`  occurences
+/// For each element of `list_array[i]`, removed up to `arr_n[i]` occurrences
 /// of `element_array[i]`.
 ///
 /// The type of each **element** in `list_array` must be the same as the type of

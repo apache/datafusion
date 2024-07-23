@@ -293,3 +293,45 @@ id0 "value0"
 id1 "value1"
 id2 "value2"
 id3 "value3"
+
+# Handling of newlines in values
+
+statement ok
+SET datafusion.optimizer.repartition_file_min_size = 1;
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_newlines_in_values_unsafe (
+col1 TEXT,
+col2 TEXT
+) STORED AS CSV
+LOCATION '../core/tests/data/newlines_in_values.csv';
+
+statement error incorrect number of fields
+select * from stored_table_with_newlines_in_values_unsafe;
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_newlines_in_values_safe (
+col1 TEXT,
+col2 TEXT
+) STORED AS CSV
+LOCATION '../core/tests/data/newlines_in_values.csv'
+OPTIONS ('format.newlines_in_values' 'true');
+
+query TT
+select * from stored_table_with_newlines_in_values_safe;
+----
+id message
+1
+01)hello
+02)world
+2
+01)something
+02)else
+3
+01)
+02)many
+03)lines
+04)make
+05)good test
+4 unquoted
+value end

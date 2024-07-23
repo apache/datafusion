@@ -43,7 +43,7 @@ make_udaf_expr_and_func!(
     approx_percentile_cont_with_weight_udaf
 );
 
-/// APPROX_PERCENTILE_CONT_WITH_WEIGTH aggregate expression
+/// APPROX_PERCENTILE_CONT_WITH_WEIGHT aggregate expression
 pub struct ApproxPercentileContWithWeight {
     signature: Signature,
     approx_percentile_cont: ApproxPercentileCont,

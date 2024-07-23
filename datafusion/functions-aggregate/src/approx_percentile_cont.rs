@@ -30,7 +30,8 @@ use arrow::{
 use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, ScalarValue,
+    downcast_value, internal_err, not_impl_err, plan_err, DFSchema, DataFusionError,
+    ScalarValue,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
@@ -42,7 +43,7 @@ use datafusion_expr::{
 use datafusion_physical_expr_common::aggregate::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
-use datafusion_physical_expr_common::utils::limited_convert_logical_expr_to_physical_expr;
+use datafusion_physical_expr_common::utils::limited_convert_logical_expr_to_physical_expr_with_dfschema;
 
 make_udaf_expr_and_func!(
     ApproxPercentileCont,
@@ -135,7 +136,9 @@ impl ApproxPercentileCont {
 fn get_lit_value(expr: &Expr) -> datafusion_common::Result<ScalarValue> {
     let empty_schema = Arc::new(Schema::empty());
     let empty_batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    let expr = limited_convert_logical_expr_to_physical_expr(expr, &empty_schema)?;
+    let dfschema = DFSchema::empty();
+    let expr =
+        limited_convert_logical_expr_to_physical_expr_with_dfschema(expr, &dfschema)?;
     let result = expr.evaluate(&empty_batch)?;
     match result {
         ColumnarValue::Array(_) => Err(DataFusionError::Internal(format!(

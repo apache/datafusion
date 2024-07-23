@@ -103,6 +103,14 @@ fn analyze_internal(
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
     schema.merge(external_schema);
 
+    // Coerce filter predicates to boolean (handles `WHERE NULL`)
+    let plan = if let LogicalPlan::Filter(mut filter) = plan {
+        filter.predicate = filter.predicate.cast_to(&DataType::Boolean, &schema)?;
+        LogicalPlan::Filter(filter)
+    } else {
+        plan
+    };
+
     let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
 
     let name_preserver = NamePreserver::new(&plan);

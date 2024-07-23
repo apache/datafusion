@@ -355,7 +355,7 @@ where
         assert_eq!(values.len(), batch_hashes.len());
 
         for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
-            // hande null value
+            // handle null value
             let Some(value) = value else {
                 let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
                     payload
@@ -439,7 +439,7 @@ where
                     // Put the small values into buffer and offsets so it
                     // appears the output array, and store that offset
                     // so the bytes can be compared if needed
-                    let offset = self.buffer.len(); // offset of start fof data
+                    let offset = self.buffer.len(); // offset of start for data
                     self.buffer.append_slice(value);
                     self.offsets.push(O::usize_as(self.buffer.len()));
 

@@ -27,6 +27,7 @@ use arrow::array::{
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
+    DECIMAL256_MAX_PRECISION,
 };
 use prost::Message;
 
@@ -44,6 +45,7 @@ use datafusion::functions_aggregate::expr_fn::{
     count_distinct, covar_pop, covar_samp, first_value, grouping, median, stddev,
     stddev_pop, sum, var_pop, var_sample,
 };
+use datafusion::functions_array::map::map;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -66,7 +68,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
-    avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
+    array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_proto::bytes::{
@@ -702,6 +704,12 @@ async fn roundtrip_expr_api() -> Result<()> {
         string_agg(col("a").cast_to(&DataType::Utf8, &schema)?, lit("|")),
         bool_and(lit(true)),
         bool_or(lit(true)),
+        array_agg(lit(1)),
+        array_agg(lit(1)).distinct().build().unwrap(),
+        map(
+            vec![lit(1), lit(2), lit(3)],
+            vec![lit(10), lit(20), lit(30)],
+        ),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -1372,6 +1380,7 @@ fn round_trip_datatype() {
         DataType::Utf8,
         DataType::LargeUtf8,
         DataType::Decimal128(7, 12),
+        DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
         // Recursive list tests
         DataType::List(new_arc_field("Level1", DataType::Binary, true)),
         DataType::List(new_arc_field(

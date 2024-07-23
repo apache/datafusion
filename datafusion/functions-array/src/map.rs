@@ -15,18 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::make_array::make_array;
+use arrow::array::ArrayData;
+use arrow_array::{Array, ArrayRef, MapArray, StructArray};
+use arrow_buffer::{Buffer, ToByteSlice};
+use arrow_schema::{DataType, Field, SchemaBuilder};
+use datafusion_common::{exec_err, ScalarValue};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayData, ArrayRef, MapArray, StructArray};
-use arrow::compute::concat;
-use arrow::datatypes::{DataType, Field, SchemaBuilder};
-use arrow_buffer::{Buffer, ToByteSlice};
+/// Returns a map created from a key list and a value list
+pub fn map(keys: Vec<Expr>, values: Vec<Expr>) -> Expr {
+    let keys = make_array(keys);
+    let values = make_array(values);
+    Expr::ScalarFunction(ScalarFunction::new_udf(map_udf(), vec![keys, values]))
+}
 
-use datafusion_common::{exec_err, internal_err, ScalarValue};
-use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+create_func!(MapFunc, map_udf);
 
 /// Check if we can evaluate the expr to constant directly.
 ///
@@ -40,42 +48,7 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn make_map(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let can_evaluate_to_const = can_evaluate_to_const(args);
-
-    let (key, value): (Vec<_>, Vec<_>) = args
-        .chunks_exact(2)
-        .map(|chunk| {
-            if let ColumnarValue::Array(_) = chunk[0] {
-                return not_impl_err!("make_map does not support array keys");
-            }
-            if let ColumnarValue::Array(_) = chunk[1] {
-                return not_impl_err!("make_map does not support array values");
-            }
-            Ok((chunk[0].clone(), chunk[1].clone()))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .unzip();
-
-    let keys = ColumnarValue::values_to_arrays(&key)?;
-    let values = ColumnarValue::values_to_arrays(&value)?;
-
-    let keys: Vec<_> = keys.iter().map(|k| k.as_ref()).collect();
-    let values: Vec<_> = values.iter().map(|v| v.as_ref()).collect();
-
-    let key = match concat(&keys) {
-        Ok(key) => key,
-        Err(e) => return internal_err!("Error concatenating keys: {}", e),
-    };
-    let value = match concat(&values) {
-        Ok(value) => value,
-        Err(e) => return internal_err!("Error concatenating values: {}", e),
-    };
-    make_map_batch_internal(key, value, can_evaluate_to_const)
-}
-
-fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
     if args.len() != 2 {
         return exec_err!(
             "make_map requires exactly 2 arguments, got {} instead",
@@ -90,7 +63,9 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     make_map_batch_internal(key, value, can_evaluate_to_const)
 }
 
-fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
+fn get_first_array_ref(
+    columnar_value: &ColumnarValue,
+) -> datafusion_common::Result<ArrayRef> {
     match columnar_value {
         ColumnarValue::Scalar(value) => match value {
             ScalarValue::List(array) => Ok(array.value(0)),
@@ -106,7 +81,7 @@ fn make_map_batch_internal(
     keys: ArrayRef,
     values: ArrayRef,
     can_evaluate_to_const: bool,
-) -> Result<ColumnarValue> {
+) -> datafusion_common::Result<ColumnarValue> {
     if keys.null_count() > 0 {
         return exec_err!("map key cannot be null");
     }
@@ -155,115 +130,6 @@ fn make_map_batch_internal(
 }
 
 #[derive(Debug)]
-pub struct MakeMap {
-    signature: Signature,
-}
-
-impl Default for MakeMap {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl MakeMap {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::user_defined(Volatility::Immutable),
-        }
-    }
-}
-
-impl ScalarUDFImpl for MakeMap {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "make_map"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.is_empty() {
-            return exec_err!(
-                "make_map requires at least one pair of arguments, got 0 instead"
-            );
-        }
-        if arg_types.len() % 2 != 0 {
-            return exec_err!(
-                "make_map requires an even number of arguments, got {} instead",
-                arg_types.len()
-            );
-        }
-
-        let key_type = &arg_types[0];
-        let mut value_type = &arg_types[1];
-
-        for (i, chunk) in arg_types.chunks_exact(2).enumerate() {
-            if chunk[0].is_null() {
-                return exec_err!("make_map key cannot be null at position {}", i);
-            }
-            if &chunk[0] != key_type {
-                return exec_err!(
-                    "make_map requires all keys to have the same type {}, got {} instead at position {}",
-                    key_type,
-                    chunk[0],
-                    i
-                );
-            }
-
-            if !chunk[1].is_null() {
-                if value_type.is_null() {
-                    value_type = &chunk[1];
-                } else if &chunk[1] != value_type {
-                    return exec_err!(
-                        "map requires all values to have the same type {}, got {} instead at position {}",
-                        value_type,
-                        &chunk[1],
-                        i
-                    );
-                }
-            }
-        }
-
-        let mut result = Vec::new();
-        for _ in 0..arg_types.len() / 2 {
-            result.push(key_type.clone());
-            result.push(value_type.clone());
-        }
-
-        Ok(result)
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let key_type = &arg_types[0];
-        let mut value_type = &arg_types[1];
-
-        for chunk in arg_types.chunks_exact(2) {
-            if !chunk[1].is_null() && value_type.is_null() {
-                value_type = &chunk[1];
-            }
-        }
-
-        let mut builder = SchemaBuilder::new();
-        builder.push(Field::new("key", key_type.clone(), false));
-        builder.push(Field::new("value", value_type.clone(), true));
-        let fields = builder.finish().fields;
-        Ok(DataType::Map(
-            Arc::new(Field::new("entries", DataType::Struct(fields), false)),
-            false,
-        ))
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_map(args)
-    }
-}
-
-#[derive(Debug)]
 pub struct MapFunc {
     signature: Signature,
 }
@@ -295,7 +161,7 @@ impl ScalarUDFImpl for MapFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
         if arg_types.len() % 2 != 0 {
             return exec_err!(
                 "map requires an even number of arguments, got {} instead",
@@ -320,12 +186,12 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
         make_map_batch(args)
     }
 }
 
-fn get_element_type(data_type: &DataType) -> Result<&DataType> {
+fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType> {
     match data_type {
         DataType::List(element) => Ok(element.data_type()),
         DataType::LargeList(element) => Ok(element.data_type()),
