@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::Result;
 use datafusion_expr::AggregateFunction;
 
 use crate::expressions::{self};
@@ -56,7 +56,6 @@ pub fn create_aggregate_expr(
     let data_type = input_phy_types[0].clone();
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::ArrayAgg, _) => return internal_err!("not reachable"),
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             Arc::clone(&input_phy_exprs[0]),
             name,
@@ -123,7 +122,6 @@ mod tests {
                             result_agg_phy_exprs.field().unwrap()
                         );
                     }
-                    _ => {}
                 };
             }
         }

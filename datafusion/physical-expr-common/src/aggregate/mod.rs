@@ -573,8 +573,9 @@ impl AggregateExpr for AggregateFunctionExpr {
                     })
                     .collect::<Vec<_>>();
                 let mut name = self.name().to_string();
-                // TODO: Generalize order-by clause rewrite
-                if reverse_udf.name() == "ARRAY_AGG" {
+                // If the function is changed, we need to reverse order_by clause as well
+                // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
+                if self.fun().name() == reverse_udf.name() {
                 } else {
                     replace_order_by_clause(&mut name);
                 }
