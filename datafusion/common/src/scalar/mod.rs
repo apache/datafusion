@@ -1060,7 +1060,6 @@ impl ScalarValue {
     pub fn new_neg_frac_pi_2_lower(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
             DataType::Float32 => {
-                // -PI/2 ~ -1.5707964 in f32
                 Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F32))
             }
             DataType::Float64 => {
