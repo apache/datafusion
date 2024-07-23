@@ -20,6 +20,7 @@ use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use hashbrown::HashSet;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -45,7 +46,6 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         .map(|(i, chunk)| {
 
             let name_column = &chunk[0];
-
             let name = match name_column {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(name_scalar))) => name_scalar,
                 _ => return exec_err!("named_struct even arguments must be string literals, got {name_column:?} instead at position {}", i * 2)
@@ -56,6 +56,15 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .unzip();
+
+    // Check to enforce the uniqueness of struct field name
+    let unique_field_names_set = names.iter().collect::<HashSet<_>>();
+
+    if unique_field_names_set.len() != names.len() {
+        return exec_err!("named_struct requires unique field names");
+    }
+
+    drop(unique_field_names_set);
 
     let arrays = ColumnarValue::values_to_arrays(&values)?;
 
