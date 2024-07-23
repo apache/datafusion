@@ -113,6 +113,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         "sum1",
         false,
         false,
+        false,
     )
     .unwrap()];
     let expr = group_by_columns

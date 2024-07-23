@@ -24,8 +24,8 @@ use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, InListExpr, IsNotNullExpr,
-    IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr, NthValue, Ntile,
-    OrderSensitiveArrayAgg, Rank, RankType, RowNumber, TryCastExpr, WindowShift,
+    IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr, NthValue, Ntile, Rank,
+    RankType, RowNumber, TryCastExpr, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -260,10 +260,8 @@ struct AggrFn {
 fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     let aggr_expr = expr.as_any();
 
-    // TODO: remove OrderSensitiveArrayAgg
-    let inner = if aggr_expr.downcast_ref::<OrderSensitiveArrayAgg>().is_some() {
-        protobuf::AggregateFunction::ArrayAgg
-    } else if aggr_expr.downcast_ref::<Min>().is_some() {
+    // TODO: remove Min and Max
+    let inner = if aggr_expr.downcast_ref::<Min>().is_some() {
         protobuf::AggregateFunction::Min
     } else if aggr_expr.downcast_ref::<Max>().is_some() {
         protobuf::AggregateFunction::Max
