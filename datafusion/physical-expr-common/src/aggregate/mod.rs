@@ -252,13 +252,28 @@ impl AggregateExprBuilder {
         self
     }
 
+    pub fn with_reversed(mut self, is_reversed: bool) -> Self {
+        self.is_reversed = is_reversed;
+        self
+    }
+
     pub fn distinct(mut self) -> Self {
         self.is_distinct = true;
         self
     }
 
+    pub fn with_distinct(mut self, is_distinct: bool) -> Self {
+        self.is_distinct = is_distinct;
+        self
+    }
+
     pub fn ignore_nulls(mut self) -> Self {
         self.ignore_nulls = true;
+        self
+    }
+
+    pub fn with_ignore_nulls(mut self, ignore_nulls: bool) -> Self {
+        self.ignore_nulls = ignore_nulls;
         self
     }
 

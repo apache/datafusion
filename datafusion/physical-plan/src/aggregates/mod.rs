@@ -1211,7 +1211,7 @@ mod tests {
 
     use crate::common::collect;
     use datafusion_physical_expr_common::aggregate::{
-        create_aggregate_expr, create_aggregate_expr_with_dfschema, AggregateExprBuilder,
+        create_aggregate_expr_with_dfschema, AggregateExprBuilder,
     };
     use datafusion_physical_expr_common::expressions::Literal;
     use futures::{FutureExt, Stream};
@@ -1821,18 +1821,13 @@ mod tests {
             vec![test_median_agg_expr(Arc::clone(&input_schema))?];
 
         // use fast-path in `row_hash.rs`.
-        let aggregates_v2: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
-            &avg_udaf(),
-            &[col("b", &input_schema)?],
-            &[datafusion_expr::col("b")],
-            &[],
-            &[],
-            &input_schema,
-            "AVG(b)",
-            false,
-            false,
-            false,
-        )?];
+        let aggregates_v2: Vec<Arc<dyn AggregateExpr>> =
+            vec![
+                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
+                    .schema(Arc::clone(&input_schema))
+                    .name("AVG(b)")
+                    .build()?,
+            ];
 
         for (version, groups, aggregates) in [
             (0, groups_none, aggregates_v0),
@@ -1886,18 +1881,13 @@ mod tests {
 
         let groups = PhysicalGroupBy::default();
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
-            &avg_udaf(),
-            &[col("a", &schema)?],
-            &[datafusion_expr::col("a")],
-            &[],
-            &[],
-            &schema,
-            "AVG(a)",
-            false,
-            false,
-            false,
-        )?];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> =
+            vec![
+                AggregateExprBuilder::new(avg_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .name("AVG(a)")
+                    .build()?,
+            ];
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
@@ -1931,18 +1921,13 @@ mod tests {
         let groups =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
-            &avg_udaf(),
-            &[col("b", &schema)?],
-            &[datafusion_expr::col("b")],
-            &[],
-            &[],
-            &schema,
-            "AVG(b)",
-            false,
-            false,
-            false,
-        )?];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> =
+            vec![
+                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .name("AVG(b)")
+                    .build()?,
+            ];
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
@@ -2366,18 +2351,11 @@ mod tests {
             ],
         );
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
-            count_udaf().as_ref(),
-            &[lit(1)],
-            &[datafusion_expr::lit(1)],
-            &[],
-            &[],
-            schema.as_ref(),
-            "1",
-            false,
-            false,
-            false,
-        )?];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> =
+            vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
+                .schema(Arc::clone(&schema))
+                .name("1")
+                .build()?];
 
         let input_batches = (0..4)
             .map(|_| {

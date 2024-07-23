@@ -26,7 +26,7 @@ use crate::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    udaf, ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
+    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
@@ -44,6 +44,7 @@ use datafusion_physical_expr::{
     AggregateExpr, ConstExpr, EquivalenceProperties, LexOrdering,
     PhysicalSortRequirement,
 };
+use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
 use itertools::Itertools;
 
 mod bounded_window_agg_exec;
@@ -95,7 +96,7 @@ pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
-    logical_args: &[Expr],
+    _logical_args: &[Expr],
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
@@ -131,7 +132,7 @@ pub fn create_window_expr(
         WindowFunctionDefinition::AggregateUDF(fun) => {
             // TODO: Ordering not supported for Window UDFs yet
             // Convert `Vec<PhysicalSortExpr>` into `Vec<Expr::Sort>`
-            let sort_exprs = order_by
+            let _sort_exprs = order_by
                 .iter()
                 .map(|PhysicalSortExpr { expr, options }| {
                     let field_name = expr.to_string();
@@ -147,18 +148,11 @@ pub fn create_window_expr(
                 })
                 .collect::<Vec<_>>();
 
-            let aggregate = udaf::create_aggregate_expr(
-                fun.as_ref(),
-                args,
-                logical_args,
-                &sort_exprs,
-                order_by,
-                input_schema,
-                name,
-                ignore_nulls,
-                false,
-                false,
-            )?;
+            let aggregate = AggregateExprBuilder::new(fun.clone(), args.to_vec())
+                .schema(Arc::new(input_schema.clone()))
+                .name(name)
+                .with_ignore_nulls(ignore_nulls)
+                .build()?;
             window_expr_from_aggregate_expr(
                 partition_by,
                 order_by,
