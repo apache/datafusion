@@ -29,8 +29,8 @@ use arrow_buffer::IntervalMonthDayNano;
 
 use crate::cast::{
     as_boolean_array, as_fixed_size_list_array, as_generic_binary_array,
-    as_large_list_array, as_list_array, as_primitive_array, as_string_array,
-    as_struct_array,
+    as_large_list_array, as_list_array, as_map_array, as_primitive_array,
+    as_string_array, as_struct_array,
 };
 use crate::error::{Result, _internal_err};
 
@@ -236,6 +236,40 @@ fn hash_struct_array(
     Ok(())
 }
 
+fn hash_map_array(
+    array: &MapArray,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()> {
+    let nulls = array.nulls();
+    let offsets = array.offsets();
+
+    // Create hashes for each entry in each row
+    let mut values_hashes = vec![0u64; array.entries().len()];
+    create_hashes(array.entries().columns(), random_state, &mut values_hashes)?;
+
+    // Combine the hashes for entries on each row with each other and previous hash for that row
+    if let Some(nulls) = nulls {
+        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+            if nulls.is_valid(i) {
+                let hash = &mut hashes_buffer[i];
+                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                    *hash = combine_hashes(*hash, *values_hash);
+                }
+            }
+        }
+    } else {
+        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+            let hash = &mut hashes_buffer[i];
+            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                *hash = combine_hashes(*hash, *values_hash);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn hash_list_array<OffsetSize>(
     array: &GenericListArray<OffsetSize>,
     random_state: &RandomState,
@@ -399,6 +433,10 @@ pub fn create_hashes<'a>(
             DataType::LargeList(_) => {
                 let array = as_large_list_array(array)?;
                 hash_list_array(array, random_state, hashes_buffer)?;
+            }
+            DataType::Map(_, _) => {
+                let array = as_map_array(array)?;
+                hash_map_array(array, random_state, hashes_buffer)?;
             }
             DataType::FixedSizeList(_,_) => {
                 let array = as_fixed_size_list_array(array)?;
@@ -572,6 +610,7 @@ mod tests {
             Some(vec![Some(3), None, Some(5)]),
             None,
             Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![]),
         ];
         let list_array =
             Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
@@ -581,6 +620,7 @@ mod tests {
         assert_eq!(hashes[0], hashes[5]);
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
     }
 
     #[test]
@@ -690,6 +730,64 @@ mod tests {
         let mut hashes = vec![0; array.len()];
         create_hashes(&[array], &random_state, &mut hashes).unwrap();
         assert_eq!(hashes[0], hashes[1]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_map_arrays() {
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        // Row 0
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key2");
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+        // Row 1
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key2");
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+        // Row 2
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key2");
+        builder.values().append_value(1);
+        builder.values().append_value(3);
+        builder.append(true).unwrap();
+        // Row 3
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key3");
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+        // Row 4
+        builder.keys().append_value("key1");
+        builder.values().append_value(1);
+        builder.append(true).unwrap();
+        // Row 5
+        builder.keys().append_value("key1");
+        builder.values().append_null();
+        builder.append(true).unwrap();
+        // Row 6
+        builder.append(true).unwrap();
+        // Row 7
+        builder.keys().append_value("key1");
+        builder.values().append_value(1);
+        builder.append(false).unwrap();
+
+        let array = Arc::new(builder.finish()) as ArrayRef;
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; array.len()];
+        create_hashes(&[array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1]); // same value
+        assert_ne!(hashes[0], hashes[2]); // different value
+        assert_ne!(hashes[0], hashes[3]); // different key
+        assert_ne!(hashes[0], hashes[4]); // missing an entry
+        assert_ne!(hashes[4], hashes[5]); // filled vs null value
+        assert_eq!(hashes[6], hashes[7]); // empty vs null map
     }
 
     #[test]
