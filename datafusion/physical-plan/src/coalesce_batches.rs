@@ -303,28 +303,27 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
         .iter()
         .map(|c| {
             // Try to re-create the `StringViewArray` to prevent holding the underlying buffer too long.
-            if let Some(s) = c.as_string_view_opt() {
-                let view_cnt = s.views().len();
-                let buffer_size = s.get_buffer_memory_size();
+            let Some(s) = c.as_string_view_opt() else {
+                return Arc::clone(c);
+            };
+            let view_cnt = s.views().len();
+            let buffer_size = s.get_buffer_memory_size();
 
-                // Re-creating the array copies data and can be time consuming.
-                // We only do it if the array is sparse, below is a heuristic to determine if the array is sparse.
-                if buffer_size > (view_cnt * 32) {
-                    // We use a block size of 2MB (instead of 8KB) to reduce the number of buffers to track.
-                    // See https://github.com/apache/arrow-rs/issues/6094 for more details.
-                    let mut builder = StringViewBuilder::with_capacity(s.len())
-                        .with_block_size(1024 * 1024 * 2);
+            // Re-creating the array copies data and can be time consuming.
+            // We only do it if the array is sparse, below is a heuristic to determine if the array is sparse.
+            if buffer_size > (view_cnt * 32) {
+                // We use a block size of 2MB (instead of 8KB) to reduce the number of buffers to track.
+                // See https://github.com/apache/arrow-rs/issues/6094 for more details.
+                let mut builder = StringViewBuilder::with_capacity(s.len())
+                    .with_block_size(1024 * 1024 * 2);
 
-                    for v in s.iter() {
-                        builder.append_option(v);
-                    }
-
-                    let gc_string = builder.finish();
-
-                    Arc::new(gc_string)
-                } else {
-                    Arc::clone(c)
+                for v in s.iter() {
+                    builder.append_option(v);
                 }
+
+                let gc_string = builder.finish();
+
+                Arc::new(gc_string)
             } else {
                 Arc::clone(c)
             }
