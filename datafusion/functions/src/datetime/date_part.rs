@@ -21,8 +21,9 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Float64Array};
 use arrow::compute::{binary, cast, date_part, DatePart};
 use arrow::datatypes::DataType::{
-    Date32, Date64, Float64, Time32, Time64, Timestamp, Utf8,
+    Date32, Date64, Float64, Interval, Time32, Time64, Timestamp, Utf8,
 };
+use arrow::datatypes::IntervalUnit::{YearMonth, DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
@@ -81,6 +82,9 @@ impl DatePartFunc {
                     Exact(vec![Utf8, Time32(Millisecond)]),
                     Exact(vec![Utf8, Time64(Microsecond)]),
                     Exact(vec![Utf8, Time64(Nanosecond)]),
+                    Exact(vec![Utf8, Interval(YearMonth)]),
+                    Exact(vec![Utf8, Interval(DayTime)]),
+                    Exact(vec![Utf8, Interval(MonthDayNano)]),
                 ],
                 Volatility::Immutable,
             ),
