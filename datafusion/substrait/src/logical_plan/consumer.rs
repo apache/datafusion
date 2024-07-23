@@ -1450,21 +1450,14 @@ fn from_substrait_type(
                     from_substrait_type(value_type, extensions, dfs_names, name_idx)?,
                     true,
                 ));
-                match map.type_variation_reference {
-                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
-                        Ok(DataType::Map(
-                            Arc::new(Field::new_struct(
-                                "entries",
-                                [key_field, value_field],
-                                false, // The inner map field is always non-nullable (Arrow #1697),
-                            )),
-                            false, // whether keys are sorted
-                        ))
-                    }
-                    v => not_impl_err!(
-                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
-                    )?,
-                }
+                Ok(DataType::Map(
+                    Arc::new(Field::new_struct(
+                        "entries",
+                        [key_field, value_field],
+                        false, // The inner map field is always non-nullable (Arrow #1697),
+                    )),
+                    false, // whether keys are sorted
+                ))
             }
             r#type::Kind::Decimal(d) => match d.type_variation_reference {
                 DECIMAL_128_TYPE_VARIATION_REF => {
@@ -1836,20 +1829,13 @@ fn from_substrait_literal(
                 );
             }
 
-            match lit.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
-                    ScalarValue::Map(Arc::new(MapArray::new(
-                        Arc::new(Field::new("entries", entries[0].data_type(), false)),
-                        OffsetBuffer::new(vec![0, entries.len() as i32].into()),
-                        ScalarValue::iter_to_array(entries)?.as_struct().to_owned(),
-                        None,
-                        false,
-                    )))
-                }
-                others => {
-                    return substrait_err!("Unknown type variation reference {others}");
-                }
-            }
+            ScalarValue::Map(Arc::new(MapArray::new(
+                Arc::new(Field::new("entries", entries[0].data_type(), false)),
+                OffsetBuffer::new(vec![0, entries.len() as i32].into()),
+                ScalarValue::iter_to_array(entries)?.as_struct().to_owned(),
+                None,
+                false,
+            )))
         }
         Some(LiteralType::EmptyMap(m)) => {
             let key = match &m.key {
@@ -1875,20 +1861,13 @@ fn from_substrait_literal(
             );
             let struct_array =
                 new_empty_array(entries.data_type()).as_struct().to_owned();
-            match lit.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
-                    ScalarValue::Map(Arc::new(MapArray::new(
-                        Arc::new(entries),
-                        OffsetBuffer::new(vec![0, 0].into()),
-                        struct_array,
-                        None,
-                        false,
-                    )))
-                }
-                others => {
-                    return substrait_err!("Unknown type variation reference {others}");
-                }
-            }
+            ScalarValue::Map(Arc::new(MapArray::new(
+                Arc::new(entries),
+                OffsetBuffer::new(vec![0, 0].into()),
+                struct_array,
+                None,
+                false,
+            )))
         }
         Some(LiteralType::Struct(s)) => {
             let mut builder = ScalarStructBuilder::new();
@@ -2139,14 +2118,7 @@ fn from_substrait_null(
                     false,
                 ));
 
-                match map.type_variation_reference {
-                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
-                        DataType::Map(entries_field, false /* keys sorted */).try_into()
-                    }
-                    v => not_impl_err!(
-                        "Unsupported Substrait type variation {v} of type {kind:?}"
-                    ),
-                }
+                DataType::Map(entries_field, false /* keys sorted */).try_into()
             }
             r#type::Kind::Struct(s) => {
                 let fields =
