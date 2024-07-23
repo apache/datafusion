@@ -31,11 +31,11 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{exec_err, Column, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Expr;
 use datafusion_expr::{
-    BuiltInWindowFunction, PartitionEvaluator, SortExpr, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
+    WindowUDF,
 };
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
@@ -130,27 +130,10 @@ pub fn create_window_expr(
             ))
         }
         WindowFunctionDefinition::AggregateUDF(fun) => {
-            // TODO: Ordering not supported for Window UDFs yet
-            // Convert `Vec<PhysicalSortExpr>` into `Vec<Expr::Sort>`
-            let _sort_exprs = order_by
-                .iter()
-                .map(|PhysicalSortExpr { expr, options }| {
-                    let field_name = expr.to_string();
-                    let field_name = field_name.split('@').next().unwrap_or(&field_name);
-                    Expr::Sort(SortExpr {
-                        expr: Box::new(Expr::Column(Column::new(
-                            None::<String>,
-                            field_name,
-                        ))),
-                        asc: !options.descending,
-                        nulls_first: options.nulls_first,
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            let aggregate = AggregateExprBuilder::new(fun.clone(), args.to_vec())
+            let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                 .schema(Arc::new(input_schema.clone()))
                 .name(name)
+                .order_by(order_by.to_vec())
                 .with_ignore_nulls(ignore_nulls)
                 .build()?;
             window_expr_from_aggregate_expr(
