@@ -1211,7 +1211,7 @@ mod tests {
 
     use crate::common::collect;
     use datafusion_physical_expr_common::aggregate::{
-        create_aggregate_expr, create_aggregate_expr_with_dfschema,
+        create_aggregate_expr, create_aggregate_expr_with_dfschema, AggregateExprBuilder,
     };
     use datafusion_physical_expr_common::expressions::Literal;
     use futures::{FutureExt, Stream};
@@ -1351,18 +1351,11 @@ mod tests {
             ],
         };
 
-        let aggregates = vec![create_aggregate_expr(
-            &count_udaf(),
-            &[lit(1i8)],
-            &[datafusion_expr::lit(1i8)],
-            &[],
-            &[],
-            &input_schema,
-            "COUNT(1)",
-            false,
-            false,
-            false,
-        )?];
+        let aggregates = vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1i8)])
+            .schema(Arc::clone(&input_schema))
+            .name("COUNT(1)")
+            .logical_exprs(vec![datafusion_expr::lit(1i8)])
+            .build()?];
 
         let task_ctx = if spill {
             new_spill_ctx(4, 1000)
@@ -1501,18 +1494,13 @@ mod tests {
             groups: vec![vec![false]],
         };
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
-            &avg_udaf(),
-            &[col("b", &input_schema)?],
-            &[datafusion_expr::col("b")],
-            &[],
-            &[],
-            &input_schema,
-            "AVG(b)",
-            false,
-            false,
-            false,
-        )?];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> =
+            vec![
+                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
+                    .schema(Arc::clone(&input_schema))
+                    .name("AVG(b)")
+                    .build()?,
+            ];
 
         let task_ctx = if spill {
             // set to an appropriate value to trigger spill
@@ -1803,21 +1791,11 @@ mod tests {
     }
 
     // Median(a)
-    fn test_median_agg_expr(schema: &Schema) -> Result<Arc<dyn AggregateExpr>> {
-        let args = vec![col("a", schema)?];
-        let fun = median_udaf();
-        datafusion_physical_expr_common::aggregate::create_aggregate_expr(
-            &fun,
-            &args,
-            &[],
-            &[],
-            &[],
-            schema,
-            "MEDIAN(a)",
-            false,
-            false,
-            false,
-        )
+    fn test_median_agg_expr(schema: SchemaRef) -> Result<Arc<dyn AggregateExpr>> {
+        AggregateExprBuilder::new(median_udaf(), vec![col("a", &schema)?])
+            .schema(schema)
+            .name("MEDIAN(a)")
+            .build()
     }
 
     #[tokio::test]
@@ -1840,7 +1818,7 @@ mod tests {
 
         // something that allocates within the aggregator
         let aggregates_v0: Vec<Arc<dyn AggregateExpr>> =
-            vec![test_median_agg_expr(&input_schema)?];
+            vec![test_median_agg_expr(Arc::clone(&input_schema))?];
 
         // use fast-path in `row_hash.rs`.
         let aggregates_v2: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(

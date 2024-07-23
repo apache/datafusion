@@ -24,6 +24,7 @@ use std::vec;
 
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
+use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
 use prost::Message;
 
 use datafusion::arrow::array::ArrayRef;
@@ -86,7 +87,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
-use datafusion_functions_aggregate::string_agg::StringAgg;
+use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
@@ -357,49 +358,28 @@ fn rountrip_aggregate() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
+    let avg_expr = AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+        .schema(Arc::clone(&schema))
+        .name("AVG(b)")
+        .build()?;
+    let nth_expr =
+        AggregateExprBuilder::new(nth_value_udaf(), vec![col("b", &schema)?, lit(1u64)])
+            .schema(Arc::clone(&schema))
+            .name("NTH_VALUE(b, 1)")
+            .build()?;
+    let str_agg_expr =
+        AggregateExprBuilder::new(string_agg_udaf(), vec![col("b", &schema)?, lit(1u64)])
+            .schema(Arc::clone(&schema))
+            .name("NTH_VALUE(b, 1)")
+            .build()?;
+
     let test_cases: Vec<Vec<Arc<dyn AggregateExpr>>> = vec![
         // AVG
-        vec![create_aggregate_expr(
-            &avg_udaf(),
-            &[col("b", &schema)?],
-            &[],
-            &[],
-            &[],
-            &schema,
-            "AVG(b)",
-            false,
-            false,
-            false,
-        )?],
+        vec![avg_expr],
         // NTH_VALUE
-        vec![create_aggregate_expr(
-            &nth_value_udaf(),
-            &[col("b", &schema)?, lit(1u64)],
-            &[],
-            &[],
-            &[],
-            &schema,
-            "NTH_VALUE(b, 1)",
-            false,
-            false,
-            false,
-        )?],
+        vec![nth_expr],
         // STRING_AGG
-        vec![create_aggregate_expr(
-            &AggregateUDF::new_from_impl(StringAgg::new()),
-            &[
-                cast(col("b", &schema)?, &schema, DataType::Utf8)?,
-                lit(ScalarValue::Utf8(Some(",".to_string()))),
-            ],
-            &[],
-            &[],
-            &[],
-            &schema,
-            "STRING_AGG(name, ',')",
-            false,
-            false,
-            false,
-        )?],
+        vec![str_agg_expr],
     ];
 
     for aggregates in test_cases {

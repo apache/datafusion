@@ -22,7 +22,7 @@ pub mod stats;
 pub mod tdigest;
 pub mod utils;
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
@@ -75,7 +75,7 @@ pub fn create_aggregate_expr(
     builder = builder.sort_exprs(sort_exprs.to_vec());
     builder = builder.order_by(ordering_req.to_vec());
     builder = builder.logical_exprs(input_exprs.to_vec());
-    builder = builder.schema(schema.clone());
+    builder = builder.schema(Arc::new(schema.clone()));
     builder = builder.name(name);
 
     if ignore_nulls {
@@ -109,7 +109,7 @@ pub fn create_aggregate_expr_with_dfschema(
     builder = builder.logical_exprs(input_exprs.to_vec());
     builder = builder.dfschema(dfschema.clone());
     let schema: Schema = dfschema.into();
-    builder = builder.schema(schema);
+    builder = builder.schema(Arc::new(schema));
     builder = builder.name(name);
 
     if ignore_nulls {
@@ -134,7 +134,7 @@ pub struct AggregateExprBuilder {
     logical_args: Vec<Expr>,
     name: String,
     /// Arrow Schema for the aggregate function
-    schema: Schema,
+    schema: SchemaRef,
     /// Datafusion Schema for the aggregate function
     dfschema: DFSchema,
     /// The logical order by expressions, it will be deprecated in <https://github.com/apache/datafusion/issues/11359>
@@ -156,7 +156,7 @@ impl AggregateExprBuilder {
             args,
             logical_args: vec![],
             name: String::new(),
-            schema: Schema::empty(),
+            schema: Arc::new(Schema::empty()),
             dfschema: DFSchema::empty(),
             sort_exprs: vec![],
             ordering_req: vec![],
@@ -215,7 +215,7 @@ impl AggregateExprBuilder {
             logical_args,
             data_type,
             name,
-            schema,
+            schema: Arc::unwrap_or_clone(schema),
             dfschema,
             sort_exprs,
             ordering_req,
@@ -232,7 +232,7 @@ impl AggregateExprBuilder {
         self
     }
 
-    pub fn schema(mut self, schema: Schema) -> Self {
+    pub fn schema(mut self, schema: SchemaRef) -> Self {
         self.schema = schema;
         self
     }
