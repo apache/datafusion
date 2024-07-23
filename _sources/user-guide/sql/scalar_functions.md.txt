@@ -772,7 +772,7 @@ concat(str[, ..., str_n])
 Concatenates multiple strings together with a specified separator.
 
 ```
-concat(separator, str[, ..., str_n])
+concat_ws(separator, str[, ..., str_n])
 ```
 
 #### Arguments
