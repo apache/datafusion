@@ -1301,11 +1301,8 @@ mod tests {
             "+-----------------------+",
             "| 50                    |",
             "+-----------------------+"];
-        let file_size = if cfg!(target_os = "windows") {
-            30 // new line on Win is '\r\n'
-        } else {
-            20
-        };
+
+        let file_size = std::fs::metadata("tests/data/one_col.csv")?.len() as usize;
         // A 20-Byte file at most get partitioned into 20 chunks
         let expected_partitions = if n_partitions <= file_size {
             n_partitions
