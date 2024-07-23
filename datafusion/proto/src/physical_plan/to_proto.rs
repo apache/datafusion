@@ -16,6 +16,7 @@
 // under the License.language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
@@ -43,7 +44,7 @@ use datafusion_expr::WindowFrame;
 
 use crate::protobuf::{
     self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
-    PhysicalSortExprNodeCollection,
+    PhysicalSortExprNodeCollection, ProjectionColumns
 };
 
 use super::PhysicalExtensionCodec;
@@ -592,6 +593,13 @@ pub fn serialize_file_scan_config(
             .unwrap_or(&vec![])
             .iter()
             .map(|n| *n as u32)
+            .collect(),
+        projection_deep: conf
+            .projection_deep
+            .as_ref()
+            .unwrap_or(&HashMap::new())
+            .iter()
+            .map(|(n, v)| (*n as u32, ProjectionColumns { columns: v.clone() }))
             .collect(),
         schema: Some(schema.as_ref().try_into()?),
         table_partition_cols: conf

@@ -17,7 +17,8 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
-use crate::datasource::file_format::transform_schema_to_view;
+use std::cmp::min;
+use std::collections::HashMap;
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::row_group_filter::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
@@ -33,16 +34,21 @@ use datafusion_common::{exec_err, Result};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::{StreamExt, TryStreamExt};
-use log::debug;
+use log::{debug, info, trace};
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use std::sync::Arc;
+use parquet::schema::types::SchemaDescriptor;
+// use datafusion_common::DataFusionError;
+use datafusion_common::deep::{has_deep_projection, rewrite_schema, splat_columns};
+use crate::datasource::file_format::transform_schema_to_view;
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
     pub partition_index: usize,
     pub projection: Arc<[usize]>,
+    pub projection_deep: Arc<HashMap<usize, Vec<String>>>,
     pub batch_size: usize,
     pub limit: Option<usize>,
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
@@ -78,7 +84,20 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
-        let projected_schema = SchemaRef::from(self.table_schema.project(&projection)?);
+        let projection_vec = projection.as_ref().iter().map(|i| *i).collect::<Vec<usize>>();
+        debug!("ParquetOpener::open projection={:?}", projection);
+        // FIXME @HStack: ADR: why do we need to do this ? our function needs another param maybe ?
+        // In the case when the projections requested are empty, we should return an empty schema
+        let projected_schema = if projection_vec.len() == 0 {
+            SchemaRef::from(self.table_schema.project(&projection)?)
+        } else {
+            rewrite_schema(
+                self.table_schema.clone(),
+                &projection_vec,
+                self.projection_deep.as_ref()
+            )
+        };
+        let projection_deep = self.projection_deep.clone();
         let schema_adapter = self.schema_adapter_factory.create(projected_schema);
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
@@ -93,6 +112,7 @@ impl FileOpener for ParquetOpener {
         let enable_bloom_filter = self.enable_bloom_filter;
         let limit = self.limit;
         let schema_force_string_view = self.schema_force_string_view;
+
 
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
@@ -119,11 +139,32 @@ impl FileOpener for ParquetOpener {
             let (schema_mapping, adapted_projections) =
                 schema_adapter.map_schema(&file_schema)?;
 
-            let mask = ProjectionMask::roots(
-                builder.parquet_schema(),
-                adapted_projections.iter().cloned(),
-            );
-
+            // let mask = ProjectionMask::roots(
+            //     builder.parquet_schema(),
+            //     adapted_projections.iter().cloned(),
+            // );
+            let mask = if has_deep_projection(Some(projection_deep.clone().as_ref())) {
+                let leaves = generate_leaf_paths(
+                    table_schema.clone(),
+                    builder.parquet_schema(),
+                    &projection_vec,
+                    projection_deep.clone().as_ref()
+                );
+                info!("ParquetOpener::open, using deep projection parquet leaves: {:?}", leaves.clone());
+                // let tmp = builder.parquet_schema();
+                // for (i, col) in tmp.columns().iter().enumerate() {
+                //     info!("  {}  {}= {:?}", i, col.path(), col);
+                // }
+                ProjectionMask::leaves(
+                    builder.parquet_schema(),
+                    leaves,
+                )
+            } else {
+                ProjectionMask::roots(
+                    builder.parquet_schema(),
+                    adapted_projections.iter().cloned(),
+                )
+            };
             // Filter pushdown: evaluate predicates during scan
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
@@ -262,4 +303,100 @@ fn create_initial_plan(
 
     // default to scanning all row groups
     Ok(ParquetAccessPlan::new_all(row_group_count))
+}
+
+// FIXME: @HStack ACTUALLY look at the arrow schema and handle map types correctly
+//  Right now, we are matching "map-like" parquet leaves like "key_value.key" etc
+//  But, we neeed to walk through both the arrow schema (which KNOWS about the map type)
+//  and the parquet leaves to do this correctly.
+fn equivalent_projection_paths_from_parquet_schema(
+    arrow_schema: SchemaRef,
+    parquet_schema: &SchemaDescriptor,
+) -> Vec<(usize, (String, String))> {
+    let mut output: Vec<(usize, (String, String))> = vec![];
+    for (i, col) in parquet_schema.columns().iter().enumerate() {
+        let original_path = col.path().string();
+        let converted_path = convert_parquet_path_to_deep_projection_path(&original_path.as_str());
+        output.push((i, (original_path.clone(), converted_path)));
+    }
+    output
+}
+
+fn convert_parquet_path_to_deep_projection_path(parquet_path: &str) -> String {
+    if parquet_path.contains(".key_value.key") ||
+        parquet_path.contains(".key_value.value") ||
+        parquet_path.contains(".entries.keys") ||
+        parquet_path.contains(".entries.values") ||
+        parquet_path.contains(".list.element") {
+        let tmp = parquet_path
+            .replace("key_value.key", "*")
+            .replace("key_value.value", "*")
+            .replace("entries.keys", "*")
+            .replace("entries.values", "*")
+            .replace("list.element", "*");
+        tmp
+    } else {
+        parquet_path.to_string()
+    }
+}
+
+fn generate_leaf_paths(
+    arrow_schema: SchemaRef,
+    parquet_schema: &SchemaDescriptor,
+    projection: &Vec<usize>,
+    projection_deep: &HashMap<usize, Vec<String>>,
+) -> Vec<usize> {
+    let actual_projection = if projection.len() == 0 {
+        (0..arrow_schema.fields().len()).collect()
+    } else {
+        projection.clone()
+    };
+    let splatted =
+        splat_columns(arrow_schema.clone(), &actual_projection, &projection_deep);
+    trace!(target: "deep", "generate_leaf_paths: splatted: {:?}", &splatted);
+
+    let mut out: Vec<usize> = vec![];
+    for (i, (original, converted)) in equivalent_projection_paths_from_parquet_schema(arrow_schema, parquet_schema) {
+        // FIXME: @HStack
+        //  for map fields, the actual parquet paths look like x.y.z.key_value.key, x.y.z.key_value.value
+        //  since we are ignoring these names in the paths, we need to actually collapse this access to a *
+        //  so we can filter for them
+        //  also, we need BOTH the key and the value for maps otherwise we run into an arrow-rs error
+        //  "partial projection of MapArray is not supported"
+
+        trace!(target: "deep", "  generate_leaf_paths looking at index {} {} =  {}", i, &original, &converted);
+
+        let mut found = false;
+        for filter in splatted.iter() {
+            // check if this filter matches this leaf path
+            let filter_pieces = filter.split(".").collect::<Vec<&str>>();
+            // let col_pieces = col_path.parts();
+            let col_pieces = converted.split(".").collect::<Vec<_>>();
+            // let's check
+            let mut filter_found = true;
+            for i in 0..min(filter_pieces.len(), col_pieces.len()) {
+                if i >= filter_pieces.len() {
+                    //  we are at the end of the filter, and we matched until now, so we break, we match !
+                    break;
+                }
+                if i >= col_pieces.len() {
+                    // we have a longer filter, we matched until now, we match !
+                    break;
+                }
+                // we can actually check
+                if !(col_pieces[i] == filter_pieces[i] || filter_pieces[i] == "*") {
+                    filter_found = false;
+                    break;
+                }
+            }
+            if filter_found {
+                found = true;
+                break;
+            }
+        }
+        if found {
+            out.push(i);
+        }
+    }
+    out
 }

@@ -54,6 +54,7 @@ use datafusion_catalog::Session;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
+use datafusion_common::deep::try_rewrite_schema_opt;
 
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
@@ -814,6 +815,99 @@ impl TableProvider for ListingTable {
                     .with_file_groups(partitioned_file_lists)
                     .with_statistics(statistics)
                     .with_projection(projection.cloned())
+                    .with_limit(limit)
+                    .with_output_ordering(output_ordering)
+                    .with_table_partition_cols(table_partition_cols),
+                filters.as_ref(),
+            )
+            .await
+    }
+
+    async fn scan_deep(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        projection_deep: Option<&HashMap<usize, Vec<String>>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
+        let (mut partitioned_file_lists, statistics) =
+            self.list_files_for_scan(session_state, filters, limit).await?;
+
+        // let projected_schema = project_schema(&self.schema(), projection)?;
+        let projected_schema = try_rewrite_schema_opt(
+            self.schema(),
+            projection,
+            projection_deep
+        )?;
+
+        // if no files need to be read, return an `EmptyExec`
+        if partitioned_file_lists.is_empty() {
+            return Ok(Arc::new(EmptyExec::new(projected_schema)));
+        }
+
+        let output_ordering = self.try_create_output_ordering()?;
+        match state
+            .config_options()
+            .execution
+            .split_file_groups_by_statistics
+            .then(|| {
+                output_ordering.first().map(|output_ordering| {
+                    FileScanConfig::split_groups_by_statistics(
+                        &self.table_schema,
+                        &partitioned_file_lists,
+                        output_ordering,
+                    )
+                })
+            })
+            .flatten()
+        {
+            Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
+            Some(Ok(new_groups)) => {
+                if new_groups.len() <= self.options.target_partitions {
+                    partitioned_file_lists = new_groups;
+                } else {
+                    log::debug!("attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered")
+                }
+            }
+            None => {} // no ordering required
+        };
+
+        // extract types of partition columns
+        let table_partition_cols = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
+            .collect::<Result<Vec<_>>>()?;
+
+        let filters = if let Some(expr) = conjunction(filters.to_vec()) {
+            // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
+            let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
+            let filters =
+                create_physical_expr(&expr, &table_df_schema, state.execution_props())?;
+            Some(filters)
+        } else {
+            None
+        };
+
+        let object_store_url = if let Some(url) = self.table_paths.first() {
+            url.object_store()
+        } else {
+            return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
+        };
+
+        // create the execution plan
+        self.options
+            .format
+            .create_physical_plan(
+                session_state,
+                FileScanConfig::new(object_store_url, Arc::clone(&self.file_schema))
+                    .with_file_groups(partitioned_file_lists)
+                    .with_statistics(statistics)
+                    .with_projection(projection.cloned())
+                    .with_projection_deep(projection_deep.cloned())
                     .with_limit(limit)
                     .with_output_ordering(output_ordering)
                     .with_table_partition_cols(table_partition_cols),

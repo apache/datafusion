@@ -37,7 +37,8 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 
-use log::warn;
+use log::{trace, warn};
+use datafusion_common::deep::rewrite_field_projection;
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is
@@ -121,6 +122,9 @@ pub struct FileScanConfig {
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub projection: Option<Vec<usize>>,
+    /// Columns on which to project the data. Indexes that are higher than the
+    /// number of columns of `file_schema` refer to `table_partition_cols`.
+    pub projection_deep: Option<HashMap<usize, Vec<String>>>,
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
@@ -149,6 +153,7 @@ impl FileScanConfig {
             file_groups: vec![],
             statistics,
             projection: None,
+            projection_deep: None,
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
@@ -166,6 +171,13 @@ impl FileScanConfig {
         self.projection = projection;
         self
     }
+
+    /// Set the projection of the files
+    pub fn with_projection_deep(mut self, projection_deep: Option<HashMap<usize, Vec<String>>>) -> Self {
+        self.projection_deep = projection_deep;
+        self
+    }
+
 
     /// Set the limit of the files
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
@@ -232,8 +244,21 @@ impl FileScanConfig {
         let mut table_cols_stats = vec![];
         for idx in proj_iter {
             if idx < self.file_schema.fields().len() {
-                let field = self.file_schema.field(idx);
-                table_fields.push(field.clone());
+
+                let output_field = match &self.projection_deep {
+                    None => {
+                        self.file_schema.field(idx).clone()
+                    }
+                    Some(projection_deep) => {
+                        trace!("FileScanConfig::project DEEP PROJECT");
+                        let field_arc = Arc::new(self.file_schema.field(idx).clone());
+                        let rewritten_field_arc = rewrite_field_projection(self.file_schema.clone(), idx, &projection_deep);
+                        trace!("FileScanConfig::project DEEP PROJECT {:#?}", rewritten_field_arc);
+                        rewritten_field_arc.as_ref().clone()
+                    }
+                };
+
+                table_fields.push(output_field);
                 table_cols_stats.push(self.statistics.column_statistics[idx].clone())
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();

@@ -932,6 +932,8 @@ message FileScanExecConf {
   repeated FileGroup file_groups = 1;
   datafusion_common.Schema schema = 2;
   repeated uint32 projection = 4;
+  // FIXME somewhat abusively using ProjectionColumns to serialize map<u32, vec<string>>
+  map<uint32, ProjectionColumns> projection_deep = 20;
   ScanLimit limit = 5;
   datafusion_common.Statistics statistics = 6;
   repeated string table_partition_cols = 7;

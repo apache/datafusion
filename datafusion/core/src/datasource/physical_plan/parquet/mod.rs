@@ -18,6 +18,7 @@
 //! [`ParquetExec`] Execution plan for reading Parquet files
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -43,7 +44,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
 use itertools::Itertools;
-use log::debug;
+use log::{debug, info, trace};
 
 mod access_plan;
 mod metrics;
@@ -374,8 +375,8 @@ impl ParquetExecBuilder {
         } = self;
 
         let base_config = file_scan_config;
-        debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
-        base_config.file_groups, base_config.projection, predicate, base_config.limit);
+        info!("Creating ParquetExec, files: {:?}, projection {:?}, projection deep {:?}, predicate: {:?}, limit: {:?}",
+        base_config.file_groups, base_config.projection, base_config.projection_deep, predicate, base_config.limit);
 
         let metrics = ExecutionPlanMetricsSet::new();
         let predicate_creation_errors =
@@ -689,6 +690,23 @@ impl ExecutionPlan for ParquetExec {
             Some(proj) => proj,
             None => (0..self.base_config.file_schema.fields().len()).collect(),
         };
+        let projection_deep = match &self.base_config.projection_deep {
+            None => {HashMap::new()}
+            Some(pd) => {
+                let mut out: HashMap<usize, Vec<String>> = HashMap::new();
+                for npi in &projection {
+                    match pd.get(npi) {
+                        None => {}
+                        Some(v) => {
+                            out.insert(*npi, v.clone());
+                        }
+                    }
+
+                }
+                out
+            }
+        };
+        trace!("ParquetExec::execute projection={:#?}, projection_deep={:#?}", &projection, &projection_deep);
 
         let parquet_file_reader_factory = self
             .parquet_file_reader_factory
@@ -711,6 +729,7 @@ impl ExecutionPlan for ParquetExec {
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
+            projection_deep: Arc::new(projection_deep),
             batch_size: ctx.session_config().batch_size(),
             limit: self.base_config.limit,
             predicate: self.predicate.clone(),

@@ -850,7 +850,7 @@ mod tests {
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
         not, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
         Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition,
-        Literal, 
+        Literal,
     };
     use crate::optimize_projections::required_indices_deep::expr_to_deep_columns;
 
