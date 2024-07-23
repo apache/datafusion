@@ -175,6 +175,9 @@ impl serde::Serialize for ArrowType {
                 arrow_type::ArrowTypeEnum::Decimal(v) => {
                     struct_ser.serialize_field("DECIMAL", v)?;
                 }
+                arrow_type::ArrowTypeEnum::Decimal256(v) => {
+                    struct_ser.serialize_field("DECIMAL256", v)?;
+                }
                 arrow_type::ArrowTypeEnum::List(v) => {
                     struct_ser.serialize_field("LIST", v)?;
                 }
@@ -241,6 +244,7 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             "TIME64",
             "INTERVAL",
             "DECIMAL",
+            "DECIMAL256",
             "LIST",
             "LARGE_LIST",
             "LARGELIST",
@@ -282,6 +286,7 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             Time64,
             Interval,
             Decimal,
+            Decimal256,
             List,
             LargeList,
             FixedSizeList,
@@ -338,6 +343,7 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             "TIME64" => Ok(GeneratedField::Time64),
                             "INTERVAL" => Ok(GeneratedField::Interval),
                             "DECIMAL" => Ok(GeneratedField::Decimal),
+                            "DECIMAL256" => Ok(GeneratedField::Decimal256),
                             "LIST" => Ok(GeneratedField::List),
                             "LARGELIST" | "LARGE_LIST" => Ok(GeneratedField::LargeList),
                             "FIXEDSIZELIST" | "FIXED_SIZE_LIST" => Ok(GeneratedField::FixedSizeList),
@@ -556,6 +562,13 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                                 return Err(serde::de::Error::duplicate_field("DECIMAL"));
                             }
                             arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Decimal)
+;
+                        }
+                        GeneratedField::Decimal256 => {
+                            if arrow_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("DECIMAL256"));
+                            }
+                            arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::Decimal256)
 ;
                         }
                         GeneratedField::List => {
@@ -2847,6 +2860,118 @@ impl<'de> serde::Deserialize<'de> for Decimal256 {
             }
         }
         deserializer.deserialize_struct("datafusion_common.Decimal256", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for Decimal256Type {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.precision != 0 {
+            len += 1;
+        }
+        if self.scale != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion_common.Decimal256Type", len)?;
+        if self.precision != 0 {
+            struct_ser.serialize_field("precision", &self.precision)?;
+        }
+        if self.scale != 0 {
+            struct_ser.serialize_field("scale", &self.scale)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Decimal256Type {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "precision",
+            "scale",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Precision,
+            Scale,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "precision" => Ok(GeneratedField::Precision),
+                            "scale" => Ok(GeneratedField::Scale),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Decimal256Type;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion_common.Decimal256Type")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Decimal256Type, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut precision__ = None;
+                let mut scale__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Precision => {
+                            if precision__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("precision"));
+                            }
+                            precision__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Scale => {
+                            if scale__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("scale"));
+                            }
+                            scale__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(Decimal256Type {
+                    precision: precision__.unwrap_or_default(),
+                    scale: scale__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion_common.Decimal256Type", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for DfField {
