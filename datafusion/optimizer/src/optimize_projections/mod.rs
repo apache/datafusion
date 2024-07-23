@@ -851,7 +851,7 @@ mod tests {
         max, min, not, try_cast, when, AggregateFunction, BinaryExpr, Expr, Extension,
         Like, LogicalPlan, Operator, Projection, UserDefinedLogicalNodeCore,
         WindowFunctionDefinition,
-        Literal, 
+        Literal,
     };
     use crate::optimize_projections::required_indices_deep::expr_to_deep_columns;
 
