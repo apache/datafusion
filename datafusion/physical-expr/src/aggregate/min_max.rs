@@ -43,11 +43,10 @@ use arrow_array::types::{
     Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
     UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use datafusion_common::scalar::serialize_scalar_value;
+use datafusion_common::internal_err;
 use datafusion_common::ScalarValue;
-use datafusion_common::{deserialize_scalar_value, internal_err};
 use datafusion_common::{downcast_value, DataFusionError, Result};
-use datafusion_expr::{Accumulator, GroupsAccumulator, SerializableAccumulator};
+use datafusion_expr::{Accumulator, GroupsAccumulator};
 
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
@@ -789,24 +788,6 @@ impl Accumulator for MaxAccumulator {
     fn size(&self) -> usize {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
     }
-
-    fn as_serializable(&self) -> Option<&dyn SerializableAccumulator> {
-        Some(self)
-    }
-}
-
-impl SerializableAccumulator for MaxAccumulator {
-    fn serialize(&self) -> Result<Vec<u8>> {
-        let mut writer = Vec::new();
-        serialize_scalar_value(&self.max, &mut writer)?;
-        Ok(writer)
-    }
-
-    fn deserialize(bytes: &[u8]) -> Result<Box<dyn Accumulator>> {
-        let mut reader = std::io::Cursor::new(bytes);
-        let max = deserialize_scalar_value(&mut reader)?;
-        Ok(Box::new(MaxAccumulator { max }))
-    }
 }
 
 /// An accumulator to compute the maximum value
@@ -1070,24 +1051,6 @@ impl Accumulator for MinAccumulator {
     fn size(&self) -> usize {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
     }
-
-    fn as_serializable(&self) -> Option<&dyn SerializableAccumulator> {
-        Some(self)
-    }
-}
-
-impl SerializableAccumulator for MinAccumulator {
-    fn serialize(&self) -> Result<Vec<u8>> {
-        let mut writer = Vec::new();
-        serialize_scalar_value(&self.min, &mut writer)?;
-        Ok(writer)
-    }
-
-    fn deserialize(bytes: &[u8]) -> Result<Box<dyn Accumulator>> {
-        let mut reader = std::io::Cursor::new(bytes);
-        let min = deserialize_scalar_value(&mut reader)?;
-        Ok(Box::new(MinAccumulator { min }))
-    }
 }
 
 /// An accumulator to compute the minimum value
@@ -1190,37 +1153,5 @@ mod tests {
         check(&mut max(), &[&[zero, pos_nan]], pos_nan);
         check(&mut max(), &[&[zero], &[neg_inf]], zero);
         check(&mut max(), &[&[zero, neg_inf]], zero);
-    }
-
-    #[test]
-    fn test_max_accumulator_serialization() {
-        let mut max_acc = MaxAccumulator::try_new(&DataType::Int32).unwrap();
-        max_acc
-            .update_batch(&[Arc::new(Int32Array::from(vec![Some(1), Some(3), Some(2)]))])
-            .unwrap();
-
-        let serialized = max_acc.as_serializable().unwrap().serialize().unwrap();
-        let mut deserialized_acc = MaxAccumulator::deserialize(&serialized).unwrap();
-
-        assert_eq!(
-            max_acc.evaluate().unwrap(),
-            deserialized_acc.evaluate().unwrap()
-        );
-    }
-
-    #[test]
-    fn test_min_accumulator_serialization() {
-        let mut min_acc = MinAccumulator::try_new(&DataType::Int32).unwrap();
-        min_acc
-            .update_batch(&[Arc::new(Int32Array::from(vec![Some(1), Some(3), Some(2)]))])
-            .unwrap();
-
-        let serialized = min_acc.as_serializable().unwrap().serialize().unwrap();
-        let mut deserialized_acc = MinAccumulator::deserialize(&serialized).unwrap();
-
-        assert_eq!(
-            min_acc.evaluate().unwrap(),
-            deserialized_acc.evaluate().unwrap()
-        );
     }
 }
