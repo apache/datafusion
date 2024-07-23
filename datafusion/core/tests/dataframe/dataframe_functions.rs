@@ -34,6 +34,7 @@ use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::ExprSchemable;
 use datafusion_functions_aggregate::expr_fn::{approx_median, approx_percentile_cont};
+use datafusion_functions_array::map::map;
 
 fn test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -1082,6 +1083,27 @@ async fn test_fn_array_to_string() -> Result<()> {
         "| 3***5                               |",
         "| 6***7                               |",
         "+-------------------------------------+",
+    ];
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_map() -> Result<()> {
+    let expr = map(
+        vec![lit("a"), lit("b"), lit("c")],
+        vec![lit(1), lit(2), lit(3)],
+    );
+    let expected = [
+        "+---------------------------------------------------------------------------------------+",
+        "| map(make_array(Utf8(\"a\"),Utf8(\"b\"),Utf8(\"c\")),make_array(Int32(1),Int32(2),Int32(3))) |",
+        "+---------------------------------------------------------------------------------------+",
+        "| {a: 1, b: 2, c: 3}                                                                    |",
+        "| {a: 1, b: 2, c: 3}                                                                    |",
+        "| {a: 1, b: 2, c: 3}                                                                    |",
+        "| {a: 1, b: 2, c: 3}                                                                    |",
+        "+---------------------------------------------------------------------------------------+",
     ];
     assert_fn_batches!(expr, expected);
 

@@ -164,8 +164,10 @@ pub fn parse_physical_window_expr(
                 WindowFunctionDefinition::BuiltInWindowFunction(f.into())
             }
             protobuf::physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(udaf_name) => {
-                let agg_udf = registry.udaf(udaf_name)?;
-                WindowFunctionDefinition::AggregateUDF(agg_udf)
+                WindowFunctionDefinition::AggregateUDF(match &proto.fun_definition {
+                    Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
+                    None => registry.udaf(udaf_name)?
+                })
             }
         }
     } else {
@@ -365,7 +367,7 @@ pub fn parse_physical_expr(
                 Some(buf) => codec.try_decode_udf(&e.name, buf)?,
                 None => registry.udf(e.name.as_str())?,
             };
-            let scalar_fun_def = udf.clone();
+            let scalar_fun_def = Arc::clone(&udf);
 
             let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
 
@@ -394,6 +396,14 @@ pub fn parse_physical_expr(
                 codec,
             )?,
         )),
+        ExprType::Extension(extension) => {
+            let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
+                .inputs
+                .iter()
+                .map(|e| parse_physical_expr(e, registry, input_schema, codec))
+                .collect::<Result<_>>()?;
+            (codec.try_decode_expr(extension.expr.as_slice(), &inputs)?) as _
+        }
     };
 
     Ok(pexpr)

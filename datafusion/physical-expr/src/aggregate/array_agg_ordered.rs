@@ -33,7 +33,7 @@ use arrow::datatypes::{DataType, Field};
 use arrow_array::cast::AsArray;
 use arrow_array::{new_empty_array, Array, ArrayRef, StructArray};
 use arrow_schema::Fields;
-use datafusion_common::utils::{array_into_list_array, get_row_at_idx};
+use datafusion_common::utils::{array_into_list_array_nullable, get_row_at_idx};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_expr::Accumulator;
@@ -50,8 +50,6 @@ pub struct OrderSensitiveArrayAgg {
     input_data_type: DataType,
     /// The input expression
     expr: Arc<dyn PhysicalExpr>,
-    /// If the input expression can have `NULL`s
-    nullable: bool,
     /// Ordering data types
     order_by_data_types: Vec<DataType>,
     /// Ordering requirement
@@ -66,7 +64,6 @@ impl OrderSensitiveArrayAgg {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         input_data_type: DataType,
-        nullable: bool,
         order_by_data_types: Vec<DataType>,
         ordering_req: LexOrdering,
     ) -> Self {
@@ -74,7 +71,6 @@ impl OrderSensitiveArrayAgg {
             name: name.into(),
             input_data_type,
             expr,
-            nullable,
             order_by_data_types,
             ordering_req,
             reverse: false,
@@ -90,8 +86,8 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new_list(
             &self.name,
-            // This should be the same as return type of AggregateFunction::ArrayAgg
-            Field::new("item", self.input_data_type.clone(), self.nullable),
+            // This should be the same as return type of AggregateFunction::OrderSensitiveArrayAgg
+            Field::new("item", self.input_data_type.clone(), true),
             true,
         ))
     }
@@ -102,7 +98,6 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
             &self.order_by_data_types,
             self.ordering_req.clone(),
             self.reverse,
-            self.nullable,
         )
         .map(|acc| Box::new(acc) as _)
     }
@@ -110,17 +105,13 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn state_fields(&self) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
-            Field::new("item", self.input_data_type.clone(), self.nullable),
+            Field::new("item", self.input_data_type.clone(), true),
             true, // This should be the same as field()
         )];
         let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
         fields.push(Field::new_list(
             format_state_name(&self.name, "array_agg_orderings"),
-            Field::new(
-                "item",
-                DataType::Struct(Fields::from(orderings)),
-                self.nullable,
-            ),
+            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
             false,
         ));
         Ok(fields)
@@ -147,7 +138,6 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
             name: self.name.to_string(),
             input_data_type: self.input_data_type.clone(),
             expr: Arc::clone(&self.expr),
-            nullable: self.nullable,
             order_by_data_types: self.order_by_data_types.clone(),
             // Reverse requirement:
             ordering_req: reverse_order_bys(&self.ordering_req),
@@ -186,8 +176,6 @@ pub(crate) struct OrderSensitiveArrayAggAccumulator {
     ordering_req: LexOrdering,
     /// Whether the aggregation is running in reverse.
     reverse: bool,
-    /// Whether the input expr is nullable
-    nullable: bool,
 }
 
 impl OrderSensitiveArrayAggAccumulator {
@@ -198,7 +186,6 @@ impl OrderSensitiveArrayAggAccumulator {
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
         reverse: bool,
-        nullable: bool,
     ) -> Result<Self> {
         let mut datatypes = vec![datatype.clone()];
         datatypes.extend(ordering_dtypes.iter().cloned());
@@ -208,7 +195,6 @@ impl OrderSensitiveArrayAggAccumulator {
             datatypes,
             ordering_req,
             reverse,
-            nullable,
         })
     }
 }
@@ -312,7 +298,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if self.values.is_empty() {
             return Ok(ScalarValue::new_null_list(
                 self.datatypes[0].clone(),
-                self.nullable,
+                true,
                 1,
             ));
         }
@@ -322,14 +308,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             ScalarValue::new_list_from_iter(
                 values.into_iter().rev(),
                 &self.datatypes[0],
-                self.nullable,
+                true,
             )
         } else {
-            ScalarValue::new_list_from_iter(
-                values.into_iter(),
-                &self.datatypes[0],
-                self.nullable,
-            )
+            ScalarValue::new_list_from_iter(values.into_iter(), &self.datatypes[0], true)
         };
         Ok(ScalarValue::List(array))
     }
@@ -385,9 +367,8 @@ impl OrderSensitiveArrayAggAccumulator {
             column_wise_ordering_values,
             None,
         )?;
-        Ok(ScalarValue::List(Arc::new(array_into_list_array(
+        Ok(ScalarValue::List(Arc::new(array_into_list_array_nullable(
             Arc::new(ordering_array),
-            self.nullable,
         ))))
     }
 }

@@ -75,12 +75,12 @@ pub enum AggregateMode {
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
-    /// This mode requires tha the input is a single partition (like Final)
+    /// This mode requires that the input is a single partition (like Final)
     Single,
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
-    /// This mode requires tha the input is partitioned by group key (like FinalPartitioned)
+    /// This mode requires that the input is partitioned by group key (like FinalPartitioned)
     SinglePartitioned,
 }
 
@@ -324,7 +324,7 @@ impl AggregateExec {
 
     /// Create a new hash aggregate execution plan with the given schema.
     /// This constructor isn't part of the public API, it is used internally
-    /// by Datafusion to enforce schema consistency during when re-creating
+    /// by DataFusion to enforce schema consistency during when re-creating
     /// `AggregateExec`s inside optimization rules. Schema field names of an
     /// `AggregateExec` depends on the names of aggregate expressions. Since
     /// a rule may re-write aggregate expressions (e.g. reverse them) during
@@ -733,7 +733,7 @@ impl ExecutionPlan for AggregateExec {
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
         // TODO stats: aggr expression:
-        // - aggregations somtimes also preserve invariants such as min, max...
+        // - aggregations sometimes also preserve invariants such as min, max...
         let column_statistics = Statistics::unknown_column(&self.schema());
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
@@ -2231,7 +2231,6 @@ mod tests {
                     Arc::clone(col_a),
                     "array_agg",
                     DataType::Int32,
-                    false,
                     vec![],
                     order_by_expr.unwrap_or_default(),
                 )) as _

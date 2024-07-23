@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::expressions::{self};
@@ -60,37 +60,22 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
-        (AggregateFunction::ArrayAgg, false) => {
+        (AggregateFunction::ArrayAgg, _) => {
             let expr = Arc::clone(&input_phy_exprs[0]);
-            let nullable = expr.nullable(input_schema)?;
 
             if ordering_req.is_empty() {
-                Arc::new(expressions::ArrayAgg::new(expr, name, data_type, nullable))
+                return internal_err!(
+                    "ArrayAgg without ordering should be handled as UDAF"
+                );
             } else {
                 Arc::new(expressions::OrderSensitiveArrayAgg::new(
                     expr,
                     name,
                     data_type,
-                    nullable,
                     ordering_types,
                     ordering_req.to_vec(),
                 ))
             }
-        }
-        (AggregateFunction::ArrayAgg, true) => {
-            if !ordering_req.is_empty() {
-                return not_impl_err!(
-                    "ARRAY_AGG(DISTINCT ORDER BY a ASC) order-sensitive aggregations are not available"
-                );
-            }
-            let expr = Arc::clone(&input_phy_exprs[0]);
-            let is_expr_nullable = expr.nullable(input_schema)?;
-            Arc::new(expressions::DistinctArrayAgg::new(
-                expr,
-                name,
-                data_type,
-                is_expr_nullable,
-            ))
         }
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             Arc::clone(&input_phy_exprs[0]),
@@ -112,70 +97,9 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_expr::{type_coercion, Signature};
 
-    use crate::expressions::{try_cast, ArrayAgg, DistinctArrayAgg, Max, Min};
+    use crate::expressions::{try_cast, Max, Min};
 
     use super::*;
-    #[test]
-    fn test_approx_expr() -> Result<()> {
-        let funcs = vec![AggregateFunction::ArrayAgg];
-        let data_types = vec![
-            DataType::UInt32,
-            DataType::Int32,
-            DataType::Float32,
-            DataType::Float64,
-            DataType::Decimal128(10, 2),
-            DataType::Utf8,
-        ];
-        for fun in funcs {
-            for data_type in &data_types {
-                let input_schema =
-                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
-                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
-                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
-                )];
-                let result_agg_phy_exprs = create_physical_agg_expr_for_test(
-                    &fun,
-                    false,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::ArrayAgg {
-                    assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
-                    assert_eq!("c1", result_agg_phy_exprs.name());
-                    assert_eq!(
-                        Field::new_list(
-                            "c1",
-                            Field::new("item", data_type.clone(), true),
-                            true,
-                        ),
-                        result_agg_phy_exprs.field().unwrap()
-                    );
-                }
-
-                let result_distinct = create_physical_agg_expr_for_test(
-                    &fun,
-                    true,
-                    &input_phy_exprs[0..1],
-                    &input_schema,
-                    "c1",
-                )?;
-                if fun == AggregateFunction::ArrayAgg {
-                    assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
-                    assert_eq!("c1", result_distinct.name());
-                    assert_eq!(
-                        Field::new_list(
-                            "c1",
-                            Field::new("item", data_type.clone(), true),
-                            true,
-                        ),
-                        result_agg_phy_exprs.field().unwrap()
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
 
     #[test]
     fn test_min_max_expr() -> Result<()> {

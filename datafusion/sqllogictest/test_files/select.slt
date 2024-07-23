@@ -101,7 +101,7 @@ statement ok
 CREATE TABLE test (
   c1 BIGINT NOT NULL,
   c2 BIGINT NOT NULL,
-  c3 BOOLEAN NOT NULL,
+  c3 BOOLEAN NOT NULL
 ) AS VALUES (0, 1, false),
 (0, 10, true),
 (0, 2, true),
@@ -336,13 +336,13 @@ three 1
 NULL 1
 
 # select_values_list
-statement error DataFusion error: SQL error: ParserError\("Expected \(, found: EOF"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: \(, found: EOF"\)
 VALUES
 
-statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
 VALUES ()
 
-statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
 VALUES (1),()
 
 statement error DataFusion error: Error during planning: Inconsistent data length across values list: got 2 values in row 1 but expected 1
@@ -612,6 +612,33 @@ select CASE
 END;
 ----
 2
+
+# select case when type is null
+query I
+select CASE
+  WHEN NULL THEN 1
+  ELSE 2
+END;
+----
+2
+
+# select case then type is null
+query I
+select CASE
+  WHEN 10 > 5 THEN NULL
+  ELSE 2
+END;
+----
+NULL
+
+# select case else type is null
+query I
+select CASE
+  WHEN 10 = 5 THEN 1
+  ELSE NULL
+END;
+----
+NULL
 
 # Binary Expression for LargeUtf8
 # issue: https://github.com/apache/datafusion/issues/5893
@@ -1504,21 +1531,25 @@ query TT
 EXPLAIN SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
 ----
 logical_plan
-01)Projection: t.y > Int32(0) AND Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y > Int64(0) AND Int64(1) / t.y < Int64(1), t.x > Int32(0) AND t.y > Int32(0) AND Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x
-02)--TableScan: t projection=[x, y]
+01)Projection: __common_expr_1 AND Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y > Int64(0) AND Int64(1) / t.y < Int64(1), t.x > Int32(0) AND __common_expr_1 AND Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x
+02)--Projection: t.y > Int32(0) AS __common_expr_1, t.x, t.y
+03)----TableScan: t projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[y@1 > 0 AND 1 / CAST(y@1 AS Int64) < 1 as t.y > Int64(0) AND Int64(1) / t.y < Int64(1), x@0 > 0 AND y@1 > 0 AND 1 / CAST(y@1 AS Int64) < 1 / CAST(x@0 AS Int64) as t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[__common_expr_1@0 AND 1 / CAST(y@2 AS Int64) < 1 as t.y > Int64(0) AND Int64(1) / t.y < Int64(1), x@1 > 0 AND __common_expr_1@0 AND 1 / CAST(y@2 AS Int64) < 1 / CAST(x@1 AS Int64) as t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x]
+02)--ProjectionExec: expr=[y@1 > 0 as __common_expr_1, x@0 as x, y@1 as y]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
 ----
 logical_plan
-01)Projection: t.y = Int32(0) OR Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y = Int64(0) OR Int64(1) / t.y < Int64(1), t.x = Int32(0) OR t.y = Int32(0) OR Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x
-02)--TableScan: t projection=[x, y]
+01)Projection: __common_expr_1 OR Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y = Int64(0) OR Int64(1) / t.y < Int64(1), t.x = Int32(0) OR __common_expr_1 OR Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x
+02)--Projection: t.y = Int32(0) AS __common_expr_1, t.x, t.y
+03)----TableScan: t projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[y@1 = 0 OR 1 / CAST(y@1 AS Int64) < 1 as t.y = Int64(0) OR Int64(1) / t.y < Int64(1), x@0 = 0 OR y@1 = 0 OR 1 / CAST(y@1 AS Int64) < 1 / CAST(x@0 AS Int64) as t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[__common_expr_1@0 OR 1 / CAST(y@2 AS Int64) < 1 as t.y = Int64(0) OR Int64(1) / t.y < Int64(1), x@1 = 0 OR __common_expr_1@0 OR 1 / CAST(y@2 AS Int64) < 1 / CAST(x@1 AS Int64) as t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x]
+02)--ProjectionExec: expr=[y@1 = 0 as __common_expr_1, x@0 as x, y@1 as y]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 # due to the reason describe in https://github.com/apache/datafusion/issues/8927,
 # the following queries will fail

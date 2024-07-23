@@ -73,6 +73,7 @@ use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 
+use crate::execution::session_state::SessionStateBuilder;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -294,7 +295,11 @@ impl SessionContext {
     /// all `SessionContext`'s should be configured with the
     /// same `RuntimeEnv`.
     pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        let state = SessionState::new_with_config_rt(config, runtime);
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
         Self::new_with_state(state)
     }
 
@@ -315,7 +320,7 @@ impl SessionContext {
     }
 
     /// Creates a new `SessionContext` using the provided [`SessionState`]
-    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_state")]
+    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_state")]
     pub fn with_state(state: SessionState) -> Self {
         Self::new_with_state(state)
     }
@@ -495,7 +500,7 @@ impl SessionContext {
         self.execute_logical_plan(plan).await
     }
 
-    /// Creates logical expresssions from SQL query text.
+    /// Creates logical expressions from SQL query text.
     ///
     /// # Example: Parsing SQL queries
     ///
@@ -1347,7 +1352,7 @@ impl SessionContext {
         self.state.write().register_catalog_list(catalog_list)
     }
 
-    /// Registers a [`ConfigExtension`] as a table option extention that can be
+    /// Registers a [`ConfigExtension`] as a table option extension that can be
     /// referenced from SQL statements executed against this context.
     pub fn register_table_options_extension<T: ConfigExtension>(&self, extension: T) {
         self.state
@@ -1574,6 +1579,7 @@ mod tests {
     use datafusion_common_runtime::SpawnedTask;
 
     use crate::catalog::schema::SchemaProvider;
+    use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use tempfile::TempDir;
@@ -1707,7 +1713,11 @@ mod tests {
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")
             .set_str("datafusion.catalog.has_header", "true");
-        let session_state = SessionState::new_with_config_rt(cfg, runtime);
+        let session_state = SessionStateBuilder::new()
+            .with_config(cfg)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
         let ctx = SessionContext::new_with_state(session_state);
         ctx.refresh_catalogs().await?;
 
@@ -1733,9 +1743,12 @@ mod tests {
     #[tokio::test]
     async fn custom_query_planner() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
-        let session_state =
-            SessionState::new_with_config_rt(SessionConfig::new(), runtime)
-                .with_query_planner(Arc::new(MyQueryPlanner {}));
+        let session_state = SessionStateBuilder::new()
+            .with_config(SessionConfig::new())
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .with_query_planner(Arc::new(MyQueryPlanner {}))
+            .build();
         let ctx = SessionContext::new_with_state(session_state);
 
         let df = ctx.sql("SELECT 1").await?;

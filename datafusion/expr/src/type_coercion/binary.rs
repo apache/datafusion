@@ -370,7 +370,7 @@ impl From<&DataType> for TypeCategory {
 /// The rules in the document provide a clue, but adhering strictly to them doesn't precisely
 /// align with the behavior of Postgres. Therefore, we've made slight adjustments to the rules
 /// to better match the behavior of both Postgres and DuckDB. For example, we expect adjusted
-/// decimal percision and scale when coercing decimal types.
+/// decimal precision and scale when coercing decimal types.
 pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
@@ -718,7 +718,7 @@ pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         (Int16 | Int32 | Int64, Int8) | (Int32 | Int64, Int16) | (Int64, Int32) |
         // Left Float is larger than right Float.
         (Float32 | Float64, Float16) | (Float64, Float32) |
-        // Left String is larget than right String.
+        // Left String is larger than right String.
         (LargeUtf8, Utf8) |
         // Any left type is wider than a right hand side Null.
         (_, Null) => lhs.clone(),
@@ -919,16 +919,21 @@ fn string_concat_internal_coercion(
     }
 }
 
-/// Coercion rules for string types (Utf8/LargeUtf8): If at least one argument is
-/// a string type and both arguments can be coerced into a string type, coerce
-/// to string type.
+/// Coercion rules for string view types (Utf8/LargeUtf8/Utf8View):
+/// If at least one argument is a string view, we coerce to string view
+/// based on the observation that StringArray to StringViewArray is cheap but not vice versa.
+///
+/// Between Utf8 and LargeUtf8, we coerce to LargeUtf8.
 fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
+        // If Utf8View is in any side, we coerce to Utf8View.
+        (Utf8View, Utf8View | Utf8 | LargeUtf8) | (Utf8 | LargeUtf8, Utf8View) => {
+            Some(Utf8View)
+        }
+        // Then, if LargeUtf8 is in any side, we coerce to LargeUtf8.
+        (LargeUtf8, Utf8 | LargeUtf8) | (Utf8, LargeUtf8) => Some(LargeUtf8),
         (Utf8, Utf8) => Some(Utf8),
-        (LargeUtf8, Utf8) => Some(LargeUtf8),
-        (Utf8, LargeUtf8) => Some(LargeUtf8),
-        (LargeUtf8, LargeUtf8) => Some(LargeUtf8),
         _ => None,
     }
 }
@@ -975,15 +980,26 @@ fn binary_to_string_coercion(
     }
 }
 
-/// Coercion rules for binary types (Binary/LargeBinary): If at least one argument is
+/// Coercion rules for binary types (Binary/LargeBinary/BinaryView): If at least one argument is
 /// a binary type and both arguments can be coerced into a binary type, coerce
 /// to binary type.
 fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Binary | Utf8, Binary) | (Binary, Utf8) => Some(Binary),
-        (LargeBinary | Binary | Utf8 | LargeUtf8, LargeBinary)
-        | (LargeBinary, Binary | Utf8 | LargeUtf8) => Some(LargeBinary),
+        // If BinaryView is in any side, we coerce to BinaryView.
+        (BinaryView, BinaryView | Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View)
+        | (LargeBinary | Binary | Utf8 | LargeUtf8 | Utf8View, BinaryView) => {
+            Some(BinaryView)
+        }
+        // Prefer LargeBinary over Binary
+        (LargeBinary | Binary | Utf8 | LargeUtf8 | Utf8View, LargeBinary)
+        | (LargeBinary, Binary | Utf8 | LargeUtf8 | Utf8View) => Some(LargeBinary),
+
+        // If Utf8View/LargeUtf8 presents need to be large Binary
+        (Utf8View | LargeUtf8, Binary) | (Binary, Utf8View | LargeUtf8) => {
+            Some(LargeBinary)
+        }
+        (Binary, Utf8) | (Utf8, Binary) => Some(Binary),
         _ => None,
     }
 }

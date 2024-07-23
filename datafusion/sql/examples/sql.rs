@@ -15,13 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::{collections::HashMap, sync::Arc};
+
 use arrow_schema::{DataType, Field, Schema};
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
+use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::WindowUDF;
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
+use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_sql::{
@@ -29,7 +34,6 @@ use datafusion_sql::{
     sqlparser::{dialect::GenericDialect, parser::Parser},
     TableReference,
 };
-use std::{collections::HashMap, sync::Arc};
 
 fn main() {
     let sql = "SELECT \
@@ -53,7 +57,8 @@ fn main() {
     // create a logical query plan
     let context_provider = MyContextProvider::new()
         .with_udaf(sum_udaf())
-        .with_udaf(count_udaf());
+        .with_udaf(count_udaf())
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
@@ -65,12 +70,17 @@ struct MyContextProvider {
     options: ConfigOptions,
     tables: HashMap<String, Arc<dyn TableSource>>,
     udafs: HashMap<String, Arc<AggregateUDF>>,
+    expr_planners: Vec<Arc<dyn ExprPlanner>>,
 }
 
 impl MyContextProvider {
     fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
-        // TODO: change to to_string() if all the function name is converted to lowercase
-        self.udafs.insert(udaf.name().to_lowercase(), udaf);
+        self.udafs.insert(udaf.name().to_string(), udaf);
+        self
+    }
+
+    fn with_expr_planner(mut self, planner: Arc<dyn ExprPlanner>) -> Self {
+        self.expr_planners.push(planner);
         self
     }
 
@@ -106,6 +116,7 @@ impl MyContextProvider {
             tables,
             options: Default::default(),
             udafs: Default::default(),
+            expr_planners: vec![],
         }
     }
 }
@@ -154,5 +165,9 @@ impl ContextProvider for MyContextProvider {
 
     fn udwf_names(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.expr_planners
     }
 }

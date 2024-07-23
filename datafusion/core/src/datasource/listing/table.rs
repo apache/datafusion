@@ -695,8 +695,8 @@ impl ListingTable {
     }
 
     /// Specify the SQL definition for this table, if any
-    pub fn with_definition(mut self, defintion: Option<String>) -> Self {
-        self.definition = defintion;
+    pub fn with_definition(mut self, definition: Option<String>) -> Self {
+        self.definition = definition;
         self
     }
 
@@ -1038,8 +1038,8 @@ mod tests {
     use crate::datasource::file_format::avro::AvroFormat;
     use crate::datasource::file_format::csv::CsvFormat;
     use crate::datasource::file_format::json::JsonFormat;
-    use crate::datasource::file_format::parquet::ParquetFormat;
     #[cfg(feature = "parquet")]
+    use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::physical_plan::collect;

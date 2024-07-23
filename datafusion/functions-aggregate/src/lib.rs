@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 //! Aggregate Function packages for [DataFusion].
 //!
@@ -56,6 +58,7 @@
 pub mod macros;
 
 pub mod approx_distinct;
+pub mod array_agg;
 pub mod correlation;
 pub mod count;
 pub mod covariance;
@@ -91,6 +94,7 @@ pub mod expr_fn {
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
+    pub use super::array_agg::array_agg;
     pub use super::average::avg;
     pub use super::bit_and_or_xor::bit_and;
     pub use super::bit_and_or_xor::bit_or;
@@ -126,6 +130,7 @@ pub mod expr_fn {
 /// Returns all default aggregate functions
 pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
     vec![
+        array_agg::array_agg_udaf(),
         first_last::first_value_udaf(),
         first_last::last_value_udaf(),
         covariance::covar_samp_udaf(),
@@ -189,8 +194,9 @@ mod tests {
         let mut names = HashSet::new();
         for func in all_default_aggregate_functions() {
             // TODO: remove this
-            // These functions are in intermediate migration state, skip them
-            if func.name().to_lowercase() == "count" {
+            // These functions are in intermidiate migration state, skip them
+            let name_lower_case = func.name().to_lowercase();
+            if name_lower_case == "count" || name_lower_case == "array_agg" {
                 continue;
             }
             assert!(

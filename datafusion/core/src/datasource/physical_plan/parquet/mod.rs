@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::file_stream::FileStream;
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningPredicate, DisplayAs, FileGroupPartitioner,
+    parquet::page_filter::PagePruningAccessPlanFilter, DisplayAs, FileGroupPartitioner,
     FileScanConfig,
 };
 use crate::{
@@ -39,13 +39,11 @@ use crate::{
     },
 };
 
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
 use itertools::Itertools;
 use log::debug;
-use parquet::basic::{ConvertedType, LogicalType};
-use parquet::schema::types::ColumnDescriptor;
 
 mod access_plan;
 mod metrics;
@@ -53,7 +51,7 @@ mod opener;
 mod page_filter;
 mod reader;
 mod row_filter;
-mod row_groups;
+mod row_group_filter;
 mod statistics;
 mod writer;
 
@@ -225,7 +223,7 @@ pub struct ParquetExec {
     /// Optional predicate for pruning row groups (derived from `predicate`)
     pruning_predicate: Option<Arc<PruningPredicate>>,
     /// Optional predicate for pruning pages (derived from `predicate`)
-    page_pruning_predicate: Option<Arc<PagePruningPredicate>>,
+    page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
     /// Optional hint for the size of the parquet metadata
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
@@ -381,19 +379,12 @@ impl ParquetExecBuilder {
             })
             .filter(|p| !p.always_true());
 
-        let page_pruning_predicate = predicate.as_ref().and_then(|predicate_expr| {
-            match PagePruningPredicate::try_new(predicate_expr, file_schema.clone()) {
-                Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
-                Err(e) => {
-                    debug!(
-                        "Could not create page pruning predicate for '{:?}': {}",
-                        pruning_predicate, e
-                    );
-                    predicate_creation_errors.add(1);
-                    None
-                }
-            }
-        });
+        let page_pruning_predicate = predicate
+            .as_ref()
+            .map(|predicate_expr| {
+                PagePruningAccessPlanFilter::new(predicate_expr, file_schema.clone())
+            })
+            .map(Arc::new);
 
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
@@ -739,7 +730,7 @@ impl ExecutionPlan for ParquetExec {
 
 fn should_enable_page_index(
     enable_page_index: bool,
-    page_pruning_predicate: &Option<Arc<PagePruningPredicate>>,
+    page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
 ) -> bool {
     enable_page_index
         && page_pruning_predicate.is_some()
@@ -747,26 +738,6 @@ fn should_enable_page_index(
             .as_ref()
             .map(|p| p.filter_number() > 0)
             .unwrap_or(false)
-}
-
-// Convert parquet column schema to arrow data type, and just consider the
-// decimal data type.
-pub(crate) fn parquet_to_arrow_decimal_type(
-    parquet_column: &ColumnDescriptor,
-) -> Option<DataType> {
-    let type_ptr = parquet_column.self_type_ptr();
-    match type_ptr.get_basic_info().logical_type() {
-        Some(LogicalType::Decimal { scale, precision }) => {
-            Some(DataType::Decimal128(precision as u8, scale as i8))
-        }
-        _ => match type_ptr.get_basic_info().converted_type() {
-            ConvertedType::DECIMAL => Some(DataType::Decimal128(
-                type_ptr.get_precision() as u8,
-                type_ptr.get_scale() as i8,
-            )),
-            _ => None,
-        },
-    }
 }
 
 #[cfg(test)]
@@ -798,7 +769,7 @@ mod tests {
     };
     use arrow::datatypes::{Field, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::Fields;
+    use arrow_schema::{DataType, Fields};
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;

@@ -2356,7 +2356,7 @@ CREATE TABLE t_source(
     column1 String,
     column2 String,
     column3 String,
-    column4 String,
+    column4 String
 ) AS VALUES
 ('one', 'one', 'one', 'one'),
 ('two', 'two', '', 'two'),

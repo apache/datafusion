@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn test_work_table() {
         let work_table = WorkTable::new();
-        // cann't take from empty work_table
+        // can't take from empty work_table
         assert!(work_table.take().is_err());
 
         let pool = Arc::new(UnboundedMemoryPool::default()) as _;

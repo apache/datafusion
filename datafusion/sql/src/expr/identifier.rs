@@ -15,14 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::Field;
-use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
-    ScalarValue, TableReference,
-};
-use datafusion_expr::{expr::ScalarFunction, lit, Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
+
+use datafusion_common::{
+    internal_err, not_impl_err, plan_datafusion_err, Column, DFSchema, DataFusionError,
+    Result, TableReference,
+};
+use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::{Case, Expr};
+
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_identifier_to_expr(
@@ -118,33 +121,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Though ideally once that support is in place, this code should work with it
             // TODO: remove when can support multiple nested identifiers
             if ids.len() > 5 {
-                return internal_err!("Unsupported compound identifier: {ids:?}");
+                return not_impl_err!("Compound identifier: {ids:?}");
             }
 
             let search_result = search_dfschema(&ids, schema);
             match search_result {
                 // found matching field with spare identifier(s) for nested field(s) in structure
                 Some((field, qualifier, nested_names)) if !nested_names.is_empty() => {
-                    // TODO: remove when can support multiple nested identifiers
-                    if nested_names.len() > 1 {
-                        return internal_err!(
-                            "Nested identifiers not yet supported for column {}",
-                            Column::from((qualifier, field)).quoted_flat_name()
-                        );
+                    // found matching field with spare identifier(s) for nested field(s) in structure
+                    for planner in self.context_provider.get_expr_planners() {
+                        if let Ok(planner_result) = planner.plan_compound_identifier(
+                            field,
+                            qualifier,
+                            nested_names,
+                        ) {
+                            match planner_result {
+                                PlannerResult::Planned(expr) => return Ok(expr),
+                                PlannerResult::Original(_args) => {}
+                            }
+                        }
                     }
-                    let nested_name = nested_names[0].to_string();
-
-                    let col = Expr::Column(Column::from((qualifier, field)));
-                    if let Some(udf) =
-                        self.context_provider.get_function_meta("get_field")
-                    {
-                        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                            udf,
-                            vec![col, lit(ScalarValue::from(nested_name))],
-                        )))
-                    } else {
-                        internal_err!("get_field not found")
-                    }
+                    not_impl_err!(
+                        "Compound identifiers not supported by ExprPlanner: {ids:?}"
+                    )
                 }
                 // found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {
@@ -154,7 +153,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // return default where use all identifiers to not have a nested field
                     // this len check is because at 5 identifiers will have to have a nested field
                     if ids.len() == 5 {
-                        internal_err!("Unsupported compound identifier: {ids:?}")
+                        not_impl_err!("compound identifier: {ids:?}")
                     } else {
                         // check the outer_query_schema and try to find a match
                         if let Some(outer) = planner_context.outer_query_schema() {
@@ -165,7 +164,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     if !nested_names.is_empty() =>
                                 {
                                     // TODO: remove when can support nested identifiers for OuterReferenceColumn
-                                    internal_err!(
+                                    not_impl_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
                                         Column::from((qualifier, field)).quoted_flat_name()
                                     )

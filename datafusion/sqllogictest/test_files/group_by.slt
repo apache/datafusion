@@ -4489,7 +4489,7 @@ LIMIT 5
 statement ok
 CREATE TABLE src_table (
 	t1 TIMESTAMP,
-	c2 INT,
+	c2 INT
 ) AS VALUES
 ('2020-12-10T00:00:00.00Z', 0),
 ('2020-12-11T00:00:00.00Z', 1),

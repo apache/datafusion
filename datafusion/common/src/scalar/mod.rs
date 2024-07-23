@@ -1063,7 +1063,6 @@ impl ScalarValue {
 
     /// Create an one value in the given type.
     pub fn new_one(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Int8 => ScalarValue::Int8(Some(1)),
             DataType::Int16 => ScalarValue::Int16(Some(1)),
@@ -1086,7 +1085,6 @@ impl ScalarValue {
 
     /// Create a negative one value in the given type.
     pub fn new_negative_one(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Int8 | DataType::UInt8 => ScalarValue::Int8(Some(-1)),
             DataType::Int16 | DataType::UInt16 => ScalarValue::Int16(Some(-1)),
@@ -1104,7 +1102,6 @@ impl ScalarValue {
     }
 
     pub fn new_ten(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Int8 => ScalarValue::Int8(Some(10)),
             DataType::Int16 => ScalarValue::Int16(Some(10)),
@@ -1682,8 +1679,10 @@ impl ScalarValue {
             DataType::UInt16 => build_array_primitive!(UInt16Array, UInt16),
             DataType::UInt32 => build_array_primitive!(UInt32Array, UInt32),
             DataType::UInt64 => build_array_primitive!(UInt64Array, UInt64),
+            DataType::Utf8View => build_array_string!(StringViewArray, Utf8View),
             DataType::Utf8 => build_array_string!(StringArray, Utf8),
             DataType::LargeUtf8 => build_array_string!(LargeStringArray, LargeUtf8),
+            DataType::BinaryView => build_array_string!(BinaryViewArray, BinaryView),
             DataType::Binary => build_array_string!(BinaryArray, Binary),
             DataType::LargeBinary => build_array_string!(LargeBinaryArray, LargeBinary),
             DataType::Date32 => build_array_primitive!(Date32Array, Date32),
@@ -1841,8 +1840,6 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _)
-            | DataType::Utf8View
-            | DataType::BinaryView
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
                 return _internal_err!(
@@ -2678,7 +2675,10 @@ impl ScalarValue {
             DataType::Duration(TimeUnit::Nanosecond) => {
                 typed_cast!(array, index, DurationNanosecondArray, DurationNanosecond)?
             }
-
+            DataType::Map(_, _) => {
+                let a = array.slice(index, 1);
+                Self::Map(Arc::new(a.as_map().to_owned()))
+            }
             other => {
                 return _not_impl_err!(
                     "Can't create a scalar from array of type \"{other:?}\""
@@ -5692,16 +5692,12 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
         );
 
-        // needs https://github.com/apache/arrow-rs/issues/5893
-        /*
         check_scalar_cast(ScalarValue::Utf8(None), DataType::Utf8View);
         check_scalar_cast(ScalarValue::from("foo"), DataType::Utf8View);
         check_scalar_cast(
             ScalarValue::from("larger than 12 bytes string"),
             DataType::Utf8View,
         );
-
-         */
     }
 
     // mimics how casting work on scalar values by `casting` `scalar` to `desired_type`

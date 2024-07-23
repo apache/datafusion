@@ -43,6 +43,14 @@ use datafusion_expr::utils::AggregateOrderSensitivity;
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
+///
+/// `input_exprs` and `sort_exprs` are used for customizing Accumulator
+/// whose behavior depends on arguments such as the `ORDER BY`.
+///
+/// For example to call `ARRAY_AGG(x ORDER BY y)` would pass `y` to `sort_exprs`, `x` to `input_exprs`
+///
+/// `input_exprs` and `sort_exprs` are used for customizing Accumulator as the arguments in `AccumulatorArgs`,
+/// if you don't need them it is fine to pass empty slice `&[]`.
 #[allow(clippy::too_many_arguments)]
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
@@ -275,6 +283,11 @@ impl AggregateFunctionExpr {
     pub fn is_distinct(&self) -> bool {
         self.is_distinct
     }
+
+    /// Return if the aggregation ignores nulls
+    pub fn ignore_nulls(&self) -> bool {
+        self.ignore_nulls
+    }
 }
 
 impl AggregateExpr for AggregateFunctionExpr {
@@ -333,7 +346,7 @@ impl AggregateExpr for AggregateFunctionExpr {
         let accumulator = self.fun.create_sliding_accumulator(args)?;
 
         // Accumulators that have window frame startings different
-        // than `UNBOUNDED PRECEDING`, such as `1 PRECEEDING`, need to
+        // than `UNBOUNDED PRECEDING`, such as `1 PRECEDING`, need to
         // implement retract_batch method in order to run correctly
         // currently in DataFusion.
         //
@@ -364,7 +377,7 @@ impl AggregateExpr for AggregateFunctionExpr {
         // 3. Third sum we add to the state sum value between `[2, 3)`
         // (`[0, 2)` is already in the state sum).  Also we need to
         // retract values between `[0, 1)` by this way we can obtain sum
-        // between [1, 3) which is indeed the apropriate range.
+        // between [1, 3) which is indeed the appropriate range.
         //
         // When we use `UNBOUNDED PRECEDING` in the query starting
         // index will always be 0 for the desired range, and hence the

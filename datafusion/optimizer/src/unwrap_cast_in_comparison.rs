@@ -33,7 +33,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan, Operator};
+use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan};
 
 /// [`UnwrapCastInComparison`] attempts to remove casts from
 /// comparisons to literals ([`ScalarValue`]s) by applying the casts
@@ -146,7 +146,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                     };
                     is_supported_type(&left_type)
                         && is_supported_type(&right_type)
-                        && is_comparison_op(op)
+                        && op.is_comparison_operator()
                 } =>
             {
                 match (left.as_mut(), right.as_mut()) {
@@ -262,18 +262,6 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
     }
 }
 
-fn is_comparison_op(op: &Operator) -> bool {
-    matches!(
-        op,
-        Operator::Eq
-            | Operator::NotEq
-            | Operator::Gt
-            | Operator::GtEq
-            | Operator::Lt
-            | Operator::LtEq
-    )
-}
-
 /// Returns true if [UnwrapCastExprRewriter] supports this data type
 fn is_supported_type(data_type: &DataType) -> bool {
     is_supported_numeric_type(data_type)
@@ -300,7 +288,10 @@ fn is_supported_numeric_type(data_type: &DataType) -> bool {
 
 /// Returns true if [UnwrapCastExprRewriter] supports casting this value as a string
 fn is_supported_string_type(data_type: &DataType) -> bool {
-    matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
 }
 
 /// Returns true if [UnwrapCastExprRewriter] supports casting this value as a dictionary
@@ -473,12 +464,15 @@ fn try_cast_string_literal(
     target_type: &DataType,
 ) -> Option<ScalarValue> {
     let string_value = match lit_value {
-        ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) => s.clone(),
+        ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s) => {
+            s.clone()
+        }
         _ => return None,
     };
     let scalar_value = match target_type {
         DataType::Utf8 => ScalarValue::Utf8(string_value),
         DataType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),
+        DataType::Utf8View => ScalarValue::Utf8View(string_value),
         _ => return None,
     };
     Some(scalar_value)
@@ -899,7 +893,7 @@ mod tests {
         DataType::Timestamp(TimeUnit::Nanosecond, utc)
     }
 
-    // a dictonary type for storing string tags
+    // a dictionary type for storing string tags
     fn dictionary_tag_type() -> DataType {
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
     }
@@ -1080,7 +1074,7 @@ mod tests {
                 ),
             };
 
-            // Datafusion ignores timezones for comparisons of ScalarValue
+            // DataFusion ignores timezones for comparisons of ScalarValue
             // so double check it here
             assert_eq!(lit_tz_none, lit_tz_utc);
 

@@ -38,6 +38,7 @@ use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
@@ -163,7 +164,7 @@ async fn cross_join() {
 }
 
 #[tokio::test]
-async fn merge_join() {
+async fn sort_merge_join_no_spill() {
     // Planner chooses MergeJoin only if number of partitions > 1
     let config = SessionConfig::new()
         .with_target_partitions(2)
@@ -174,11 +175,32 @@ async fn merge_join() {
             "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
+            "Failed to allocate additional",
             "SMJStream",
+            "Disk spilling disabled",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
+        .with_scenario(Scenario::AccessLogStreaming)
+        .run()
+        .await
+}
+
+#[tokio::test]
+async fn sort_merge_join_spill() {
+    // Planner chooses MergeJoin only if number of partitions > 1
+    let config = SessionConfig::new()
+        .with_target_partitions(2)
+        .set_bool("datafusion.optimizer.prefer_hash_join", false);
+
+    TestCase::new()
+        .with_query(
+            "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
+        )
+        .with_memory_limit(1_000)
+        .with_config(config)
+        .with_disk_manager_config(DiskManagerConfig::NewOs)
+        .with_scenario(Scenario::AccessLogStreaming)
         .run()
         .await
 }
@@ -258,7 +280,7 @@ async fn sort_spill_reservation() {
         .with_query("select * from t ORDER BY a , b DESC")
     // enough memory to sort if we don't try to merge it all at once
         .with_memory_limit(partition_size)
-    // use a single partiton so only a sort is needed
+    // use a single partition so only a sort is needed
         .with_scenario(scenario)
         .with_disk_manager_config(DiskManagerConfig::NewOs)
         .with_expected_plan(
@@ -340,8 +362,8 @@ async fn oom_parquet_sink() {
             path.to_string_lossy()
         ))
         .with_expected_errors(vec![
-            // TODO: update error handling in ParquetSink
-            "Unable to send array to writer!",
+            "Failed to allocate additional",
+            "for ParquetSink(ArrowColumnWriter)",
         ])
         .with_memory_limit(200_000)
         .run()
@@ -360,7 +382,7 @@ struct TestCase {
     /// How should the disk manager (that allows spilling) be
     /// configured? Defaults to `Disabled`
     disk_manager_config: DiskManagerConfig,
-    /// Expected explain plan, if non emptry
+    /// Expected explain plan, if non-empty
     expected_plan: Vec<String>,
     /// Is the plan expected to pass? Defaults to false
     expected_success: bool,
@@ -452,20 +474,23 @@ impl TestCase {
         let table = scenario.table();
 
         let rt_config = RuntimeConfig::new()
-            // do not allow spilling
+            // disk manager setting controls the spilling
             .with_disk_manager(disk_manager_config)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
         let runtime = RuntimeEnv::new(rt_config).unwrap();
 
         // Configure execution
-        let state = SessionState::new_with_config_rt(config, Arc::new(runtime));
-        let state = match scenario.rules() {
-            Some(rules) => state.with_physical_optimizer_rules(rules),
-            None => state,
+        let builder = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(Arc::new(runtime))
+            .with_default_features();
+        let builder = match scenario.rules() {
+            Some(rules) => builder.with_physical_optimizer_rules(rules),
+            None => builder,
         };
 
-        let ctx = SessionContext::new_with_state(state);
+        let ctx = SessionContext::new_with_state(builder.build());
         ctx.register_table("t", table).expect("registering table");
 
         let query = query.expect("Test error: query not specified");

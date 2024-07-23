@@ -92,6 +92,7 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
@@ -290,10 +291,14 @@ async fn topk_plan() -> Result<()> {
 fn make_topk_context() -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(48);
     let runtime = Arc::new(RuntimeEnv::default());
-    let mut state = SessionState::new_with_config_rt(config, runtime)
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
-        .add_optimizer_rule(Arc::new(TopKOptimizerRule {}));
-    state.add_analyzer_rule(Arc::new(MyAnalyzerRule {}));
+        .with_optimizer_rule(Arc::new(TopKOptimizerRule {}))
+        .with_analyzer_rule(Arc::new(MyAnalyzerRule {}))
+        .build();
     SessionContext::new_with_state(state)
 }
 

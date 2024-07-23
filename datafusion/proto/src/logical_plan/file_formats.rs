@@ -86,22 +86,6 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
     ) -> datafusion_common::Result<()> {
         Ok(())
     }
-
-    fn try_decode_udf(
-        &self,
-        name: &str,
-        __buf: &[u8],
-    ) -> datafusion_common::Result<Arc<datafusion_expr::ScalarUDF>> {
-        not_impl_err!("LogicalExtensionCodec is not provided for scalar function {name}")
-    }
-
-    fn try_encode_udf(
-        &self,
-        __node: &datafusion_expr::ScalarUDF,
-        __buf: &mut Vec<u8>,
-    ) -> datafusion_common::Result<()> {
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -159,22 +143,6 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         &self,
         __buf: &[u8],
         __node: Arc<dyn FileFormatFactory>,
-    ) -> datafusion_common::Result<()> {
-        Ok(())
-    }
-
-    fn try_decode_udf(
-        &self,
-        name: &str,
-        __buf: &[u8],
-    ) -> datafusion_common::Result<Arc<datafusion_expr::ScalarUDF>> {
-        not_impl_err!("LogicalExtensionCodec is not provided for scalar function {name}")
-    }
-
-    fn try_encode_udf(
-        &self,
-        __node: &datafusion_expr::ScalarUDF,
-        __buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         Ok(())
     }
@@ -238,22 +206,6 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
     ) -> datafusion_common::Result<()> {
         Ok(())
     }
-
-    fn try_decode_udf(
-        &self,
-        name: &str,
-        __buf: &[u8],
-    ) -> datafusion_common::Result<Arc<datafusion_expr::ScalarUDF>> {
-        not_impl_err!("LogicalExtensionCodec is not provided for scalar function {name}")
-    }
-
-    fn try_encode_udf(
-        &self,
-        __node: &datafusion_expr::ScalarUDF,
-        __buf: &mut Vec<u8>,
-    ) -> datafusion_common::Result<()> {
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -314,22 +266,6 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
     ) -> datafusion_common::Result<()> {
         Ok(())
     }
-
-    fn try_decode_udf(
-        &self,
-        name: &str,
-        __buf: &[u8],
-    ) -> datafusion_common::Result<Arc<datafusion_expr::ScalarUDF>> {
-        not_impl_err!("LogicalExtensionCodec is not provided for scalar function {name}")
-    }
-
-    fn try_encode_udf(
-        &self,
-        __node: &datafusion_expr::ScalarUDF,
-        __buf: &mut Vec<u8>,
-    ) -> datafusion_common::Result<()> {
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -387,22 +323,6 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
         &self,
         __buf: &[u8],
         __node: Arc<dyn FileFormatFactory>,
-    ) -> datafusion_common::Result<()> {
-        Ok(())
-    }
-
-    fn try_decode_udf(
-        &self,
-        name: &str,
-        __buf: &[u8],
-    ) -> datafusion_common::Result<Arc<datafusion_expr::ScalarUDF>> {
-        not_impl_err!("LogicalExtensionCodec is not provided for scalar function {name}")
-    }
-
-    fn try_encode_udf(
-        &self,
-        __node: &datafusion_expr::ScalarUDF,
-        __buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         Ok(())
     }

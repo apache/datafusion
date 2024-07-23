@@ -261,6 +261,7 @@ impl BatchPartitioner {
                     num_partitions: partitions,
                     hash_buffer,
                 } => {
+                    // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
                     let arrays = exprs
@@ -282,6 +283,11 @@ impl BatchPartitioner {
                             .append_value(index as u64);
                     }
 
+                    // Finished building index-arrays for output partitions
+                    timer.done();
+
+                    // Borrowing partitioner timer to prevent moving `self` to closure
+                    let partitioner_timer = &self.timer;
                     let it = indices
                         .into_iter()
                         .enumerate()
@@ -290,6 +296,9 @@ impl BatchPartitioner {
                             (!indices.is_empty()).then_some((partition, indices))
                         })
                         .map(move |(partition, indices)| {
+                            // Tracking time required for repartitioned batches construction
+                            let _timer = partitioner_timer.timer();
+
                             // Produce batches based on indices
                             let columns = batch
                                 .columns()
@@ -302,9 +311,6 @@ impl BatchPartitioner {
 
                             let batch =
                                 RecordBatch::try_new(batch.schema(), columns).unwrap();
-
-                            // bind timer so it drops w/ this iterator
-                            let _ = &timer;
 
                             Ok((partition, batch))
                         });
@@ -1339,8 +1345,8 @@ mod tests {
 
     #[tokio::test]
     // As the hash results might be different on different platforms or
-    // wiht different compilers, we will compare the same execution with
-    // and without droping the output stream.
+    // with different compilers, we will compare the same execution with
+    // and without dropping the output stream.
     async fn hash_repartition_with_dropping_output_stream() {
         let task_ctx = Arc::new(TaskContext::default());
         let partitioning = Partitioning::Hash(
@@ -1351,7 +1357,7 @@ mod tests {
             2,
         );
 
-        // We first collect the results without droping the output stream.
+        // We first collect the results without dropping the output stream.
         let input = Arc::new(make_barrier_exec());
         let exec = RepartitionExec::try_new(
             Arc::clone(&input) as Arc<dyn ExecutionPlan>,

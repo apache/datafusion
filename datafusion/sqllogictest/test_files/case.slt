@@ -1,0 +1,110 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# create test data
+statement ok
+create table foo (a int, b int) as values (1, 2), (3, 4), (5, 6), (null, null), (6, null), (null, 7);
+
+# CASE WHEN with condition
+query T
+SELECT CASE a WHEN 1 THEN 'one' WHEN 3 THEN 'three' ELSE '?' END FROM foo
+----
+one
+three
+?
+?
+?
+?
+
+# CASE WHEN with no condition
+query I
+SELECT CASE WHEN a > 2 THEN a ELSE b END FROM foo
+----
+2
+3
+5
+NULL
+6
+7
+
+# column or explicit null
+query I
+SELECT CASE WHEN a > 2 THEN b ELSE null END FROM foo
+----
+NULL
+4
+6
+NULL
+NULL
+7
+
+# column or implicit null
+query I
+SELECT CASE WHEN a > 2 THEN b END FROM foo
+----
+NULL
+4
+6
+NULL
+NULL
+7
+
+# scalar or scalar (string)
+query T
+SELECT CASE WHEN a > 2 THEN 'even' ELSE 'odd' END FROM foo
+----
+odd
+even
+even
+odd
+even
+odd
+
+# scalar or scalar (int)
+query I
+SELECT CASE WHEN a > 2 THEN 1 ELSE 0 END FROM foo
+----
+0
+1
+1
+0
+1
+0
+
+# predicate binary expression with scalars (does not make much sense because the expression in
+# this case is always false, so this expression could be rewritten as a literal 0 during planning
+query I
+SELECT CASE WHEN 1 > 2 THEN 1 ELSE 0 END FROM foo
+----
+0
+0
+0
+0
+0
+0
+
+# predicate using boolean literal (does not make much sense because the expression in
+# this case is always false, so this expression could be rewritten as a literal 0 during planning
+query I
+SELECT CASE WHEN false THEN 1 ELSE 0 END FROM foo
+----
+0
+0
+0
+0
+0
+0

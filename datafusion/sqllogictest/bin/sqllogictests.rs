@@ -18,8 +18,6 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(target_family = "windows")]
-use std::thread;
 
 use clap::Parser;
 use datafusion_sqllogictest::{DataFusion, TestContext};
@@ -32,29 +30,15 @@ use datafusion_common_runtime::SpawnedTask;
 
 const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
+const STACK_SIZE: usize = 2 * 1024 * 1024 + 512 * 1024; // 2.5 MBs, the default 2 MBs is currently too small
 
-#[cfg(target_family = "windows")]
-pub fn main() {
-    // Tests from `tpch/tpch.slt` fail with stackoverflow with the default stack size.
-    thread::Builder::new()
-        .stack_size(2 * 1024 * 1024) // 2 MB
-        .spawn(move || {
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async { run_tests().await })
-                .unwrap()
-        })
+pub fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(STACK_SIZE)
+        .enable_all()
+        .build()
         .unwrap()
-        .join()
-        .unwrap();
-}
-
-#[tokio::main]
-#[cfg(not(target_family = "windows"))]
-pub async fn main() -> Result<()> {
-    run_tests().await
+        .block_on(run_tests())
 }
 
 /// Sets up an empty directory at test_files/scratch/<name>
