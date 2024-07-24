@@ -34,7 +34,7 @@ use crate::function::{
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
-use crate::{Accumulator, Expr, ExprFunctionExt};
+use crate::{Accumulator, Expr};
 use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
@@ -654,7 +654,3 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
         (self.accumulator)(acc_args)
     }
 }
-
-#[deprecated(since = "40.0.0", note = "Use ExprFunctionExt instead.")]
-// pub trait AggregateExt : ExprFunctionExt {}
-pub trait AggregateExt = ExprFunctionExt;

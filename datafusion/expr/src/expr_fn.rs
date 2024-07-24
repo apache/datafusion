@@ -799,7 +799,7 @@ impl ExprFuncBuilder {
                 Expr::AggregateFunction(udaf)
             }
             ExprFuncKind::Window(mut udwf) => {
-                let has_order_by = order_by.as_ref().map(|o| o.len() > 0);
+                let has_order_by = order_by.as_ref().map(|o| !o.is_empty());
                 udwf.order_by = order_by.unwrap_or_default();
                 udwf.partition_by = partition_by.unwrap_or_default();
                 udwf.window_frame =

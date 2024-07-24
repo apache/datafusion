@@ -16,8 +16,6 @@
 // under the License.
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// TODO When the deprecated trait AggregateExt is removed, remove this unstable feature.
-#![feature(trait_alias)]
 
 //! [DataFusion](https://github.com/apache/datafusion)
 //! is an extensible query execution framework that uses
@@ -89,8 +87,6 @@ pub use signature::{
 };
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-#[allow(deprecated)]
-pub use udaf::AggregateExt;
 pub use udaf::{AggregateUDF, AggregateUDFImpl, ReversedUDAF};
 pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::{WindowUDF, WindowUDFImpl};
