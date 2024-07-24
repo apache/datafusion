@@ -93,13 +93,6 @@ pub(super) fn radians_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     Interval::make_symmetric_pi_interval(&data_type)
 }
 
-pub(super) fn signum_bounds(input: &[&Interval]) -> crate::Result<Interval> {
-    // signum(x) is bounded by [-1, 1]
-    let data_type = input[0].data_type();
-
-    Interval::make_symmetric_unit_interval(&data_type)
-}
-
 pub(super) fn sqrt_bounds(input: &[&Interval]) -> crate::Result<Interval> {
     // sqrt(x) is bounded by [0, ∞)
     let data_type = input[0].data_type();
