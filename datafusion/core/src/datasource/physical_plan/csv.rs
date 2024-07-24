@@ -707,6 +707,8 @@ mod tests {
     use arrow::datatypes::*;
     use datafusion_common::test_util::arrow_test_data;
 
+    use datafusion_common::config::CsvOptions;
+    use datafusion_execution::object_store::ObjectStoreUrl;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
@@ -1326,5 +1328,35 @@ mod tests {
         let schema = Schema::new(fields);
 
         Arc::new(schema)
+    }
+
+    /// Ensure that the default options are set correctly
+    #[test]
+    fn test_default_options() {
+        let file_scan_config =
+            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), aggr_test_schema())
+                .with_file(PartitionedFile::new("foo", 34));
+
+        let CsvExecBuilder {
+            file_scan_config: _,
+            file_compression_type: _    ,
+            has_header,
+            delimiter,
+            quote,
+            escape,
+            comment,
+            newlines_in_values,
+        } = CsvExecBuilder::new(file_scan_config);
+
+        let default_options = CsvOptions::default();
+        assert_eq!(has_header, default_options.has_header.unwrap_or(false));
+        assert_eq!(delimiter, default_options.delimiter);
+        assert_eq!(quote, default_options.quote);
+        assert_eq!(escape, default_options.escape);
+        assert_eq!(comment, default_options.comment);
+        assert_eq!(
+            newlines_in_values,
+            default_options.newlines_in_values.unwrap_or(false)
+        );
     }
 }
