@@ -15,24 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-
-fn symmetric_unit_interval(data_type: &DataType) -> Result<Interval> {
-    Interval::try_new(
-        ScalarValue::new_negative_one(data_type)?,
-        ScalarValue::new_one(data_type)?,
-    )
-}
 
 /// Non-increasing on the interval \[−1, 1\], undefined otherwise.
 pub fn acos_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
-    let valid_domain = symmetric_unit_interval(&range.lower().data_type())?;
+    let valid_domain =
+        Interval::make_symmetric_unit_interval(&range.lower().data_type())?;
 
     if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
         Ok(-arg.sort_properties)
@@ -63,7 +56,8 @@ pub fn asin_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
-    let valid_domain = symmetric_unit_interval(&range.lower().data_type())?;
+    let valid_domain =
+        Interval::make_symmetric_unit_interval(&range.lower().data_type())?;
 
     if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
         Ok(arg.sort_properties)
@@ -87,7 +81,8 @@ pub fn atanh_order(input: &[ExprProperties]) -> Result<SortProperties> {
     let arg = &input[0];
     let range = &arg.range;
 
-    let valid_domain = symmetric_unit_interval(&range.lower().data_type())?;
+    let valid_domain =
+        Interval::make_symmetric_unit_interval(&range.lower().data_type())?;
 
     if valid_domain.contains(range)? == Interval::CERTAINLY_TRUE {
         Ok(arg.sort_properties)
