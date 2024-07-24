@@ -24,7 +24,7 @@ use std::vec;
 
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
-use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr_common::aggregate::AggregateExprBuilder;
 use prost::Message;
 
 use datafusion::arrow::array::ArrayRef;
