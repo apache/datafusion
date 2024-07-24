@@ -197,11 +197,6 @@ pub fn radians_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
 }
 
-/// Non-decreasing for all real numbers x.
-pub fn signum_order(input: &[ExprProperties]) -> Result<SortProperties> {
-    Ok(input[0].sort_properties)
-}
-
 /// Non-decreasing on \[0, π\] and then non-increasing on \[π, 2π\].
 /// This pattern repeats periodically with a period of 2π.
 // TODO: Implement ordering rule of the SIN function.

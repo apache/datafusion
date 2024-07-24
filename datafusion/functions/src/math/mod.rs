@@ -35,6 +35,7 @@ pub mod pi;
 pub mod power;
 pub mod random;
 pub mod round;
+pub mod signum;
 pub mod trunc;
 
 // Create UDFs
@@ -81,7 +82,7 @@ make_math_unary_udf!(
 );
 make_udf_function!(random::RandomFunc, RANDOM, random);
 make_udf_function!(round::RoundFunc, ROUND, round);
-make_math_unary_udf!(SignumFunc, SIGNUM, signum, signum, super::signum_order);
+make_udf_function!(signum::SignumFunc, SIGNUM, signum);
 make_math_unary_udf!(SinFunc, SIN, sin, sin, super::sin_order);
 make_math_unary_udf!(SinhFunc, SINH, sinh, sinh, super::sinh_order);
 make_math_unary_udf!(SqrtFunc, SQRT, sqrt, sqrt, super::sqrt_order);
