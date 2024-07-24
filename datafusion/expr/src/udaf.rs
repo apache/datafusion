@@ -541,7 +541,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 pub enum ReversedUDAF {
     /// The expression is the same as the original expression, like SUM, COUNT
     Identical,
-    /// The expression does not support reverse calculation, like ArrayAgg
+    /// The expression does not support reverse calculation
     NotSupported,
     /// The expression is different from the original expression
     Reversed(Arc<AggregateUDF>),

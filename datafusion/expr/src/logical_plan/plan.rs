@@ -496,18 +496,18 @@ impl LogicalPlan {
                 // The join keys in using-join must be columns.
                 let columns =
                     on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
-                        let Some(l) = l.try_as_col().cloned() else {
+                        let Some(l) = l.get_as_join_column() else {
                             return internal_err!(
                                 "Invalid join key. Expected column, found {l:?}"
                             );
                         };
-                        let Some(r) = r.try_as_col().cloned() else {
+                        let Some(r) = r.get_as_join_column() else {
                             return internal_err!(
                                 "Invalid join key. Expected column, found {r:?}"
                             );
                         };
-                        accumu.insert(l);
-                        accumu.insert(r);
+                        accumu.insert(l.to_owned());
+                        accumu.insert(r.to_owned());
                         Result::<_, DataFusionError>::Ok(accumu)
                     })?;
                 using_columns.push(columns);

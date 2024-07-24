@@ -326,6 +326,13 @@ select column1 + column2 from foo group by column1, column2 ORDER BY column2 des
 7
 3
 
+# Test issue: https://github.com/apache/datafusion/issues/11549
+query I
+select column1 from foo order by log(column2);
+----
+1
+3
+5
 
 # Cleanup
 statement ok
@@ -512,7 +519,7 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
 )
 STORED AS CSV
 WITH ORDER(c11)
-WITH ORDER(c12 DESC)
+WITH ORDER(c12 DESC NULLS LAST)
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 OPTIONS ('format.has_header' 'true');
 
@@ -547,34 +554,34 @@ physical_plan
 04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
 
 query TT
-  EXPLAIN SELECT LOG(c11, c12) as log_c11_base_c12
+  EXPLAIN SELECT LOG(c12, c11) as log_c11_base_c12
   FROM aggregate_test_100
   ORDER BY log_c11_base_c12;
 ----
 logical_plan
 01)Sort: log_c11_base_c12 ASC NULLS LAST
-02)--Projection: log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) AS log_c11_base_c12
+02)--Projection: log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) AS log_c11_base_c12
 03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
 01)SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c11_base_c12]
+02)--ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c11_base_c12]
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC]], has_header=true
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], has_header=true
 
 query TT
-EXPLAIN SELECT LOG(c12, c11) as log_c12_base_c11
+EXPLAIN SELECT LOG(c11, c12) as log_c12_base_c11
 FROM aggregate_test_100
-ORDER BY log_c12_base_c11 DESC;
+ORDER BY log_c12_base_c11 DESC NULLS LAST;
 ----
 logical_plan
-01)Sort: log_c12_base_c11 DESC NULLS FIRST
-02)--Projection: log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) AS log_c12_base_c11
+01)Sort: log_c12_base_c11 DESC NULLS LAST
+02)--Projection: log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) AS log_c12_base_c11
 03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
-01)SortPreservingMergeExec: [log_c12_base_c11@0 DESC]
-02)--ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c12_base_c11]
+01)SortPreservingMergeExec: [log_c12_base_c11@0 DESC NULLS LAST]
+02)--ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c12_base_c11]
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC]], has_header=true
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], has_header=true
 
 statement ok
 drop table aggregate_test_100;
@@ -1132,3 +1139,10 @@ physical_plan
 02)--ProjectionExec: expr=[CAST(inc_col@0 > desc_col@1 AS Int32) as c]
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC]], has_header=true
+
+# Union a query with the actual data and one with a constant
+query I
+SELECT (SELECT c from ordered_table ORDER BY c LIMIT 1) UNION ALL (SELECT 23 as c from ordered_table ORDER BY c LIMIT 1) ORDER BY c;
+----
+0
+23

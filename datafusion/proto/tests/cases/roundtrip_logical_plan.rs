@@ -15,25 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::fmt::{self, Debug, Formatter};
-use std::sync::Arc;
-use std::vec;
-
 use arrow::array::{
     ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
 };
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
+    DECIMAL256_MAX_PRECISION,
 };
 use prost::Message;
+use std::any::Any;
+use std::collections::HashMap;
+use std::fmt::{self, Debug, Formatter};
+use std::sync::Arc;
+use std::vec;
 
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
-use datafusion::datasource::file_format::format_as_file_type;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+use datafusion::datasource::file_format::{format_as_file_type, DefaultFileType};
 use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -44,7 +44,7 @@ use datafusion::functions_aggregate::expr_fn::{
     count_distinct, covar_pop, covar_samp, first_value, grouping, median, stddev,
     stddev_pop, sum, var_pop, var_sample,
 };
-use datafusion::functions_array::map::map;
+use datafusion::functions_nested::map::map;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -379,7 +379,9 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     parquet_format.global.dictionary_page_size_limit = 444;
     parquet_format.global.max_row_group_size = 555;
 
-    let file_type = format_as_file_type(Arc::new(ParquetFormatFactory::new()));
+    let file_type = format_as_file_type(Arc::new(
+        ParquetFormatFactory::new_with_options(parquet_format),
+    ));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
@@ -394,7 +396,6 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     let logical_round_trip =
         logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
-
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.parquet", copy_to.output_url);
@@ -457,7 +458,9 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     csv_format.time_format = Some("HH:mm:ss".to_string());
     csv_format.null_value = Some("NIL".to_string());
 
-    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
+    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new_with_options(
+        csv_format.clone(),
+    )));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
@@ -478,6 +481,27 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
             assert_eq!("test.csv", copy_to.output_url);
             assert_eq!("csv".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
+
+            let file_type = copy_to
+                .file_type
+                .as_ref()
+                .as_any()
+                .downcast_ref::<DefaultFileType>()
+                .unwrap();
+
+            let format_factory = file_type.as_format_factory();
+            let csv_factory = format_factory
+                .as_ref()
+                .as_any()
+                .downcast_ref::<CsvFormatFactory>()
+                .unwrap();
+            let csv_config = csv_factory.options.as_ref().unwrap();
+            assert_eq!(csv_format.delimiter, csv_config.delimiter);
+            assert_eq!(csv_format.date_format, csv_config.date_format);
+            assert_eq!(csv_format.datetime_format, csv_config.datetime_format);
+            assert_eq!(csv_format.timestamp_format, csv_config.timestamp_format);
+            assert_eq!(csv_format.time_format, csv_config.time_format);
+            assert_eq!(csv_format.null_value, csv_config.null_value)
         }
         _ => panic!(),
     }
@@ -1379,6 +1403,7 @@ fn round_trip_datatype() {
         DataType::Utf8,
         DataType::LargeUtf8,
         DataType::Decimal128(7, 12),
+        DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
         // Recursive list tests
         DataType::List(new_arc_field("Level1", DataType::Binary, true)),
         DataType::List(new_arc_field(

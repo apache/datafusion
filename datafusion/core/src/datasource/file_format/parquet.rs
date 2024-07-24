@@ -140,6 +140,10 @@ impl FileFormatFactory for ParquetFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ParquetFormat::default())
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl GetExt for ParquetFormatFactory {
@@ -149,6 +153,13 @@ impl GetExt for ParquetFormatFactory {
     }
 }
 
+impl fmt::Debug for ParquetFormatFactory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetFormatFactory")
+            .field("ParquetFormatFactory", &self.options)
+            .finish()
+    }
+}
 /// The Apache Parquet `FileFormat` implementation
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
