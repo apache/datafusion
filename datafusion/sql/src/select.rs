@@ -101,7 +101,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Order-by expressions prioritize referencing columns from the select list,
         // then from the FROM clause.
         let order_by_rex = self.order_by_to_sort_expr(
-            &order_by,
+            order_by,
             projected_plan.schema().as_ref(),
             planner_context,
             true,
