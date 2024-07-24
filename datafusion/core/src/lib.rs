@@ -458,7 +458,7 @@
 //! * [datafusion_execution]: State and structures needed for execution
 //! * [datafusion_expr]: [`LogicalPlan`],  [`Expr`] and related logical planning structure
 //! * [datafusion_functions]: Scalar function packages
-//! * [datafusion_functions_array]: Scalar function packages for `ARRAY`s
+//! * [datafusion_functions_nested]: Scalar function packages for `ARRAY`s, `MAP`s and `STRUCT`s
 //! * [datafusion_optimizer]: [`OptimizerRule`]s and [`AnalyzerRule`]s
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
 //! * [datafusion_physical_plan]: [`ExecutionPlan`] and related expressions
@@ -569,10 +569,17 @@ pub mod functions {
     pub use datafusion_functions::*;
 }
 
-/// re-export of [`datafusion_functions_array`] crate, if "array_expressions" feature is enabled
+/// re-export of [`datafusion_functions_nested`] crate, if "nested_expressions" feature is enabled
+pub mod functions_nested {
+    #[cfg(feature = "nested_expressions")]
+    pub use datafusion_functions_nested::*;
+}
+
+/// re-export of [`datafusion_functions_nested`] crate as [`functions_array`] for backward compatibility, if "nested_expressions" feature is enabled
+#[deprecated(since = "41.0.0", note = "use datafusion-functions-nested instead")]
 pub mod functions_array {
-    #[cfg(feature = "array_expressions")]
-    pub use datafusion_functions_array::*;
+    #[cfg(feature = "nested_expressions")]
+    pub use datafusion_functions_nested::*;
 }
 
 /// re-export of [`datafusion_functions_aggregate`] crate

@@ -17,9 +17,9 @@
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
-//! Array Functions for [DataFusion].
+//! Nested type Functions for [DataFusion].
 //!
-//! This crate contains a collection of array functions implemented using the
+//! This crate contains a collection of nested type functions implemented using the
 //! extension API.
 //!
 //! [DataFusion]: https://crates.io/crates/datafusion
@@ -102,8 +102,8 @@ pub mod expr_fn {
     pub use super::string::string_to_array;
 }
 
-/// Return all default array functions
-pub fn all_default_array_functions() -> Vec<Arc<ScalarUDF>> {
+/// Return all default nested type functions
+pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         string::array_to_string_udf(),
         string::string_to_array_udf(),
@@ -148,7 +148,7 @@ pub fn all_default_array_functions() -> Vec<Arc<ScalarUDF>> {
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let functions: Vec<Arc<ScalarUDF>> = all_default_array_functions();
+    let functions: Vec<Arc<ScalarUDF>> = all_default_nested_functions();
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
         if let Some(existing_udf) = existing_udf {
@@ -162,14 +162,14 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::all_default_array_functions;
+    use crate::all_default_nested_functions;
     use datafusion_common::Result;
     use std::collections::HashSet;
 
     #[test]
     fn test_no_duplicate_name() -> Result<()> {
         let mut names = HashSet::new();
-        for func in all_default_array_functions() {
+        for func in all_default_nested_functions() {
             assert!(
                 names.insert(func.name().to_string().to_lowercase()),
                 "duplicate function name: {}",
