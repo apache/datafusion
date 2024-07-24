@@ -38,7 +38,7 @@ meet other contributors and get guidance on where to contribute. It is important
 decisions are made fully in the open, on GitHub.
 
 Most of us use the `#datafusion` and `#arrow-rust` channels in the [ASF Slack
-workspace](https://s.apache.org/slack-invite) and the [Arrow Rust Discord
+workspace](https://s.apache.org/slack-invite) and the `#comet` channel in the [Arrow Rust Discord
 server](https://discord.gg/Qw5gKqHxUM) for discussions.
 
 Unfortunately, due to spammers, the ASF Slack workspace requires an invitation
