@@ -27,7 +27,7 @@ use tokio::runtime::Runtime;
 use datafusion::prelude::SessionContext;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Expr;
-use datafusion_functions_array::map::map;
+use datafusion_functions_nested::map::map;
 
 mod data_utils;
 

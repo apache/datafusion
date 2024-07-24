@@ -274,7 +274,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             let mut order_by = self.order_by_to_sort_expr(
-                &window.order_by,
+                window.order_by,
                 schema,
                 planner_context,
                 // Numeric literals in window function ORDER BY are treated as constants
@@ -350,7 +350,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
                 let order_by = self.order_by_to_sort_expr(
-                    &order_by,
+                    order_by,
                     schema,
                     planner_context,
                     true,
@@ -375,7 +375,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // next, aggregate built-ins
             if let Ok(fun) = AggregateFunction::from_str(&name) {
                 let order_by = self.order_by_to_sort_expr(
-                    &order_by,
+                    order_by,
                     schema,
                     planner_context,
                     true,

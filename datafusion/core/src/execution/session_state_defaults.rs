@@ -26,8 +26,8 @@ use crate::datasource::file_format::parquet::ParquetFormatFactory;
 use crate::datasource::file_format::FileFormatFactory;
 use crate::datasource::provider::{DefaultTableFactory, TableProviderFactory};
 use crate::execution::context::SessionState;
-#[cfg(feature = "array_expressions")]
-use crate::functions_array;
+#[cfg(feature = "nested_expressions")]
+use crate::functions_nested;
 use crate::{functions, functions_aggregate};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -82,11 +82,11 @@ impl SessionStateDefaults {
     pub fn default_expr_planners() -> Vec<Arc<dyn ExprPlanner>> {
         let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![
             Arc::new(functions::core::planner::CoreFunctionPlanner::default()),
-            // register crate of array expressions (if enabled)
-            #[cfg(feature = "array_expressions")]
-            Arc::new(functions_array::planner::ArrayFunctionPlanner),
-            #[cfg(feature = "array_expressions")]
-            Arc::new(functions_array::planner::FieldAccessPlanner),
+            // register crate of nested expressions (if enabled)
+            #[cfg(feature = "nested_expressions")]
+            Arc::new(functions_nested::planner::NestedFunctionPlanner),
+            #[cfg(feature = "nested_expressions")]
+            Arc::new(functions_nested::planner::FieldAccessPlanner),
             #[cfg(any(
                 feature = "datetime_expressions",
                 feature = "unicode_expressions"
@@ -100,8 +100,8 @@ impl SessionStateDefaults {
     /// returns the list of default [`ScalarUDF']'s
     pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
         let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
-        #[cfg(feature = "array_expressions")]
-        functions.append(&mut functions_array::all_default_array_functions());
+        #[cfg(feature = "nested_expressions")]
+        functions.append(&mut functions_nested::all_default_nested_functions());
 
         functions
     }
@@ -140,8 +140,9 @@ impl SessionStateDefaults {
     /// registers all the builtin array functions
     pub fn register_array_functions(state: &mut SessionState) {
         // register crate of array expressions (if enabled)
-        #[cfg(feature = "array_expressions")]
-        functions_array::register_all(state).expect("can not register array expressions");
+        #[cfg(feature = "nested_expressions")]
+        functions_nested::register_all(state)
+            .expect("can not register nested expressions");
     }
 
     /// registers all the builtin aggregate functions
