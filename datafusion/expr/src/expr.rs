@@ -801,15 +801,12 @@ impl From<Arc<WindowUDF>> for WindowFunctionDefinition {
 
 /// Window function
 ///
-/// Holds the actual actual function to call
-/// [`window_function::WindowFunction`] as well as its arguments
-/// (`args`) and the contents of the `OVER` clause:
+/// Holds the actual actual function to call [`WindowFunction`] as well as its
+/// arguments (`args`) and the contents of the `OVER` clause:
 ///
 /// 1. `PARTITION BY`
 /// 2. `ORDER BY`
 /// 3. Window frame (e.g. `ROWS 1 PRECEDING AND 1 FOLLOWING`)
-///
-/// See [`Self::build`] to create an [`Expr`]
 ///
 /// # Example
 /// ```

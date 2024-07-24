@@ -125,11 +125,14 @@ impl WindowUDF {
     }
 
     /// creates a [`Expr`] that calls the window function with default
-    /// values for order_by, partition_by, window_frame. See [`ExprFunctionExt`]
-    /// for details on setting these values.
+    /// values for `order_by`, `partition_by`, `window_frame`.
     ///
-    /// This utility allows using the UDWF without requiring access to
-    /// the registry, such as with the DataFrame API.
+    /// See [`ExprFunctionExt`] for details on setting these values.
+    ///
+    /// This utility allows using a user defined window function without
+    /// requiring access to the registry, such as with the DataFrame API.
+    ///
+    /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         let fun = crate::WindowFunctionDefinition::WindowUDF(Arc::new(self.clone()));
 
