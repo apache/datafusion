@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, OffsetBuffer};
 use async_recursion::async_recursion;
-use datafusion::arrow::array::GenericListArray;
+use datafusion::arrow::array::{GenericListArray, MapArray};
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
@@ -51,6 +51,7 @@ use crate::variation_const::{
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
     INTERVAL_YEAR_MONTH_TYPE_REF,
 };
+use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
@@ -1449,21 +1450,14 @@ fn from_substrait_type(
                     from_substrait_type(value_type, extensions, dfs_names, name_idx)?,
                     true,
                 ));
-                match map.type_variation_reference {
-                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
-                        Ok(DataType::Map(
-                            Arc::new(Field::new_struct(
-                                "entries",
-                                [key_field, value_field],
-                                false, // The inner map field is always non-nullable (Arrow #1697),
-                            )),
-                            false,
-                        ))
-                    }
-                    v => not_impl_err!(
-                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
-                    )?,
-                }
+                Ok(DataType::Map(
+                    Arc::new(Field::new_struct(
+                        "entries",
+                        [key_field, value_field],
+                        false, // The inner map field is always non-nullable (Arrow #1697),
+                    )),
+                    false, // whether keys are sorted
+                ))
             }
             r#type::Kind::Decimal(d) => match d.type_variation_reference {
                 DECIMAL_128_TYPE_VARIATION_REF => {
@@ -1743,11 +1737,23 @@ fn from_substrait_literal(
             )
         }
         Some(LiteralType::List(l)) => {
+            // Each element should start the name index from the same value, then we increase it
+            // once at the end
+            let mut element_name_idx = *name_idx;
             let elements = l
                 .values
                 .iter()
-                .map(|el| from_substrait_literal(el, extensions, dfs_names, name_idx))
+                .map(|el| {
+                    element_name_idx = *name_idx;
+                    from_substrait_literal(
+                        el,
+                        extensions,
+                        dfs_names,
+                        &mut element_name_idx,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?;
+            *name_idx = element_name_idx;
             if elements.is_empty() {
                 return substrait_err!(
                     "Empty list must be encoded as EmptyList literal type, not List"
@@ -1784,6 +1790,84 @@ fn from_substrait_literal(
                     return substrait_err!("Unknown type variation reference {others}");
                 }
             }
+        }
+        Some(LiteralType::Map(m)) => {
+            // Each entry should start the name index from the same value, then we increase it
+            // once at the end
+            let mut entry_name_idx = *name_idx;
+            let entries = m
+                .key_values
+                .iter()
+                .map(|kv| {
+                    entry_name_idx = *name_idx;
+                    let key_sv = from_substrait_literal(
+                        kv.key.as_ref().unwrap(),
+                        extensions,
+                        dfs_names,
+                        &mut entry_name_idx,
+                    )?;
+                    let value_sv = from_substrait_literal(
+                        kv.value.as_ref().unwrap(),
+                        extensions,
+                        dfs_names,
+                        &mut entry_name_idx,
+                    )?;
+                    ScalarStructBuilder::new()
+                        .with_scalar(Field::new("key", key_sv.data_type(), false), key_sv)
+                        .with_scalar(
+                            Field::new("value", value_sv.data_type(), true),
+                            value_sv,
+                        )
+                        .build()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            *name_idx = entry_name_idx;
+
+            if entries.is_empty() {
+                return substrait_err!(
+                    "Empty map must be encoded as EmptyMap literal type, not Map"
+                );
+            }
+
+            ScalarValue::Map(Arc::new(MapArray::new(
+                Arc::new(Field::new("entries", entries[0].data_type(), false)),
+                OffsetBuffer::new(vec![0, entries.len() as i32].into()),
+                ScalarValue::iter_to_array(entries)?.as_struct().to_owned(),
+                None,
+                false,
+            )))
+        }
+        Some(LiteralType::EmptyMap(m)) => {
+            let key = match &m.key {
+                Some(k) => Ok(k),
+                _ => plan_err!("Missing key type for empty map"),
+            }?;
+            let value = match &m.value {
+                Some(v) => Ok(v),
+                _ => plan_err!("Missing value type for empty map"),
+            }?;
+            let key_type = from_substrait_type(key, extensions, dfs_names, name_idx)?;
+            let value_type = from_substrait_type(value, extensions, dfs_names, name_idx)?;
+
+            // new_empty_array on a MapType creates a too empty array
+            // We want it to contain an empty struct array to align with an empty MapBuilder one
+            let entries = Field::new_struct(
+                "entries",
+                vec![
+                    Field::new("key", key_type, false),
+                    Field::new("value", value_type, true),
+                ],
+                false,
+            );
+            let struct_array =
+                new_empty_array(entries.data_type()).as_struct().to_owned();
+            ScalarValue::Map(Arc::new(MapArray::new(
+                Arc::new(entries),
+                OffsetBuffer::new(vec![0, 0].into()),
+                struct_array,
+                None,
+                false,
+            )))
         }
         Some(LiteralType::Struct(s)) => {
             let mut builder = ScalarStructBuilder::new();
@@ -2012,6 +2096,29 @@ fn from_substrait_null(
                         "Unsupported Substrait type variation {v} of type {kind:?}"
                     ),
                 }
+            }
+            r#type::Kind::Map(map) => {
+                let key_type = map.key.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("Map type must have key type")
+                })?;
+                let value_type = map.value.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("Map type must have value type")
+                })?;
+
+                let key_type =
+                    from_substrait_type(key_type, extensions, dfs_names, name_idx)?;
+                let value_type =
+                    from_substrait_type(value_type, extensions, dfs_names, name_idx)?;
+                let entries_field = Arc::new(Field::new_struct(
+                    "entries",
+                    vec![
+                        Field::new("key", key_type, false),
+                        Field::new("value", value_type, true),
+                    ],
+                    false,
+                ));
+
+                DataType::Map(entries_field, false /* keys sorted */).try_into()
             }
             r#type::Kind::Struct(s) => {
                 let fields =

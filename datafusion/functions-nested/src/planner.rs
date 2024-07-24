@@ -172,7 +172,7 @@ impl ExprPlanner for FieldAccessPlanner {
 
 fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
     if let AggregateFunctionDefinition::UDF(udf) = &agg_func.func_def {
-        return udf.name() == "ARRAY_AGG";
+        return udf.name() == "array_agg";
     }
 
     false

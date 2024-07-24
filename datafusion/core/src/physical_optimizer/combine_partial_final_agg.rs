@@ -288,6 +288,7 @@ mod tests {
             name,
             false,
             false,
+            false,
         )
         .unwrap()
     }
@@ -376,6 +377,7 @@ mod tests {
             &[],
             &schema,
             "Sum(b)",
+            false,
             false,
             false,
         )?];

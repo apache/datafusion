@@ -19,15 +19,15 @@ use std::sync::Arc;
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
-use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, DFSchema, Result};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::Expr;
 
+use crate::expressions::column::Column;
 use crate::expressions::literal::Literal;
-use crate::expressions::{self, CastExpr};
+use crate::expressions::CastExpr;
 use crate::physical_expr::PhysicalExpr;
 use crate::sort_expr::PhysicalSortExpr;
 use crate::tree_node::ExprContext;
@@ -110,19 +110,22 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
 
 /// Converts `datafusion_expr::Expr` into corresponding `Arc<dyn PhysicalExpr>`.
 /// If conversion is not supported yet, returns Error.
-pub fn limited_convert_logical_expr_to_physical_expr(
+pub fn limited_convert_logical_expr_to_physical_expr_with_dfschema(
     expr: &Expr,
-    schema: &Schema,
+    dfschema: &DFSchema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     match expr {
-        Expr::Alias(Alias { expr, .. }) => {
-            Ok(limited_convert_logical_expr_to_physical_expr(expr, schema)?)
+        Expr::Alias(Alias { expr, .. }) => Ok(
+            limited_convert_logical_expr_to_physical_expr_with_dfschema(expr, dfschema)?,
+        ),
+        Expr::Column(col) => {
+            let idx = dfschema.index_of_column(col)?;
+            Ok(Arc::new(Column::new(&col.name, idx)))
         }
-        Expr::Column(col) => expressions::column::col(&col.name, schema),
         Expr::Cast(cast_expr) => Ok(Arc::new(CastExpr::new(
-            limited_convert_logical_expr_to_physical_expr(
+            limited_convert_logical_expr_to_physical_expr_with_dfschema(
                 cast_expr.expr.as_ref(),
-                schema,
+                dfschema,
             )?,
             cast_expr.data_type.clone(),
             None,

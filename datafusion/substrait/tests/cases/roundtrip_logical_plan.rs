@@ -749,7 +749,7 @@ async fn roundtrip_values() -> Result<()> {
                 [[-213.1, NULL, 5.5, 2.0, 1.0], []], \
                 arrow_cast([1,2,3], 'LargeList(Int64)'), \
                 STRUCT(true, 1 AS int_field, CAST(NULL AS STRING)), \
-                [STRUCT(STRUCT('a' AS string_field) AS struct_field)]\
+                [STRUCT(STRUCT('a' AS string_field) AS struct_field), STRUCT(STRUCT('b' AS string_field) AS struct_field)]\
             ), \
             (NULL, NULL, NULL, NULL, NULL, NULL)",
         "Values: \
@@ -759,7 +759,7 @@ async fn roundtrip_values() -> Result<()> {
                 List([[-213.1, , 5.5, 2.0, 1.0], []]), \
                 LargeList([1, 2, 3]), \
                 Struct({c0:true,int_field:1,c2:}), \
-                List([{struct_field: {string_field: a}}])\
+                List([{struct_field: {string_field: a}}, {struct_field: {string_field: b}}])\
             ), \
             (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())",
     true).await

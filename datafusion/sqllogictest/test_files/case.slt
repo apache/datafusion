@@ -17,7 +17,7 @@
 
 # create test data
 statement ok
-create table foo (a int, b int) as values (1, 2), (3, 4), (5, 6);
+create table foo (a int, b int) as values (1, 2), (3, 4), (5, 6), (null, null), (6, null), (null, 7);
 
 # CASE WHEN with condition
 query T
@@ -25,6 +25,9 @@ SELECT CASE a WHEN 1 THEN 'one' WHEN 3 THEN 'three' ELSE '?' END FROM foo
 ----
 one
 three
+?
+?
+?
 ?
 
 # CASE WHEN with no condition
@@ -34,6 +37,9 @@ SELECT CASE WHEN a > 2 THEN a ELSE b END FROM foo
 2
 3
 5
+NULL
+6
+7
 
 # column or explicit null
 query I
@@ -42,6 +48,9 @@ SELECT CASE WHEN a > 2 THEN b ELSE null END FROM foo
 NULL
 4
 6
+NULL
+NULL
+7
 
 # column or implicit null
 query I
@@ -50,3 +59,52 @@ SELECT CASE WHEN a > 2 THEN b END FROM foo
 NULL
 4
 6
+NULL
+NULL
+7
+
+# scalar or scalar (string)
+query T
+SELECT CASE WHEN a > 2 THEN 'even' ELSE 'odd' END FROM foo
+----
+odd
+even
+even
+odd
+even
+odd
+
+# scalar or scalar (int)
+query I
+SELECT CASE WHEN a > 2 THEN 1 ELSE 0 END FROM foo
+----
+0
+1
+1
+0
+1
+0
+
+# predicate binary expression with scalars (does not make much sense because the expression in
+# this case is always false, so this expression could be rewritten as a literal 0 during planning
+query I
+SELECT CASE WHEN 1 > 2 THEN 1 ELSE 0 END FROM foo
+----
+0
+0
+0
+0
+0
+0
+
+# predicate using boolean literal (does not make much sense because the expression in
+# this case is always false, so this expression could be rewritten as a literal 0 during planning
+query I
+SELECT CASE WHEN false THEN 1 ELSE 0 END FROM foo
+----
+0
+0
+0
+0
+0
+0
