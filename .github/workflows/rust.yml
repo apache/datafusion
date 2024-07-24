@@ -90,8 +90,8 @@ jobs:
 
       # Ensure that the datafusion crate can be built with only a subset of the function
       # packages enabled.
-      - name: Check datafusion (array_expressions)
-        run: cargo check --no-default-features --features=array_expressions -p datafusion
+      - name: Check datafusion (nested_expressions)
+        run: cargo check --no-default-features --features=nested_expressions -p datafusion
 
       - name: Check datafusion (crypto)
         run: cargo check --no-default-features --features=crypto_expressions -p datafusion

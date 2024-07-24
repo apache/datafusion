@@ -1149,7 +1149,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
- "datafusion-functions-array",
+ "datafusion-functions-nested",
  "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
@@ -1315,7 +1315,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-functions-array"
+name = "datafusion-functions-nested"
 version = "40.0.0"
 dependencies = [
  "arrow",

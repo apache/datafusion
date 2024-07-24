@@ -153,15 +153,15 @@
 <path fill="none" stroke="black" d="M932.78,-364.97C895.04,-354.05 838.86,-337.8 795.58,-325.28"/>
 <polygon fill="black" stroke="black" points="796.29,-321.84 785.71,-322.43 794.34,-328.57 796.29,-321.84"/>
 </g>
-<!-- datafusion_functions_array -->
+<!-- datafusion_functions_nested -->
 <g id="node16" class="node">
-<title>datafusion_functions_array</title>
+<title>datafusion_functions_nested</title>
 <ellipse fill="none" stroke="black" cx="1279.38" cy="-234" rx="135.68" ry="18"/>
-<text text-anchor="middle" x="1279.38" y="-230.3" font-family="Times,serif" font-size="14.00">datafusion_functions_array</text>
+<text text-anchor="middle" x="1279.38" y="-230.3" font-family="Times,serif" font-size="14.00">datafusion_functions_nested</text>
 </g>
-<!-- datafusion&#45;&gt;datafusion_functions_array -->
+<!-- datafusion&#45;&gt;datafusion_functions_nested -->
 <g id="edge45" class="edge">
-<title>datafusion&#45;&gt;datafusion_functions_array</title>
+<title>datafusion&#45;&gt;datafusion_functions_nested</title>
 <path fill="none" stroke="black" d="M1005.59,-362.47C1059.89,-337.19 1171.92,-285.03 1234.54,-255.88"/>
 <polygon fill="black" stroke="black" points="1236.19,-258.97 1243.78,-251.58 1233.23,-252.63 1236.19,-258.97"/>
 </g>
@@ -411,21 +411,21 @@
 <path fill="none" stroke="black" d="M1574.65,-431.7C1582.24,-405.14 1595.38,-352.61 1595.38,-307 1595.38,-307 1595.38,-307 1595.38,-161 1595.38,-108.7 1565.1,-95.53 1518.38,-72 1467.03,-46.14 1111.46,-29.63 927.36,-22.72"/>
 <polygon fill="black" stroke="black" points="927.23,-19.22 917.1,-22.34 926.97,-26.21 927.23,-19.22"/>
 </g>
-<!-- datafusion_functions_array&#45;&gt;datafusion_common -->
+<!-- datafusion_functions_nested&#45;&gt;datafusion_common -->
 <g id="edge50" class="edge">
-<title>datafusion_functions_array&#45;&gt;datafusion_common</title>
+<title>datafusion_functions_nested&#45;&gt;datafusion_common</title>
 <path fill="none" stroke="black" d="M1253.53,-216.22C1203.95,-184.59 1091.36,-115.46 989.38,-72 955.26,-57.46 915.79,-45 883.28,-35.83"/>
 <polygon fill="black" stroke="black" points="884,-32.4 873.43,-33.09 882.12,-39.14 884,-32.4"/>
 </g>
-<!-- datafusion_functions_array&#45;&gt;datafusion_expr -->
+<!-- datafusion_functions_nested&#45;&gt;datafusion_expr -->
 <g id="edge52" class="edge">
-<title>datafusion_functions_array&#45;&gt;datafusion_expr</title>
+<title>datafusion_functions_nested&#45;&gt;datafusion_expr</title>
 <path fill="none" stroke="black" d="M1240.69,-216.61C1191.68,-196.5 1104.24,-162.78 1026.38,-144 924.46,-119.42 804.61,-105.26 724.94,-97.87"/>
 <polygon fill="black" stroke="black" points="725.22,-94.38 714.94,-96.96 724.59,-101.35 725.22,-94.38"/>
 </g>
-<!-- datafusion_functions_array&#45;&gt;datafusion_execution -->
+<!-- datafusion_functions_nested&#45;&gt;datafusion_execution -->
 <g id="edge51" class="edge">
-<title>datafusion_functions_array&#45;&gt;datafusion_execution</title>
+<title>datafusion_functions_nested&#45;&gt;datafusion_execution</title>
 <path fill="none" stroke="black" d="M1201.74,-219.17C1134.05,-207.11 1036.21,-189.69 967.5,-177.45"/>
 <polygon fill="black" stroke="black" points="968.05,-173.99 957.59,-175.68 966.82,-180.88 968.05,-173.99"/>
 </g>

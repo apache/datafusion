@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL planning extensions like [`ArrayFunctionPlanner`] and [`FieldAccessPlanner`]
+//! SQL planning extensions like [`NestedFunctionPlanner`] and [`FieldAccessPlanner`]
 
 use datafusion_common::{exec_err, utils::list_ndims, DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
@@ -35,9 +35,9 @@ use crate::{
     make_array::make_array,
 };
 
-pub struct ArrayFunctionPlanner;
+pub struct NestedFunctionPlanner;
 
-impl ExprPlanner for ArrayFunctionPlanner {
+impl ExprPlanner for NestedFunctionPlanner {
     fn plan_binary_op(
         &self,
         expr: RawBinaryExpr,

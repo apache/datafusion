@@ -21,7 +21,7 @@ extern crate arrow;
 
 use crate::criterion::Criterion;
 use datafusion_expr::lit;
-use datafusion_functions_array::expr_fn::{array_replace_all, make_array};
+use datafusion_functions_nested::expr_fn::{array_replace_all, make_array};
 
 fn criterion_benchmark(c: &mut Criterion) {
     // Construct large arrays for benchmarking

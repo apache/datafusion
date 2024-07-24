@@ -39,7 +39,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// If false, interpret numeric literals as constant values.
     pub(crate) fn order_by_to_sort_expr(
         &self,
-        exprs: &[OrderByExpr],
+        exprs: Vec<OrderByExpr>,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
@@ -94,11 +94,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         input_schema.qualified_field(field_index - 1),
                     ))
                 }
-                e => self.sql_expr_to_logical_expr(
-                    e.clone(),
-                    order_by_schema,
-                    planner_context,
-                )?,
+                e => {
+                    self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?
+                }
             };
             let asc = asc.unwrap_or(true);
             expr_vec.push(Expr::Sort(Sort::new(
