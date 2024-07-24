@@ -68,7 +68,6 @@ pub fn create_aggregate_expr(
     name: impl Into<String>,
     ignore_nulls: bool,
     is_distinct: bool,
-    _is_reversed: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let mut builder =
         AggregateExprBuilder::new(Arc::new(fun.clone()), input_phy_exprs.to_vec());
