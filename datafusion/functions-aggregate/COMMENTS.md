@@ -71,6 +71,6 @@ and special treatment of nulls in the accumulator state.
 
 ## Nullable Of List Itself
 
-The `nullable` of list itself is dependent on the aggregate. In the
-case of `array_agg` the list is nullable(`true`), meanwhile for `sum`
-the list is not nullable(`false`).
+The `nullable` of list itself depends on the aggregate. In the case of
+`array_agg` the list is nullable(`true`), meanwhile for `sum` the list
+is not nullable(`false`).
