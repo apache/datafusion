@@ -806,14 +806,17 @@ impl From<Arc<WindowUDF>> for WindowFunctionDefinition {
 /// See [`Self::build`] to create an [`Expr`]
 ///
 /// # Example
-/// ```/// # use datafusion_expr::expr::WindowFunction;
+/// ```
+/// # use datafusion_expr::{Expr, BuiltInWindowFunction, col, ExprFunctionExt};
+/// # use datafusion_expr::expr::WindowFunction;
 /// // Create FIRST_VALUE(a) OVER (PARTITION BY b ORDER BY c)
-/// let expr: Expr = Expr::WindowFunction(
+/// let expr = Expr::WindowFunction(
 ///     WindowFunction::new(BuiltInWindowFunction::FirstValue, vec![col("a")])
 /// )
-///   .with_partition_by(vec![col("b")])
-///   .with_order_by(vec![col("b")])
-///   .build()?;
+///   .partition_by(vec![col("b")])
+///   .order_by(vec![col("b").sort(true, true)])
+///   .build()
+///   .unwrap();
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct WindowFunction {
