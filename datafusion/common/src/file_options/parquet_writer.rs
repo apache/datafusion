@@ -614,23 +614,7 @@ mod tests {
             "should indicate that table_parquet_opts defaults came from datafusion",
         );
 
-        // Expected: the remaining should match
-        let same_created_by = default_table_writer_opts.global.created_by.clone();
-        let mut from_extern_parquet =
-            session_config_from_writer_props(&default_writer_props);
-        from_extern_parquet.global.created_by = same_created_by;
-        // TODO: the remaining defaults do not match!
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_ne!(
-            default_table_writer_opts,
-            from_extern_parquet,
-            "the default writer_props should have the same configuration as the session's default TableParquetOptions",
-        );
-
-        // Below here itemizes how the defaults **should** match, but do not.
-
-        // TODO: compression defaults do not match
-        // refer to https://github.com/apache/datafusion/issues/11367
+        // Expected: the datafusion default compression is different from arrow-rs's parquet
         assert_eq!(
             default_writer_props.compression(&"default".into()),
             Compression::UNCOMPRESSED,
@@ -642,6 +626,21 @@ mod tests {
                 Compression::ZSTD(_)
             ),
             "datafusion's default is zstd"
+        );
+
+        // Expected: the remaining should match
+        let same_created_by = default_table_writer_opts.global.created_by.clone();
+        let mut from_extern_parquet =
+            session_config_from_writer_props(&default_writer_props);
+        from_extern_parquet.global.created_by = same_created_by;
+        from_extern_parquet.global.compression = Some("zstd(3)".into());
+
+        // TODO: the remaining defaults do not match!
+        // refer to https://github.com/apache/datafusion/issues/11367
+        assert_ne!(
+            default_table_writer_opts,
+            from_extern_parquet,
+            "the default writer_props should have the same configuration as the session's default TableParquetOptions",
         );
 
         // datafusion's `None` for Option<String> => becomes parquet's EnabledStatistics::Page
@@ -667,12 +666,12 @@ mod tests {
         // TODO: once we fix the above mis-matches, we should be able to remove this.
         let mut from_extern_parquet =
             session_config_from_writer_props(&default_writer_props);
-        from_extern_parquet.global.compression = Some("zstd(3)".into());
         from_extern_parquet.global.statistics_enabled = None;
 
         // Expected: the remaining should match
         let same_created_by = default_table_writer_opts.global.created_by.clone(); // we expect these to be different
         from_extern_parquet.global.created_by = same_created_by; // we expect these to be different
+        from_extern_parquet.global.compression = Some("zstd(3)".into()); // we expect these to be different
         assert_eq!(
             default_table_writer_opts,
             from_extern_parquet,
