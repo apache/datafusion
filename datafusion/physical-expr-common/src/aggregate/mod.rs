@@ -124,6 +124,10 @@ pub fn create_aggregate_expr_with_dfschema(
     builder.build()
 }
 
+/// Builder for physical [`AggregateExpr`]
+///
+/// `AggregateExpr` contains the information necessary to call
+/// an aggregate expression.
 #[derive(Debug, Clone)]
 pub struct AggregateExprBuilder {
     fun: Arc<AggregateUDF>,
