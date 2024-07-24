@@ -2075,7 +2075,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2")])
+    .order_by(vec![col("col2").sort(true, false)])
     .window_frame(WindowFrame::new(Some(false)))
     .build()
     .unwrap();
@@ -2088,7 +2088,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2")])
+    .order_by(vec![col("col2").sort(false, true)])
     .window_frame(WindowFrame::new(Some(false)))
     .build()
     .unwrap();
@@ -2107,7 +2107,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2")])
+    .order_by(vec![col("col2").sort(false, false)])
     .window_frame(range_number_frame)
     .build()
     .unwrap();
@@ -2124,7 +2124,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2")])
+    .order_by(vec![col("col2").sort(true, true)])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
@@ -2174,7 +2174,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2")])
+    .order_by(vec![col("col2").sort(true, true)])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
@@ -2251,7 +2251,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2")])
+    .order_by(vec![col("col2").sort(true, true)])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
