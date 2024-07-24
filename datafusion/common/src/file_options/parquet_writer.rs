@@ -392,7 +392,7 @@ mod tests {
         ColumnOptions {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
-            statistics_enabled: Some("page".into()),
+            statistics_enabled: Some("none".into()),
             max_statistics_size: Some(72),
             encoding: Some("RLE".into()),
             bloom_filter_enabled: Some(true),
@@ -635,43 +635,6 @@ mod tests {
         from_extern_parquet.global.created_by = same_created_by;
         from_extern_parquet.global.compression = Some("zstd(3)".into());
 
-        // TODO: the remaining defaults do not match!
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_ne!(
-            default_table_writer_opts,
-            from_extern_parquet,
-            "the default writer_props should have the same configuration as the session's default TableParquetOptions",
-        );
-
-        // datafusion's `None` for Option<String> => becomes parquet's EnabledStatistics::Page
-        // TODO: should this be changed?
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_eq!(
-            default_writer_props.statistics_enabled(&"default".into()),
-            EnabledStatistics::Page,
-            "extern parquet's default is page"
-        );
-        assert_eq!(
-            default_table_writer_opts.global.statistics_enabled, None,
-            "datafusion's has no default"
-        );
-        assert_eq!(
-            from_datafusion_defaults.statistics_enabled(&"default".into()),
-            EnabledStatistics::Page,
-            "should see the extern parquet's default over-riding datafusion's None",
-        );
-
-        // Confirm all other settings are equal.
-        // First resolve the known discrepancies, (set as the same).
-        // TODO: once we fix the above mis-matches, we should be able to remove this.
-        let mut from_extern_parquet =
-            session_config_from_writer_props(&default_writer_props);
-        from_extern_parquet.global.statistics_enabled = None;
-
-        // Expected: the remaining should match
-        let same_created_by = default_table_writer_opts.global.created_by.clone(); // we expect these to be different
-        from_extern_parquet.global.created_by = same_created_by; // we expect these to be different
-        from_extern_parquet.global.compression = Some("zstd(3)".into()); // we expect these to be different
         assert_eq!(
             default_table_writer_opts,
             from_extern_parquet,

@@ -397,7 +397,7 @@ config_namespace! {
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub statistics_enabled: Option<String>, default = None
+        pub statistics_enabled: Option<String>, default = Some("page".into())
 
         /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
