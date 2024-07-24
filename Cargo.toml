@@ -34,6 +34,7 @@ chrono = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 chrono-tz = { workspace = true }
@@ -41,6 +42,22 @@ num = { workspace = true }
 regex = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+criterion = "0.5.1"
+rand = "0.8.5"
+
 [lib]
 name = "datafusion_comet_spark_expr"
 path = "src/lib.rs"
+
+[[bench]]
+name = "cast_from_string"
+harness = false
+
+[[bench]]
+name = "cast_numeric"
+harness = false
+
+[[bench]]
+name = "conditional"
+harness = false

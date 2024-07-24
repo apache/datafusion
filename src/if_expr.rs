@@ -22,22 +22,24 @@ use std::{
 };
 
 use arrow::{
-    array::*,
-    compute::{and, is_null, kernels::zip::zip, not, or_kleene},
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion::logical_expr::ColumnarValue;
-use datafusion_common::{cast::as_boolean_array, Result};
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_common::Result;
+use datafusion_physical_expr::{expressions::CaseExpr, PhysicalExpr};
 
 use crate::utils::down_cast_any_ref;
 
+/// IfExpr is a wrapper around CaseExpr, because `IF(a, b, c)` is semantically equivalent to
+/// `CASE WHEN a THEN b ELSE c END`.
 #[derive(Debug, Hash)]
 pub struct IfExpr {
     if_expr: Arc<dyn PhysicalExpr>,
     true_expr: Arc<dyn PhysicalExpr>,
     false_expr: Arc<dyn PhysicalExpr>,
+    // we delegate to case_expr for evaluation
+    case_expr: Arc<CaseExpr>,
 }
 
 impl std::fmt::Display for IfExpr {
@@ -58,9 +60,12 @@ impl IfExpr {
         false_expr: Arc<dyn PhysicalExpr>,
     ) -> Self {
         Self {
-            if_expr,
-            true_expr,
-            false_expr,
+            if_expr: if_expr.clone(),
+            true_expr: true_expr.clone(),
+            false_expr: false_expr.clone(),
+            case_expr: Arc::new(
+                CaseExpr::try_new(None, vec![(if_expr, true_expr)], Some(false_expr)).unwrap(),
+            ),
         }
     }
 }
@@ -85,29 +90,7 @@ impl PhysicalExpr for IfExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let mut remainder = BooleanArray::from(vec![true; batch.num_rows()]);
-
-        // evaluate if condition on batch
-        let if_value = self.if_expr.evaluate_selection(batch, &remainder)?;
-        let if_value = if_value.into_array(batch.num_rows())?;
-        let if_value =
-            as_boolean_array(&if_value).expect("if expression did not return a BooleanArray");
-
-        let true_value = self.true_expr.evaluate_selection(batch, if_value)?;
-        let true_value = true_value.into_array(batch.num_rows())?;
-
-        remainder = and(
-            &remainder,
-            &or_kleene(&not(if_value)?, &is_null(if_value)?)?,
-        )?;
-
-        let false_value = self
-            .false_expr
-            .evaluate_selection(batch, &remainder)?
-            .into_array(batch.num_rows())?;
-        let current_value = zip(&remainder, &false_value, &true_value)?;
-
-        Ok(ColumnarValue::Array(current_value))
+        self.case_expr.evaluate(batch)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -150,6 +133,7 @@ impl PartialEq<dyn Any> for IfExpr {
 #[cfg(test)]
 mod tests {
     use arrow::{array::StringArray, datatypes::*};
+    use arrow_array::Int32Array;
     use datafusion::logical_expr::Operator;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr::expressions::{binary, col, lit};
