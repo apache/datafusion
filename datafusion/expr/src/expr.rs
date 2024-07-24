@@ -60,6 +60,10 @@ use sqlparser::ast::NullTreatment;
 /// use the fluent APIs in [`crate::expr_fn`] such as [`col`] and [`lit`], or
 /// methods such as [`Expr::alias`], [`Expr::cast_to`], and [`Expr::Like`]).
 ///
+/// See also [`ExprFunctionExt`] for creating aggregate and window functions.
+///
+/// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
+///
 /// # Schema Access
 ///
 /// See [`ExprSchemable::get_type`] to access the [`DataType`] and nullability

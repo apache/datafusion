@@ -744,7 +744,6 @@ pub struct ExprFuncBuilder {
 
 impl ExprFuncBuilder {
     /// Create a new `ExprFuncBuilder`, see [`ExprFunctionExt`]
-
     fn new(fun: Option<ExprFuncKind>) -> Self {
         Self {
             fun,
@@ -761,7 +760,7 @@ impl ExprFuncBuilder {
     ///
     /// # Errors:
     ///
-    /// Returns an error of this builder  [`ExprFunctionExt`] was used with an
+    /// Returns an error if this builder  [`ExprFunctionExt`] was used with an
     /// `Expr` variant other than [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
     pub fn build(self) -> Result<Expr> {
         let Self {
