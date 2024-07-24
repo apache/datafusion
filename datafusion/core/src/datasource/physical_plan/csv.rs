@@ -1339,7 +1339,7 @@ mod tests {
 
         let CsvExecBuilder {
             file_scan_config: _,
-            file_compression_type: _    ,
+            file_compression_type: _,
             has_header,
             delimiter,
             quote,
