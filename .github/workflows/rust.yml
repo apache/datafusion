@@ -62,7 +62,7 @@ jobs:
             ~/.cargo/git/db/
             ./target/
             ./datafusion-cli/target/
-          key: cargo-cache-${{ hashFiles('**/Cargo.toml') }}
+          key: cargo-cache-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
 
       - name: Check datafusion without default features
         # Some of the test binaries require the parquet feature still
