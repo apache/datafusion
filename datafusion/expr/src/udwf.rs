@@ -28,9 +28,10 @@ use arrow::datatypes::DataType;
 
 use datafusion_common::Result;
 
+use crate::expr::WindowFunction;
 use crate::{
     function::WindowFunctionSimplification, Expr, PartitionEvaluator,
-    PartitionEvaluatorFactory, ReturnTypeFunction, Signature, WindowFrame,
+    PartitionEvaluatorFactory, ReturnTypeFunction, Signature,
 };
 
 /// Logical representation of a user-defined window function (UDWF)
@@ -123,28 +124,19 @@ impl WindowUDF {
         Self::new_from_impl(AliasedWindowUDFImpl::new(Arc::clone(&self.inner), aliases))
     }
 
-    /// creates a [`Expr`] that calls the window function given
-    /// the `partition_by`, `order_by`, and `window_frame` definition
+    /// creates a [`Expr`] that calls the window function with default
+    /// values for `order_by`, `partition_by`, `window_frame`.
     ///
-    /// This utility allows using the UDWF without requiring access to
-    /// the registry, such as with the DataFrame API.
-    pub fn call(
-        &self,
-        args: Vec<Expr>,
-        partition_by: Vec<Expr>,
-        order_by: Vec<Expr>,
-        window_frame: WindowFrame,
-    ) -> Expr {
+    /// See [`ExprFunctionExt`] for details on setting these values.
+    ///
+    /// This utility allows using a user defined window function without
+    /// requiring access to the registry, such as with the DataFrame API.
+    ///
+    /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
+    pub fn call(&self, args: Vec<Expr>) -> Expr {
         let fun = crate::WindowFunctionDefinition::WindowUDF(Arc::new(self.clone()));
 
-        Expr::WindowFunction(crate::expr::WindowFunction {
-            fun,
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment: None,
-        })
+        Expr::WindowFunction(WindowFunction::new(fun, args))
     }
 
     /// Returns this function's name
@@ -210,7 +202,7 @@ where
 /// # use std::any::Any;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame};
+/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
@@ -244,12 +236,13 @@ where
 /// let smooth_it = WindowUDF::from(SmoothIt::new());
 ///
 /// // Call the function `add_one(col)`
-/// let expr = smooth_it.call(
-///     vec![col("speed")],                 // smooth_it(speed)
-///     vec![col("car")],                   // PARTITION BY car
-///     vec![col("time").sort(true, true)], // ORDER BY time ASC
-///     WindowFrame::new(None),
-/// );
+/// // smooth_it(speed) OVER (PARTITION BY car ORDER BY time ASC)
+/// let expr = smooth_it.call(vec![col("speed")])
+///     .partition_by(vec![col("car")])
+///     .order_by(vec![col("time").sort(true, true)])
+///     .window_frame(WindowFrame::new(None))
+///     .build()
+///     .unwrap();
 /// ```
 pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Returns this object as an [`Any`] trait object
