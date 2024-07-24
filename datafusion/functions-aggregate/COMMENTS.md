@@ -1,64 +1,53 @@
-# Nullable Setting For List Items
+# Why Is List Item Always Nullable?
 
-When the accumulator state is a list of items and the type of the item
-is either equivalent to the first-argument/returned-value, then
-we set `nullable` argument of list item as `true` regardless of the
-how `nullable` is defined in the schema of either the first argument or
-the returned value.
+## Motivation
+There were independent proposals to make the `nullable` setting of list
+items in accumulator state be configurable. This meant adding additional
+fields which captured the `nullable` setting from schema in planning for
+the first argument to the aggregation function, and the returned value.
 
-For example, in `NthValueAgg` we do this:
+These fields were to be added to `StateFieldArgs`. But then we found out
+that aggregate computation does not depend on it, and it can be avoided.
+
+This document exists to make that reasoning explicit.
+
+## Background
+The list data type is used in the accumulator state for a few aggregate
+functions like:
+- `sum`
+- `count`
+- `array_agg`
+- `bit_and`, `bit_or` and `bit_xor`
+- `nth_value`
+
+In all of the above cases the data type of the list item is equivalent
+to either the first argument of the aggregate function or the returned
+value.
+
+For example, in `array_agg` the data type of item is equivalent to the
+first argument and the definition looks like this:
 ```rust
-fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-    let mut fields = vec![Field::new_list(
-        format_state_name(self.name(), "nth_value"),
-        Field::new("item", args.input_type.clone(), true), // always true
-        false,
-    )];
-    // ... rest of the function code
-}
+// `args`       : `StateFieldArgs`
+// `input_type` :  data type of the first argument
+let mut fields = vec![Field::new_list(
+    format_state_name(self.name(), "array_agg"),
+    Field::new("item", args.input_type.clone(), true /* nullable of list item */ ),
+    false, // nullable of list itself
+)];
 ```
+
+For all the aggregates listed above, the list item is always defined as
+nullable.
+
+## Computing Intermediate State
 
 By setting `nullable` to be always `true` like this we ensure that the
-aggregate computation works even when nulls are present.
+aggregate computation works even when nulls are present. The advantage
+of doing it this way is that it eliminates the need for additional code
+and special treatment of nulls in the accumulator state.
 
-The advantage of doing it this way is that it eliminates the need for
-additional code and special treatment of nulls in the accumulator state.
+## Nullable Of List Itself
 
-# Nullable Setting For List
-
-This depends on the aggregate implementation.
-
-In `ArrayAgg` the list is nullable, so it is set to `true`.
-```rust
-fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-    if args.is_distinct {
-        return Ok(vec![Field::new_list(
-            format_state_name(args.name, "distinct_array_agg"),
-            Field::new("item", args.input_type.clone(), true),
-            true, // list maybe null
-        )]);
-    }
-
-    let mut fields = vec![Field::new_list(
-        format_state_name(args.name, "array_agg"),
-        Field::new("item", args.input_type.clone(), true),
-        true, // list maybe null
-    )];
-    // ... rest of the function code
-}
-```
-
-Alternatively in `Sum` the list is not nullable, so it is set to `false`.
-```rust
-fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-    if args.is_distinct {
-        Ok(vec![Field::new_list(
-            format_state_name(args.name, "sum distinct"),
-            Field::new("item", args.return_type.clone(), true),
-            false, // impossible for list to be null
-        )])
-    } else {
-        // .. rest of the function code
-    }
-}
-```
+The `nullable` of list itself is dependent on the aggregate. In the
+case of `array_agg` the list is nullable(`true`), meanwhile for `sum`
+the list is not nullable(`false`).
