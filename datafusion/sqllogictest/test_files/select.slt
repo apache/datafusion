@@ -1216,32 +1216,43 @@ FROM table1
 2 20 20 200 2000
 
 # EXCEPT, or EXCLUDE shouldn't contain duplicate column names
-statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT contains duplicate column names
+query error DataFusion error: Error during planning: EXCLUDE or EXCEPT contains duplicate column names
 SELECT * EXCLUDE(a, a)
 FROM table1
 
 # if EXCEPT all the columns, query should still succeed but return empty
-statement ok
+query 
 SELECT * EXCEPT(a, b, c, d)
 FROM table1
+----
+
+
 
 # try zero column with LIMIT, 1 row but empty
-statement ok
+query 
 SELECT * EXCEPT (a, b, c, d)
 FROM table1
 LIMIT 1
+----
+
+
 
 # try zero column with GROUP BY, 2 row but empty
-statement ok
+query 
 SELECT * EXCEPT (a, b, c, d)
 FROM table1
 GROUP BY a
+----
+
+
 
 # try zero column with WHERE, 1 row but empty
-statement ok
+query 
 SELECT * EXCEPT (a, b, c, d)
 FROM table1
 WHERE a = 1
+----
+
 
 # create table2 the same with table1
 statement ok
@@ -1255,14 +1266,17 @@ CREATE TABLE table2 (
   (2, 20, 200, 2000);
 
 # try zero column with inner JOIN, 2 row but empty
-statement ok
+query 
 WITH t1 AS (SELECT a AS t1_a FROM table1), t2 AS (SELECT a AS t2_a FROM table2)
 SELECT * EXCEPT (t1_a, t2_a)
 FROM t1
 JOIN t2 ON (t1_a = t2_a)
+----
+
+
 
 # try zero column with more JOIN, 2 row but empty
-statement ok
+query 
 SELECT * EXCEPT (b1, b2)
 FROM (
   SELECT b AS b1 FROM table1
@@ -1270,9 +1284,12 @@ FROM (
 JOIN (
   SELECT b AS b2 FROM table2
 ) ON b1 = b2
+----
+
+
 
 # try zero column with Window, 2 row but empty
-statement ok
+query 
 SELECT * EXCEPT (a, b, row_num)
 FROM (
     SELECT
@@ -1281,6 +1298,9 @@ FROM (
         ROW_NUMBER() OVER (ORDER BY b) AS row_num
     FROM table1
 )
+----
+
+
 
 # EXCLUDE order shouldn't matter
 query II
