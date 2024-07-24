@@ -18,13 +18,10 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
-use std::{any::Any, sync::Arc, task::Poll};
-
 use super::utils::{
     adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
     StatefulStreamResult,
 };
-use crate::coalesce_batches::concat_batches;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
@@ -33,6 +30,8 @@ use crate::{
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use arrow::compute::concat_batches;
+use std::{any::Any, sync::Arc, task::Poll};
 
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -155,7 +154,7 @@ async fn load_left_input(
     let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
-    let (batches, num_rows, _, reservation) = stream
+    let (batches, _num_rows, _, reservation) = stream
         .try_fold(
             (Vec::new(), 0usize, metrics, reservation),
             |mut acc, batch| async {
@@ -175,7 +174,7 @@ async fn load_left_input(
         )
         .await?;
 
-    let merged_batch = concat_batches(&left_schema, &batches, num_rows)?;
+    let merged_batch = concat_batches(&left_schema, &batches)?;
 
     Ok((merged_batch, reservation))
 }
