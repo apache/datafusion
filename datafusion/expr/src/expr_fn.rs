@@ -674,31 +674,35 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 ///
 /// # Example
 /// ```no_run
-/// # use datafusion::{
-/// #     common::Result,
-/// #     functions_aggregate::{count::count, expr_fn::first_value},
-/// #     logical_expr::window_function::percent_rank,
-/// #     prelude::{col, lit, ExprFunctionExt},
-/// #     sql::sqlparser::ast::NullTreatment,
-/// # };
-///
+/// # use datafusion_common::Result;
+/// # use datafusion_expr::test::function_stub::count;
+/// # use sqlparser::ast::NullTreatment;
+/// # use datafusion_expr::{ExprFunctionExt, lit, Expr, col};
+/// # use datafusion_expr::window_function::percent_rank;
+/// # // first_value is an aggregate function in another crate
+/// # fn first_value(_arg: Expr) -> Expr {
+/// unimplemented!() }
 /// # fn main() -> Result<()> {
-///     // Create an aggregate count, filtering on column y > 5
-///     let agg = count(col("x")).filter(col("y").gt(lit(5))).build()?;
+/// // Create an aggregate count, filtering on column y > 5
+/// let agg = count(col("x")).filter(col("y").gt(lit(5))).build()?;
 ///
-///     // Find the first value in an aggregate sorted by column y
-///     let sort_expr = col("y").sort(true, true);
-///     let agg = first_value(col("x"), None)
-///         .order_by(vec![sort_expr])
-///         .null_treatment(NullTreatment::IgnoreNulls)
-///         .build()?;
+/// // Find the first value in an aggregate sorted by column y
+/// // equivalent to:
+/// // `FIRST_VALUE(x ORDER BY y ASC IGNORE NULLS)`
+/// let sort_expr = col("y").sort(true, true);
+/// let agg = first_value(col("x"))
+///     .order_by(vec![sort_expr])
+///     .null_treatment(NullTreatment::IgnoreNulls)
+///     .build()?;
 ///
-///     // Create a window expression for percent rank partitioned on column a
-///     let window = percent_rank()
-///         .partition_by(vec![col("a")])
-///         .order_by(vec![col("b")])
-///         .null_treatment(NullTreatment::IgnoreNulls)
-///         .build()?;
+/// // Create a window expression for percent rank partitioned on column a
+/// // equivalent to:
+/// // `PERCENT_RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS LAST IGNORE NULLS)`
+/// let window = percent_rank()
+///     .partition_by(vec![col("a")])
+///     .order_by(vec![col("b").sort(true, true)])
+///     .null_treatment(NullTreatment::IgnoreNulls)
+///     .build()?;
 /// #     Ok(())
 /// # }
 /// ```
@@ -716,9 +720,9 @@ pub trait ExprFunctionExt {
         self,
         null_treatment: impl Into<Option<NullTreatment>>,
     ) -> ExprFuncBuilder;
-    // Add `PARTITION BY`
+    /// Add `PARTITION BY`
     fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder;
-    // Add appropriate window frame conditions
+    /// Add appropriate window frame conditions
     fn window_frame(self, window_frame: WindowFrame) -> ExprFuncBuilder;
 }
 

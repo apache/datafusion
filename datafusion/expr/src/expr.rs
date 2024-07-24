@@ -287,6 +287,8 @@ pub enum Expr {
     /// This expression is guaranteed to have a fixed type.
     TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
+    ///
+    /// See [Expr::sort] for more details
     Sort(Sort),
     /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
