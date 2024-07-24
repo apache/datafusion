@@ -60,7 +60,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    Accumulator, AggregateExt, AggregateFunction, AggregateUDF, ColumnarValue,
+    Accumulator, AggregateFunction, AggregateUDF, ColumnarValue, ExprFunctionExt,
     ExprSchemable, Literal, LogicalPlan, Operator, PartitionEvaluator, ScalarUDF,
     Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
@@ -2073,11 +2073,12 @@ fn roundtrip_window() {
             datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
-        vec![col("col1")],
-        vec![col("col2")],
-        WindowFrame::new(Some(false)),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .build()
+    .unwrap();
 
     // 2. with default window_frame
     let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
@@ -2085,11 +2086,12 @@ fn roundtrip_window() {
             datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
-        vec![col("col1")],
-        vec![col("col2")],
-        WindowFrame::new(Some(false)),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(false, true)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .build()
+    .unwrap();
 
     // 3. with window_frame with row numbers
     let range_number_frame = WindowFrame::new_bounds(
@@ -2103,11 +2105,12 @@ fn roundtrip_window() {
             datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
-        vec![col("col1")],
-        vec![col("col2")],
-        range_number_frame,
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(false, false)])
+    .window_frame(range_number_frame)
+    .build()
+    .unwrap();
 
     // 4. test with AggregateFunction
     let row_number_frame = WindowFrame::new_bounds(
@@ -2119,11 +2122,12 @@ fn roundtrip_window() {
     let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
         vec![col("col1")],
-        vec![col("col1")],
-        vec![col("col2")],
-        row_number_frame.clone(),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, true)])
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
 
     // 5. test with AggregateUDF
     #[derive(Debug)]
@@ -2168,11 +2172,12 @@ fn roundtrip_window() {
     let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(Arc::new(dummy_agg.clone())),
         vec![col("col1")],
-        vec![col("col1")],
-        vec![col("col2")],
-        row_number_frame.clone(),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, true)])
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
     ctx.register_udaf(dummy_agg);
 
     // 6. test with WindowUDF
@@ -2244,20 +2249,20 @@ fn roundtrip_window() {
     let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(Arc::new(dummy_window_udf.clone())),
         vec![col("col1")],
-        vec![col("col1")],
-        vec![col("col2")],
-        row_number_frame.clone(),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, true)])
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
 
     let text_expr7 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
-        vec![],
-        vec![],
-        row_number_frame.clone(),
-        None,
-    ));
+    ))
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
 
     ctx.register_udwf(dummy_window_udf);
 
