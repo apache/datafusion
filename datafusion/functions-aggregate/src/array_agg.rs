@@ -89,20 +89,10 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        // The data type of the "item" in the list is equivalent to the
-        // data type of the first argument.
-        //
-        // However, `nullable` is set to `true` regardless of how it is
-        // set in the schema of the first argument. This ensures that
-        // the aggregate computation works even when null values are
-        // present in the list.
-        //
-        // This eliminates the need for special treatment of nulls.
-        //
-        // (applies to both "distinct_array_agg" and "array_agg")
         if args.is_distinct {
             return Ok(vec![Field::new_list(
                 format_state_name(args.name, "distinct_array_agg"),
+                // See COMMENTS.md to understand why nullable is set to true
                 Field::new("item", args.input_type.clone(), true),
                 true,
             )]);
@@ -110,6 +100,7 @@ impl AggregateUDFImpl for ArrayAgg {
 
         let mut fields = vec![Field::new_list(
             format_state_name(args.name, "array_agg"),
+            // See COMMENTS.md to understand why nullable is set to true
             Field::new("item", args.input_type.clone(), true),
             true,
         )];

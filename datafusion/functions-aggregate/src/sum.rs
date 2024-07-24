@@ -171,18 +171,10 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        // The data type of the "item" in the list is equivalent to the
-        // data type of the returned value.
-        //
-        // However, `nullable` is set to `true` regardless of how it is
-        // set in the schema of the returned value. This ensures that
-        // the aggregate computation works even when null values are
-        // present in the list.
-        //
-        // This eliminates the need for special treatment of nulls.
         if args.is_distinct {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "sum distinct"),
+                // See COMMENTS.md to understand why nullable is set to true
                 Field::new("item", args.return_type.clone(), true),
                 false,
             )])

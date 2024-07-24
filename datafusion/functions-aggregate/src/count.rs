@@ -123,17 +123,9 @@ impl AggregateUDFImpl for Count {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         if args.is_distinct {
-            // The data type of the "item" in the list is equivalent to the
-            // data type of the first argument.
-            //
-            // However, `nullable` is set to `true` regardless of how it is
-            // set in the schema of the first argument. This ensures that
-            // the aggregate computation works even when null values are
-            // present in the list.
-            //
-            // This eliminates the need for special treatment of nulls.
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "count distinct"),
+                // See COMMENTS.md to understand why nullable is set to true
                 Field::new("item", args.input_type.clone(), true),
                 false,
             )])
