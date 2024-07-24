@@ -1941,12 +1941,11 @@ pub struct PartitionStats {
 #[repr(i32)]
 pub enum AggregateFunction {
     Min = 0,
-    Max = 1,
     /// SUM = 2;
     /// AVG = 3;
     /// COUNT = 4;
     /// APPROX_DISTINCT = 5;
-    ///
+    /// ARRAY_AGG = 6;
     /// VARIANCE = 7;
     /// VARIANCE_POP = 8;
     /// COVARIANCE = 9;
@@ -1975,7 +1974,7 @@ pub enum AggregateFunction {
     /// REGR_SXY = 34;
     /// STRING_AGG = 35;
     /// NTH_VALUE_AGG = 36;
-    ArrayAgg = 6,
+    Max = 1,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1986,7 +1985,6 @@ impl AggregateFunction {
         match self {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
-            AggregateFunction::ArrayAgg => "ARRAY_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1994,7 +1992,6 @@ impl AggregateFunction {
         match value {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
-            "ARRAY_AGG" => Some(Self::ArrayAgg),
             _ => None,
         }
     }

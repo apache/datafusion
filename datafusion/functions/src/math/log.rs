@@ -82,10 +82,16 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        match (input[0].sort_properties, input[1].sort_properties) {
-            (first @ SortProperties::Ordered(value), SortProperties::Ordered(base))
-                if !value.descending && base.descending
-                    || value.descending && !base.descending =>
+        let (base_sort_properties, num_sort_properties) = if input.len() == 1 {
+            // log(x) defaults to log(10, x)
+            (SortProperties::Singleton, input[0].sort_properties)
+        } else {
+            (input[0].sort_properties, input[1].sort_properties)
+        };
+        match (num_sort_properties, base_sort_properties) {
+            (first @ SortProperties::Ordered(num), SortProperties::Ordered(base))
+                if num.descending != base.descending
+                    && num.nulls_first == base.nulls_first =>
             {
                 Ok(first)
             }
@@ -230,6 +236,7 @@ mod tests {
 
     use super::*;
 
+    use arrow::compute::SortOptions;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
@@ -333,5 +340,113 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], lit(2));
         assert_eq!(args[1], lit(3));
+    }
+
+    #[test]
+    fn test_log_output_ordering() {
+        // [Unordered, Ascending, Descending, Literal]
+        let orders = vec![
+            ExprProperties::new_unknown(),
+            ExprProperties::new_unknown().with_order(SortProperties::Ordered(
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            )),
+            ExprProperties::new_unknown().with_order(SortProperties::Ordered(
+                SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                },
+            )),
+            ExprProperties::new_unknown().with_order(SortProperties::Singleton),
+        ];
+
+        let log = LogFunc::new();
+
+        // Test log(num)
+        for order in orders.iter().cloned() {
+            let result = log.output_ordering(&[order.clone()]).unwrap();
+            assert_eq!(result, order.sort_properties);
+        }
+
+        // Test log(base, num), where `nulls_first` is the same
+        let mut results = Vec::with_capacity(orders.len() * orders.len());
+        for base_order in orders.iter() {
+            for num_order in orders.iter().cloned() {
+                let result = log
+                    .output_ordering(&[base_order.clone(), num_order])
+                    .unwrap();
+                results.push(result);
+            }
+        }
+        let expected = vec![
+            // base: Unordered
+            SortProperties::Unordered,
+            SortProperties::Unordered,
+            SortProperties::Unordered,
+            SortProperties::Unordered,
+            // base: Ascending, num: Unordered
+            SortProperties::Unordered,
+            // base: Ascending, num: Ascending
+            SortProperties::Unordered,
+            // base: Ascending, num: Descending
+            SortProperties::Ordered(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            // base: Ascending, num: Literal
+            SortProperties::Ordered(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            // base: Descending, num: Unordered
+            SortProperties::Unordered,
+            // base: Descending, num: Ascending
+            SortProperties::Ordered(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            // base: Descending, num: Descending
+            SortProperties::Unordered,
+            // base: Descending, num: Literal
+            SortProperties::Ordered(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            // base: Literal, num: Unordered
+            SortProperties::Unordered,
+            // base: Literal, num: Ascending
+            SortProperties::Ordered(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            // base: Literal, num: Descending
+            SortProperties::Ordered(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            // base: Literal, num: Literal
+            SortProperties::Singleton,
+        ];
+        assert_eq!(results, expected);
+
+        // Test with different `nulls_first`
+        let base_order = ExprProperties::new_unknown().with_order(
+            SortProperties::Ordered(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+        );
+        let num_order = ExprProperties::new_unknown().with_order(
+            SortProperties::Ordered(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+        );
+        assert_eq!(
+            log.output_ordering(&[base_order, num_order]).unwrap(),
+            SortProperties::Unordered
+        );
     }
 }
