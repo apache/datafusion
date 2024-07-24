@@ -20,6 +20,7 @@
 # Why Is List Item Always Nullable?
 
 ## Motivation
+
 There were independent proposals to make the `nullable` setting of list
 items in accumulator state be configurable. This meant adding additional
 fields which captured the `nullable` setting from schema in planning for
@@ -31,8 +32,10 @@ that aggregate computation does not depend on it, and it can be avoided.
 This document exists to make that reasoning explicit.
 
 ## Background
+
 The list data type is used in the accumulator state for a few aggregate
 functions like:
+
 - `sum`
 - `count`
 - `array_agg`
@@ -45,6 +48,7 @@ value.
 
 For example, in `array_agg` the data type of item is equivalent to the
 first argument and the definition looks like this:
+
 ```rust
 // `args`       : `StateFieldArgs`
 // `input_type` :  data type of the first argument
