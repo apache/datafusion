@@ -75,12 +75,12 @@ pub enum AggregateMode {
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
-    /// This mode requires tha the input is a single partition (like Final)
+    /// This mode requires that the input is a single partition (like Final)
     Single,
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
-    /// This mode requires tha the input is partitioned by group key (like FinalPartitioned)
+    /// This mode requires that the input is partitioned by group key (like FinalPartitioned)
     SinglePartitioned,
 }
 
@@ -733,7 +733,7 @@ impl ExecutionPlan for AggregateExec {
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
         // TODO stats: aggr expression:
-        // - aggregations somtimes also preserve invariants such as min, max...
+        // - aggregations sometimes also preserve invariants such as min, max...
         let column_statistics = Statistics::unknown_column(&self.schema());
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
@@ -1194,22 +1194,25 @@ mod tests {
     use arrow::datatypes::DataType;
     use arrow_array::{Float32Array, Int32Array};
     use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, internal_err, DataFusionError,
-        ScalarValue,
+        assert_batches_eq, assert_batches_sorted_eq, internal_err, DFSchema, DFSchemaRef,
+        DataFusionError, ScalarValue,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::expr::Sort;
+    use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::first_last::{FirstValue, LastValue};
     use datafusion_functions_aggregate::median::median_udaf;
-    use datafusion_physical_expr::expressions::{lit, OrderSensitiveArrayAgg};
+    use datafusion_physical_expr::expressions::lit;
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use crate::common::collect;
-    use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
+    use datafusion_physical_expr_common::aggregate::{
+        create_aggregate_expr, create_aggregate_expr_with_dfschema,
+    };
     use datafusion_physical_expr_common::expressions::Literal;
     use futures::{FutureExt, Stream};
 
@@ -1258,12 +1261,14 @@ mod tests {
     }
 
     /// Generates some mock data for aggregate tests.
-    fn some_data_v2() -> (Arc<Schema>, Vec<RecordBatch>) {
+    fn some_data_v2() -> (Arc<Schema>, DFSchemaRef, Vec<RecordBatch>) {
         // Define a schema:
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Float64, false),
         ]));
+
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
 
         // Generate data so that first and last value results are at 2nd and
         // 3rd partitions.  With this construction, we guarantee we don't receive
@@ -1271,6 +1276,7 @@ mod tests {
         // i.e. it doesn't depend on the data insertion order.
         (
             Arc::clone(&schema),
+            Arc::new(df_schema),
             vec![
                 RecordBatch::try_new(
                     Arc::clone(&schema),
@@ -1353,6 +1359,7 @@ mod tests {
             &[],
             &input_schema,
             "COUNT(1)",
+            false,
             false,
             false,
         )?];
@@ -1502,6 +1509,7 @@ mod tests {
             &[],
             &input_schema,
             "AVG(b)",
+            false,
             false,
             false,
         )?];
@@ -1808,6 +1816,7 @@ mod tests {
             "MEDIAN(a)",
             false,
             false,
+            false,
         )
     }
 
@@ -1842,6 +1851,7 @@ mod tests {
             &[],
             &input_schema,
             "AVG(b)",
+            false,
             false,
             false,
         )?];
@@ -1908,6 +1918,7 @@ mod tests {
             "AVG(a)",
             false,
             false,
+            false,
         )?];
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
@@ -1950,6 +1961,7 @@ mod tests {
             &[],
             &schema,
             "AVG(b)",
+            false,
             false,
             false,
         )?];
@@ -1996,12 +2008,11 @@ mod tests {
     // FIRST_VALUE(b ORDER BY b <SortOptions>)
     fn test_first_value_agg_expr(
         schema: &Schema,
+        dfschema: &DFSchema,
         sort_options: SortOptions,
     ) -> Result<Arc<dyn AggregateExpr>> {
         let sort_exprs = vec![datafusion_expr::Expr::Sort(Sort {
-            expr: Box::new(datafusion_expr::Expr::Column(
-                datafusion_common::Column::new(Some("table1"), "b"),
-            )),
+            expr: Box::new(datafusion_expr::col("b")),
             asc: !sort_options.descending,
             nulls_first: sort_options.nulls_first,
         })];
@@ -2012,14 +2023,15 @@ mod tests {
         let args = vec![col("b", schema)?];
         let logical_args = vec![datafusion_expr::col("b")];
         let func = datafusion_expr::AggregateUDF::new_from_impl(FirstValue::new());
-        datafusion_physical_expr_common::aggregate::create_aggregate_expr(
+        datafusion_physical_expr_common::aggregate::create_aggregate_expr_with_dfschema(
             &func,
             &args,
             &logical_args,
             &sort_exprs,
             &ordering_req,
-            schema,
+            dfschema,
             "FIRST_VALUE(b)",
+            false,
             false,
             false,
         )
@@ -2028,12 +2040,11 @@ mod tests {
     // LAST_VALUE(b ORDER BY b <SortOptions>)
     fn test_last_value_agg_expr(
         schema: &Schema,
+        dfschema: &DFSchema,
         sort_options: SortOptions,
     ) -> Result<Arc<dyn AggregateExpr>> {
         let sort_exprs = vec![datafusion_expr::Expr::Sort(Sort {
-            expr: Box::new(datafusion_expr::Expr::Column(
-                datafusion_common::Column::new(Some("table1"), "b"),
-            )),
+            expr: Box::new(datafusion_expr::col("b")),
             asc: !sort_options.descending,
             nulls_first: sort_options.nulls_first,
         })];
@@ -2044,14 +2055,15 @@ mod tests {
         let args = vec![col("b", schema)?];
         let logical_args = vec![datafusion_expr::col("b")];
         let func = datafusion_expr::AggregateUDF::new_from_impl(LastValue::new());
-        create_aggregate_expr(
+        create_aggregate_expr_with_dfschema(
             &func,
             &args,
             &logical_args,
             &sort_exprs,
             &ordering_req,
-            schema,
+            dfschema,
             "LAST_VALUE(b)",
+            false,
             false,
             false,
         )
@@ -2086,7 +2098,7 @@ mod tests {
             Arc::new(TaskContext::default())
         };
 
-        let (schema, data) = some_data_v2();
+        let (schema, df_schema, data) = some_data_v2();
         let partition1 = data[0].clone();
         let partition2 = data[1].clone();
         let partition3 = data[2].clone();
@@ -2100,9 +2112,13 @@ mod tests {
             nulls_first: false,
         };
         let aggregates: Vec<Arc<dyn AggregateExpr>> = if is_first_acc {
-            vec![test_first_value_agg_expr(&schema, sort_options)?]
+            vec![test_first_value_agg_expr(
+                &schema,
+                &df_schema,
+                sort_options,
+            )?]
         } else {
-            vec![test_last_value_agg_expr(&schema, sort_options)?]
+            vec![test_last_value_agg_expr(&schema, &df_schema, sort_options)?]
         };
 
         let memory_exec = Arc::new(MemoryExec::try_new(
@@ -2169,6 +2185,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_finest_requirements() -> Result<()> {
         let test_schema = create_test_schema()?;
+        let test_df_schema = DFSchema::try_from(Arc::clone(&test_schema)).unwrap();
+
         // Assume column a and b are aliases
         // Assume also that a ASC and c DESC describe the same global ordering for the table. (Since they are ordering equivalent).
         let options1 = SortOptions {
@@ -2178,7 +2196,7 @@ mod tests {
         let col_a = &col("a", &test_schema)?;
         let col_b = &col("b", &test_schema)?;
         let col_c = &col("c", &test_schema)?;
-        let mut eq_properties = EquivalenceProperties::new(test_schema);
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
         // Columns a and b are equal.
         eq_properties.add_equal_conditions(col_a, col_b)?;
         // Aggregate requirements are
@@ -2214,6 +2232,46 @@ mod tests {
                 },
             ]),
         ];
+        let col_expr_a = Box::new(datafusion_expr::col("a"));
+        let col_expr_b = Box::new(datafusion_expr::col("b"));
+        let col_expr_c = Box::new(datafusion_expr::col("c"));
+        let sort_exprs = vec![
+            None,
+            Some(vec![datafusion_expr::Expr::Sort(Sort::new(
+                col_expr_a.clone(),
+                options1.descending,
+                options1.nulls_first,
+            ))]),
+            Some(vec![
+                datafusion_expr::Expr::Sort(Sort::new(
+                    col_expr_a.clone(),
+                    options1.descending,
+                    options1.nulls_first,
+                )),
+                datafusion_expr::Expr::Sort(Sort::new(
+                    col_expr_b.clone(),
+                    options1.descending,
+                    options1.nulls_first,
+                )),
+                datafusion_expr::Expr::Sort(Sort::new(
+                    col_expr_c,
+                    options1.descending,
+                    options1.nulls_first,
+                )),
+            ]),
+            Some(vec![
+                datafusion_expr::Expr::Sort(Sort::new(
+                    col_expr_a,
+                    options1.descending,
+                    options1.nulls_first,
+                )),
+                datafusion_expr::Expr::Sort(Sort::new(
+                    col_expr_b,
+                    options1.descending,
+                    options1.nulls_first,
+                )),
+            ]),
+        ];
         let common_requirement = vec![
             PhysicalSortExpr {
                 expr: Arc::clone(col_a),
@@ -2226,14 +2284,23 @@ mod tests {
         ];
         let mut aggr_exprs = order_by_exprs
             .into_iter()
-            .map(|order_by_expr| {
-                Arc::new(OrderSensitiveArrayAgg::new(
-                    Arc::clone(col_a),
+            .zip(sort_exprs.into_iter())
+            .map(|(order_by_expr, sort_exprs)| {
+                let ordering_req = order_by_expr.unwrap_or_default();
+                let sort_exprs = sort_exprs.unwrap_or_default();
+                create_aggregate_expr_with_dfschema(
+                    &array_agg_udaf(),
+                    &[Arc::clone(col_a)],
+                    &[],
+                    &sort_exprs,
+                    &ordering_req,
+                    &test_df_schema,
                     "array_agg",
-                    DataType::Int32,
-                    vec![],
-                    order_by_expr.unwrap_or_default(),
-                )) as _
+                    false,
+                    false,
+                    false,
+                )
+                .unwrap()
             })
             .collect::<Vec<_>>();
         let group_by = PhysicalGroupBy::new_single(vec![]);
@@ -2254,6 +2321,7 @@ mod tests {
             Field::new("a", DataType::Float32, true),
             Field::new("b", DataType::Float32, true),
         ]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
 
         let col_a = col("a", &schema)?;
         let option_desc = SortOptions {
@@ -2263,8 +2331,8 @@ mod tests {
         let groups = PhysicalGroupBy::new_single(vec![(col_a, "a".to_string())]);
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![
-            test_first_value_agg_expr(&schema, option_desc)?,
-            test_last_value_agg_expr(&schema, option_desc)?,
+            test_first_value_agg_expr(&schema, &df_schema, option_desc)?,
+            test_last_value_agg_expr(&schema, &df_schema, option_desc)?,
         ];
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let aggregate_exec = Arc::new(AggregateExec::try_new(
@@ -2328,6 +2396,7 @@ mod tests {
             &[],
             schema.as_ref(),
             "1",
+            false,
             false,
             false,
         )?];

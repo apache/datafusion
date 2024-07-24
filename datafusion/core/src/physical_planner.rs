@@ -38,7 +38,6 @@ use crate::logical_expr::{
 };
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
-use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::empty::EmptyExec;
@@ -91,6 +90,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
@@ -1872,22 +1872,27 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         )?),
                         None => None,
                     };
+
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         physical_sort_exprs.clone().unwrap_or(vec![]);
-                    let agg_expr = udaf::create_aggregate_expr(
+
+                    let agg_expr = udaf::create_aggregate_expr_with_dfschema(
                         fun,
                         &physical_args,
                         args,
                         &sort_exprs,
                         &ordering_reqs,
-                        physical_input_schema,
+                        logical_input_schema,
                         name,
                         ignore_nulls,
                         *distinct,
+                        false,
                     )?;
+
                     (agg_expr, filter, physical_sort_exprs)
                 }
             };
+
             Ok((agg_expr, filter, order_by))
         }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),

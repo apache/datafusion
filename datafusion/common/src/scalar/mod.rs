@@ -1063,7 +1063,6 @@ impl ScalarValue {
 
     /// Create an one value in the given type.
     pub fn new_one(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Int8 => ScalarValue::Int8(Some(1)),
             DataType::Int16 => ScalarValue::Int16(Some(1)),
@@ -1086,7 +1085,6 @@ impl ScalarValue {
 
     /// Create a negative one value in the given type.
     pub fn new_negative_one(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Int8 | DataType::UInt8 => ScalarValue::Int8(Some(-1)),
             DataType::Int16 | DataType::UInt16 => ScalarValue::Int16(Some(-1)),
@@ -1104,7 +1102,6 @@ impl ScalarValue {
     }
 
     pub fn new_ten(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Int8 => ScalarValue::Int8(Some(10)),
             DataType::Int16 => ScalarValue::Int16(Some(10)),
@@ -1773,6 +1770,7 @@ impl ScalarValue {
             }
             DataType::List(_)
             | DataType::LargeList(_)
+            | DataType::Map(_, _)
             | DataType::Struct(_)
             | DataType::Union(_, _) => {
                 let arrays = scalars.map(|s| s.to_array()).collect::<Result<Vec<_>>>()?;
@@ -1841,7 +1839,6 @@ impl ScalarValue {
             | DataType::Time32(TimeUnit::Nanosecond)
             | DataType::Time64(TimeUnit::Second)
             | DataType::Time64(TimeUnit::Millisecond)
-            | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _)
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {

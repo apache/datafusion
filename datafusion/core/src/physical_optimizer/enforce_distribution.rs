@@ -24,14 +24,12 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::output_requirements::OutputRequirementExec;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
     is_sort_preserving_merge,
 };
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::joins::{
@@ -56,6 +54,8 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
+use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -392,7 +392,7 @@ fn adjust_input_keys_ordering(
         let expr = proj.expr();
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
-        // Construct a mapping from new name to the orginal Column
+        // Construct a mapping from new name to the original Column
         let new_required = map_columns_before_projection(&requirements.data, expr);
         if new_required.len() == requirements.data.len() {
             requirements.children[0].data = new_required;
@@ -566,7 +566,7 @@ fn shift_right_required(
         })
         .collect::<Vec<_>>();
 
-    // if the parent required are all comming from the right side, the requirements can be pushdown
+    // if the parent required are all coming from the right side, the requirements can be pushdown
     (new_right_required.len() == parent_required.len()).then_some(new_right_required)
 }
 
@@ -1290,7 +1290,6 @@ pub(crate) mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
-    use crate::physical_optimizer::output_requirements::OutputRequirements;
     use crate::physical_optimizer::test_utils::{
         check_integrity, coalesce_partitions_exec, repartition_exec,
     };
@@ -1301,6 +1300,7 @@ pub(crate) mod tests {
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
+    use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::ScalarValue;
@@ -1472,6 +1472,7 @@ pub(crate) mod tests {
             b'"',
             None,
             None,
+            false,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -1496,6 +1497,7 @@ pub(crate) mod tests {
             b'"',
             None,
             None,
+            false,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -3770,6 +3772,7 @@ pub(crate) mod tests {
                     b'"',
                     None,
                     None,
+                    false,
                     compression_type,
                 )),
                 vec![("a".to_string(), "a".to_string())],

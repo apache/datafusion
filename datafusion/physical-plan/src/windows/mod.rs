@@ -157,6 +157,7 @@ pub fn create_window_expr(
                 name,
                 ignore_nulls,
                 false,
+                false,
             )?;
             window_expr_from_aggregate_expr(
                 partition_by,
@@ -805,7 +806,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_satisfiy_nullable() -> Result<()> {
+    async fn test_satisfy_nullable() -> Result<()> {
         let schema = create_test_schema()?;
         let params = vec![
             ((true, true), (false, false), false),

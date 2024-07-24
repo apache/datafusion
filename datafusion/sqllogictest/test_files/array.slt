@@ -5690,7 +5690,7 @@ select
 ----
 [] [] [0] [0]
 
-# Test range for other egde cases
+# Test range for other edge cases
 query ????????
 select 
   range(9223372036854775807, 9223372036854775807, -1) as c1,
@@ -5828,7 +5828,7 @@ select
 [-9223372036854775808] [9223372036854775807] [0, -9223372036854775808] [0, 9223372036854775807]
 
 
-# Test generate_series for other egde cases
+# Test generate_series for other edge cases
 query ????
 select 
   generate_series(9223372036854775807, 9223372036854775807, -1) as c1,

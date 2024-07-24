@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use datafusion_physical_expr_common::aggregate::AggregateExpr;
-
-pub(crate) mod array_agg;
-pub(crate) mod array_agg_distinct;
-pub(crate) mod array_agg_ordered;
 #[macro_use]
 pub(crate) mod min_max;
 pub(crate) mod groups_accumulator;
@@ -33,3 +28,5 @@ pub mod utils {
         get_sort_options, ordering_fields, DecimalAverager, Hashable,
     };
 }
+
+pub use datafusion_physical_expr_common::aggregate::AggregateExpr;

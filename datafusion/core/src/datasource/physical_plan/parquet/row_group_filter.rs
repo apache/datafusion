@@ -1123,7 +1123,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_row_group_bloom_filter_pruning_predicate_mutiple_expr() {
+    async fn test_row_group_bloom_filter_pruning_predicate_multiple_expr() {
         BloomFilterTest::new_data_index_bloom_encoding_stats()
             .with_expect_all_pruned()
             // generate pruning predicate `(String = "Hello_Not_exists" OR String = "Hello_Not_exists2")`

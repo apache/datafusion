@@ -31,8 +31,9 @@ use crate::common::IPCWriter;
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge;
+use crate::spill::read_spill_as_stream;
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{aggregates, read_spill_as_stream, ExecutionPlan, PhysicalExpr};
+use crate::{aggregates, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;

@@ -21,13 +21,13 @@
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::{physical_exprs_equal, AggregateExpr, PhysicalExpr};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
@@ -288,6 +288,7 @@ mod tests {
             name,
             false,
             false,
+            false,
         )
         .unwrap()
     }
@@ -354,7 +355,7 @@ mod tests {
             PhysicalGroupBy::default(),
             aggr_expr,
         );
-        // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
+        // should combine the Partial/Final AggregateExecs to the Single AggregateExec
         let expected = &[
             "AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
@@ -378,6 +379,7 @@ mod tests {
             "Sum(b)",
             false,
             false,
+            false,
         )?];
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(col("c", &schema)?, "c".to_string())];
@@ -394,7 +396,7 @@ mod tests {
         let final_group_by = PhysicalGroupBy::new_single(groups);
 
         let plan = final_aggregate_exec(partial_agg, final_group_by, aggr_expr);
-        // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
+        // should combine the Partial/Final AggregateExecs to the Single AggregateExec
         let expected = &[
             "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[Sum(b)]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",

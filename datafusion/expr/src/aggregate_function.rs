@@ -17,13 +17,12 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
-use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 use crate::utils;
 use crate::{type_coercion::aggregates::*, Signature, Volatility};
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 
 use strum_macros::EnumIter;
@@ -37,8 +36,6 @@ pub enum AggregateFunction {
     Min,
     /// Maximum
     Max,
-    /// Aggregation into an array
-    ArrayAgg,
 }
 
 impl AggregateFunction {
@@ -47,7 +44,6 @@ impl AggregateFunction {
         match self {
             Min => "MIN",
             Max => "MAX",
-            ArrayAgg => "ARRAY_AGG",
         }
     }
 }
@@ -65,7 +61,6 @@ impl FromStr for AggregateFunction {
             // general
             "max" => AggregateFunction::Max,
             "min" => AggregateFunction::Min,
-            "array_agg" => AggregateFunction::ArrayAgg,
             _ => {
                 return plan_err!("There is no built-in function named {name}");
             }
@@ -80,7 +75,7 @@ impl AggregateFunction {
     pub fn return_type(
         &self,
         input_expr_types: &[DataType],
-        input_expr_nullable: &[bool],
+        _input_expr_nullable: &[bool],
     ) -> Result<DataType> {
         // Note that this function *must* return the same type that the respective physical expression returns
         // or the execution panics.
@@ -105,11 +100,6 @@ impl AggregateFunction {
                 // The coerced_data_types is same with input_types.
                 Ok(coerced_data_types[0].clone())
             }
-            AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
-                "item",
-                coerced_data_types[0].clone(),
-                input_expr_nullable[0],
-            )))),
         }
     }
 
@@ -118,7 +108,6 @@ impl AggregateFunction {
     pub fn nullable(&self) -> Result<bool> {
         match self {
             AggregateFunction::Max | AggregateFunction::Min => Ok(true),
-            AggregateFunction::ArrayAgg => Ok(true),
         }
     }
 }
@@ -128,7 +117,6 @@ impl AggregateFunction {
     pub fn signature(&self) -> Signature {
         // note: the physical expression must accept the type returned by this function or the execution panics.
         match self {
-            AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
             AggregateFunction::Min | AggregateFunction::Max => {
                 let valid = STRINGS
                     .iter()
@@ -152,8 +140,8 @@ mod tests {
     use strum::IntoEnumIterator;
 
     #[test]
-    // Test for AggregateFuncion's Display and from_str() implementations.
-    // For each variant in AggregateFuncion, it converts the variant to a string
+    // Test for AggregateFunction's Display and from_str() implementations.
+    // For each variant in AggregateFunction, it converts the variant to a string
     // and then back to a variant. The test asserts that the original variant and
     // the reconstructed variant are the same. This assertion is also necessary for
     // function suggestion. See https://github.com/apache/datafusion/issues/8082

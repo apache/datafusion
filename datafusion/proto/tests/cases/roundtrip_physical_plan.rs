@@ -301,6 +301,7 @@ fn roundtrip_window() -> Result<()> {
             "avg(b)",
             false,
             false,
+            false,
         )?,
         &[],
         &[],
@@ -322,6 +323,7 @@ fn roundtrip_window() -> Result<()> {
         &[],
         &schema,
         "SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING",
+        false,
         false,
         false,
     )?;
@@ -367,6 +369,7 @@ fn rountrip_aggregate() -> Result<()> {
             "AVG(b)",
             false,
             false,
+            false,
         )?],
         // NTH_VALUE
         vec![create_aggregate_expr(
@@ -377,6 +380,7 @@ fn rountrip_aggregate() -> Result<()> {
             &[],
             &schema,
             "NTH_VALUE(b, 1)",
+            false,
             false,
             false,
         )?],
@@ -392,6 +396,7 @@ fn rountrip_aggregate() -> Result<()> {
             &[],
             &schema,
             "STRING_AGG(name, ',')",
+            false,
             false,
             false,
         )?],
@@ -429,6 +434,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
         &[],
         &schema,
         "AVG(b)",
+        false,
         false,
         false,
     )?];
@@ -500,6 +506,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         &[],
         &schema,
         "example_agg",
+        false,
         false,
         false,
     )?];
@@ -1000,6 +1007,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         "aggregate_udf",
         false,
         false,
+        false,
     )?;
 
     let filter = Arc::new(FilterExec::try_new(
@@ -1032,6 +1040,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         "aggregate_udf",
         true,
         true,
+        false,
     )?;
 
     let aggregate = Arc::new(AggregateExec::try_new(

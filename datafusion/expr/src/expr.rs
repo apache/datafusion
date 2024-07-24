@@ -109,7 +109,7 @@ use sqlparser::ast::NullTreatment;
 /// ## Binary Expressions
 ///
 /// Exprs implement traits that allow easy to understand construction of more
-/// complex expresions. For example, to create `c1 + c2` to add columns "c1" and
+/// complex expressions. For example, to create `c1 + c2` to add columns "c1" and
 /// "c2" together
 ///
 /// ```
@@ -1340,6 +1340,9 @@ impl Expr {
     ///
     /// returns `None` if the expression is not a `Column`
     ///
+    /// Note: None may be returned for expressions that are not `Column` but
+    /// are convertible to `Column` such as `Cast` expressions.
+    ///
     /// Example
     /// ```
     /// # use datafusion_common::Column;
@@ -1355,6 +1358,23 @@ impl Expr {
             Some(it)
         } else {
             None
+        }
+    }
+
+    /// Returns the inner `Column` if any. This is a specialized version of
+    /// [`Self::try_as_col`] that take Cast expressions into account when the
+    /// expression is as on condition for joins.
+    ///
+    /// Called this method when you are sure that the expression is a `Column`
+    /// or a `Cast` expression that wraps a `Column`.
+    pub fn get_as_join_column(&self) -> Option<&Column> {
+        match self {
+            Expr::Column(c) => Some(c),
+            Expr::Cast(Cast { expr, .. }) => match &**expr {
+                Expr::Column(c) => Some(c),
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -1398,7 +1418,7 @@ impl Expr {
             }
             Ok(TreeNodeRecursion::Continue)
         })
-        .expect("traversal is infallable");
+        .expect("traversal is infallible");
     }
 
     /// Return all references to columns and their occurrence counts in the expression.
@@ -1433,7 +1453,7 @@ impl Expr {
             }
             Ok(TreeNodeRecursion::Continue)
         })
-        .expect("traversal is infallable");
+        .expect("traversal is infallible");
     }
 
     /// Returns true if there are any column references in this Expr

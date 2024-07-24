@@ -140,6 +140,10 @@ impl FileFormatFactory for ParquetFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ParquetFormat::default())
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl GetExt for ParquetFormatFactory {
@@ -149,6 +153,13 @@ impl GetExt for ParquetFormatFactory {
     }
 }
 
+impl fmt::Debug for ParquetFormatFactory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetFormatFactory")
+            .field("ParquetFormatFactory", &self.options)
+            .finish()
+    }
+}
 /// The Apache Parquet `FileFormat` implementation
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
@@ -854,14 +865,14 @@ fn spawn_column_parallel_row_group_writer(
     let mut col_array_channels = Vec::with_capacity(num_columns);
     for writer in col_writers.into_iter() {
         // Buffer size of this channel limits the number of arrays queued up for column level serialization
-        let (send_array, recieve_array) =
+        let (send_array, receive_array) =
             mpsc::channel::<ArrowLeafColumn>(max_buffer_size);
         col_array_channels.push(send_array);
 
         let reservation =
             MemoryConsumer::new("ParquetSink(ArrowColumnWriter)").register(pool);
         let task = SpawnedTask::spawn(column_serializer_task(
-            recieve_array,
+            receive_array,
             writer,
             reservation,
         ));
@@ -936,7 +947,7 @@ fn spawn_rg_join_and_finalize_task(
 /// row group is reached, the parallel tasks are joined on another separate task
 /// and sent to a concatenation task. This task immediately continues to work
 /// on the next row group in parallel. So, parquet serialization is parallelized
-/// accross both columns and row_groups, with a theoretical max number of parallel tasks
+/// across both columns and row_groups, with a theoretical max number of parallel tasks
 /// given by n_columns * num_row_groups.
 fn spawn_parquet_parallel_serialization_task(
     mut data: Receiver<RecordBatch>,
@@ -1560,7 +1571,7 @@ mod tests {
         // . batch1 written into first file and includes:
         //    - column c1 that has 3 rows with one null. Stats min and max of string column is missing for this test even the column has values
         // . batch2 written into second file and includes:
-        //    - column c2 that has 3 rows with one null. Stats min and max of int are avaialble and 1 and 2 respectively
+        //    - column c2 that has 3 rows with one null. Stats min and max of int are available and 1 and 2 respectively
         let store = Arc::new(LocalFileSystem::new()) as _;
         let (files, _file_names) = store_parquet(vec![batch1, batch2], false).await?;
 
@@ -2112,7 +2123,7 @@ mod tests {
         let path_parts = path.parts().collect::<Vec<_>>();
         assert_eq!(path_parts.len(), 1, "should not have path prefix");
 
-        assert_eq!(num_rows, 2, "file metdata to have 2 rows");
+        assert_eq!(num_rows, 2, "file metadata to have 2 rows");
         assert!(
             schema.iter().any(|col_schema| col_schema.name == "a"),
             "output file metadata should contain col a"
@@ -2208,7 +2219,7 @@ mod tests {
             );
             expected_partitions.remove(prefix);
 
-            assert_eq!(num_rows, 1, "file metdata to have 1 row");
+            assert_eq!(num_rows, 1, "file metadata to have 1 row");
             assert!(
                 !schema.iter().any(|col_schema| col_schema.name == "a"),
                 "output file metadata will not contain partitioned col a"
