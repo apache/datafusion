@@ -21,7 +21,10 @@ use crate::{expr::WindowFunction, BuiltInWindowFunction, Expr, Literal};
 
 /// Create an expression to represent the `row_number` window function
 pub fn row_number() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::RowNumber, vec![]))
+    Expr::WindowFunction(WindowFunction::new(
+        BuiltInWindowFunction::RowNumber,
+        vec![],
+    ))
 }
 
 /// Create an expression to represent the `rank` window function
@@ -31,12 +34,18 @@ pub fn rank() -> Expr {
 
 /// Create an expression to represent the `dense_rank` window function
 pub fn dense_rank() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::DenseRank, vec![]))
+    Expr::WindowFunction(WindowFunction::new(
+        BuiltInWindowFunction::DenseRank,
+        vec![],
+    ))
 }
 
 /// Create an expression to represent the `percent_rank` window function
 pub fn percent_rank() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::PercentRank, vec![]))
+    Expr::WindowFunction(WindowFunction::new(
+        BuiltInWindowFunction::PercentRank,
+        vec![],
+    ))
 }
 
 /// Create an expression to represent the `cume_dist` window function
@@ -83,5 +92,8 @@ pub fn lead(
 
 /// Create an expression to represent the `nth_value` window function
 pub fn nth_value(arg: Expr, n: i64) -> Expr {
-    Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::NthValue, vec![arg, n.lit()]))
+    Expr::WindowFunction(WindowFunction::new(
+        BuiltInWindowFunction::NthValue,
+        vec![arg, n.lit()],
+    ))
 }

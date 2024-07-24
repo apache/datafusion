@@ -130,9 +130,7 @@ impl WindowUDF {
     ///
     /// This utility allows using the UDWF without requiring access to
     /// the registry, such as with the DataFrame API.
-    pub fn call(
-        &self,
-        args: Vec<Expr>) -> Expr {
+    pub fn call(&self, args: Vec<Expr>) -> Expr {
         let fun = crate::WindowFunctionDefinition::WindowUDF(Arc::new(self.clone()));
 
         Expr::WindowFunction(WindowFunction::new(fun, args))

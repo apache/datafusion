@@ -655,6 +655,6 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
     }
 }
 
-#[deprecated(since = "40.0.0", note="Use ExprFunctionExt instead.")]
+#[deprecated(since = "40.0.0", note = "Use ExprFunctionExt instead.")]
 // pub trait AggregateExt : ExprFunctionExt {}
 pub trait AggregateExt = ExprFunctionExt;

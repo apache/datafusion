@@ -216,9 +216,10 @@ async fn main() -> Result<()> {
     df.show().await?;
 
     // Now, run the function using the DataFrame API:
-    let window_expr = smooth_it.call(vec![col("speed")])  // smooth_it(speed)
-        .partition_by(vec![col("car")])                         // PARTITION BY car
-        .order_by(vec![col("time").sort(true, true)])           // ORDER BY time ASC
+    let window_expr = smooth_it
+        .call(vec![col("speed")]) // smooth_it(speed)
+        .partition_by(vec![col("car")]) // PARTITION BY car
+        .order_by(vec![col("time").sort(true, true)]) // ORDER BY time ASC
         .window_frame(WindowFrame::new(None))
         .build()?;
     let df = ctx.table("cars").await?.window(vec![window_expr])?;
