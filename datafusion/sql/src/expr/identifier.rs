@@ -53,34 +53,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let normalize_ident = self.normalizer.normalize(id);
 
             // Check for qualified field with unqualified name
-            if let Ok((Some(qualifier), _)) =
+            if let Ok((qualifier, _)) =
                 schema.qualified_field_with_unqualified_name(normalize_ident.as_str())
             {
-                let is_unnamed_table = match &qualifier {
-                    TableReference::Bare { table } => table.as_ref() == UNNAMED_TABLE,
-                    TableReference::Partial { table, .. } => {
-                        table.as_ref() == UNNAMED_TABLE
-                    }
-                    TableReference::Full { table, .. } => table.as_ref() == UNNAMED_TABLE,
-                };
-
-                if !is_unnamed_table {
-                    // Found a match with a qualified name, return it with the qualifier
-                    return Ok(Expr::Column(Column {
-                        relation: Some(qualifier.clone()),
-                        name: normalize_ident,
-                    }));
-                }
-            }
-
-            // Check for unqualified field
-            if schema
-                .field_with_unqualified_name(normalize_ident.as_str())
-                .is_ok()
-            {
-                // Found a match without a qualified name, this is an inner table column
                 return Ok(Expr::Column(Column {
-                    relation: None,
+                    relation: qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
                     name: normalize_ident,
                 }));
             }
