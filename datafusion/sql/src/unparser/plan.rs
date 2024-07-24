@@ -558,11 +558,13 @@ impl Unparser<'_> {
         }
     }
 
-    /// Convert the components of a USING clause to the USING AST
+    /// Convert the components of a USING clause to the USING AST. Returns
+    /// 'None' if the conditions are not compatible with a USING expression,
+    /// e.g. non-column expressions or non-matching names.
     fn join_using_to_sql(
         &self,
         join_conditions: &[(Expr, Expr)],
-    ) -> Result<ast::JoinConstraint> {
+    ) -> Option<ast::JoinConstraint> {
         let mut idents = Vec::with_capacity(join_conditions.len());
         for (left, right) in join_conditions {
             match (left, right) {
@@ -575,24 +577,15 @@ impl Unparser<'_> {
                         relation: _,
                         name: right_name,
                     }),
-                ) => {
-                    if left_name != right_name {
-                        // USING is only valid when the column names are the
-                        // same, so they should never be different
-                        return not_impl_err!(
-                            "Unsupported USING with different column names"
-                        );
-                    }
+                ) if left_name == right_name => {
                     idents.push(self.new_ident_quoted_if_needs(left_name.to_string()));
                 }
-                // USING is only valid with column names; arbitrary expressions
+                // USING is only valid with matching column names; arbitrary expressions
                 // are not allowed
-                _ => {
-                    return not_impl_err!("Unsupported USING with non-column expressions")
-                }
+                _ => return None,
             }
         }
-        Ok(ast::JoinConstraint::Using(idents))
+        Some(ast::JoinConstraint::Using(idents))
     }
 
     /// Convert a join constraint and associated conditions and filter to a SQL AST node
@@ -604,58 +597,69 @@ impl Unparser<'_> {
     ) -> Result<ast::JoinConstraint> {
         match (constraint, conditions, filter) {
             // No constraints
-            (JoinConstraint::On, [], None) => Ok(ast::JoinConstraint::None),
-            // Only equi-join conditions
-            (JoinConstraint::On, conditions, None) => {
-                let expr =
-                    self.join_conditions_to_sql(conditions, ast::BinaryOperator::Eq)?;
-                match expr {
-                    Some(expr) => Ok(ast::JoinConstraint::On(expr)),
-                    None => Ok(ast::JoinConstraint::None),
-                }
-            }
-            // More complex filter with non-equi-join conditions; so we combine
-            // all conditions into a single AST Expr
-            (JoinConstraint::On, conditions, Some(filter)) => {
-                let filter_expr = self.expr_to_sql(filter)?;
-                let expr =
-                    self.join_conditions_to_sql(conditions, ast::BinaryOperator::Eq)?;
-                match expr {
-                    Some(expr) => {
-                        let join_expr = self.and_op_to_sql(filter_expr, expr);
-                        Ok(ast::JoinConstraint::On(join_expr))
-                    }
-                    None => Ok(ast::JoinConstraint::On(filter_expr)),
-                }
+            (JoinConstraint::On | JoinConstraint::Using, [], None) => {
+                Ok(ast::JoinConstraint::None)
             }
 
             (JoinConstraint::Using, conditions, None) => {
-                self.join_using_to_sql(conditions)
+                match self.join_using_to_sql(conditions) {
+                    Some(using) => Ok(using),
+                    // As above, this should not be reachable from parsed SQL,
+                    // but a user could create this; we "downgrade" to ON.
+                    None => self.join_conditions_to_sql_on(conditions, None),
+                }
             }
-            (JoinConstraint::Using, _, Some(_)) => {
-                not_impl_err!("Unsupported USING with filter")
+
+            // Two cases here:
+            // 1. Straightforward ON case, with possible equi-join conditions
+            //    and additional filters
+            // 2. USING with additional filters; we "downgrade" to ON, because
+            //    you can't use USING with arbitrary filters. (This should not
+            //    be accessible from parsed SQL, but may have been a
+            //    custom-built JOIN by a user.)
+            (JoinConstraint::On | JoinConstraint::Using, conditions, filter) => {
+                self.join_conditions_to_sql_on(conditions, filter)
             }
         }
     }
 
-    fn join_conditions_to_sql(
+    // Convert a list of equi0join conditions and an optional filter to a SQL ON
+    // AST node, with the equi-join conditions and the filter merged into a
+    // single conditional expression
+    fn join_conditions_to_sql_on(
         &self,
         join_conditions: &[(Expr, Expr)],
-        eq_op: ast::BinaryOperator,
-    ) -> Result<Option<ast::Expr>> {
-        // Only support AND conjunction for each binary expression in join conditions
-        let mut exprs: Vec<ast::Expr> = vec![];
+        filter: Option<&Expr>,
+    ) -> Result<ast::JoinConstraint> {
+        let mut condition = None;
+        // AND the join conditions together to create the overall condition
         for (left, right) in join_conditions {
-            // Parse left
+            // Parse left and right
             let l = self.expr_to_sql(left)?;
-            // Parse right
             let r = self.expr_to_sql(right)?;
-            // AND with existing expression
-            exprs.push(self.binary_op_to_sql(l, r, eq_op.clone()));
+            let e = self.binary_op_to_sql(l, r, ast::BinaryOperator::Eq);
+            condition = match condition {
+                Some(expr) => Some(self.and_op_to_sql(expr, e)),
+                None => Some(e),
+            };
         }
-        let join_expr: Option<ast::Expr> =
-            exprs.into_iter().reduce(|r, l| self.and_op_to_sql(r, l));
-        Ok(join_expr)
+
+        // Then AND the non-equijoin filter condition as well
+        condition = match (condition, filter) {
+            (Some(expr), Some(filter)) => {
+                Some(self.and_op_to_sql(expr, self.expr_to_sql(filter)?))
+            }
+            (Some(expr), None) => Some(expr),
+            (None, Some(filter)) => Some(self.expr_to_sql(filter)?),
+            (None, None) => None,
+        };
+
+        let constraint = match condition {
+            Some(filter) => ast::JoinConstraint::On(filter),
+            None => ast::JoinConstraint::None,
+        };
+
+        Ok(constraint)
     }
 
     fn and_op_to_sql(&self, lhs: ast::Expr, rhs: ast::Expr) -> ast::Expr {
