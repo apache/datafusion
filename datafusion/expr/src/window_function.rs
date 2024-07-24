@@ -20,50 +20,36 @@ use datafusion_common::ScalarValue;
 use crate::{expr::WindowFunction, BuiltInWindowFunction, Expr, Literal};
 
 /// Create an expression to represent the `row_number` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn row_number() -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::RowNumber, vec![]))
 }
 
 /// Create an expression to represent the `rank` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn rank() -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::Rank, vec![]))
 }
 
 /// Create an expression to represent the `dense_rank` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn dense_rank() -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::DenseRank, vec![]))
 }
 
 /// Create an expression to represent the `percent_rank` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn percent_rank() -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::PercentRank, vec![]))
 }
 
 /// Create an expression to represent the `cume_dist` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn cume_dist() -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::CumeDist, vec![]))
 }
 
 /// Create an expression to represent the `ntile` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn ntile(arg: Expr) -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::Ntile, vec![arg]))
 }
 
 /// Create an expression to represent the `lag` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn lag(
     arg: Expr,
     shift_offset: Option<i64>,
@@ -80,8 +66,6 @@ pub fn lag(
 }
 
 /// Create an expression to represent the `lead` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn lead(
     arg: Expr,
     shift_offset: Option<i64>,
@@ -98,22 +82,16 @@ pub fn lead(
 }
 
 /// Create an expression to represent the `first_value` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn first_value(arg: Expr) -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::FirstValue, vec![arg]))
 }
 
 /// Create an expression to represent the `last_value` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn last_value(arg: Expr) -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::LastValue, vec![arg]))
 }
 
 /// Create an expression to represent the `nth_value` window function
-///
-/// Note: call [`WindowFunction::build]` to create an [`Expr`]
 pub fn nth_value(arg: Expr, n: i64) -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::NthValue, vec![arg, n.lit()]))
 }
