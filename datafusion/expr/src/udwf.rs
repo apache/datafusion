@@ -202,7 +202,7 @@ where
 /// # use std::any::Any;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame};
+/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
@@ -236,12 +236,13 @@ where
 /// let smooth_it = WindowUDF::from(SmoothIt::new());
 ///
 /// // Call the function `add_one(col)`
-/// let expr = smooth_it.call(
-///     vec![col("speed")],                 // smooth_it(speed)
-///     vec![col("car")],                   // PARTITION BY car
-///     vec![col("time").sort(true, true)], // ORDER BY time ASC
-///     WindowFrame::new(None),
-/// );
+/// // smooth_it(speed) OVER (PARTITION BY car ORDER BY time ASC)
+/// let expr = smooth_it.call(vec![col("speed")])
+///     .partition_by(vec![col("car")])
+///     .order_by(vec![col("time").sort(true, true)])
+///     .window_frame(WindowFrame::new(None))
+///     .build()
+///     .unwrap();
 /// ```
 pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Returns this object as an [`Any`] trait object
