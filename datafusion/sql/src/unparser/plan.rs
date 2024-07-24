@@ -558,6 +558,7 @@ impl Unparser<'_> {
                         asc: Some(sort_expr.asc),
                         expr: col,
                         nulls_first,
+                        with_fill: None,
                     })
                 }
                 _ => plan_err!("Expecting Sort expr"),

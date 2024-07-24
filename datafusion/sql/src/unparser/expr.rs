@@ -543,6 +543,7 @@ impl Unparser<'_> {
                     expr: sql_parser_expr,
                     asc: Some(*asc),
                     nulls_first,
+                    with_fill: None,
                 }))
             }
             _ => {
