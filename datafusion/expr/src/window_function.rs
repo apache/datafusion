@@ -81,16 +81,6 @@ pub fn lead(
     ))
 }
 
-/// Create an expression to represent the `first_value` window function
-pub fn first_value(arg: Expr) -> Expr {
-    Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::FirstValue, vec![arg]))
-}
-
-/// Create an expression to represent the `last_value` window function
-pub fn last_value(arg: Expr) -> Expr {
-    Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::LastValue, vec![arg]))
-}
-
 /// Create an expression to represent the `nth_value` window function
 pub fn nth_value(arg: Expr, n: i64) -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::NthValue, vec![arg, n.lit()]))
