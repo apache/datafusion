@@ -794,6 +794,27 @@ impl From<Arc<WindowUDF>> for WindowFunctionDefinition {
 }
 
 /// Window function
+///
+/// Holds the actual actual function to call
+/// [`window_function::WindowFunction`] as well as its arguments
+/// (`args`) and the contents of the `OVER` clause:
+///
+/// 1. `PARTITION BY`
+/// 2. `ORDER BY`
+/// 3. Window frame (e.g. `ROWS 1 PRECEDING AND 1 FOLLOWING`)
+///
+/// See [`Self::build`] to create an [`Expr`]
+///
+/// # Example
+/// ```/// # use datafusion_expr::expr::WindowFunction;
+/// // Create FIRST_VALUE(a) OVER (PARTITION BY b ORDER BY c)
+/// let expr: Expr = Expr::WindowFunction(
+///     WindowFunction::new(BuiltInWindowFunction::FirstValue, vec![col("a")])
+/// )
+///   .with_partition_by(vec![col("b")])
+///   .with_order_by(vec![col("b")])
+///   .build()?;
+/// ```
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct WindowFunction {
     /// Name of the function
@@ -811,7 +832,8 @@ pub struct WindowFunction {
 }
 
 impl WindowFunction {
-    /// Create a new Window expression
+    /// Create a new Window expression with the specified argument an
+    /// empty `OVER` clause
     pub fn new(fun: impl Into<WindowFunctionDefinition>, args: Vec<Expr>) -> Self {
         Self {
             fun: fun.into(),

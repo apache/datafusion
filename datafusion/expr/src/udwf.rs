@@ -28,9 +28,10 @@ use arrow::datatypes::DataType;
 
 use datafusion_common::Result;
 
+use crate::expr::WindowFunction;
 use crate::{
     function::WindowFunctionSimplification, Expr, PartitionEvaluator,
-    PartitionEvaluatorFactory, ReturnTypeFunction, Signature, WindowFrame,
+    PartitionEvaluatorFactory, ReturnTypeFunction, Signature,
 };
 
 /// Logical representation of a user-defined window function (UDWF)
@@ -123,28 +124,18 @@ impl WindowUDF {
         Self::new_from_impl(AliasedWindowUDFImpl::new(Arc::clone(&self.inner), aliases))
     }
 
-    /// creates a [`Expr`] that calls the window function given
-    /// the `partition_by`, `order_by`, and `window_frame` definition
+    /// creates a [`Expr`] that calls the window function with default
+    /// values for order_by, partition_by, window_frame. See [`ExprFunctionExt`]
+    /// for details on setting these values.
     ///
     /// This utility allows using the UDWF without requiring access to
     /// the registry, such as with the DataFrame API.
     pub fn call(
         &self,
-        args: Vec<Expr>,
-        partition_by: Vec<Expr>,
-        order_by: Vec<Expr>,
-        window_frame: WindowFrame,
-    ) -> Expr {
+        args: Vec<Expr>) -> Expr {
         let fun = crate::WindowFunctionDefinition::WindowUDF(Arc::new(self.clone()));
 
-        Expr::WindowFunction(crate::expr::WindowFunction {
-            fun,
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment: None,
-        })
+        Expr::WindowFunction(WindowFunction::new(fun, args))
     }
 
     /// Returns this function's name
