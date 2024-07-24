@@ -364,19 +364,17 @@ async fn collect_left_input(
     let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
-    let (batches, _num_rows, metrics, mut reservation) = stream
+    let (batches, metrics, mut reservation) = stream
         .try_fold(
-            (Vec::new(), 0usize, join_metrics, reservation),
+            (Vec::new(), join_metrics, reservation),
             |mut acc, batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
-                acc.3.try_grow(batch_size)?;
+                acc.2.try_grow(batch_size)?;
                 // Update metrics
-                acc.2.build_mem_used.add(batch_size);
-                acc.2.build_input_batches.add(1);
-                acc.2.build_input_rows.add(batch.num_rows());
-                // Update rowcount
-                acc.1 += batch.num_rows();
+                acc.1.build_mem_used.add(batch_size);
+                acc.1.build_input_batches.add(1);
+                acc.1.build_input_rows.add(batch.num_rows());
                 // Push batch to output
                 acc.0.push(batch);
                 Ok(acc)
