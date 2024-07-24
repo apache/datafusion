@@ -57,14 +57,18 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         .into_iter()
         .unzip();
 
-    // Check to enforce the uniqueness of struct field name
-    let unique_field_names_set = names.iter().collect::<HashSet<_>>();
-
-    if unique_field_names_set.len() != names.len() {
-        return exec_err!("named_struct requires unique field names");
+    {
+        // Check to enforce the uniqueness of struct field name
+        let mut unique_field_names = HashSet::new();
+        for name in names.iter() {
+            if unique_field_names.contains(name) {
+                return exec_err!(
+                    "named_struct requires unique field names. Field {name} is used more than once."
+                );
+            }
+            unique_field_names.insert(name);
+        }
     }
-
-    drop(unique_field_names_set);
 
     let arrays = ColumnarValue::values_to_arrays(&values)?;
 
