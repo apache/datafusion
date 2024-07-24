@@ -32,9 +32,9 @@ use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 /// Task Execution Context
 ///
-/// A [`TaskContext`] contains the state required during a single
-/// query's execution. Please see [`SessionContext`] for a user level
-/// multi-query API.
+/// A [`TaskContext`] contains the state required during a single query's
+/// execution. Please see the documentation on [`SessionContext`] for more
+/// information.
 ///
 /// [`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
 #[derive(Debug)]
