@@ -258,11 +258,7 @@ impl CoalesceBatchesStream {
                                 self.buffered_rows += batch.num_rows();
                                 self.buffer.push(batch);
                                 // Combine buffered batches:
-                                let batch = concat_batches(
-                                    &self.schema,
-                                    &self.buffer,
-                                    self.buffered_rows,
-                                )?;
+                                let batch = concat_batches(&self.schema, &self.buffer)?;
                                 // Reset the buffer state and return final batch:
                                 self.buffer.clear();
                                 self.buffered_rows = 0;
