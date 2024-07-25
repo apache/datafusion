@@ -28,9 +28,11 @@ use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
 };
 use datafusion_expr::{
+    dml::CopyTo,
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
-    ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, CreateExternalTable, DdlStatement, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -87,6 +89,7 @@ fn parse_decimals() {
                 parse_float_as_decimal: true,
                 enable_ident_normalization: false,
                 support_varchar_with_length: false,
+                enable_options_value_normalization: false,
             },
         );
     }
@@ -141,12 +144,77 @@ fn parse_ident_normalization() {
                 parse_float_as_decimal: false,
                 enable_ident_normalization,
                 support_varchar_with_length: false,
+                enable_options_value_normalization: false,
             },
         );
         if plan.is_ok() {
             assert_eq!(expected, format!("{plan:?}"));
         } else {
             assert_eq!(expected, plan.unwrap_err().strip_backtrace());
+        }
+    }
+}
+
+#[test]
+fn test_parse_options_value_normalization() {
+    let test_data = [
+        (
+            "CREATE EXTERNAL TABLE test OPTIONS ('location' 'LoCaTiOn') STORED AS PARQUET LOCATION 'fake_location'",
+            "CreateExternalTable: Bare { table: \"test\" }",
+            HashMap::from([("format.location", "LoCaTiOn")]),
+            false,
+        ),
+        (
+            "CREATE EXTERNAL TABLE test OPTIONS ('location' 'LoCaTiOn') STORED AS PARQUET LOCATION 'fake_location'",
+            "CreateExternalTable: Bare { table: \"test\" }",
+            HashMap::from([("format.location", "location")]),
+            true,
+        ),
+        (
+            "COPY test TO 'fake_location' STORED AS PARQUET OPTIONS ('location' 'LoCaTiOn')",
+            "CopyTo: format=csv output_url=fake_location options: (format.location LoCaTiOn)\n  TableScan: test",
+            HashMap::from([("format.location", "LoCaTiOn")]),
+            false,
+        ),
+        (
+            "COPY test TO 'fake_location' STORED AS PARQUET OPTIONS ('location' 'LoCaTiOn')",
+            "CopyTo: format=csv output_url=fake_location options: (format.location location)\n  TableScan: test",
+            HashMap::from([("format.location", "location")]),
+            true,
+        ),
+    ];
+
+    for (sql, expected_plan, expected_options, enable_options_value_normalization) in
+        test_data
+    {
+        let plan = logical_plan_with_options(
+            sql,
+            ParserOptions {
+                parse_float_as_decimal: false,
+                enable_ident_normalization: false,
+                support_varchar_with_length: false,
+                enable_options_value_normalization,
+            },
+        );
+        if let Ok(plan) = plan {
+            assert_eq!(expected_plan, format!("{plan:?}"));
+
+            match plan {
+                LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+                    CreateExternalTable { options, .. },
+                ))
+                | LogicalPlan::Copy(CopyTo { options, .. }) => {
+                    expected_options.iter().for_each(|(k, v)| {
+                        assert_eq!(Some(&v.to_string()), options.get(*k));
+                    });
+                }
+                _ => panic!(
+                    "Expected Ddl(CreateExternalTable) or Copy(CopyTo) but got {:?}",
+                    plan
+                ),
+            }
+        } else {
+            assert_eq!(expected_plan, plan.unwrap_err().strip_backtrace());
         }
     }
 }

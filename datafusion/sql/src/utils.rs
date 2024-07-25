@@ -32,7 +32,7 @@ use datafusion_expr::builder::get_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
-use sqlparser::ast::Ident;
+use sqlparser::ast::{Ident, Value};
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -260,6 +260,30 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
     match id.quote_style {
         Some(_) => id.value,
         None => id.value.to_ascii_lowercase(),
+    }
+}
+
+pub(crate) fn value_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::SingleQuotedString(s) => Some(s.to_string()),
+        Value::DollarQuotedString(s) => Some(s.to_string()),
+        Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
+        Value::DoubleQuotedString(_)
+        | Value::EscapedStringLiteral(_)
+        | Value::NationalStringLiteral(_)
+        | Value::SingleQuotedByteStringLiteral(_)
+        | Value::DoubleQuotedByteStringLiteral(_)
+        | Value::TripleSingleQuotedString(_)
+        | Value::TripleDoubleQuotedString(_)
+        | Value::TripleSingleQuotedByteStringLiteral(_)
+        | Value::TripleDoubleQuotedByteStringLiteral(_)
+        | Value::SingleQuotedRawStringLiteral(_)
+        | Value::DoubleQuotedRawStringLiteral(_)
+        | Value::TripleSingleQuotedRawStringLiteral(_)
+        | Value::TripleDoubleQuotedRawStringLiteral(_)
+        | Value::HexStringLiteral(_)
+        | Value::Null
+        | Value::Placeholder(_) => None,
     }
 }
 
