@@ -30,11 +30,11 @@ use datafusion_common::{
     JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
-use datafusion_expr::Unnest;
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, Distinct, Expr, Projection,
     TableScan, Window,
 };
+use datafusion_expr::{StreamingWindowSchema, Unnest};
 
 use crate::optimize_projections::required_indices::RequiredIndicies;
 use crate::utils::NamePreserver;
@@ -212,7 +212,7 @@ fn optimize_projections(
                 .map(LogicalPlan::Aggregate)
             });
         }
-        LogicalPlan::StreamingWindow(aggregate, window) => {
+        LogicalPlan::StreamingWindow(aggregate, window, ..) => {
             // Split parent requirements to GROUP BY and aggregate sections:
             let n_group_exprs = aggregate.group_expr_len()?;
             // Offset aggregate indices so that they point to valid indices at
@@ -297,7 +297,13 @@ fn optimize_projections(
                     new_group_bys,
                     new_aggr_expr,
                 )
-                .map(|agg| LogicalPlan::StreamingWindow(agg, window))
+                .map(|agg| {
+                    LogicalPlan::StreamingWindow(
+                        agg.clone(),
+                        window,
+                        StreamingWindowSchema::try_new(agg).unwrap(),
+                    )
+                })
             });
         }
         LogicalPlan::Window(window) => {
@@ -482,7 +488,7 @@ fn optimize_projections(
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)
         | LogicalPlan::Window(_)
-        | LogicalPlan::StreamingWindow(_, _)
+        | LogicalPlan::StreamingWindow(..)
         | LogicalPlan::TableScan(_) => {
             return internal_err!(
                 "OptimizeProjection: should have handled in the match statement above"

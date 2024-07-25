@@ -18,7 +18,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::plan::StreamingWindowType;
+use super::plan::{StreamingWindowSchema, StreamingWindowType};
 use super::LogicalPlanBuilder;
 use crate::builder::add_group_by_exprs_from_dependencies;
 use crate::{Aggregate, Expr};
@@ -47,7 +47,13 @@ impl LogicalPlanBuilder {
             |_slide| StreamingWindowType::Sliding(window_length, _slide),
         );
         let aggr = Aggregate::try_new(Arc::new(self.plan), group_expr, aggr_expr)
-            .map(|new_aggr| LogicalPlan::StreamingWindow(new_aggr, window))
+            .map(|new_aggr| {
+                LogicalPlan::StreamingWindow(
+                    new_aggr.clone(),
+                    window,
+                    StreamingWindowSchema::try_new(new_aggr).unwrap(),
+                )
+            })
             .map(Self::from);
         aggr
     }

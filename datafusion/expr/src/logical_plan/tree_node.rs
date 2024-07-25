@@ -55,6 +55,8 @@ use datafusion_common::{
     internal_err, map_until_stop_and_collect, DataFusionError, Result,
 };
 
+use super::plan::StreamingWindowSchema;
+
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
@@ -373,15 +375,18 @@ impl TreeNode for LogicalPlan {
                     schema,
                 },
                 window_length,
+                ..,
             ) => rewrite_arc(input, f)?.update_data(|input| {
+                let new_aggr_exp = Aggregate {
+                    input,
+                    group_expr,
+                    aggr_expr,
+                    schema,
+                };
                 LogicalPlan::StreamingWindow(
-                    Aggregate {
-                        input,
-                        group_expr,
-                        aggr_expr,
-                        schema,
-                    },
+                    new_aggr_exp.clone(),
                     window_length,
+                    StreamingWindowSchema::try_new(new_aggr_exp).unwrap(),
                 )
             }),
         })
@@ -551,6 +556,7 @@ impl LogicalPlan {
                     ..
                 },
                 _,
+                ..,
             ) => group_expr
                 .iter()
                 .chain(aggr_expr.iter())
@@ -768,20 +774,23 @@ impl LogicalPlan {
                     schema,
                 },
                 window_length,
+                ..,
             ) => map_until_stop_and_collect!(
                 group_expr.into_iter().map_until_stop_and_collect(&mut f),
                 aggr_expr,
                 aggr_expr.into_iter().map_until_stop_and_collect(&mut f)
             )?
             .update_data(|(group_expr, aggr_expr)| {
+                let new_aggr_exp = Aggregate {
+                    input,
+                    group_expr,
+                    aggr_expr,
+                    schema,
+                };
                 LogicalPlan::StreamingWindow(
-                    Aggregate {
-                        input,
-                        group_expr,
-                        aggr_expr,
-                        schema,
-                    },
+                    new_aggr_exp.clone(),
                     window_length,
+                    StreamingWindowSchema::try_new(new_aggr_exp).unwrap(),
                 )
             }),
         })

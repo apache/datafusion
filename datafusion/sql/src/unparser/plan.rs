@@ -91,7 +91,7 @@ impl Unparser<'_> {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Unnest(_)
-            | LogicalPlan::StreamingWindow(_, _) => {
+            | LogicalPlan::StreamingWindow(..) => {
                 not_impl_err!("Unsupported plan: {plan:?}")
             }
         }

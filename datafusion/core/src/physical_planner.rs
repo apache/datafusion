@@ -1509,6 +1509,7 @@ impl DefaultPhysicalPlanner {
                     ..
                 },
                 window_type,
+                window_schema,
             ) => {
                 // Initially need to perform the aggregate and then merge the partitions
                 let input_exec = children.one()?;

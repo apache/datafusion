@@ -668,6 +668,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     ..
                 },
                 window,
+                ..,
             ) => {
                 json!({
                     "Node Type": "StreamingWindow",

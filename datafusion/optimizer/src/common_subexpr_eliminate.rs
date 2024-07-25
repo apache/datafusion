@@ -30,7 +30,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{qualified_name, Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
-use datafusion_expr::{col, Expr, ExprSchemable};
+use datafusion_expr::{col, Expr, ExprSchemable, StreamingWindowSchema};
 use indexmap::IndexMap;
 
 const CSE_PREFIX: &str = "__common_expr";
@@ -319,9 +319,13 @@ impl CommonSubexprEliminate {
             // Since group_epxr changes, schema changes also. Use try_new method.
             let inner_agg =
                 Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr);
-            if let LogicalPlan::StreamingWindow(_, window_length) = plan {
+            if let LogicalPlan::StreamingWindow(_, window_length, ..) = plan {
                 inner_agg.map(|new_aggr| {
-                    LogicalPlan::StreamingWindow(new_aggr, window_length.clone())
+                    LogicalPlan::StreamingWindow(
+                        new_aggr.clone(),
+                        window_length.clone(),
+                        StreamingWindowSchema::try_new(new_aggr).unwrap(),
+                    )
                 })
             } else {
                 inner_agg.map(LogicalPlan::Aggregate)
@@ -360,8 +364,12 @@ impl CommonSubexprEliminate {
             let inner_agg =
                 Aggregate::try_new(Arc::new(new_input), new_group_expr, agg_exprs)?;
 
-            let agg = if let LogicalPlan::StreamingWindow(_, window_length) = plan {
-                LogicalPlan::StreamingWindow(inner_agg, window_length.clone())
+            let agg = if let LogicalPlan::StreamingWindow(_, window_length, ..) = plan {
+                LogicalPlan::StreamingWindow(
+                    inner_agg.clone(),
+                    window_length.clone(),
+                    StreamingWindowSchema::try_new(inner_agg).unwrap(),
+                )
             } else {
                 LogicalPlan::Aggregate(inner_agg)
             };
@@ -407,7 +415,7 @@ impl OptimizerRule for CommonSubexprEliminate {
                 Some(self.try_optimize_window(window, config)?)
             }
             LogicalPlan::Aggregate(aggregate)
-            | LogicalPlan::StreamingWindow(aggregate, _) => {
+            | LogicalPlan::StreamingWindow(aggregate, ..) => {
                 Some(self.try_optimize_aggregate(aggregate, config, plan)?)
             }
             LogicalPlan::Join(_)
