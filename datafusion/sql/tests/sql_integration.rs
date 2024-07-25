@@ -18,6 +18,7 @@
 use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::TimeUnit::Nanosecond;
@@ -39,6 +40,7 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
+use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf,
 };
@@ -2762,7 +2764,8 @@ fn logical_plan_with_dialect_and_options(
         .with_udaf(approx_median_udaf())
         .with_udaf(count_udaf())
         .with_udaf(avg_udaf())
-        .with_udaf(grouping_udaf());
+        .with_udaf(grouping_udaf())
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
@@ -3339,7 +3342,7 @@ fn test_offset_before_limit() {
 #[test]
 fn test_distribute_by() {
     let sql = "select id from person distribute by state";
-    let expected = "Repartition: DistributeBy(state)\
+    let expected = "Repartition: DistributeBy(person.state)\
         \n  Projection: person.id\
         \n    TableScan: person";
     quick_test(sql, expected);

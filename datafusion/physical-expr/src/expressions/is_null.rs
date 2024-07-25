@@ -117,6 +117,16 @@ pub(crate) fn compute_is_null(array: ArrayRef) -> Result<BooleanArray> {
     }
 }
 
+/// workaround <https://github.com/apache/arrow-rs/issues/6017>,
+/// this can be replaced with a direct call to `arrow::compute::is_not_null` once it's fixed.
+pub(crate) fn compute_is_not_null(array: ArrayRef) -> Result<BooleanArray> {
+    if array.as_any().is::<UnionArray>() {
+        compute::not(&compute_is_null(array)?).map_err(Into::into)
+    } else {
+        compute::is_not_null(array.as_ref()).map_err(Into::into)
+    }
+}
+
 fn dense_union_is_null(
     union_array: &UnionArray,
     offsets: &ScalarBuffer<i32>,

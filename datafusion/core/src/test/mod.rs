@@ -99,6 +99,7 @@ pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<Cs
         b'"',
         None,
         None,
+        false,
         FileCompressionType::UNCOMPRESSED,
     )))
 }
@@ -283,6 +284,7 @@ pub fn csv_exec_sorted(
         0,
         None,
         None,
+        false,
         FileCompressionType::UNCOMPRESSED,
     ))
 }
@@ -339,6 +341,7 @@ pub fn csv_exec_ordered(
         b'"',
         None,
         None,
+        false,
         FileCompressionType::UNCOMPRESSED,
     ))
 }

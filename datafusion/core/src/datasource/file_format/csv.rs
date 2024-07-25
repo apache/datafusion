@@ -58,7 +58,8 @@ use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore}
 #[derive(Default)]
 /// Factory struct used to create [CsvFormatFactory]
 pub struct CsvFormatFactory {
-    options: Option<CsvOptions>,
+    /// the options for csv file read
+    pub options: Option<CsvOptions>,
 }
 
 impl CsvFormatFactory {
@@ -72,6 +73,14 @@ impl CsvFormatFactory {
         Self {
             options: Some(options),
         }
+    }
+}
+
+impl fmt::Debug for CsvFormatFactory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CsvFormatFactory")
+            .field("options", &self.options)
+            .finish()
     }
 }
 
@@ -102,6 +111,10 @@ impl FileFormatFactory for CsvFormatFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(CsvFormat::default())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -233,6 +246,18 @@ impl CsvFormat {
         self
     }
 
+    /// Specifies whether newlines in (quoted) values are supported.
+    ///
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
+    pub fn with_newlines_in_values(mut self, newlines_in_values: bool) -> Self {
+        self.options.newlines_in_values = Some(newlines_in_values);
+        self
+    }
+
     /// Set a `FileCompressionType` of CSV
     /// - defaults to `FileCompressionType::UNCOMPRESSED`
     pub fn with_file_compression_type(
@@ -330,6 +355,9 @@ impl FileFormat for CsvFormat {
             self.options.quote,
             self.options.escape,
             self.options.comment,
+            self.options
+                .newlines_in_values
+                .unwrap_or(state.config_options().catalog.newlines_in_values),
             self.options.compression.into(),
         );
         Ok(Arc::new(exec))
@@ -1052,6 +1080,41 @@ mod tests {
         Ok(())
     }
 
+    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
+    #[tokio::test]
+    async fn test_csv_parallel_newlines_in_values(n_partitions: usize) -> Result<()> {
+        let config = SessionConfig::new()
+            .with_repartition_file_scans(true)
+            .with_repartition_file_min_size(0)
+            .with_target_partitions(n_partitions);
+        let csv_options = CsvReadOptions::default()
+            .has_header(true)
+            .newlines_in_values(true);
+        let ctx = SessionContext::new_with_config(config);
+        let testdata = arrow_test_data();
+        ctx.register_csv(
+            "aggr",
+            &format!("{testdata}/csv/aggregate_test_100.csv"),
+            csv_options,
+        )
+        .await?;
+
+        let query = "select sum(c3) from aggr;";
+        let query_result = ctx.sql(query).await?.collect().await?;
+        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
+
+        #[rustfmt::skip]
+        let expected = ["+--------------+",
+            "| sum(aggr.c3) |",
+            "+--------------+",
+            "| 781          |",
+            "+--------------+"];
+        assert_batches_eq!(expected, &query_result);
+        assert_eq!(1, actual_partitions); // csv won't be scanned in parallel when newlines_in_values is set
+
+        Ok(())
+    }
+
     /// Read a single empty csv file in parallel
     ///
     /// empty_0_byte.csv:
@@ -1251,11 +1314,8 @@ mod tests {
             "+-----------------------+",
             "| 50                    |",
             "+-----------------------+"];
-        let file_size = if cfg!(target_os = "windows") {
-            30 // new line on Win is '\r\n'
-        } else {
-            20
-        };
+
+        let file_size = std::fs::metadata("tests/data/one_col.csv")?.len() as usize;
         // A 20-Byte file at most get partitioned into 20 chunks
         let expected_partitions = if n_partitions <= file_size {
             n_partitions

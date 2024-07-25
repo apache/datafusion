@@ -28,8 +28,8 @@ use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::{
-    aggregate_function, built_in_window_function, udaf, ExprSchemable, Operator,
-    Signature,
+    aggregate_function, built_in_window_function, udaf, BuiltInWindowFunction,
+    ExprSchemable, Operator, Signature, WindowFrame, WindowUDF,
 };
 use crate::{window_frame, Volatility};
 
@@ -59,6 +59,10 @@ use sqlparser::ast::NullTreatment;
 /// `Expr`s can be created directly, but it is often easier and less verbose to
 /// use the fluent APIs in [`crate::expr_fn`] such as [`col`] and [`lit`], or
 /// methods such as [`Expr::alias`], [`Expr::cast_to`], and [`Expr::Like`]).
+///
+/// See also [`ExprFunctionExt`] for creating aggregate and window functions.
+///
+/// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
 ///
 /// # Schema Access
 ///
@@ -283,15 +287,17 @@ pub enum Expr {
     /// This expression is guaranteed to have a fixed type.
     TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
+    ///
+    /// See [Expr::sort] for more details
     Sort(Sort),
     /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Calls an aggregate function with arguments, and optional
     /// `ORDER BY`, `FILTER`, `DISTINCT` and `NULL TREATMENT`.
     ///
-    /// See also [`AggregateExt`] to set these fields.
+    /// See also [`ExprFunctionExt`] to set these fields.
     ///
-    /// [`AggregateExt`]: crate::udaf::AggregateExt
+    /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),
@@ -641,9 +647,9 @@ impl AggregateFunctionDefinition {
 
 /// Aggregate function
 ///
-/// See also  [`AggregateExt`] to set these fields on `Expr`
+/// See also  [`ExprFunctionExt`] to set these fields on `Expr`
 ///
-/// [`AggregateExt`]: crate::udaf::AggregateExt
+/// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
@@ -769,7 +775,52 @@ impl fmt::Display for WindowFunctionDefinition {
     }
 }
 
+impl From<aggregate_function::AggregateFunction> for WindowFunctionDefinition {
+    fn from(value: aggregate_function::AggregateFunction) -> Self {
+        Self::AggregateFunction(value)
+    }
+}
+
+impl From<BuiltInWindowFunction> for WindowFunctionDefinition {
+    fn from(value: BuiltInWindowFunction) -> Self {
+        Self::BuiltInWindowFunction(value)
+    }
+}
+
+impl From<Arc<crate::AggregateUDF>> for WindowFunctionDefinition {
+    fn from(value: Arc<crate::AggregateUDF>) -> Self {
+        Self::AggregateUDF(value)
+    }
+}
+
+impl From<Arc<WindowUDF>> for WindowFunctionDefinition {
+    fn from(value: Arc<WindowUDF>) -> Self {
+        Self::WindowUDF(value)
+    }
+}
+
 /// Window function
+///
+/// Holds the actual actual function to call [`WindowFunction`] as well as its
+/// arguments (`args`) and the contents of the `OVER` clause:
+///
+/// 1. `PARTITION BY`
+/// 2. `ORDER BY`
+/// 3. Window frame (e.g. `ROWS 1 PRECEDING AND 1 FOLLOWING`)
+///
+/// # Example
+/// ```
+/// # use datafusion_expr::{Expr, BuiltInWindowFunction, col, ExprFunctionExt};
+/// # use datafusion_expr::expr::WindowFunction;
+/// // Create FIRST_VALUE(a) OVER (PARTITION BY b ORDER BY c)
+/// let expr = Expr::WindowFunction(
+///     WindowFunction::new(BuiltInWindowFunction::FirstValue, vec![col("a")])
+/// )
+///   .partition_by(vec![col("b")])
+///   .order_by(vec![col("b").sort(true, true)])
+///   .build()
+///   .unwrap();
+/// ```
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct WindowFunction {
     /// Name of the function
@@ -787,22 +838,16 @@ pub struct WindowFunction {
 }
 
 impl WindowFunction {
-    /// Create a new Window expression
-    pub fn new(
-        fun: WindowFunctionDefinition,
-        args: Vec<Expr>,
-        partition_by: Vec<Expr>,
-        order_by: Vec<Expr>,
-        window_frame: window_frame::WindowFrame,
-        null_treatment: Option<NullTreatment>,
-    ) -> Self {
+    /// Create a new Window expression with the specified argument an
+    /// empty `OVER` clause
+    pub fn new(fun: impl Into<WindowFunctionDefinition>, args: Vec<Expr>) -> Self {
         Self {
-            fun,
+            fun: fun.into(),
             args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment,
+            partition_by: Vec::default(),
+            order_by: Vec::default(),
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
         }
     }
 }
@@ -1340,6 +1385,9 @@ impl Expr {
     ///
     /// returns `None` if the expression is not a `Column`
     ///
+    /// Note: None may be returned for expressions that are not `Column` but
+    /// are convertible to `Column` such as `Cast` expressions.
+    ///
     /// Example
     /// ```
     /// # use datafusion_common::Column;
@@ -1355,6 +1403,23 @@ impl Expr {
             Some(it)
         } else {
             None
+        }
+    }
+
+    /// Returns the inner `Column` if any. This is a specialized version of
+    /// [`Self::try_as_col`] that take Cast expressions into account when the
+    /// expression is as on condition for joins.
+    ///
+    /// Called this method when you are sure that the expression is a `Column`
+    /// or a `Cast` expression that wraps a `Column`.
+    pub fn get_as_join_column(&self) -> Option<&Column> {
+        match self {
+            Expr::Column(c) => Some(c),
+            Expr::Cast(Cast { expr, .. }) => match &**expr {
+                Expr::Column(c) => Some(c),
+                _ => None,
+            },
+            _ => None,
         }
     }
 

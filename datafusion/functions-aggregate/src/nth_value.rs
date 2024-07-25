@@ -36,7 +36,8 @@ use datafusion_expr::{
 use datafusion_physical_expr_common::aggregate::merge_arrays::merge_ordered_arrays;
 use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
 use datafusion_physical_expr_common::sort_expr::{
-    limited_convert_logical_sort_exprs_to_physical, LexOrdering, PhysicalSortExpr,
+    limited_convert_logical_sort_exprs_to_physical_with_dfschema, LexOrdering,
+    PhysicalSortExpr,
 };
 
 make_udaf_expr_and_func!(
@@ -111,9 +112,9 @@ impl AggregateUDFImpl for NthValueAgg {
             ),
         }?;
 
-        let ordering_req = limited_convert_logical_sort_exprs_to_physical(
+        let ordering_req = limited_convert_logical_sort_exprs_to_physical_with_dfschema(
             acc_args.sort_exprs,
-            acc_args.schema,
+            acc_args.dfschema,
         )?;
 
         let ordering_dtypes = ordering_req

@@ -33,4 +33,6 @@ workspace = true
 
 [dependencies]
 datafusion-common = { workspace = true, default-features = true }
+datafusion-execution = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }

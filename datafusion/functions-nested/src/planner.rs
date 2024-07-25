@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL planning extensions like [`ArrayFunctionPlanner`] and [`FieldAccessPlanner`]
+//! SQL planning extensions like [`NestedFunctionPlanner`] and [`FieldAccessPlanner`]
 
 use datafusion_common::{exec_err, utils::list_ndims, DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
@@ -27,6 +27,7 @@ use datafusion_expr::{
 use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 
+use crate::map::map_udf;
 use crate::{
     array_has::array_has_all,
     expr_fn::{array_append, array_concat, array_prepend},
@@ -34,9 +35,9 @@ use crate::{
     make_array::make_array,
 };
 
-pub struct ArrayFunctionPlanner;
+pub struct NestedFunctionPlanner;
 
-impl ExprPlanner for ArrayFunctionPlanner {
+impl ExprPlanner for NestedFunctionPlanner {
     fn plan_binary_op(
         &self,
         expr: RawBinaryExpr,
@@ -111,10 +112,7 @@ impl ExprPlanner for ArrayFunctionPlanner {
         let values = make_array(values.into_iter().map(|(_, e)| e).collect());
 
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
-            ScalarFunction::new_udf(
-                datafusion_functions::core::map(),
-                vec![keys, values],
-            ),
+            ScalarFunction::new_udf(map_udf(), vec![keys, values]),
         )))
     }
 }
@@ -174,7 +172,7 @@ impl ExprPlanner for FieldAccessPlanner {
 
 fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
     if let AggregateFunctionDefinition::UDF(udf) = &agg_func.func_def {
-        return udf.name() == "ARRAY_AGG";
+        return udf.name() == "array_agg";
     }
 
     false

@@ -90,7 +90,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
-    pub use super::approx_distinct;
+    pub use super::approx_distinct::approx_distinct;
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
