@@ -485,7 +485,7 @@ impl AggregateFunctionExpr {
         self.ignore_nulls
     }
 
-    /// Return if the aggregation is distinct
+    /// Return if the aggregation is reversed
     pub fn is_reversed(&self) -> bool {
         self.is_reversed
     }
