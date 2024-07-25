@@ -306,22 +306,35 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
             let Some(s) = c.as_string_view_opt() else {
                 return Arc::clone(c);
             };
-            let view_cnt = s.views().len();
-            let buffer_size = s.get_buffer_memory_size();
+            let ideal_buffer_size: usize = s
+                .views()
+                .iter()
+                .map(|v| {
+                    let len = (*v as u32) as usize;
+                    if len > 12 {
+                        len
+                    } else {
+                        0
+                    }
+                })
+                .sum();
+            let actual_buffer_size = s.get_buffer_memory_size();
 
             // Re-creating the array copies data and can be time consuming.
-            // We only do it if the array is sparse, below is a heuristic to determine if the array is sparse.
-            if buffer_size > (view_cnt * 32) {
-                // We use a block size of 2MB (instead of 8KB) to reduce the number of buffers to track.
+            // We only do it if the array is sparse
+            if actual_buffer_size > (ideal_buffer_size * 2) {
+                // We set the block size to `ideal_buffer_size` so that the new StringViewArray only has one buffer, which accelerate later concat_batches.
                 // See https://github.com/apache/arrow-rs/issues/6094 for more details.
                 let mut builder = StringViewBuilder::with_capacity(s.len())
-                    .with_block_size(1024 * 1024 * 2);
+                    .with_block_size(ideal_buffer_size as u32);
 
                 for v in s.iter() {
                     builder.append_option(v);
                 }
 
                 let gc_string = builder.finish();
+
+                debug_assert_eq!(gc_string.data_buffers().len(), 1);
 
                 Arc::new(gc_string)
             } else {
