@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::str::FromStr;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+
 use arrow_schema::DataType;
 use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     Dependency, Result,
 };
 use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     expr, AggregateFunction, Expr, ExprFunctionExt, ExprSchemable, WindowFrame,
     WindowFunctionDefinition,
@@ -36,7 +38,7 @@ use sqlparser::ast::{
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
     NullTreatment, ObjectName, OrderByExpr, WindowType,
 };
-use std::str::FromStr;
+
 use strum::IntoEnumIterator;
 
 /// Suggest a valid function based on an invalid input function name
@@ -306,14 +308,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .window_frame
                 .as_ref()
                 .map(|window_frame| {
-                    let window_frame = window_frame.clone().try_into()?;
-                    check_window_frame(&window_frame, order_by.len())
+                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                    window_frame
+                        .regularize_order_bys(&mut order_by)
                         .map(|_| window_frame)
                 })
                 .transpose()?;
 
             let window_frame = if let Some(window_frame) = window_frame {
-                regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
             } else if let Some(is_ordering_strict) = is_ordering_strict {
                 WindowFrame::new(Some(is_ordering_strict))
@@ -322,7 +324,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
-                let expr = match fun {
+                return match fun {
                     WindowFunctionDefinition::AggregateFunction(aggregate_fun) => {
                         let args =
                             self.function_args_to_expr(args, schema, planner_context)?;
@@ -336,7 +338,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .window_frame(window_frame)
                         .null_treatment(null_treatment)
                         .build()
-                        .unwrap()
                     }
                     _ => Expr::WindowFunction(expr::WindowFunction::new(
                         fun,
@@ -346,10 +347,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .order_by(order_by)
                     .window_frame(window_frame)
                     .null_treatment(null_treatment)
-                    .build()
-                    .unwrap(),
+                    .build(),
                 };
-                return Ok(expr);
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
