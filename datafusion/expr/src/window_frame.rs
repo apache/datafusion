@@ -26,8 +26,7 @@
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
 
-use crate::expr::Sort;
-use crate::Expr;
+use crate::{lit, Expr};
 
 use datafusion_common::{plan_err, sql_err, DataFusionError, Result, ScalarValue};
 use sqlparser::ast;
@@ -260,11 +259,7 @@ impl WindowFrame {
                 // ORDER BY clause is present but has more than one column,
                 // it is unchanged. Note that this follows PostgreSQL behavior.
                 if order_by.is_empty() {
-                    order_by.push(Expr::Sort(Sort::new(
-                        Box::new(Expr::Literal(ScalarValue::UInt64(Some(1)))),
-                        true,
-                        false,
-                    )));
+                    order_by.push(lit(1u64).sort(true, false));
                 }
             }
             WindowFrameUnits::Range if order_by.len() != 1 => {
