@@ -471,7 +471,6 @@ mod tests {
         let gc_array = do_gc(array.clone());
         compare_string_array_values(&array, &gc_array);
         assert_eq!(array.data_buffers().len(), 5);
-        // TODO this is failing now (it always compacts)
         assert_eq!(array.data_buffers().len(), gc_array.data_buffers().len()); // no compaction
     }
 
