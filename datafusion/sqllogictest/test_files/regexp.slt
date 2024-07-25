@@ -325,6 +325,9 @@ SELECT 'foo\nbar\nbaz' ~ 'bar';
 ----
 true
 
+statement error
+select [1,2] ~ [3];
+
 query B
 SELECT 'foo\nbar\nbaz' LIKE '%bar%';
 ----
