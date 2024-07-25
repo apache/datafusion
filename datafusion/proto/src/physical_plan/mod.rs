@@ -187,34 +187,39 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     )),
                 }
             }
-            PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
-                parse_protobuf_file_scan_config(
+            PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(
+                CsvExec::builder(parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
                     extension_codec,
-                )?,
-                scan.has_header,
-                str_to_byte(&scan.delimiter, "delimiter")?,
-                str_to_byte(&scan.quote, "quote")?,
-                if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
-                    escape,
-                )) = &scan.optional_escape
-                {
-                    Some(str_to_byte(escape, "escape")?)
-                } else {
-                    None
-                },
-                if let Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
-                    comment,
-                )) = &scan.optional_comment
-                {
-                    Some(str_to_byte(comment, "comment")?)
-                } else {
-                    None
-                },
-                scan.newlines_in_values,
-                FileCompressionType::UNCOMPRESSED,
-            ))),
+                )?)
+                .with_has_header(scan.has_header)
+                .with_delimeter(str_to_byte(&scan.delimiter, "delimiter")?)
+                .with_quote(str_to_byte(&scan.quote, "quote")?)
+                .with_escape(
+                    if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                        escape,
+                    )) = &scan.optional_escape
+                    {
+                        Some(str_to_byte(escape, "escape")?)
+                    } else {
+                        None
+                    },
+                )
+                .with_comment(
+                    if let Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
+                        comment,
+                    )) = &scan.optional_comment
+                    {
+                        Some(str_to_byte(comment, "comment")?)
+                    } else {
+                        None
+                    },
+                )
+                .with_newlines_in_values(scan.newlines_in_values)
+                .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+                .build(),
+            )),
             #[cfg(feature = "parquet")]
             PhysicalPlanType::ParquetScan(scan) => {
                 let base_config = parse_protobuf_file_scan_config(

@@ -1464,18 +1464,21 @@ pub(crate) mod tests {
     }
 
     fn csv_exec_with_sort(output_ordering: Vec<Vec<PhysicalSortExpr>>) -> Arc<CsvExec> {
-        Arc::new(CsvExec::new(
-            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
-                .with_file(PartitionedFile::new("x".to_string(), 100))
-                .with_output_ordering(output_ordering),
-            false,
-            b',',
-            b'"',
-            None,
-            None,
-            false,
-            FileCompressionType::UNCOMPRESSED,
-        ))
+        Arc::new(
+            CsvExec::builder(
+                FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
+                    .with_file(PartitionedFile::new("x".to_string(), 100))
+                    .with_output_ordering(output_ordering),
+            )
+            .with_has_header(false)
+            .with_delimeter(b',')
+            .with_quote(b'"')
+            .with_escape(None)
+            .with_comment(None)
+            .with_newlines_in_values(false)
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build(),
+        )
     }
 
     fn csv_exec_multiple() -> Arc<CsvExec> {
@@ -1486,21 +1489,24 @@ pub(crate) mod tests {
     fn csv_exec_multiple_sorted(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<CsvExec> {
-        Arc::new(CsvExec::new(
-            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
-                .with_file_groups(vec![
-                    vec![PartitionedFile::new("x".to_string(), 100)],
-                    vec![PartitionedFile::new("y".to_string(), 100)],
-                ])
-                .with_output_ordering(output_ordering),
-            false,
-            b',',
-            b'"',
-            None,
-            None,
-            false,
-            FileCompressionType::UNCOMPRESSED,
-        ))
+        Arc::new(
+            CsvExec::builder(
+                FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
+                    .with_file_groups(vec![
+                        vec![PartitionedFile::new("x".to_string(), 100)],
+                        vec![PartitionedFile::new("y".to_string(), 100)],
+                    ])
+                    .with_output_ordering(output_ordering),
+            )
+            .with_has_header(false)
+            .with_delimeter(b',')
+            .with_quote(b'"')
+            .with_escape(None)
+            .with_comment(None)
+            .with_newlines_in_values(false)
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build(),
+        )
     }
 
     fn projection_exec_with_alias(
@@ -3762,20 +3768,23 @@ pub(crate) mod tests {
             };
 
             let plan = aggregate_exec_with_alias(
-                Arc::new(CsvExec::new(
-                    FileScanConfig::new(
-                        ObjectStoreUrl::parse("test:///").unwrap(),
-                        schema(),
+                Arc::new(
+                    CsvExec::builder(
+                        FileScanConfig::new(
+                            ObjectStoreUrl::parse("test:///").unwrap(),
+                            schema(),
+                        )
+                        .with_file(PartitionedFile::new("x".to_string(), 100)),
                     )
-                    .with_file(PartitionedFile::new("x".to_string(), 100)),
-                    false,
-                    b',',
-                    b'"',
-                    None,
-                    None,
-                    false,
-                    compression_type,
-                )),
+                    .with_has_header(false)
+                    .with_delimeter(b',')
+                    .with_quote(b'"')
+                    .with_escape(None)
+                    .with_comment(None)
+                    .with_newlines_in_values(false)
+                    .with_file_compression_type(compression_type)
+                    .build(),
+                ),
                 vec![("a".to_string(), "a".to_string())],
             );
             assert_optimized!(expected, plan, true, false, 2, true, 10, false);
