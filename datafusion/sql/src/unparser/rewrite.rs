@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeIterator},
     Result,
 };
-use datafusion_expr::{Expr, LogicalPlan, Sort};
+use datafusion_expr::{Expr, LogicalPlan, Projection, Sort};
 
 /// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
 ///
@@ -98,4 +101,77 @@ fn rewrite_sort_expr_for_union(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
         .data()?;
 
     Ok(sort_exprs)
+}
+
+// Rewrite logic plan for query that order by columns are not in projections
+// Plan before rewrite:
+//
+// Projection: j1.j1_string, j2.j2_string
+//   Sort: j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST
+//     Projection: j1.j1_string, j2.j2_string, j1.j1_id, j2.j2_id
+//       Inner Join:  Filter: j1.j1_id = j2.j2_id
+//         TableScan: j1
+//         TableScan: j2
+//
+// Plan after rewrite
+//
+// Sort: j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST
+//   Projection: j1.j1_string, j2.j2_string
+//     Inner Join:  Filter: j1.j1_id = j2.j2_id
+//       TableScan: j1
+//       TableScan: j2
+//
+// This prevents the original plan generate query with derived table but missing alias.
+pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
+    p: &Projection,
+) -> Option<LogicalPlan> {
+    let LogicalPlan::Sort(sort) = p.input.as_ref() else {
+        return None;
+    };
+
+    let LogicalPlan::Projection(inner_p) = sort.input.as_ref() else {
+        return None;
+    };
+
+    let mut map = HashMap::new();
+    let inner_exprs = inner_p
+        .expr
+        .iter()
+        .map(|f| {
+            if let Expr::Alias(alias) = f {
+                let a = Expr::Column(alias.name.clone().into());
+                map.insert(a.clone(), f.clone());
+                a
+            } else {
+                f.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut collects = p.expr.clone();
+    for expr in &sort.expr {
+        if let Expr::Sort(s) = expr {
+            collects.push(s.expr.as_ref().clone());
+        }
+    }
+
+    if collects.iter().collect::<HashSet<_>>()
+        == inner_exprs.iter().collect::<HashSet<_>>()
+    {
+        let mut sort = sort.clone();
+        let mut inner_p = inner_p.clone();
+
+        let new_exprs = p
+            .expr
+            .iter()
+            .map(|e| map.get(e).unwrap_or(e).clone())
+            .collect::<Vec<_>>();
+
+        inner_p.expr.clone_from(&new_exprs);
+        sort.input = Arc::new(LogicalPlan::Projection(inner_p));
+
+        Some(LogicalPlan::Sort(sort))
+    } else {
+        None
+    }
 }

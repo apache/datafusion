@@ -268,7 +268,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/functions-aggregate && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/functions && cargo publish)
-(cd datafusion/functions-array && cargo publish)
+(cd datafusion/functions-nested && cargo publish)
 (cd datafusion/sql && cargo publish)
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)

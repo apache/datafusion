@@ -374,18 +374,21 @@ config_namespace! {
 
         /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
-        pub writer_version: String, default = "1.0".into()
+        pub writer_version: String, default = "1.0".to_string()
 
         /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
+        ///
+        /// Note that this default setting is not the same as
+        /// the default parquet writer setting.
         pub compression: Option<String>, default = Some("zstd(3)".into())
 
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
-        pub dictionary_enabled: Option<bool>, default = None
+        pub dictionary_enabled: Option<bool>, default = Some(true)
 
         /// (writing) Sets best effort maximum dictionary page size, in bytes
         pub dictionary_page_size_limit: usize, default = 1024 * 1024
@@ -398,21 +401,21 @@ config_namespace! {
 
         /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
-        pub max_statistics_size: Option<usize>, default = None
+        pub max_statistics_size: Option<usize>, default = Some(4096)
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
         /// can get better compression and be faster to read.
-        pub max_row_group_size: usize, default = 1024 * 1024
+        pub max_row_group_size: usize, default =  1024 * 1024
 
         /// (writing) Sets "created by" property
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
 
         /// (writing) Sets column index truncate length
-        pub column_index_truncate_length: Option<usize>, default = None
+        pub column_index_truncate_length: Option<usize>, default = Some(64)
 
         /// (writing) Sets best effort maximum number of rows in data page
-        pub data_page_row_count_limit: usize, default = usize::MAX
+        pub data_page_row_count_limit: usize, default = 20_000
 
         /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,

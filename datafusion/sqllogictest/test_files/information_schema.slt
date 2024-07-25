@@ -184,17 +184,17 @@ datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
 datafusion.execution.parquet.bloom_filter_on_read true
 datafusion.execution.parquet.bloom_filter_on_write false
-datafusion.execution.parquet.column_index_truncate_length NULL
+datafusion.execution.parquet.column_index_truncate_length 64
 datafusion.execution.parquet.compression zstd(3)
 datafusion.execution.parquet.created_by datafusion
-datafusion.execution.parquet.data_page_row_count_limit 18446744073709551615
+datafusion.execution.parquet.data_page_row_count_limit 20000
 datafusion.execution.parquet.data_pagesize_limit 1048576
-datafusion.execution.parquet.dictionary_enabled NULL
+datafusion.execution.parquet.dictionary_enabled true
 datafusion.execution.parquet.dictionary_page_size_limit 1048576
 datafusion.execution.parquet.enable_page_index true
 datafusion.execution.parquet.encoding NULL
 datafusion.execution.parquet.max_row_group_size 1048576
-datafusion.execution.parquet.max_statistics_size NULL
+datafusion.execution.parquet.max_statistics_size 4096
 datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 2
 datafusion.execution.parquet.maximum_parallel_row_group_writers 1
 datafusion.execution.parquet.metadata_size_hint NULL
@@ -269,17 +269,17 @@ datafusion.execution.parquet.bloom_filter_fpp NULL (writing) Sets bloom filter f
 datafusion.execution.parquet.bloom_filter_ndv NULL (writing) Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_on_read true (writing) Use any available bloom filters when reading parquet files
 datafusion.execution.parquet.bloom_filter_on_write false (writing) Write bloom filters for all columns when creating parquet files
-datafusion.execution.parquet.column_index_truncate_length NULL (writing) Sets column index truncate length
-datafusion.execution.parquet.compression zstd(3) (writing) Sets default parquet compression codec. Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.column_index_truncate_length 64 (writing) Sets column index truncate length
+datafusion.execution.parquet.compression zstd(3) (writing) Sets default parquet compression codec. Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting Note that this default setting is not the same as the default parquet writer setting.
 datafusion.execution.parquet.created_by datafusion (writing) Sets "created by" property
-datafusion.execution.parquet.data_page_row_count_limit 18446744073709551615 (writing) Sets best effort maximum number of rows in data page
+datafusion.execution.parquet.data_page_row_count_limit 20000 (writing) Sets best effort maximum number of rows in data page
 datafusion.execution.parquet.data_pagesize_limit 1048576 (writing) Sets best effort maximum size of data page in bytes
-datafusion.execution.parquet.dictionary_enabled NULL (writing) Sets if dictionary encoding is enabled. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.dictionary_enabled true (writing) Sets if dictionary encoding is enabled. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.dictionary_page_size_limit 1048576 (writing) Sets best effort maximum dictionary page size, in bytes
 datafusion.execution.parquet.enable_page_index true (reading) If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce the I/O and number of rows decoded.
 datafusion.execution.parquet.encoding NULL (writing)  Sets default encoding for any column. Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.max_row_group_size 1048576 (writing) Target maximum number of rows in each row group (defaults to 1M rows). Writing larger row groups requires more memory to write, but can get better compression and be faster to read.
-datafusion.execution.parquet.max_statistics_size NULL (writing) Sets max statistics size for any column. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.max_statistics_size 4096 (writing) Sets max statistics size for any column. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 2 (writing) By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.
 datafusion.execution.parquet.maximum_parallel_row_group_writers 1 (writing) By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.
 datafusion.execution.parquet.metadata_size_hint NULL (reading) If specified, the parquet reader will try and fetch the last `size_hint` bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer
@@ -370,9 +370,12 @@ datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g.
 
 
 # show empty verbose
-query TTT
+statement error DataFusion error: Error during planning: '' is not a variable which can be viewed with 'SHOW'
 SHOW VERBOSE
-----
+
+# show nonsense verbose
+statement error DataFusion error: Error during planning: 'nonsense' is not a variable which can be viewed with 'SHOW'
+SHOW NONSENSE VERBOSE
 
 # information_schema_describe_table
 
@@ -508,9 +511,7 @@ SHOW columns from datafusion.public.t2
 
 
 # show_non_existing_variable
-# FIXME
-# currently we cannot know whether a variable exists, this will output 0 row instead
-statement ok
+statement error DataFusion error: Error during planning: 'something_unknown' is not a variable which can be viewed with 'SHOW'
 SHOW SOMETHING_UNKNOWN;
 
 statement ok

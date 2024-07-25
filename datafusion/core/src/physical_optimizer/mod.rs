@@ -30,17 +30,16 @@ pub mod join_selection;
 pub mod limit_pushdown;
 pub mod limited_distinct_aggregation;
 pub mod optimizer;
-pub mod output_requirements;
 pub mod projection_pushdown;
 pub mod pruning;
 pub mod replace_with_order_preserving_variants;
 pub mod sanity_checker;
-mod sort_pushdown;
-pub mod topk_aggregation;
-pub mod update_aggr_exprs;
-mod utils;
-
 #[cfg(test)]
 pub mod test_utils;
+pub mod topk_aggregation;
+pub mod update_aggr_exprs;
+
+mod sort_pushdown;
+mod utils;
 
 pub use datafusion_physical_optimizer::*;

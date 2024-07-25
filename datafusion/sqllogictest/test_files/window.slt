@@ -2041,16 +2041,16 @@ query TT
 EXPLAIN SELECT ARRAY_AGG(c13) as array_agg1 FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1)
 ----
 logical_plan
-01)Projection: ARRAY_AGG(aggregate_test_100.c13) AS array_agg1
-02)--Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(aggregate_test_100.c13)]]
+01)Projection: array_agg(aggregate_test_100.c13) AS array_agg1
+02)--Aggregate: groupBy=[[]], aggr=[[array_agg(aggregate_test_100.c13)]]
 03)----Limit: skip=0, fetch=1
 04)------Sort: aggregate_test_100.c13 ASC NULLS LAST, fetch=1
 05)--------TableScan: aggregate_test_100 projection=[c13]
 physical_plan
-01)ProjectionExec: expr=[ARRAY_AGG(aggregate_test_100.c13)@0 as array_agg1]
-02)--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(aggregate_test_100.c13)]
+01)ProjectionExec: expr=[array_agg(aggregate_test_100.c13)@0 as array_agg1]
+02)--AggregateExec: mode=Final, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
 03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(aggregate_test_100.c13)]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------SortExec: TopK(fetch=1), expr=[c13@0 ASC NULLS LAST], preserve_partitioning=[false]
 07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c13], has_header=true

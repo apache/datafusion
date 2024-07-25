@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
@@ -63,6 +64,16 @@ impl FileFormatFactory for AvroFormatFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(AvroFormat)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl fmt::Debug for AvroFormatFactory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AvroFormatFactory").finish()
     }
 }
 

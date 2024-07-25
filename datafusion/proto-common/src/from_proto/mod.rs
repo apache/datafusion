@@ -260,6 +260,10 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 precision,
                 scale,
             }) => DataType::Decimal128(*precision as u8, *scale as i8),
+            arrow_type::ArrowTypeEnum::Decimal256(protobuf::Decimal256Type {
+                precision,
+                scale,
+            }) => DataType::Decimal256(*precision as u8, *scale as i8),
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
