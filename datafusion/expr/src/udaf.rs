@@ -56,7 +56,7 @@ use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 /// 1. For simple use cases, use [`create_udaf`] (examples in [`simple_udaf.rs`]).
 ///
 /// 2. For advanced use cases, use [`AggregateUDFImpl`] which provides full API
-/// access (examples in [`advanced_udaf.rs`]).
+///    access (examples in [`advanced_udaf.rs`]).
 ///
 /// # API Note
 /// This is a separate struct from `AggregateUDFImpl` to maintain backwards
@@ -346,9 +346,9 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// # Arguments:
     /// 1. `name`: the name of the expression (e.g. AVG, SUM, etc)
     /// 2. `value_type`: Aggregate function output returned by [`Self::return_type`] if defined, otherwise
-    /// it is equivalent to the data type of the first arguments
+    ///    it is equivalent to the data type of the first arguments
     /// 3. `ordering_fields`: the fields used to order the input arguments, if any.
-    ///     Empty if no ordering expression is provided.
+    ///    Empty if no ordering expression is provided.
     ///
     /// # Notes:
     ///

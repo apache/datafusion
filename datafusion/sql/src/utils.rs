@@ -268,6 +268,7 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
 /// Try transform depends on unnest type
 /// - For list column: unnest(col) with type list -> unnest(col) with type list::item
 /// - For struct column: unnest(struct(field1, field2)) -> unnest(struct).field1, unnest(struct).field2
+///
 /// The transformed exprs will be used in the outer projection
 /// If along the path from root to bottom, there are multiple unnest expressions, the transformation
 /// is done only for the bottom expression

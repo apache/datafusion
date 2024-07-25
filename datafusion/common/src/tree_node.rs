@@ -43,14 +43,14 @@ macro_rules! handle_transform_recursion {
 /// There are three categories of TreeNode APIs:
 ///
 /// 1. "Inspecting" APIs to traverse a tree of `&TreeNodes`:
-/// [`apply`], [`visit`], [`exists`].
+///    [`apply`], [`visit`], [`exists`].
 ///
 /// 2. "Transforming" APIs that traverse and consume a tree of `TreeNode`s
-/// producing possibly changed `TreeNode`s: [`transform`], [`transform_up`],
-/// [`transform_down`], [`transform_down_up`], and [`rewrite`].
+///    producing possibly changed `TreeNode`s: [`transform`], [`transform_up`],
+///    [`transform_down`], [`transform_down_up`], and [`rewrite`].
 ///
 /// 3. Internal APIs used to implement the `TreeNode` API: [`apply_children`],
-/// and [`map_children`].
+///    and [`map_children`].
 ///
 /// | Traversal Order | Inspecting | Transforming |
 /// | --- | --- | --- |

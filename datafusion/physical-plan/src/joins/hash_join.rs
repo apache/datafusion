@@ -180,9 +180,9 @@ impl JoinLeftData {
 /// Execution proceeds in 2 stages:
 ///
 /// 1. the **build phase** creates a hash table from the tuples of the build side,
-/// and single concatenated batch containing data from all fetched record batches.
-/// Resulting hash table stores hashed join-key fields for each row as a key, and
-/// indices of corresponding rows in concatenated batch.
+///    and single concatenated batch containing data from all fetched record batches.
+///    Resulting hash table stores hashed join-key fields for each row as a key, and
+///    indices of corresponding rows in concatenated batch.
 ///
 /// Hash join uses LIFO data structure as a hash table, and in order to retain
 /// original build-side input order while obtaining data during probe phase, hash
@@ -223,7 +223,7 @@ impl JoinLeftData {
 /// ```
 ///
 /// 2. the **probe phase** where the tuples of the probe side are streamed
-/// through, checking for matches of the join keys in the hash table.
+///    through, checking for matches of the join keys in the hash table.
 ///
 /// ```text
 ///                 ┌────────────────┐          ┌────────────────┐
@@ -1092,7 +1092,7 @@ impl ProcessProbeBatchState {
 /// 1. Reads the entire left input (build) and constructs a hash table
 ///
 /// 2. Streams [RecordBatch]es as they arrive from the right input (probe) and joins
-/// them with the contents of the hash table
+///    them with the contents of the hash table
 struct HashJoinStream {
     /// Input schema
     schema: Arc<Schema>,

@@ -114,15 +114,15 @@ impl Default for DataFrameWriteOptions {
 /// The typical workflow using DataFrames looks like
 ///
 /// 1. Create a DataFrame via methods on [SessionContext], such as [`read_csv`]
-/// and [`read_parquet`].
+///    and [`read_parquet`].
 ///
 /// 2. Build a desired calculation by calling methods such as [`filter`],
-/// [`select`], [`aggregate`], and [`limit`]
+///    [`select`], [`aggregate`], and [`limit`]
 ///
 /// 3. Execute into [`RecordBatch`]es by calling [`collect`]
 ///
 /// A `DataFrame` is a wrapper around a [`LogicalPlan`] and the [`SessionState`]
-/// required for execution.
+///    required for execution.
 ///
 /// DataFrames are "lazy" in the sense that most methods do not actually compute
 /// anything, they just build up a plan. Calling [`collect`] executes the plan

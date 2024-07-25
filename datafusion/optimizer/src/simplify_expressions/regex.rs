@@ -216,6 +216,7 @@ fn is_anchored_capture(v: &[Hir]) -> bool {
 /// Returns the `LIKE` pattern if the `Concat` pattern is partial anchored:
 /// - `[Look::Start, Literal(_)]`
 /// - `[Literal(_), Look::End]`
+///
 /// Full anchored patterns are handled by [`anchored_literal_to_expr`].
 fn partial_anchored_literal_to_like(v: &[Hir]) -> Option<String> {
     if v.len() != 2 {
