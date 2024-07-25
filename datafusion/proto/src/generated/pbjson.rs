@@ -534,7 +534,6 @@ impl serde::Serialize for AggregateFunction {
         let variant = match self {
             Self::Min => "MIN",
             Self::Max => "MAX",
-            Self::ArrayAgg => "ARRAY_AGG",
         };
         serializer.serialize_str(variant)
     }
@@ -548,7 +547,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
         const FIELDS: &[&str] = &[
             "MIN",
             "MAX",
-            "ARRAY_AGG",
         ];
 
         struct GeneratedVisitor;
@@ -591,7 +589,6 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                 match value {
                     "MIN" => Ok(AggregateFunction::Min),
                     "MAX" => Ok(AggregateFunction::Max),
-                    "ARRAY_AGG" => Ok(AggregateFunction::ArrayAgg),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

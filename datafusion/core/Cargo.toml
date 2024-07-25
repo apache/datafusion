@@ -40,15 +40,17 @@ name = "datafusion"
 path = "src/lib.rs"
 
 [features]
+nested_expressions = ["datafusion-functions-nested"]
+# This feature is deprecated. Use the `nested_expressions` feature instead.
+array_expressions = ["nested_expressions"]
 # Used to enable the avro format
-array_expressions = ["datafusion-functions-array"]
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
 datetime_expressions = ["datafusion-functions/datetime_expressions"]
 default = [
-    "array_expressions",
+    "nested_expressions",
     "crypto_expressions",
     "datetime_expressions",
     "encoding_expressions",
@@ -60,7 +62,7 @@ default = [
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
-force_hash_collisions = []
+force_hash_collisions = ["datafusion-physical-plan/force_hash_collisions", "datafusion-common/force_hash_collisions"]
 math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet"]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
@@ -102,7 +104,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
-datafusion-functions-array = { workspace = true, optional = true }
+datafusion-functions-nested = { workspace = true, optional = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
@@ -221,4 +223,4 @@ name = "parquet_statistic"
 [[bench]]
 harness = false
 name = "map_query_sql"
-required-features = ["array_expressions"]
+required-features = ["nested_expressions"]

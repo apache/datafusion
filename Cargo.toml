@@ -25,7 +25,7 @@ members = [
     "datafusion/execution",
     "datafusion/functions-aggregate",
     "datafusion/functions",
-    "datafusion/functions-array",
+    "datafusion/functions-nested",
     "datafusion/optimizer",
     "datafusion/physical-expr-common",
     "datafusion/physical-expr",
@@ -94,7 +94,7 @@ datafusion-execution = { path = "datafusion/execution", version = "40.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "40.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "40.0.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "40.0.0" }
-datafusion-functions-array = { path = "datafusion/functions-array", version = "40.0.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "40.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "40.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "40.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "40.0.0", default-features = false }
@@ -154,4 +154,5 @@ rpath = false
 large_futures = "warn"
 
 [workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_imports = "deny"

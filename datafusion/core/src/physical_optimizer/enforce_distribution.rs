@@ -856,6 +856,7 @@ fn add_roundrobin_on_top(
 /// Adds a hash repartition operator:
 /// - to increase parallelism, and/or
 /// - to satisfy requirements of the subsequent operators.
+///
 /// Repartition(Hash) is added on top of operator `input`.
 ///
 /// # Arguments

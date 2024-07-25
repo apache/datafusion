@@ -177,7 +177,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_plan::udaf::create_aggregate_expr;
+    use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
 
     /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
@@ -278,19 +278,11 @@ mod tests {
         name: &str,
         schema: &Schema,
     ) -> Arc<dyn AggregateExpr> {
-        create_aggregate_expr(
-            &count_udaf(),
-            &[expr],
-            &[],
-            &[],
-            &[],
-            schema,
-            name,
-            false,
-            false,
-            false,
-        )
-        .unwrap()
+        AggregateExprBuilder::new(count_udaf(), vec![expr])
+            .schema(Arc::new(schema.clone()))
+            .name(name)
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -368,19 +360,14 @@ mod tests {
     #[test]
     fn aggregations_with_group_combined() -> Result<()> {
         let schema = schema();
-
-        let aggr_expr = vec![create_aggregate_expr(
-            &sum_udaf(),
-            &[col("b", &schema)?],
-            &[],
-            &[],
-            &[],
-            &schema,
-            "Sum(b)",
-            false,
-            false,
-            false,
-        )?];
+        let aggr_expr =
+            vec![
+                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .name("Sum(b)")
+                    .build()
+                    .unwrap(),
+            ];
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(col("c", &schema)?, "c".to_string())];
 

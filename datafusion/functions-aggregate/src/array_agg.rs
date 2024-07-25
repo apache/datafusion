@@ -50,14 +50,12 @@ make_udaf_expr_and_func!(
 /// ARRAY_AGG aggregate expression
 pub struct ArrayAgg {
     signature: Signature,
-    alias: Vec<String>,
 }
 
 impl Default for ArrayAgg {
     fn default() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
-            alias: vec!["array_agg".to_string()],
         }
     }
 }
@@ -67,13 +65,12 @@ impl AggregateUDFImpl for ArrayAgg {
         self
     }
 
-    // TODO: change name to lowercase
     fn name(&self) -> &str {
-        "ARRAY_AGG"
+        "array_agg"
     }
 
     fn aliases(&self) -> &[String] {
-        &self.alias
+        &[]
     }
 
     fn signature(&self) -> &Signature {

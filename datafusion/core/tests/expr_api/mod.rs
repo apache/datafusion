@@ -21,11 +21,11 @@ use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Field};
 use datafusion::prelude::*;
 use datafusion_common::{assert_contains, DFSchema, ScalarValue};
-use datafusion_expr::AggregateExt;
+use datafusion_expr::ExprFunctionExt;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_aggregate::first_last::first_value_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
-use datafusion_functions_array::expr_ext::{IndexAccessor, SliceAccessor};
+use datafusion_functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
 use sqlparser::ast::NullTreatment;
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
 use std::sync::{Arc, OnceLock};

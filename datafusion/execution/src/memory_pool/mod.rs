@@ -78,10 +78,10 @@ pub use pool::*;
 /// * [`UnboundedMemoryPool`]: no memory limits (the default)
 ///
 /// * [`GreedyMemoryPool`]: Limits memory usage to a fixed size using a "first
-/// come first served" policy
+///   come first served" policy
 ///
 /// * [`FairSpillPool`]: Limits memory usage to a fixed size, allocating memory
-/// to all spilling operators fairly
+///   to all spilling operators fairly
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Registers a new [`MemoryConsumer`]
     ///

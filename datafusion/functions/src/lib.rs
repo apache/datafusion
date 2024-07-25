@@ -76,7 +76,7 @@
 //! 3. Add a new feature to `Cargo.toml`, with any optional dependencies
 //!
 //! 4. Use the `make_package!` macro to expose the module when the
-//! feature is enabled.
+//!    feature is enabled.
 //!
 //! [`ScalarUDF`]: datafusion_expr::ScalarUDF
 use datafusion_common::Result;

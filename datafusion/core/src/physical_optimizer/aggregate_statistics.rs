@@ -103,6 +103,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// assert if the node passed as argument is a final `AggregateExec` node that can be optimized:
 /// - its child (with possible intermediate layers) is a partial `AggregateExec` node
 /// - they both have no grouping expression
+///
 /// If this is the case, return a ref to the partial `AggregateExec`, else `None`.
 /// We would have preferred to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
@@ -326,7 +327,7 @@ pub(crate) mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::cast;
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr_common::aggregate::create_aggregate_expr;
+    use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
     use datafusion_physical_plan::aggregates::AggregateMode;
 
     /// Mock data using a MemoryExec which has an exact count statistic
@@ -419,19 +420,11 @@ pub(crate) mod tests {
 
         // Return appropriate expr depending if COUNT is for col or table (*)
         pub(crate) fn count_expr(&self, schema: &Schema) -> Arc<dyn AggregateExpr> {
-            create_aggregate_expr(
-                &count_udaf(),
-                &[self.column()],
-                &[],
-                &[],
-                &[],
-                schema,
-                self.column_name(),
-                false,
-                false,
-                false,
-            )
-            .unwrap()
+            AggregateExprBuilder::new(count_udaf(), vec![self.column()])
+                .schema(Arc::new(schema.clone()))
+                .name(self.column_name())
+                .build()
+                .unwrap()
         }
 
         /// what argument would this aggregate need in the plan?

@@ -261,8 +261,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::Unnest(_)
-        | Expr::ScalarFunction(_) => {
+        | Expr::Unnest(_) => {
             is_evaluate = false;
             Ok(TreeNodeRecursion::Stop)
         }
@@ -284,7 +283,8 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Case(_)
         | Expr::Cast(_)
         | Expr::TryCast(_)
-        | Expr::InList { .. } => Ok(TreeNodeRecursion::Continue),
+        | Expr::InList { .. }
+        | Expr::ScalarFunction(_) => Ok(TreeNodeRecursion::Continue),
         Expr::Sort(_)
         | Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
@@ -557,7 +557,7 @@ fn push_down_join(
 /// * `predicates` the pushed down filter expression
 ///
 /// * `on_filters` filters from the join ON clause that have not already been
-/// identified as join predicates
+///   identified as join predicates
 ///
 fn infer_join_predicates(
     join: &Join,
