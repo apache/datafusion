@@ -35,7 +35,7 @@ use crate::extract::{array_element, array_slice};
 ///
 /// ```
 /// # use datafusion_expr::{lit, col, Expr};
-/// # use datafusion_functions_array::expr_ext::IndexAccessor;
+/// # use datafusion_functions_nested::expr_ext::IndexAccessor;
 /// let expr = col("c1")
 ///    .index(lit(3));
 /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(3)]");
@@ -65,7 +65,7 @@ impl IndexAccessor for Expr {
 ///
 /// ```
 /// # use datafusion_expr::{lit, col};
-/// # use datafusion_functions_array::expr_ext::SliceAccessor;
+/// # use datafusion_functions_nested::expr_ext::SliceAccessor;
 /// let expr = col("c1")
 ///    .range(lit(2), lit(4));
 /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4)]");

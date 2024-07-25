@@ -4077,7 +4077,7 @@ FROM (SELECT c, b, a, SUM(d) as sum1
 DISTRIBUTE BY a
 ----
 logical_plan
-01)Repartition: DistributeBy(a)
+01)Repartition: DistributeBy(multiple_ordered_table_with_pk.a)
 02)--Projection: multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
 03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 04)------TableScan: multiple_ordered_table_with_pk projection=[a, b, c, d]

@@ -332,6 +332,38 @@ impl Interval {
         Ok(Self::new(unbounded_endpoint.clone(), unbounded_endpoint))
     }
 
+    /// Creates an interval between -1 to 1.
+    pub fn make_symmetric_unit_interval(data_type: &DataType) -> Result<Self> {
+        Self::try_new(
+            ScalarValue::new_negative_one(data_type)?,
+            ScalarValue::new_one(data_type)?,
+        )
+    }
+
+    /// Create an interval from -π to π.
+    pub fn make_symmetric_pi_interval(data_type: &DataType) -> Result<Self> {
+        Self::try_new(
+            ScalarValue::new_negative_pi_lower(data_type)?,
+            ScalarValue::new_pi_upper(data_type)?,
+        )
+    }
+
+    /// Create an interval from -π/2 to π/2.
+    pub fn make_symmetric_half_pi_interval(data_type: &DataType) -> Result<Self> {
+        Self::try_new(
+            ScalarValue::new_neg_frac_pi_2_lower(data_type)?,
+            ScalarValue::new_frac_pi_2_upper(data_type)?,
+        )
+    }
+
+    /// Create an interval from 0 to infinity.
+    pub fn make_non_negative_infinity_interval(data_type: &DataType) -> Result<Self> {
+        Self::try_new(
+            ScalarValue::new_zero(data_type)?,
+            ScalarValue::try_from(data_type)?,
+        )
+    }
+
     /// Returns a reference to the lower bound.
     pub fn lower(&self) -> &ScalarValue {
         &self.lower

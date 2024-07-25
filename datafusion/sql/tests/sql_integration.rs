@@ -3274,7 +3274,7 @@ fn test_offset_before_limit() {
 #[test]
 fn test_distribute_by() {
     let sql = "select id from person distribute by state";
-    let expected = "Repartition: DistributeBy(state)\
+    let expected = "Repartition: DistributeBy(person.state)\
         \n  Projection: person.id\
         \n    TableScan: person";
     quick_test(sql, expected);

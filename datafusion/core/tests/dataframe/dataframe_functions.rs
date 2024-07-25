@@ -34,7 +34,7 @@ use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::ExprSchemable;
 use datafusion_functions_aggregate::expr_fn::{approx_median, approx_percentile_cont};
-use datafusion_functions_array::map::map;
+use datafusion_functions_nested::map::map;
 
 fn test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
