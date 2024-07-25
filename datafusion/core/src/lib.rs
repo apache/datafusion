@@ -145,13 +145,13 @@
 //! DataFusion's Architecture Goals are:
 //!
 //! 1. Work “out of the box”: Provide a very fast, world class query engine with
-//! minimal setup or required configuration.
+//!    minimal setup or required configuration.
 //!
 //! 2. Customizable everything: All behavior should be customizable by
-//! implementing traits.
+//!    implementing traits.
 //!
 //! 3. Architecturally boring 🥱: Follow industrial best practice rather than
-//! trying cutting edge, but unproven, techniques.
+//!    trying cutting edge, but unproven, techniques.
 //!
 //! With these principles, users start with a basic, high-performance engine
 //! and specialize it over time to suit their needs and available engineering
@@ -219,11 +219,11 @@
 //! ```
 //!
 //! 1. The query string is parsed to an Abstract Syntax Tree (AST)
-//! [`Statement`] using [sqlparser].
+//!    [`Statement`] using [sqlparser].
 //!
 //! 2. The AST is converted to a [`LogicalPlan`] and logical
-//! expressions [`Expr`]s to compute the desired result by the
-//! [`SqlToRel`] planner.
+//!    expressions [`Expr`]s to compute the desired result by the
+//!    [`SqlToRel`] planner.
 //!
 //! [`Statement`]: https://docs.rs/sqlparser/latest/sqlparser/ast/enum.Statement.html
 //!
@@ -255,17 +255,17 @@
 //! optimizing, in the following manner:
 //!
 //! 1. The [`LogicalPlan`] is checked and rewritten to enforce
-//! semantic rules, such as type coercion, by [`AnalyzerRule`]s
+//!    semantic rules, such as type coercion, by [`AnalyzerRule`]s
 //!
 //! 2. The [`LogicalPlan`] is rewritten by [`OptimizerRule`]s, such as
-//! projection and filter pushdown, to improve its efficiency.
+//!    projection and filter pushdown, to improve its efficiency.
 //!
 //! 3. The [`LogicalPlan`] is converted to an [`ExecutionPlan`] by a
-//! [`PhysicalPlanner`]
+//!    [`PhysicalPlanner`]
 //!
 //! 4. The [`ExecutionPlan`] is rewritten by
-//! [`PhysicalOptimizerRule`]s, such as sort and join selection, to
-//! improve its efficiency.
+//!    [`PhysicalOptimizerRule`]s, such as sort and join selection, to
+//!    improve its efficiency.
 //!
 //! ## Data Sources
 //!
@@ -291,9 +291,9 @@
 //! an [`ExecutionPlan`]s for execution.
 //!
 //! 1. [`ListingTable`]: Reads data from Parquet, JSON, CSV, or AVRO
-//! files.  Supports single files or multiple files with HIVE style
-//! partitioning, optional compression, directly reading from remote
-//! object store and more.
+//!    files.  Supports single files or multiple files with HIVE style
+//!    partitioning, optional compression, directly reading from remote
+//!    object store and more.
 //!
 //! 2. [`MemTable`]: Reads data from in memory [`RecordBatch`]es.
 //!
@@ -425,13 +425,13 @@
 //! structures:
 //!
 //! 1. [`SessionContext`]: State needed for create [`LogicalPlan`]s such
-//! as the table definitions, and the function registries.
+//!    as the table definitions, and the function registries.
 //!
 //! 2. [`TaskContext`]: State needed for execution such as the
-//! [`MemoryPool`], [`DiskManager`], and [`ObjectStoreRegistry`].
+//!    [`MemoryPool`], [`DiskManager`], and [`ObjectStoreRegistry`].
 //!
 //! 3. [`ExecutionProps`]: Per-execution properties and data (such as
-//! starting timestamps, etc).
+//!    starting timestamps, etc).
 //!
 //! [`SessionContext`]: crate::execution::context::SessionContext
 //! [`TaskContext`]: crate::execution::context::TaskContext

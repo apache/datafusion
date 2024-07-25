@@ -151,6 +151,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
     let mut nulls_equal_nulls = false;
 
     for expr in exprs {
+        #[allow(clippy::collapsible_match)]
         match expr {
             Expr::BinaryExpr(binary_expr) => match binary_expr {
                 x @ (BinaryExpr {

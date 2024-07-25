@@ -1207,7 +1207,7 @@ impl ConfigField for TableOptions {
     /// # Parameters
     ///
     /// * `key`: The configuration key specifying which setting to adjust, prefixed with the format (e.g., "format.delimiter")
-    /// for CSV format.
+    ///   for CSV format.
     /// * `value`: The value to set for the specified configuration key.
     ///
     /// # Returns
