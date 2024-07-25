@@ -26,6 +26,7 @@ use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_expr::UNNAMED_TABLE;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_identifier_to_expr(
@@ -50,40 +51,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // compound identifiers, but this is not a compound
             // identifier. (e.g. it is "foo.bar" not foo.bar)
             let normalize_ident = self.normalizer.normalize(id);
-            match schema.field_with_unqualified_name(normalize_ident.as_str()) {
-                Ok(_) => {
-                    // found a match without a qualified name, this is a inner table column
-                    Ok(Expr::Column(Column {
-                        relation: None,
-                        name: normalize_ident,
-                    }))
-                }
-                Err(_) => {
-                    // check the outer_query_schema and try to find a match
-                    if let Some(outer) = planner_context.outer_query_schema() {
-                        match outer.qualified_field_with_unqualified_name(
-                            normalize_ident.as_str(),
-                        ) {
-                            Ok((qualifier, field)) => {
-                                // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                                Ok(Expr::OuterReferenceColumn(
-                                    field.data_type().clone(),
-                                    Column::from((qualifier, field)),
-                                ))
-                            }
-                            Err(_) => Ok(Expr::Column(Column {
-                                relation: None,
-                                name: normalize_ident,
-                            })),
-                        }
-                    } else {
-                        Ok(Expr::Column(Column {
-                            relation: None,
-                            name: normalize_ident,
-                        }))
-                    }
+
+            // Check for qualified field with unqualified name
+            if let Ok((qualifier, _)) =
+                schema.qualified_field_with_unqualified_name(normalize_ident.as_str())
+            {
+                return Ok(Expr::Column(Column {
+                    relation: qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
+                    name: normalize_ident,
+                }));
+            }
+
+            // Check the outer query schema
+            if let Some(outer) = planner_context.outer_query_schema() {
+                if let Ok((qualifier, field)) =
+                    outer.qualified_field_with_unqualified_name(normalize_ident.as_str())
+                {
+                    // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                    return Ok(Expr::OuterReferenceColumn(
+                        field.data_type().clone(),
+                        Column::from((qualifier, field)),
+                    ));
                 }
             }
+
+            // Default case
+            Ok(Expr::Column(Column {
+                relation: None,
+                name: normalize_ident,
+            }))
         }
     }
 
