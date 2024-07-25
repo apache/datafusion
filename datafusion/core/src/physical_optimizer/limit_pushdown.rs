@@ -17,6 +17,7 @@
 
 //! This rule reduces the amount of data transferred by pushing down limits as much as possible.
 
+use std::cmp::min;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -99,19 +100,6 @@ impl LimitExec {
             Self::Local(local) => Self::Local(LocalLimitExec::new(child, local.fetch())),
         }
     }
-
-    fn with_fetch(&self, fetch: usize) -> Self {
-        match self {
-            Self::Global(global) => Self::Global(GlobalLimitExec::new(
-                global.input().clone(),
-                global.skip(),
-                Some(fetch),
-            )),
-            Self::Local(local) => {
-                Self::Local(LocalLimitExec::new(local.input().clone(), fetch))
-            }
-        }
-    }
 }
 
 impl From<LimitExec> for Arc<dyn ExecutionPlan> {
@@ -129,8 +117,8 @@ pub fn push_down_limits(
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let maybe_modified = if let Some(limit_exec) = extract_limit(&plan) {
         let child = limit_exec.input();
-        if let Some(child_limit) = child.as_any().downcast_ref::<LocalLimitExec>() {
-            let merged = try_merge_limits(&limit_exec, child_limit)?;
+        if let Some(child_limit) = extract_limit(child) {
+            let merged = merge_limits(&limit_exec, &child_limit);
             // Revisit current node in case of consecutive pushdowns
             Some(push_down_limits(merged)?.data)
         } else if child.supports_limit_pushdown() {
@@ -166,35 +154,109 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
     }
 }
 
-/// Merge the limits of the parent and the child. The resulting [`ExecutionPlan`]
-/// is the same as the parent.
-fn try_merge_limits(
-    limit_exec: &LimitExec,
-    limit: &LocalLimitExec,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let parent_skip = limit_exec.skip();
-    let parent_fetch = limit_exec.fetch();
-    let parent_max = parent_fetch.map(|f| f + parent_skip);
-    let child_fetch = limit.fetch();
-
-    if let Some(parent_max) = parent_max {
-        if child_fetch >= parent_max {
-            // Child fetch is larger than or equal to parent max, so we can remove the child
-            Ok(limit_exec.with_child(limit.input().clone()).into())
-        } else if child_fetch > parent_skip {
-            // Child fetch is larger than parent skip, so we can trim the parent fetch
-            Ok(limit_exec
-                .with_child(limit.input().clone())
-                .with_fetch(child_fetch - parent_skip)
-                .into())
-        } else {
-            // This would return an empty result
-            Err(plan_datafusion_err!("Child fetch is less than parent skip"))
+/// Merge the limits of the parent and the child. If at least one of them is a
+/// [`GlobalLimitExec`], the result is also a [`GlobalLimitExec`]. Otherwise,
+/// the result is a [`LocalLimitExec`].
+fn merge_limits(
+    parent_limit_exec: &LimitExec,
+    child_limit_exec: &LimitExec,
+) -> Arc<dyn ExecutionPlan> {
+    match (parent_limit_exec, child_limit_exec) {
+        (LimitExec::Local(parent), LimitExec::Local(child)) => {
+            // Simply use the smaller fetch
+            Arc::new(LocalLimitExec::new(
+                child_limit_exec.input().clone(),
+                parent.fetch().min(child.fetch()),
+            ))
         }
-    } else {
-        // Parent's fetch is infinite, use child's
-        Ok(limit_exec.with_fetch(child_fetch).into())
+        _ => {
+            // We can use the same logic as push_down_limit from logical plan optimizer
+            let (skip, fetch) = combine_limit(
+                parent_limit_exec.skip(),
+                parent_limit_exec.fetch(),
+                child_limit_exec.skip(),
+                child_limit_exec.fetch(),
+            );
+
+            Arc::new(GlobalLimitExec::new(
+                child_limit_exec.input().clone(),
+                skip,
+                fetch,
+            ))
+        }
     }
+}
+
+/// Combines two limits into a single
+///
+/// Returns the combined limit `(skip, fetch)`
+///
+/// # Case 0: Parent and Child are disjoint. (`child_fetch <= skip`)
+///
+/// ```text
+///   Before merging:
+///                     |........skip........|---fetch-->|              Parent Limit
+///    |...child_skip...|---child_fetch-->|                             Child Limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |.........(child_skip + skip).........|
+/// ```
+///
+///   Before merging:
+/// ```text
+///                     |...skip...|------------fetch------------>|     Parent Limit
+///    |...child_skip...|-------------child_fetch------------>|         Child Limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
+/// ```
+///
+/// # Case 1: Parent is beyond the range of Child. (`skip < child_fetch <= skip + fetch`)
+///
+///   Before merging:
+/// ```text
+///                     |...skip...|------------fetch------------>|     Parent Limit
+///    |...child_skip...|-------------child_fetch------------>|         Child Limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
+/// ```
+///
+///  # Case 2: Parent is in the range of Child. (`skip + fetch < child_fetch`)
+///   Before merging:
+/// ```text
+///                     |...skip...|---fetch-->|                        Parent Limit
+///    |...child_skip...|-------------child_fetch------------>|         Child Limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |....(child_skip + skip)....|---fetch-->|
+/// ```
+fn combine_limit(
+    parent_skip: usize,
+    parent_fetch: Option<usize>,
+    child_skip: usize,
+    child_fetch: Option<usize>,
+) -> (usize, Option<usize>) {
+    let combined_skip = child_skip.saturating_add(parent_skip);
+
+    let combined_fetch = match (parent_fetch, child_fetch) {
+        (Some(parent_fetch), Some(child_fetch)) => {
+            Some(min(parent_fetch, child_fetch.saturating_sub(parent_skip)))
+        }
+        (Some(parent_fetch), None) => Some(parent_fetch),
+        (None, Some(child_fetch)) => Some(child_fetch.saturating_sub(parent_skip)),
+        (None, None) => None,
+    };
+
+    (combined_skip, combined_fetch)
 }
 
 /// Pushes down the limit through the child. If the child has a single input
@@ -274,6 +336,7 @@ mod tests {
     use datafusion_physical_expr_common::expressions::lit;
     use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::filter::FilterExec;
     use datafusion_physical_plan::get_plan_string;
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -482,6 +545,106 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn merges_local_limit_with_local_limit() -> Result<()> {
+        let schema = create_schema();
+        let empty_exec = empty_exec(schema);
+        let child_local_limit = local_limit_exec(empty_exec, 10);
+        let parent_local_limit = local_limit_exec(child_local_limit, 20);
+
+        let initial = get_plan_string(&parent_local_limit);
+        let expected_initial = [
+            "LocalLimitExec: fetch=20",
+            "  LocalLimitExec: fetch=10",
+            "    EmptyExec",
+        ];
+
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            LimitPushdown::new().optimize(parent_local_limit, &ConfigOptions::new())?;
+
+        let expected = ["LocalLimitExec: fetch=10", "  EmptyExec"];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn merges_global_limit_with_global_limit() -> Result<()> {
+        let schema = create_schema();
+        let empty_exec = empty_exec(schema);
+        let child_global_limit = global_limit_exec(empty_exec, 10, Some(30));
+        let parent_global_limit = global_limit_exec(child_global_limit, 10, Some(20));
+
+        let initial = get_plan_string(&parent_global_limit);
+        let expected_initial = [
+            "GlobalLimitExec: skip=10, fetch=20",
+            "  GlobalLimitExec: skip=10, fetch=30",
+            "    EmptyExec",
+        ];
+
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            LimitPushdown::new().optimize(parent_global_limit, &ConfigOptions::new())?;
+
+        let expected = ["GlobalLimitExec: skip=20, fetch=20", "  EmptyExec"];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn merges_global_limit_with_local_limit() -> Result<()> {
+        let schema = create_schema();
+        let empty_exec = empty_exec(schema);
+        let local_limit = local_limit_exec(empty_exec, 40);
+        let global_limit = global_limit_exec(local_limit, 20, Some(30));
+
+        let initial = get_plan_string(&global_limit);
+        let expected_initial = [
+            "GlobalLimitExec: skip=20, fetch=30",
+            "  LocalLimitExec: fetch=40",
+            "    EmptyExec",
+        ];
+
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+        let expected = ["GlobalLimitExec: skip=20, fetch=20", "  EmptyExec"];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn merges_local_limit_with_global_limit() -> Result<()> {
+        let schema = create_schema();
+        let empty_exec = empty_exec(schema);
+        let global_limit = global_limit_exec(empty_exec, 20, Some(30));
+        let local_limit = local_limit_exec(global_limit, 20);
+
+        let initial = get_plan_string(&local_limit);
+        let expected_initial = [
+            "LocalLimitExec: fetch=20",
+            "  GlobalLimitExec: skip=20, fetch=30",
+            "    EmptyExec",
+        ];
+
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            LimitPushdown::new().optimize(local_limit, &ConfigOptions::new())?;
+
+        let expected = ["GlobalLimitExec: skip=20, fetch=20", "  EmptyExec"];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+
+        Ok(())
+    }
+
     fn create_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, true),
@@ -563,5 +726,9 @@ mod tests {
             streaming_table,
             Partitioning::RoundRobinBatch(8),
         )?))
+    }
+
+    fn empty_exec(schema: SchemaRef) -> Arc<dyn ExecutionPlan> {
+        Arc::new(EmptyExec::new(schema))
     }
 }
