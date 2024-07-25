@@ -22,7 +22,6 @@ use datafusion_common::{
     Dependency, Result,
 };
 use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     expr, AggregateFunction, Expr, ExprFunctionExt, ExprSchemable, WindowFrame,
     WindowFunctionDefinition,
@@ -306,14 +305,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .window_frame
                 .as_ref()
                 .map(|window_frame| {
-                    let window_frame = window_frame.clone().try_into()?;
-                    check_window_frame(&window_frame, order_by.len())
+                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                    window_frame
+                        .regularize_order_bys(&mut order_by)
                         .map(|_| window_frame)
                 })
                 .transpose()?;
 
             let window_frame = if let Some(window_frame) = window_frame {
-                regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
             } else if let Some(is_ordering_strict) = is_ordering_strict {
                 WindowFrame::new(Some(is_ordering_strict))
