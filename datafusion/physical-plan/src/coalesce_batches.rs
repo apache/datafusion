@@ -351,7 +351,7 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
 
                 let gc_string = builder.finish();
 
-                debug_assert_eq!(gc_string.data_buffers().len(), 1);
+                debug_assert!(gc_string.data_buffers().len() <= 1); // buffer count can be 0 if the `ideal_buffer_size` is 0
 
                 Arc::new(gc_string)
             } else {
