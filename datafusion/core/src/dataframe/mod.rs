@@ -114,15 +114,15 @@ impl Default for DataFrameWriteOptions {
 /// The typical workflow using DataFrames looks like
 ///
 /// 1. Create a DataFrame via methods on [SessionContext], such as [`read_csv`]
-/// and [`read_parquet`].
+///    and [`read_parquet`].
 ///
 /// 2. Build a desired calculation by calling methods such as [`filter`],
-/// [`select`], [`aggregate`], and [`limit`]
+///    [`select`], [`aggregate`], and [`limit`]
 ///
 /// 3. Execute into [`RecordBatch`]es by calling [`collect`]
 ///
 /// A `DataFrame` is a wrapper around a [`LogicalPlan`] and the [`SessionState`]
-/// required for execution.
+///    required for execution.
 ///
 /// DataFrames are "lazy" in the sense that most methods do not actually compute
 /// anything, they just build up a plan. Calling [`collect`] executes the plan
@@ -1696,8 +1696,8 @@ mod tests {
     use datafusion_common::{Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
-        cast, create_udf, expr, lit, BuiltInWindowFunction, ScalarFunctionImplementation,
-        Volatility, WindowFrame, WindowFunctionDefinition,
+        cast, create_udf, expr, lit, BuiltInWindowFunction, ExprFunctionExt,
+        ScalarFunctionImplementation, Volatility, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::expr_fn::{array_agg, count_distinct};
     use datafusion_physical_expr::expressions::Column;
@@ -1867,11 +1867,10 @@ mod tests {
                 BuiltInWindowFunction::FirstValue,
             ),
             vec![col("aggregate_test_100.c1")],
-            vec![col("aggregate_test_100.c2")],
-            vec![],
-            WindowFrame::new(None),
-            None,
-        ));
+        ))
+        .partition_by(vec![col("aggregate_test_100.c2")])
+        .build()
+        .unwrap();
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
 

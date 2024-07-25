@@ -1508,7 +1508,7 @@ mod tests {
         table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
-    use datafusion_expr::{interval_month_day_nano_lit, AggregateExt};
+    use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
 

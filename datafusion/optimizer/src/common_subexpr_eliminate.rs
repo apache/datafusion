@@ -599,7 +599,7 @@ impl CommonSubexprEliminate {
     ///
     /// 1. The original `input` of no common subexpressions were extracted
     /// 2. A newly added projection on top of the original input
-    /// that computes the common subexpressions
+    ///    that computes the common subexpressions
     fn try_unary_plan(
         &self,
         expr: Vec<Expr>,
