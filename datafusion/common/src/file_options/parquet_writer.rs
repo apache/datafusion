@@ -653,7 +653,6 @@ mod tests {
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
-                .set_bloom_filter_enabled(true)
                 .build();
 
         // TODO: should have same behavior in either.
@@ -687,8 +686,6 @@ mod tests {
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
-                .set_bloom_filter_enabled(true)
-                .set_bloom_filter_fpp(0.42)
                 .build();
 
         // TODO: should have same behavior in either.
@@ -725,8 +722,6 @@ mod tests {
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
-                .set_bloom_filter_enabled(true)
-                .set_bloom_filter_ndv(42)
                 .build();
 
         // TODO: should have same behavior in either.
