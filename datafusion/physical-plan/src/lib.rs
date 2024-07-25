@@ -1043,5 +1043,5 @@ mod tests {
     }
 }
 
-mod coalescer;
+pub mod coalescer;
 pub mod test;

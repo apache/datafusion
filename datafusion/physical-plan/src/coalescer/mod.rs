@@ -15,9 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// TEMP
+pub mod filter;
+
+use crate::coalescer::filter::{filter_array, FilterBuilder};
 use arrow::compute::concat_batches;
-use arrow_array::RecordBatch;
+use arrow_array::{BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::SchemaRef;
+use datafusion_common::Result;
 use std::sync::Arc;
 
 /// Concatenate multiple record batches into larger batches
@@ -62,10 +67,7 @@ impl BatchCoalescer {
     }
 
     /// Add a batch to the coalescer, returning a batch if the target batch size is reached
-    pub fn push_batch(
-        &mut self,
-        batch: RecordBatch,
-    ) -> datafusion_common::Result<Option<RecordBatch>> {
+    pub fn push_batch(&mut self, batch: RecordBatch) -> Result<Option<RecordBatch>> {
         if batch.num_rows() >= self.target_batch_size && self.buffer.is_empty() {
             return Ok(Some(batch));
         }
@@ -91,9 +93,37 @@ impl BatchCoalescer {
         Ok(batch)
     }
 
+    /// Push the rows in `batch` that matching the `predicate` (i. e. where the values are true).
+    pub fn push_batch_with_filter(
+        &mut self,
+        batch: &RecordBatch,
+        predicate: &BooleanArray,
+    ) -> Result<Option<RecordBatch>> {
+        let mut filter_builder = FilterBuilder::new(predicate);
+        if batch.num_columns() > 1 {
+            // Only optimize if filtering more than one column
+            filter_builder = filter_builder.optimize();
+        }
+        let filter = filter_builder.build();
+
+        // TODO the idea is here is to iteratively build up the filtered batch
+        // and push it when it reaches the target size rather than buffering directly
+        let filtered_arrays = batch
+            .columns()
+            .iter()
+            .map(|a| filter_array(a, &filter))
+            .collect::<Result<Vec<_>, _>>()?;
+        let options = RecordBatchOptions::default().with_row_count(Some(filter.count()));
+        let filtered_batch =
+            RecordBatch::try_new_with_options(self.schema(), filtered_arrays, &options)?;
+
+        // push the filtered batch
+        self.push_batch(filtered_batch)
+    }
+
     /// Finish the coalescing process, returning all buffered data as a final,
     /// single batch, if any
-    pub fn finish(&mut self) -> datafusion_common::Result<Option<RecordBatch>> {
+    pub fn finish(&mut self) -> Result<Option<RecordBatch>> {
         if self.buffer.is_empty() {
             Ok(None)
         } else {

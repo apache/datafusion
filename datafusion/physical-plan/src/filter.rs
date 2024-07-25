@@ -388,8 +388,23 @@ impl Stream for FilterExecStream {
                     // clone timer so we can borrow self mutably
                     let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
                     let timer = elapsed_compute.timer();
-                    let filtered_batch = batch_filter(&batch, &self.predicate)?;
-                    if let Some(batch) = self.coalescer.push_batch(filtered_batch)? {
+                    // evaluate the predicate into a boolean array
+                    let predicate_result = self
+                        .predicate
+                        .evaluate(&batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))?;
+
+                    let Ok(predicate_result) = as_boolean_array(&predicate_result) else {
+                        internal_err!(
+                            "Cannot create filter_array from non-boolean predicates"
+                        )?
+                    };
+
+                    // Use coalescer logic to handle filtering the batch
+                    if let Some(batch) = self
+                        .coalescer
+                        .push_batch_with_filter(&batch, predicate_result)?
+                    {
                         timer.done();
                         poll = Poll::Ready(Some(Ok(batch)));
                         break;
