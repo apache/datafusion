@@ -67,7 +67,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
-    approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr
+    approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_proto::bytes::{
