@@ -53,7 +53,7 @@ first argument and the definition looks like this:
 // `args`       : `StateFieldArgs`
 // `input_type` :  data type of the first argument
 let mut fields = vec![Field::new_list(
-    format_state_name(self.name(), "array_agg"),
+    format_state_name(self.name(), "nth_value"),
     Field::new("item", args.input_type.clone(), true /* nullable of list item */ ),
     false, // nullable of list itself
 )];
