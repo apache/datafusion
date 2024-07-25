@@ -50,7 +50,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // interpret names with '.' as if they were
             // compound identifiers, but this is not a compound
             // identifier. (e.g. it is "foo.bar" not foo.bar)
-            let normalize_ident = self.normalizer.normalize(id);
+            let normalize_ident = self.ident_normalizer.normalize(id);
 
             // Check for qualified field with unqualified name
             if let Ok((qualifier, _)) =
@@ -96,7 +96,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if ids[0].value.starts_with('@') {
             let var_names: Vec<_> = ids
                 .into_iter()
-                .map(|id| self.normalizer.normalize(id))
+                .map(|id| self.ident_normalizer.normalize(id))
                 .collect();
             let ty = self
                 .context_provider
@@ -110,7 +110,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let ids = ids
                 .into_iter()
-                .map(|id| self.normalizer.normalize(id))
+                .map(|id| self.ident_normalizer.normalize(id))
                 .collect::<Vec<_>>();
 
             // Currently not supporting more than one nested level

@@ -66,30 +66,6 @@ fn ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
 }
 
-fn value_to_string(value: &Value) -> Option<String> {
-    match value {
-        Value::SingleQuotedString(s) => Some(s.to_string()),
-        Value::DollarQuotedString(s) => Some(s.to_string()),
-        Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
-        Value::DoubleQuotedString(_)
-        | Value::EscapedStringLiteral(_)
-        | Value::NationalStringLiteral(_)
-        | Value::SingleQuotedByteStringLiteral(_)
-        | Value::DoubleQuotedByteStringLiteral(_)
-        | Value::TripleSingleQuotedString(_)
-        | Value::TripleDoubleQuotedString(_)
-        | Value::TripleSingleQuotedByteStringLiteral(_)
-        | Value::TripleDoubleQuotedByteStringLiteral(_)
-        | Value::SingleQuotedRawStringLiteral(_)
-        | Value::DoubleQuotedRawStringLiteral(_)
-        | Value::TripleSingleQuotedRawStringLiteral(_)
-        | Value::TripleDoubleQuotedRawStringLiteral(_)
-        | Value::HexStringLiteral(_)
-        | Value::Null
-        | Value::Placeholder(_) => None,
-    }
-}
-
 fn object_name_to_string(object_name: &ObjectName) -> String {
     object_name
         .0
@@ -881,25 +857,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        let mut options = HashMap::new();
-        for (key, value) in statement.options {
-            let value_string = match value_to_string(&value) {
-                None => {
-                    return plan_err!("Unsupported Value in COPY statement {}", value);
-                }
-                Some(v) => v,
-            };
-
-            if !(&key.contains('.')) {
-                // If config does not belong to any namespace, assume it is
-                // a format option and apply the format prefix for backwards
-                // compatibility.
-                let renamed_key = format!("format.{}", key);
-                options.insert(renamed_key.to_lowercase(), value_string.to_lowercase());
-            } else {
-                options.insert(key.to_lowercase(), value_string.to_lowercase());
-            }
-        }
+        let options_map = self.parse_options_map(statement.options, true)?;
 
         let maybe_file_type = if let Some(stored_as) = &statement.stored_as {
             if let Ok(ext_file_type) = self.context_provider.get_file_type(stored_as) {
@@ -946,7 +904,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             output_url: statement.target,
             file_type,
             partition_by,
-            options,
+            options: options_map,
         }))
     }
 
@@ -1007,29 +965,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let inline_constraints = calc_inline_constraints_from_columns(&columns);
         all_constraints.extend(inline_constraints);
 
-        let mut options_map = HashMap::<String, String>::new();
-        for (key, value) in options {
-            if options_map.contains_key(&key) {
-                return plan_err!("Option {key} is specified multiple times");
-            }
-
-            let Some(value_string) = value_to_string(&value) else {
-                return plan_err!(
-                    "Unsupported Value in CREATE EXTERNAL TABLE statement {}",
-                    value
-                );
-            };
-
-            if !(&key.contains('.')) {
-                // If a config does not belong to any namespace, we assume it is
-                // a format option and apply the format prefix for backwards
-                // compatibility.
-                let renamed_key = format!("format.{}", key.to_lowercase());
-                options_map.insert(renamed_key, value_string.to_lowercase());
-            } else {
-                options_map.insert(key.to_lowercase(), value_string.to_lowercase());
-            }
-        }
+        let options_map = self.parse_options_map(options, false)?;
 
         let compression = options_map
             .get("format.compression")
@@ -1079,6 +1015,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 column_defaults,
             },
         )))
+    }
+
+    fn parse_options_map(
+        &self,
+        options: Vec<(String, Value)>,
+        allow_duplicates: bool,
+    ) -> Result<HashMap<String, String>> {
+        let mut options_map = HashMap::new();
+        for (key, value) in options {
+            if !allow_duplicates && options_map.contains_key(&key) {
+                return plan_err!("Option {key} is specified multiple times");
+            }
+
+            let Some(value_string) = self.value_normalizer.normalize(value.clone())
+            else {
+                return plan_err!("Unsupported Value {}", value);
+            };
+
+            if !(&key.contains('.')) {
+                // If config does not belong to any namespace, assume it is
+                // a format option and apply the format prefix for backwards
+                // compatibility.
+                let renamed_key = format!("format.{}", key);
+                options_map.insert(renamed_key.to_lowercase(), value_string);
+            } else {
+                options_map.insert(key.to_lowercase(), value_string);
+            }
+        }
+
+        Ok(options_map)
     }
 
     /// Generate a plan for EXPLAIN ... that will print out a plan
@@ -1204,7 +1170,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // parse value string from Expr
         let value_string = match &value[0] {
             SQLExpr::Identifier(i) => ident_to_string(i),
-            SQLExpr::Value(v) => match value_to_string(v) {
+            SQLExpr::Value(v) => match crate::utils::value_to_string(v) {
                 None => {
                     return plan_err!("Unsupported Value {}", value[0]);
                 }
@@ -1365,8 +1331,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None => {
                         // If the target table has an alias, use it to qualify the column name
                         if let Some(alias) = &table_alias {
-                            Expr::Column(Column::new(
-                                Some(self.normalizer.normalize(alias.name.clone())),
+                            datafusion_expr::Expr::Column(Column::new(
+                                Some(self.ident_normalizer.normalize(alias.name.clone())),
                                 field.name(),
                             ))
                         } else {
@@ -1421,7 +1387,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let mut value_indices = vec![None; table_schema.fields().len()];
             let fields = columns
                 .into_iter()
-                .map(|c| self.normalizer.normalize(c))
+                .map(|c| self.ident_normalizer.normalize(c))
                 .enumerate()
                 .map(|(i, c)| {
                     let column_index = table_schema
