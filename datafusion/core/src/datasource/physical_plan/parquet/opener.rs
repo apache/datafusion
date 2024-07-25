@@ -92,7 +92,9 @@ impl FileOpener for ParquetOpener {
         let limit = self.limit;
 
         Ok(Box::pin(async move {
-            let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
+            let options = ArrowReaderOptions::new()
+                .with_page_index(enable_page_index)
+                .with_schema(table_schema.clone());
             let mut builder =
                 ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                     .await?;
