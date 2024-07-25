@@ -124,7 +124,7 @@ pub mod protobuf {
     pub use datafusion_proto_common::common::proto_error;
     pub use datafusion_proto_common::protobuf_common::{
         ArrowOptions, ArrowType, AvroFormat, AvroOptions, CsvFormat, DfSchema,
-        EmptyMessage, Field, JoinSide, ParquetFormat, ScalarValue, Schema,
+        EmptyMessage, Field, JoinSide, NdJsonFormat, ParquetFormat, ScalarValue, Schema,
     };
     pub use datafusion_proto_common::{FromProtoError, ToProtoError};
 }

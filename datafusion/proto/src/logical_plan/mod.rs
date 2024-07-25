@@ -38,7 +38,10 @@ use datafusion::datasource::file_format::{
 };
 use datafusion::{
     datasource::{
-        file_format::{avro::AvroFormat, csv::CsvFormat, FileFormat},
+        file_format::{
+            avro::AvroFormat, csv::CsvFormat, json::JsonFormat as OtherNdJsonFormat,
+            FileFormat,
+        },
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
         view::ViewTable,
         TableProvider,
@@ -395,7 +398,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                             if let Some(options) = options {
                                 csv = csv.with_options(options.try_into()?)
                             }
-                            Arc::new(csv)},
+                            Arc::new(csv)
+                        },
+                        FileFormatType::Json(protobuf::NdJsonFormat {
+                            options
+                        }) => {
+                            let mut json = OtherNdJsonFormat::default();
+                            if let Some(options) = options {
+                                json = json.with_options(options.try_into()?)
+                            }
+                            Arc::new(json)
+                        }
                         FileFormatType::Avro(..) => Arc::new(AvroFormat),
                     };
 
@@ -994,6 +1007,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 Some(FileFormatType::Csv(protobuf::CsvFormat {
                                     options: Some(options.try_into()?),
                                 }));
+                        }
+
+                        if let Some(json) = any.downcast_ref::<OtherNdJsonFormat>() {
+                            let options = json.options();
+                            maybe_some_type =
+                                Some(FileFormatType::Json(protobuf::NdJsonFormat {
+                                    options: Some(options.try_into()?),
+                                }))
                         }
 
                         if any.is::<AvroFormat>() {
