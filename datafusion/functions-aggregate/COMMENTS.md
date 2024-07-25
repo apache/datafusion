@@ -64,10 +64,11 @@ nullable.
 
 ## Computing Intermediate State
 
-By setting `nullable` to be always `true` like this we ensure that the
-aggregate computation works even when nulls are present. The advantage
-of doing it this way is that it eliminates the need for additional code
-and special treatment of nulls in the accumulator state.
+By setting `nullable` (of list item) to be always `true` like this we
+ensure that the aggregate computation works even when nulls are
+present. The advantage of doing it this way is that it eliminates the
+need for additional code and special treatment of nulls in the
+accumulator state.
 
 ## Nullable Of List Itself
 
