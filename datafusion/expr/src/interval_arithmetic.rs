@@ -989,7 +989,8 @@ fn div_bounds<const UPPER: bool>(
 /// results are converted to an *unbounded endpoint* if:
 ///   - We are calculating an upper bound and we have a positive overflow.
 ///   - We are calculating a lower bound and we have a negative overflow.
-/// Otherwise; the function sets the endpoint as:
+///
+/// Otherwise, the function sets the endpoint as:
 ///   - The minimum representable number with the given datatype (`dt`) if
 ///     we are calculating an upper bound and we have a negative overflow.
 ///   - The maximum representable number with the given datatype (`dt`) if

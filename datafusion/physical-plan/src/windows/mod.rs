@@ -579,6 +579,7 @@ pub fn get_best_fitting_window(
 ///   (input ordering is not sufficient to run current window executor).
 /// - A `Some((bool, InputOrderMode))` value indicates that the window operator
 ///   can run with existing input ordering, so we can remove `SortExec` before it.
+///
 /// The `bool` field in the return value represents whether we should reverse window
 /// operator to remove `SortExec` before it. The `InputOrderMode` field represents
 /// the mode this window operator should work in to accommodate the existing ordering.

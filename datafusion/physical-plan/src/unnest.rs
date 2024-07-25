@@ -341,8 +341,9 @@ fn flatten_struct_cols(
 
 /// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
 /// - For list columns: We will expand the values in each list into multiple rows,
-/// taking the longest length among these lists, and shorter lists are padded with NULLs.
+///   taking the longest length among these lists, and shorter lists are padded with NULLs.
 /// - For struct columns: We will expand the struct columns into multiple subfield columns.
+///
 /// For columns that don't need to be unnested, repeat their values until reaching the longest length.
 fn build_batch(
     batch: &RecordBatch,
