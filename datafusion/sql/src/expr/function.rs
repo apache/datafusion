@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::str::FromStr;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+
 use arrow_schema::DataType;
 use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
@@ -35,7 +38,7 @@ use sqlparser::ast::{
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
     NullTreatment, ObjectName, OrderByExpr, WindowType,
 };
-use std::str::FromStr;
+
 use strum::IntoEnumIterator;
 
 /// Suggest a valid function based on an invalid input function name
@@ -321,7 +324,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
-                let expr = match fun {
+                return match fun {
                     WindowFunctionDefinition::AggregateFunction(aggregate_fun) => {
                         let args =
                             self.function_args_to_expr(args, schema, planner_context)?;
@@ -335,7 +338,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .window_frame(window_frame)
                         .null_treatment(null_treatment)
                         .build()
-                        .unwrap()
                     }
                     _ => Expr::WindowFunction(expr::WindowFunction::new(
                         fun,
@@ -346,9 +348,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .window_frame(window_frame)
                     .null_treatment(null_treatment)
                     .build()
-                    .unwrap(),
-                };
-                return Ok(expr);
+                }
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
