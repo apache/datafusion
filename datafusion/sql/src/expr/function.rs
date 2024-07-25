@@ -347,8 +347,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .order_by(order_by)
                     .window_frame(window_frame)
                     .null_treatment(null_treatment)
-                    .build()
-                }
+                    .build(),
+                };
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
