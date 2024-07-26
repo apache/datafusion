@@ -545,7 +545,7 @@ mod tests {
         // Much larger strings in strings2
         let strings2 = StringViewArray::from(vec![
             "FOO".repeat(1000),
-            "BAR larger than 12 bytes.".repeat(1000),
+            "BAR larger than 12 bytes.".repeat(100_000),
             "more unique.".repeat(1000),
             "more unique2.".repeat(1000),
             "FOO".repeat(3000),
