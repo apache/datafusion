@@ -227,7 +227,7 @@ impl AggregateExprBuilder {
             ignore_nulls,
             ordering_fields,
             is_distinct,
-            input_type: input_exprs_types,
+            input_types: input_exprs_types,
             is_reversed,
         }))
     }
@@ -468,7 +468,7 @@ pub struct AggregateFunctionExpr {
     ordering_fields: Vec<Field>,
     is_distinct: bool,
     is_reversed: bool,
-    input_type: Vec<DataType>,
+    input_types: Vec<DataType>,
 }
 
 impl AggregateFunctionExpr {
@@ -506,7 +506,7 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn state_fields(&self) -> Result<Vec<Field>> {
         let args = StateFieldsArgs {
             name: &self.name,
-            input_type: &self.input_type,
+            input_types: &self.input_types,
             return_type: &self.data_type,
             ordering_fields: &self.ordering_fields,
             is_distinct: self.is_distinct,
@@ -527,7 +527,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
-            input_type: &self.input_type,
+            input_types: &self.input_types,
             input_exprs: &self.logical_args,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -544,7 +544,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
-            input_type: &self.input_type,
+            input_types: &self.input_types,
             input_exprs: &self.logical_args,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -616,7 +616,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
-            input_type: &self.input_type,
+            input_types: &self.input_types,
             input_exprs: &self.logical_args,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -632,7 +632,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
-            input_type: &self.input_type,
+            input_types: &self.input_types,
             input_exprs: &self.logical_args,
             name: &self.name,
             is_reversed: self.is_reversed,

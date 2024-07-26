@@ -124,7 +124,7 @@ impl AggregateUDFImpl for NthValueAgg {
 
         NthValueAccumulator::try_new(
             n,
-            &acc_args.input_type[0],
+            &acc_args.input_types[0],
             &ordering_dtypes,
             ordering_req,
         )
@@ -138,7 +138,7 @@ impl AggregateUDFImpl for NthValueAgg {
             // The hard-coded `true` should be changed once the field for
             // nullability is added to `StateFieldArgs` struct.
             // See: https://github.com/apache/datafusion/pull/11063
-            Field::new("item", args.input_type[0].clone(), true),
+            Field::new("item", args.input_types[0].clone(), true),
             false,
         )];
         let orderings = args.ordering_fields.to_vec();
