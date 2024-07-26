@@ -431,17 +431,6 @@ mod tests {
             NonZeroUsize::new(3).unwrap(),
         ));
 
-        // Test: see error message when no consumers recorded yet
-        let mut r0 = MemoryConsumer::new("r0").register(&pool);
-        let expected = "Failed to allocate additional 150 bytes for r0 with 0 bytes already allocated - maximum available is 100. The top memory consumers (across reservations) are: r0 consumed 0 bytes";
-        assert!(
-            matches!(
-                r0.try_grow(150),
-                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
-            ),
-            "should error when no other consumers are reported"
-        );
-
         // Test: use all the different interfaces to change reservation size
 
         // set r1=50, using grow and shrink
@@ -467,12 +456,79 @@ mod tests {
         r4.grow(10);
 
         // Test: reports if new reservation causes error
-        // using the previous set size for other consumers
+        // using the previously set sizes for other consumers
         let mut r5 = MemoryConsumer::new("r5").register(&pool);
         let expected = "Failed to allocate additional 150 bytes for r5 with 0 bytes already allocated - maximum available is 5. The top memory consumers (across reservations) are: r1 consumed 50 bytes, r3 consumed 20 bytes, r2 consumed 15 bytes";
-        assert!(matches!(
-            r5.try_grow(150),
-            Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+        assert!(
+            matches!(
+                r5.try_grow(150),
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+            ),
+            "should provide list of top memory consumers"
+        );
+    }
+
+    #[test]
+    fn test_tracked_consumers_pool_register() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(TrackConsumersPool::new(
+            GreedyMemoryPool::new(100),
+            NonZeroUsize::new(3).unwrap(),
         ));
+
+        let same_name = "foo";
+
+        // Test: see error message when no consumers recorded yet
+        let mut r0 = MemoryConsumer::new(same_name).register(&pool);
+        let expected = "Failed to allocate additional 150 bytes for foo with 0 bytes already allocated - maximum available is 100. The top memory consumers (across reservations) are: foo consumed 0 bytes";
+        assert!(
+            matches!(
+                r0.try_grow(150),
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+            ),
+            "should provide proper error when no reservations have been made yet"
+        );
+
+        // API: multiple registrations using the same hashed consumer,
+        // will be recognized as the same in the TrackConsumersPool.
+
+        // Test: will be the same per Top Consumers reported.
+        r0.grow(10); // make r0=10, pool available=90
+        let new_consumer_same_name = MemoryConsumer::new(same_name);
+        let mut r1 = new_consumer_same_name.clone().register(&pool);
+        // TODO: the insufficient_capacity_err() message is per reservation, not per consumer.
+        // a followup PR will clarify this message "0 bytes already allocated for this reservation"
+        let expected = "Failed to allocate additional 150 bytes for foo with 0 bytes already allocated - maximum available is 90. The top memory consumers (across reservations) are: foo consumed 10 bytes";
+        assert!(
+            matches!(
+                r1.try_grow(150),
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+            ),
+            "should provide proper error with same hashed consumer (a single foo=10 bytes, available=90)"
+        );
+
+        // Test: will accumulate size changes per consumer, not per reservation
+        r1.grow(20);
+        let expected = "Failed to allocate additional 150 bytes for foo with 20 bytes already allocated - maximum available is 70. The top memory consumers (across reservations) are: foo consumed 30 bytes";
+        assert!(
+            matches!(
+                r1.try_grow(150),
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+            ),
+            "should provide proper error with same hashed consumer (a single foo=30 bytes, available=70)"
+        );
+
+        // Test: different hashed consumer, (even with the same name),
+        // will be recognized as different in the TrackConsumersPool
+        let consumer_with_same_name_but_different_hash =
+            MemoryConsumer::new(same_name).with_can_spill(true);
+        let mut r2 = consumer_with_same_name_but_different_hash.register(&pool);
+        let expected = "Failed to allocate additional 150 bytes for foo with 0 bytes already allocated - maximum available is 70. The top memory consumers (across reservations) are: foo consumed 30 bytes, foo consumed 0 bytes";
+        assert!(
+            matches!(
+                r2.try_grow(150),
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+            ),
+            "should provide proper error with different hashed consumer (foo(can_spill=false)=30 bytes and foo(can_spill=true)=0 bytes, available=70)"
+        );
     }
 }
