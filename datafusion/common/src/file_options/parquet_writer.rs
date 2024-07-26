@@ -542,7 +542,8 @@ mod tests {
                 maximum_buffered_record_batches_per_stream: global_options_defaults
                     .maximum_buffered_record_batches_per_stream,
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
-                schema_force_string_view: global_options_defaults.schema_force_string_view
+                schema_force_string_view: global_options_defaults
+                    .schema_force_string_view,
             },
             column_specific_options,
             key_value_metadata,
