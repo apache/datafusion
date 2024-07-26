@@ -2305,9 +2305,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         }
         Expr::Wildcard { qualifier } => match qualifier {
             Some(qualifier) => {
-                return internal_err!(
-                    "Create name does not support qualified wildcard, got {qualifier}"
-                )
+                write!(w, "{}.*", qualifier)?;
             }
             None => write!(w, "*")?,
         },
