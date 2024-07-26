@@ -237,8 +237,9 @@ impl MemoryPool for FairSpillPool {
 
 /// Constructs a resources error based upon the individual [`MemoryReservation`].
 ///
-/// The error references the total bytes affiliated with the reservation's
-/// [`MemoryConsumer`], and not the total within the collective [`MemoryPool`].
+/// The error references the `bytes already allocated` for the reservation,
+/// and not the total within the collective [`MemoryPool`],
+/// nor the total across multiple reservations with the same [`MemoryConsumer`].
 #[inline(always)]
 fn insufficient_capacity_err(
     reservation: &MemoryReservation,
