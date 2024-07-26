@@ -23,14 +23,13 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 
+use crate::datasource::TableProvider;
+use crate::physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use crate::physical_plan::ExecutionPlan;
+use datafusion_catalog::Session;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{Expr, TableType};
 use log::debug;
-
-use crate::datasource::TableProvider;
-use crate::execution::context::SessionState;
-use crate::physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use crate::physical_plan::ExecutionPlan;
 
 /// A [`TableProvider`] that streams a set of [`PartitionStream`]
 pub struct StreamingTable {
@@ -85,7 +84,7 @@ impl TableProvider for StreamingTable {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         limit: Option<usize>,

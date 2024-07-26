@@ -15,6 +15,24 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[toolchain]
-# Temporarily pin toolchain version until we solve problems reported by newer clippy release.
-channel = "1.79.0"
+[package]
+name = "datafusion-catalog"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+arrow-schema = { workspace = true }
+async-trait = "0.1.41"
+datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-physical-plan = { workspace = true }
+
+[lints]
+workspace = true

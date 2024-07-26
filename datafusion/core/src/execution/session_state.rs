@@ -17,13 +17,14 @@
 
 //! [`SessionState`]: information required to run queries in a session
 
-use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
-use crate::catalog::schema::SchemaProvider;
-use crate::catalog::{CatalogProviderList, MemoryCatalogProviderList};
+use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
+use crate::catalog_common::information_schema::{
+    InformationSchemaProvider, INFORMATION_SCHEMA,
+};
+use crate::catalog_common::MemoryCatalogProviderList;
 use crate::datasource::cte_worktable::CteWorkTable;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use crate::datasource::function::{TableFunction, TableFunctionImpl};
-use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
@@ -32,6 +33,7 @@ use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::{DataType, SchemaRef};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_catalog::Session;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -68,6 +70,7 @@ use itertools::Itertools;
 use log::{debug, info};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
+use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -144,7 +147,7 @@ pub struct SessionState {
     /// `CREATE EXTERNAL TABLE ... STORED AS <FORMAT>` for custom file
     /// formats other than those built into DataFusion
     ///
-    /// [`TableProvider`]: crate::datasource::provider::TableProvider
+    /// [`TableProvider`]: crate::catalog::TableProvider
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
@@ -177,6 +180,56 @@ impl Debug for SessionState {
             .field("runtime_env", &self.runtime_env)
             .field("function_factory", &"...")
             .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl Session for SessionState {
+    fn session_id(&self) -> &str {
+        self.session_id()
+    }
+
+    fn config(&self) -> &SessionConfig {
+        self.config()
+    }
+
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        self.create_physical_plan(logical_plan).await
+    }
+
+    fn create_physical_expr(
+        &self,
+        expr: Expr,
+        df_schema: &DFSchema,
+    ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+        self.create_physical_expr(expr, df_schema)
+    }
+
+    fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        self.scalar_functions()
+    }
+
+    fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        self.aggregate_functions()
+    }
+
+    fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        self.window_functions()
+    }
+
+    fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+        self.runtime_env()
+    }
+
+    fn execution_props(&self) -> &ExecutionProps {
+        self.execution_props()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -465,14 +518,14 @@ impl SessionState {
     ///
     /// See [`catalog::resolve_table_references`] for more information.
     ///
-    /// [`catalog::resolve_table_references`]: crate::catalog::resolve_table_references
+    /// [`catalog::resolve_table_references`]: crate::catalog_common::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &datafusion_sql::parser::Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        let (table_refs, _) = crate::catalog::resolve_table_references(
+        let (table_refs, _) = crate::catalog_common::resolve_table_references(
             statement,
             enable_ident_normalization,
         )?;

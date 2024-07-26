@@ -1932,6 +1932,7 @@ mod tests {
     }
 
     // FIXME(#TODO) test fails with feature `force_hash_collisions`
+    // https://github.com/apache/datafusion/issues/11658
     #[cfg(not(feature = "force_hash_collisions"))]
     #[apply(batch_sizes)]
     #[tokio::test]
@@ -1989,6 +1990,7 @@ mod tests {
 
     /// Test where the left has 2 parts, the right with 1 part => 1 part
     // FIXME(#TODO) test fails with feature `force_hash_collisions`
+    // https://github.com/apache/datafusion/issues/11658
     #[cfg(not(feature = "force_hash_collisions"))]
     #[apply(batch_sizes)]
     #[tokio::test]
@@ -2103,6 +2105,7 @@ mod tests {
 
     /// Test where the left has 1 part, the right has 2 parts => 2 parts
     // FIXME(#TODO) test fails with feature `force_hash_collisions`
+    // https://github.com/apache/datafusion/issues/11658
     #[cfg(not(feature = "force_hash_collisions"))]
     #[apply(batch_sizes)]
     #[tokio::test]

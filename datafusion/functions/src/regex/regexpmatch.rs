@@ -36,6 +36,7 @@ use std::sync::Arc;
 pub struct RegexpMatchFunc {
     signature: Signature,
 }
+
 impl Default for RegexpMatchFunc {
     fn default() -> Self {
         Self::new()

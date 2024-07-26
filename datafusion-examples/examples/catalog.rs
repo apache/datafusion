@@ -19,10 +19,7 @@
 use async_trait::async_trait;
 use datafusion::{
     arrow::util::pretty,
-    catalog::{
-        schema::SchemaProvider,
-        {CatalogProvider, CatalogProviderList},
-    },
+    catalog::{CatalogProvider, CatalogProviderList, SchemaProvider},
     datasource::{
         file_format::{csv::CsvFormat, FileFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
