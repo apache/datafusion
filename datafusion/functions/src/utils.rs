@@ -32,7 +32,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 ///
 /// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
 ///
-/// If the input type is `Utf8View` the return type is `Utf8View`,
+/// If the input type is `Utf8View` the return type is $utf8Type,
 macro_rules! get_optimal_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
         pub(crate) fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
@@ -41,8 +41,8 @@ macro_rules! get_optimal_return_type {
                 DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
                 // Binary inputs are automatically coerced to Utf8
                 DataType::Utf8 | DataType::Binary => $utf8Type,
-                // Utf8View inputs will yield Utf8View outputs
-                DataType::Utf8View => DataType::Utf8View,
+                // Utf8View max offset size is u32::MAX, the same as UTF8
+                DataType::Utf8View | DataType::BinaryView => $utf8Type,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => match **value_type {
                     DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
@@ -183,6 +183,21 @@ pub mod test {
         };
     }
 
+    use arrow::datatypes::DataType;
     #[allow(unused_imports)]
     pub(crate) use test_function;
+
+    use super::*;
+
+    #[test]
+    fn string_to_int_type() {
+        let v = utf8_to_int_type(&DataType::Utf8, "test").unwrap();
+        assert_eq!(v, DataType::Int32);
+
+        let v = utf8_to_int_type(&DataType::Utf8View, "test").unwrap();
+        assert_eq!(v, DataType::Int32);
+
+        let v = utf8_to_int_type(&DataType::LargeUtf8, "test").unwrap();
+        assert_eq!(v, DataType::Int64);
+    }
 }

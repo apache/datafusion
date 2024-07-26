@@ -270,14 +270,14 @@ impl RecordBatchStream for CoalesceBatchesStream {
     }
 }
 
-/// Heuristically compact [`StringViewArray`]s to reduce memory usage, if needed
+/// Heuristically compact `StringViewArray`s to reduce memory usage, if needed
 ///
 /// This function decides when to consolidate the StringView into a new buffer
 /// to reduce memory usage and improve string locality for better performance.
 ///
-/// This differs from [`StringViewArray::gc`] because:
+/// This differs from `StringViewArray::gc` because:
 /// 1. It may not compact the array depending on a heuristic.
-/// 2. It uses a larger default block size (2MB) to reduce the number of buffers to track.
+/// 2. It uses a precise block size to reduce the number of buffers to track.
 ///
 /// # Heuristic
 ///
