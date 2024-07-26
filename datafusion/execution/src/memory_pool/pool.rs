@@ -20,7 +20,10 @@ use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
 use hashbrown::HashMap;
 use log::debug;
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::{
+    num::NonZeroUsize,
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+};
 
 /// A [`MemoryPool`] that enforces no limit
 #[derive(Debug, Default)]
@@ -246,7 +249,7 @@ fn insufficient_capacity_err(
 #[derive(Debug)]
 pub struct TrackConsumersPool<I> {
     inner: I,
-    top: usize,
+    top: NonZeroUsize,
     tracked_consumers: Mutex<HashMap<MemoryConsumer, AtomicU64>>,
 }
 
@@ -255,7 +258,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
     ///
     /// The `top` determines how many Top K [`MemoryConsumer`]s to include
     /// in the reported [`DataFusionError::ResourcesExhausted`].
-    pub fn new(inner: I, top: usize) -> Self {
+    pub fn new(inner: I, top: NonZeroUsize) -> Self {
         Self {
             inner,
             top,
@@ -277,7 +280,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
 
         format!(
             "The top memory consumers (across reservations) are: {}",
-            consumers[0..std::cmp::min(self.top, consumers.len())]
+            consumers[0..std::cmp::min(self.top.into(), consumers.len())]
                 .iter()
                 .map(|(name, size)| format!("{name} consumed {:?} bytes", size))
                 .collect::<Vec<_>>()
@@ -419,8 +422,10 @@ mod tests {
 
     #[test]
     fn test_tracked_consumers_pool() {
-        let pool: Arc<dyn MemoryPool> =
-            Arc::new(TrackConsumersPool::new(GreedyMemoryPool::new(100), 3));
+        let pool: Arc<dyn MemoryPool> = Arc::new(TrackConsumersPool::new(
+            GreedyMemoryPool::new(100),
+            NonZeroUsize::new(3).unwrap(),
+        ));
 
         // Test: see error message when no consumers recorded yet
         let mut r0 = MemoryConsumer::new("r0").register(&pool);

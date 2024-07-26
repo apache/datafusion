@@ -33,6 +33,7 @@ use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use futures::StreamExt;
 use std::any::Any;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 use tokio::fs::File;
 
@@ -399,7 +400,7 @@ async fn oom_with_tracked_consumer_pool() {
         .with_memory_pool(Arc::new(
             TrackConsumersPool::new(
                 GreedyMemoryPool::new(200_000),
-                2
+                NonZeroUsize::new(1).unwrap()
             )
         ))
         .run()
