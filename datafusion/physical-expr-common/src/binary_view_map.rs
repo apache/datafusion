@@ -100,12 +100,12 @@ impl ArrowBytesViewSet {
 /// This is a specialized HashMap with the following properties:
 ///
 /// 1. Optimized for storing and emitting Arrow byte types  (e.g.
-/// `StringViewArray` / `BinaryViewArray`) very efficiently by minimizing copying of
-/// the string values themselves, both when inserting and when emitting the
-/// final array.
+///    `StringViewArray` / `BinaryViewArray`) very efficiently by minimizing copying of
+///    the string values themselves, both when inserting and when emitting the
+///    final array.
 ///
 /// 2. Retains the insertion order of entries in the final array. The values are
-/// in the same order as they were inserted.
+///    in the same order as they were inserted.
 ///
 /// Note this structure can be used as a `HashSet` by specifying the value type
 /// as `()`, as is done by [`ArrowBytesViewSet`].
