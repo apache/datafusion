@@ -17,7 +17,6 @@
 
 //! This rule reduces the amount of data transferred by pushing down limits as much as possible.
 
-use std::cmp::min;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -28,6 +27,7 @@ use crate::physical_plan::ExecutionPlan;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_datafusion_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_optimizer::push_down_limit::combine_limit;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -161,93 +161,27 @@ fn merge_limits(
     parent_limit_exec: &LimitExec,
     child_limit_exec: &LimitExec,
 ) -> Arc<dyn ExecutionPlan> {
+    // We can use the logic in `combine_limit` from the logical optimizer:
+    let (skip, fetch) = combine_limit(
+        parent_limit_exec.skip(),
+        parent_limit_exec.fetch(),
+        child_limit_exec.skip(),
+        child_limit_exec.fetch(),
+    );
     match (parent_limit_exec, child_limit_exec) {
-        (LimitExec::Local(parent), LimitExec::Local(child)) => {
-            // Simply use the smaller fetch
+        (LimitExec::Local(_), LimitExec::Local(_)) => {
+            // The fetch is present in this case, can unwrap.
             Arc::new(LocalLimitExec::new(
                 child_limit_exec.input().clone(),
-                parent.fetch().min(child.fetch()),
+                fetch.unwrap(),
             ))
         }
-        _ => {
-            // We can use the same logic as push_down_limit from logical plan optimizer
-            let (skip, fetch) = combine_limit(
-                parent_limit_exec.skip(),
-                parent_limit_exec.fetch(),
-                child_limit_exec.skip(),
-                child_limit_exec.fetch(),
-            );
-
-            Arc::new(GlobalLimitExec::new(
-                child_limit_exec.input().clone(),
-                skip,
-                fetch,
-            ))
-        }
+        _ => Arc::new(GlobalLimitExec::new(
+            child_limit_exec.input().clone(),
+            skip,
+            fetch,
+        )),
     }
-}
-
-/// Computes the `skip` and `fetch` parameters of a single limit that would be
-/// equivalent to two consecutive limits with the given `skip`/`fetch` parameters.
-///
-/// There are multiple cases to consider:
-///
-/// # Case 0: Parent and child are disjoint (`child_fetch <= skip`).
-///
-/// ```text
-///   Before merging:
-///                     |........skip........|---fetch-->|     Parent limit
-///    |...child_skip...|---child_fetch-->|                    Child limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |.........(child_skip + skip).........|
-/// ```
-///
-/// # Case 1: Parent is beyond child's range (`skip < child_fetch <= skip + fetch`).
-///
-///   Before merging:
-/// ```text
-///                     |...skip...|------------fetch------------>|   Parent limit
-///    |...child_skip...|-------------child_fetch------------>|       Child limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
-/// ```
-///
-///  # Case 2: Parent is within child's range (`skip + fetch < child_fetch`).
-///
-///   Before merging:
-/// ```text
-///                     |...skip...|---fetch-->|                   Parent limit
-///    |...child_skip...|-------------child_fetch------------>|    Child limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |....(child_skip + skip)....|---fetch-->|
-/// ```
-fn combine_limit(
-    parent_skip: usize,
-    parent_fetch: Option<usize>,
-    child_skip: usize,
-    child_fetch: Option<usize>,
-) -> (usize, Option<usize>) {
-    let combined_skip = child_skip.saturating_add(parent_skip);
-
-    let combined_fetch = match (parent_fetch, child_fetch) {
-        (Some(parent_fetch), Some(child_fetch)) => {
-            Some(min(parent_fetch, child_fetch.saturating_sub(parent_skip)))
-        }
-        (Some(parent_fetch), None) => Some(parent_fetch),
-        (None, Some(child_fetch)) => Some(child_fetch.saturating_sub(parent_skip)),
-        (None, None) => None,
-    };
-
-    (combined_skip, combined_fetch)
 }
 
 /// Pushes down the limit through the child. If the child has a single input
@@ -318,6 +252,7 @@ fn add_fetch_to_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_expr::Operator;
@@ -334,6 +269,7 @@ mod tests {
     use datafusion_physical_plan::projection::ProjectionExec;
     use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+
     struct DummyStreamPartition {
         schema: SchemaRef,
     }
