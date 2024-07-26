@@ -117,13 +117,13 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
 /// This is a specialized HashMap with the following properties:
 ///
 /// 1. Optimized for storing and emitting Arrow byte types  (e.g.
-/// `StringArray` / `BinaryArray`) very efficiently by minimizing copying of
-/// the string values themselves, both when inserting and when emitting the
-/// final array.
+///    `StringArray` / `BinaryArray`) very efficiently by minimizing copying of
+///    the string values themselves, both when inserting and when emitting the
+///    final array.
 ///
 ///
 /// 2. Retains the insertion order of entries in the final array. The values are
-/// in the same order as they were inserted.
+///    in the same order as they were inserted.
 ///
 /// Note this structure can be used as a `HashSet` by specifying the value type
 /// as `()`, as is done by [`ArrowBytesSet`].
@@ -138,18 +138,18 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
 /// "Foo", NULL, "Bar", "TheQuickBrownFox":
 ///
 /// * `hashtable` stores entries for each distinct string that has been
-/// inserted. The entries contain the payload as well as information about the
-/// value (either an offset or the actual bytes, see `Entry` docs for more
-/// details)
+///   inserted. The entries contain the payload as well as information about the
+///   value (either an offset or the actual bytes, see `Entry` docs for more
+///   details)
 ///
 /// * `offsets` stores offsets into `buffer` for each distinct string value,
-/// following the same convention as the offsets in a `StringArray` or
-/// `LargeStringArray`.
+///   following the same convention as the offsets in a `StringArray` or
+///   `LargeStringArray`.
 ///
 /// * `buffer` stores the actual byte data
 ///
 /// * `null`: stores the index and payload of the null value, in this case the
-/// second value (index 1)
+///   second value (index 1)
 ///
 /// ```text
 /// ┌───────────────────────────────────┐    ┌─────┐    ┌────┐
@@ -360,7 +360,7 @@ where
         assert_eq!(values.len(), batch_hashes.len());
 
         for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
-            // hande null value
+            // handle null value
             let Some(value) = value else {
                 let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
                     payload
@@ -444,7 +444,7 @@ where
                     // Put the small values into buffer and offsets so it
                     // appears the output array, and store that offset
                     // so the bytes can be compared if needed
-                    let offset = self.buffer.len(); // offset of start fof data
+                    let offset = self.buffer.len(); // offset of start for data
                     self.buffer.append_slice(value);
                     self.offsets.push(O::usize_as(self.buffer.len()));
 

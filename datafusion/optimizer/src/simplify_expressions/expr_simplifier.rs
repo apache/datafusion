@@ -478,7 +478,7 @@ struct ConstEvaluator<'a> {
 #[allow(dead_code)]
 /// The simplify result of ConstEvaluator
 enum ConstSimplifyResult {
-    // Expr was simplifed and contains the new expression
+    // Expr was simplified and contains the new expression
     Simplified(ScalarValue),
     // Expr was not simplified and original value is returned
     NotSimplified(ScalarValue),
@@ -519,7 +519,7 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match self.can_evaluate.pop() {
             // Certain expressions such as `CASE` and `COALESCE` are short circuiting
-            // and may not evalute all their sub expressions. Thus if
+            // and may not evaluate all their sub expressions. Thus if
             // if any error is countered during simplification, return the original
             // so that normal evaluation can occur
             Some(true) => {
@@ -3855,15 +3855,9 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::WindowFunction(datafusion_expr::expr::WindowFunction::new(
-                udwf,
-                vec![],
-                vec![],
-                vec![],
-                WindowFrame::new(None),
-                None,
-            ));
+        let window_function_expr = Expr::WindowFunction(
+            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
+        );
 
         let expected = col("result_column");
         assert_eq!(simplify(window_function_expr), expected);
@@ -3871,15 +3865,9 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::WindowFunction(datafusion_expr::expr::WindowFunction::new(
-                udwf,
-                vec![],
-                vec![],
-                vec![],
-                WindowFrame::new(None),
-                None,
-            ));
+        let window_function_expr = Expr::WindowFunction(
+            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
+        );
 
         let expected = window_function_expr.clone();
         assert_eq!(simplify(window_function_expr), expected);

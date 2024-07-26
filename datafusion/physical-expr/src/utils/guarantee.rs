@@ -62,14 +62,14 @@ use std::sync::Arc;
 /// A guarantee can be one of two forms:
 ///
 /// 1. The column must be one the values for the predicate to be `true`. If the
-/// column takes on any other value, the predicate can not evaluate to `true`.
-/// For example,
-/// `(a = 1)`, `(a = 1 OR a = 2)` or `a IN (1, 2, 3)`
+///    column takes on any other value, the predicate can not evaluate to `true`.
+///    For example,
+///    `(a = 1)`, `(a = 1 OR a = 2)` or `a IN (1, 2, 3)`
 ///
 /// 2. The column must NOT be one of the values for the predicate to be `true`.
-/// If the column can ONLY take one of these values, the predicate can not
-/// evaluate to `true`. For example,
-/// `(a != 1)`, `(a != 1 AND a != 2)` or `a NOT IN (1, 2, 3)`
+///    If the column can ONLY take one of these values, the predicate can not
+///    evaluate to `true`. For example,
+///    `(a != 1)`, `(a != 1 AND a != 2)` or `a NOT IN (1, 2, 3)`
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiteralGuarantee {
     pub column: Column,
@@ -283,7 +283,7 @@ impl<'a> GuaranteeBuilder<'a> {
         )
     }
 
-    /// Aggregates a new single column, multi literal term to ths builder
+    /// Aggregates a new single column, multi literal term to this builder
     /// combining with previously known guarantees if possible.
     ///
     /// # Examples
@@ -374,6 +374,7 @@ impl<'a> ColOpLit<'a> {
     /// 1. `col <op> literal`
     /// 2. `literal <op> col`
     /// 3. operator is `=` or `!=`
+    ///
     /// Returns None otherwise
     fn try_new(expr: &'a Arc<dyn PhysicalExpr>) -> Option<Self> {
         let binary_expr = expr

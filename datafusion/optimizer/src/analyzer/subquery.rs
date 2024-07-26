@@ -35,8 +35,8 @@ use datafusion_expr::{
 ///    the allowed while list: [Projection, Filter, Window, Aggregate, Join].
 /// 2) Check whether the inner plan is in the allowed inner plans list to use correlated(outer) expressions.
 /// 3) Check and validate unsupported cases to use the correlated(outer) expressions inside the subquery(inner) plans/inner expressions.
-/// For example, we do not want to support to use correlated expressions as the Join conditions in the subquery plan when the Join
-/// is a Full Out Join
+///    For example, we do not want to support to use correlated expressions as the Join conditions in the subquery plan when the Join
+///    is a Full Out Join
 pub fn check_subquery_expr(
     outer_plan: &LogicalPlan,
     inner_plan: &LogicalPlan,
@@ -159,11 +159,11 @@ fn check_inner_plan(
             let (correlated, _): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()
                 .partition(|e| e.contains_outer());
-            let maybe_unsupport = correlated
+            let maybe_unsupported = correlated
                 .into_iter()
                 .filter(|expr| !can_pullup_over_aggregation(expr))
                 .collect::<Vec<_>>();
-            if is_aggregate && is_scalar && !maybe_unsupport.is_empty() {
+            if is_aggregate && is_scalar && !maybe_unsupported.is_empty() {
                 return plan_err!(
                     "Correlated column is not allowed in predicate: {predicate}"
                 );

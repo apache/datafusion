@@ -42,6 +42,37 @@ use tokio::task::JoinSet;
 type WriterType = Box<dyn AsyncWrite + Send + Unpin>;
 type SerializerType = Arc<dyn BatchSerializer>;
 
+/// Result of calling [`serialize_rb_stream_to_object_store`]
+pub(crate) enum SerializedRecordBatchResult {
+    Success {
+        /// the writer
+        writer: WriterType,
+
+        /// the number of rows successfully written
+        row_count: usize,
+    },
+    Failure {
+        /// As explained in [`serialize_rb_stream_to_object_store`]:
+        /// - If an IO error occured that involved the ObjectStore writer, then the writer will not be returned to the caller
+        /// - Otherwise, the writer is returned to the caller
+        writer: Option<WriterType>,
+
+        /// the actual error that occured
+        err: DataFusionError,
+    },
+}
+
+impl SerializedRecordBatchResult {
+    /// Create the success variant
+    pub fn success(writer: WriterType, row_count: usize) -> Self {
+        Self::Success { writer, row_count }
+    }
+
+    pub fn failure(writer: Option<WriterType>, err: DataFusionError) -> Self {
+        Self::Failure { writer, err }
+    }
+}
+
 /// Serializes a single data stream in parallel and writes to an ObjectStore concurrently.
 /// Data order is preserved.
 ///
@@ -55,7 +86,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     mut data_rx: Receiver<RecordBatch>,
     serializer: Arc<dyn BatchSerializer>,
     mut writer: WriterType,
-) -> std::result::Result<(WriterType, u64), (Option<WriterType>, DataFusionError)> {
+) -> SerializedRecordBatchResult {
     let (tx, mut rx) =
         mpsc::channel::<SpawnedTask<Result<(usize, Bytes), DataFusionError>>>(100);
     let serialize_task = SpawnedTask::spawn(async move {
@@ -86,43 +117,43 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                 match writer.write_all(&bytes).await {
                     Ok(_) => (),
                     Err(e) => {
-                        return Err((
+                        return SerializedRecordBatchResult::failure(
                             None,
                             DataFusionError::Execution(format!(
                                 "Error writing to object store: {e}"
                             )),
-                        ))
+                        )
                     }
                 };
                 row_count += cnt;
             }
             Ok(Err(e)) => {
                 // Return the writer along with the error
-                return Err((Some(writer), e));
+                return SerializedRecordBatchResult::failure(Some(writer), e);
             }
             Err(e) => {
                 // Handle task panic or cancellation
-                return Err((
+                return SerializedRecordBatchResult::failure(
                     Some(writer),
                     DataFusionError::Execution(format!(
                         "Serialization task panicked or was cancelled: {e}"
                     )),
-                ));
+                );
             }
         }
     }
 
     match serialize_task.join().await {
         Ok(Ok(_)) => (),
-        Ok(Err(e)) => return Err((Some(writer), e)),
+        Ok(Err(e)) => return SerializedRecordBatchResult::failure(Some(writer), e),
         Err(_) => {
-            return Err((
+            return SerializedRecordBatchResult::failure(
                 Some(writer),
                 internal_datafusion_err!("Unknown error writing to object store"),
-            ))
+            )
         }
     }
-    Ok((writer, row_count as u64))
+    SerializedRecordBatchResult::success(writer, row_count)
 }
 
 type FileWriteBundle = (Receiver<RecordBatch>, SerializerType, WriterType);
@@ -141,7 +172,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
     // tracks the specific error triggering abort
     let mut triggering_error = None;
     // tracks if any errors were encountered in the process of aborting writers.
-    // if true, we may not have a guarentee that all written data was cleaned up.
+    // if true, we may not have a guarantee that all written data was cleaned up.
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
     while let Some((data_rx, serializer, writer)) = rx.recv().await {
@@ -153,14 +184,17 @@ pub(crate) async fn stateless_serialize_and_write_files(
     while let Some(result) = join_set.join_next().await {
         match result {
             Ok(res) => match res {
-                Ok((writer, cnt)) => {
+                SerializedRecordBatchResult::Success {
+                    writer,
+                    row_count: cnt,
+                } => {
                     finished_writers.push(writer);
                     row_count += cnt;
                 }
-                Err((writer, e)) => {
+                SerializedRecordBatchResult::Failure { writer, err } => {
                     finished_writers.extend(writer);
                     any_errors = true;
-                    triggering_error = Some(e);
+                    triggering_error = Some(err);
                 }
             },
             Err(e) => {
@@ -188,12 +222,12 @@ pub(crate) async fn stateless_serialize_and_write_files(
             true => return internal_err!("Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."),
             false => match triggering_error {
                 Some(e) => return Err(e),
-                None => return internal_err!("Unknown Error encountered during writing to ObjectStore. All writers succesfully aborted.")
+                None => return internal_err!("Unknown Error encountered during writing to ObjectStore. All writers successfully aborted.")
             }
         }
     }
 
-    tx.send(row_count).map_err(|_| {
+    tx.send(row_count as u64).map_err(|_| {
         internal_datafusion_err!(
             "Error encountered while sending row count back to file sink!"
         )
@@ -268,7 +302,7 @@ pub(crate) async fn stateless_multipart_put(
     r2?;
 
     let total_count = rx_row_cnt.await.map_err(|_| {
-        internal_datafusion_err!("Did not receieve row count from write coordinater")
+        internal_datafusion_err!("Did not receive row count from write coordinator")
     })?;
 
     Ok(total_count)

@@ -94,7 +94,7 @@ const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 ///   - If so record the visited rows. If the matched row results must be produced (INNER, LEFT), output the [RecordBatch].
 ///   - Try to prune other side (probe) with new [RecordBatch].
 ///   - If the join type indicates that the unmatched rows results must be produced (LEFT, FULL etc.),
-/// output the [RecordBatch] when a pruning happens or at the end of the data.
+///     output the [RecordBatch] when a pruning happens or at the end of the data.
 ///
 ///
 /// ``` text
@@ -215,7 +215,7 @@ impl SymmetricHashJoinExec {
         let left_schema = left.schema();
         let right_schema = right.schema();
 
-        // Error out if no "on" contraints are given:
+        // Error out if no "on" constraints are given:
         if on.is_empty() {
             return plan_err!(
                 "On constraints in SymmetricHashJoinExec should be non-empty"
@@ -584,7 +584,7 @@ impl Stream for SymmetricHashJoinStream {
 ///
 /// * `buffer`: The record batch to be pruned.
 /// * `build_side_filter_expr`: The filter expression on the build side used
-/// to determine the pruning length.
+///   to determine the pruning length.
 ///
 /// # Returns
 ///

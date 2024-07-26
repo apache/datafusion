@@ -53,7 +53,7 @@ impl ListingTableUrl {
     /// subdirectories.
     ///
     /// Similarly `s3://BUCKET/blob.csv` refers to `blob.csv` in the S3 bucket `BUCKET`,
-    /// wherease `s3://BUCKET/foo/` refers to all objects with the prefix `foo/` in the
+    /// whereas `s3://BUCKET/foo/` refers to all objects with the prefix `foo/` in the
     /// S3 bucket `BUCKET`
     ///
     /// # URL Encoding

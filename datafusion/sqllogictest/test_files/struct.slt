@@ -24,7 +24,7 @@ CREATE TABLE values(
     a INT,
     b FLOAT,
     c VARCHAR,
-    n VARCHAR,
+    n VARCHAR
 ) AS VALUES
   (1, 1.1, 'a', NULL),
   (2, 2.2, 'b', NULL),
@@ -121,6 +121,10 @@ physical_plan
 # error on 0 arguments
 query error
 select named_struct();
+
+# error on duplicate field names
+query error
+select named_struct('c0': 1, 'c1': 2, 'c1': 3);
 
 # error on odd number of arguments #1
 query error DataFusion error: Execution error: named_struct requires an even number of arguments, got 1 instead

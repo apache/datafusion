@@ -248,7 +248,7 @@ impl CommonSubexprEliminate {
     }
 
     /// Rewrites the expression in `exprs_list` with common sub-expressions
-    /// replaced with a new colum and adds a ProjectionExec on top of `input`
+    /// replaced with a new column and adds a ProjectionExec on top of `input`
     /// which computes any replaced common sub-expressions.
     ///
     /// Returns a tuple of:
@@ -599,7 +599,7 @@ impl CommonSubexprEliminate {
     ///
     /// 1. The original `input` of no common subexpressions were extracted
     /// 2. A newly added projection on top of the original input
-    /// that computes the common subexpressions
+    ///    that computes the common subexpressions
     fn try_unary_plan(
         &self,
         expr: Vec<Expr>,
@@ -636,7 +636,7 @@ impl CommonSubexprEliminate {
 /// Returns the window expressions, and the input to the deepest child
 /// LogicalPlan.
 ///
-/// For example, if the input widnow looks like
+/// For example, if the input window looks like
 ///
 /// ```text
 ///   LogicalPlan::Window(exprs=[a, b, c])

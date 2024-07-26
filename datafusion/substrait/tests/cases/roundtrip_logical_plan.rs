@@ -31,13 +31,17 @@ use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{
-    Extension, LogicalPlan, Repartition, UserDefinedLogicalNode, Volatility,
+    Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
+    Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
 
 use datafusion::execution::session_state::SessionStateBuilder;
-use substrait::proto::extensions::simple_extension_declaration::MappingType;
+use substrait::proto::extensions::simple_extension_declaration::{
+    ExtensionType, MappingType,
+};
+use substrait::proto::extensions::SimpleExtensionDeclaration;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
 
@@ -174,15 +178,46 @@ async fn select_with_filter() -> Result<()> {
 
 #[tokio::test]
 async fn select_with_reused_functions() -> Result<()> {
+    let ctx = create_context().await?;
     let sql = "SELECT * FROM data WHERE a > 1 AND a < 10 AND b > 0";
-    roundtrip(sql).await?;
-    let (mut function_names, mut function_anchors) = function_extension_info(sql).await?;
-    function_names.sort();
-    function_anchors.sort();
+    let proto = roundtrip_with_ctx(sql, ctx).await?;
+    let mut functions = proto
+        .extensions
+        .iter()
+        .map(|e| match e.mapping_type.as_ref().unwrap() {
+            MappingType::ExtensionFunction(ext_f) => {
+                (ext_f.function_anchor, ext_f.name.to_owned())
+            }
+            _ => unreachable!("Non-function extensions not expected"),
+        })
+        .collect::<Vec<_>>();
+    functions.sort_by_key(|(anchor, _)| *anchor);
 
-    assert_eq!(function_names, ["and", "gt", "lt"]);
-    assert_eq!(function_anchors, [0, 1, 2]);
+    // Functions are encountered (and thus registered) depth-first
+    let expected = vec![
+        (0, "gt".to_string()),
+        (1, "lt".to_string()),
+        (2, "and".to_string()),
+    ];
+    assert_eq!(functions, expected);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_udt_extensions() -> Result<()> {
+    let ctx = create_context().await?;
+    let proto =
+        roundtrip_with_ctx("SELECT INTERVAL '1 YEAR 1 DAY 1 SECOND' FROM data", ctx)
+            .await?;
+    let expected_type = SimpleExtensionDeclaration {
+        mapping_type: Some(MappingType::ExtensionType(ExtensionType {
+            extension_uri_reference: u32::MAX,
+            type_anchor: 0,
+            name: "interval-month-day-nano".to_string(),
+        })),
+    };
+    assert_eq!(proto.extensions, vec![expected_type]);
     Ok(())
 }
 
@@ -714,7 +749,7 @@ async fn roundtrip_values() -> Result<()> {
                 [[-213.1, NULL, 5.5, 2.0, 1.0], []], \
                 arrow_cast([1,2,3], 'LargeList(Int64)'), \
                 STRUCT(true, 1 AS int_field, CAST(NULL AS STRING)), \
-                [STRUCT(STRUCT('a' AS string_field) AS struct_field)]\
+                [STRUCT(STRUCT('a' AS string_field) AS struct_field), STRUCT(STRUCT('b' AS string_field) AS struct_field)]\
             ), \
             (NULL, NULL, NULL, NULL, NULL, NULL)",
         "Values: \
@@ -724,7 +759,7 @@ async fn roundtrip_values() -> Result<()> {
                 List([[-213.1, , 5.5, 2.0, 1.0], []]), \
                 LargeList([1, 2, 3]), \
                 Struct({c0:true,int_field:1,c2:}), \
-                List([{struct_field: {string_field: a}}])\
+                List([{struct_field: {string_field: a}}, {struct_field: {string_field: b}}])\
             ), \
             (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())",
     true).await
@@ -857,7 +892,42 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
     let ctx = create_context().await?;
     ctx.register_udaf(dummy_agg);
 
-    roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await
+    roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_window_udf() -> Result<()> {
+    #[derive(Debug)]
+    struct Dummy {}
+
+    impl PartitionEvaluator for Dummy {
+        fn evaluate_all(
+            &mut self,
+            values: &[ArrayRef],
+            _num_rows: usize,
+        ) -> Result<ArrayRef> {
+            Ok(values[0].to_owned())
+        }
+    }
+
+    fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+        Ok(Box::new(Dummy {}))
+    }
+
+    let dummy_agg = create_udwf(
+        "dummy_window",            // name
+        DataType::Int64,           // input type
+        Arc::new(DataType::Int64), // return type
+        Volatility::Immutable,
+        Arc::new(make_partition_evaluator),
+    );
+
+    let ctx = create_context().await?;
+    ctx.register_udwf(dummy_agg);
+
+    roundtrip_with_ctx("select dummy_window(a) OVER () from data", ctx).await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -1049,7 +1119,7 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     Ok(())
 }
 
-async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<()> {
+async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<Box<Plan>> {
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
@@ -1068,56 +1138,25 @@ async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<()> {
     assert_eq!(plan.schema(), plan2.schema());
 
     DataFrame::new(ctx.state(), plan2).show().await?;
-    Ok(())
+    Ok(proto)
 }
 
 async fn roundtrip(sql: &str) -> Result<()> {
-    roundtrip_with_ctx(sql, create_context().await?).await
+    roundtrip_with_ctx(sql, create_context().await?).await?;
+    Ok(())
 }
 
 async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
     let ctx = create_context().await?;
-    let df = ctx.sql(sql).await?;
-    let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&ctx, &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
-
-    println!("{plan:#?}");
-    println!("{plan2:#?}");
-
-    let plan1str = format!("{plan:?}");
-    let plan2str = format!("{plan2:?}");
-    assert_eq!(plan1str, plan2str);
-
-    assert_eq!(plan.schema(), plan2.schema());
+    let proto = roundtrip_with_ctx(sql, ctx).await?;
 
     // verify that the join filters are None
     verify_post_join_filter_value(proto).await
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {
-    roundtrip_with_ctx(sql, create_all_type_context().await?).await
-}
-
-async fn function_extension_info(sql: &str) -> Result<(Vec<String>, Vec<u32>)> {
-    let ctx = create_context().await?;
-    let df = ctx.sql(sql).await?;
-    let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx)?;
-
-    let mut function_names: Vec<String> = vec![];
-    let mut function_anchors: Vec<u32> = vec![];
-    for e in &proto.extensions {
-        let (function_anchor, function_name) = match e.mapping_type.as_ref().unwrap() {
-            MappingType::ExtensionFunction(ext_f) => (ext_f.function_anchor, &ext_f.name),
-            _ => unreachable!("Producer does not generate a non-function extension"),
-        };
-        function_names.push(function_name.to_string());
-        function_anchors.push(function_anchor);
-    }
-
-    Ok((function_names, function_anchors))
+    roundtrip_with_ctx(sql, create_all_type_context().await?).await?;
+    Ok(())
 }
 
 async fn create_context() -> Result<SessionContext> {

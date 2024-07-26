@@ -352,7 +352,7 @@ async fn csv_explain_verbose() {
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
 
-    // Don't actually test the contents of the debuging output (as
+    // Don't actually test the contents of the debugging output (as
     // that may change and keeping this test updated will be a
     // pain). Instead just check for a few key pieces.
     assert_contains!(&actual, "logical_plan");

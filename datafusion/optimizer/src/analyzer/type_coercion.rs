@@ -47,8 +47,9 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprSchemable, LogicalPlan,
-    Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    type_coercion, AggregateFunction, AggregateUDF, Expr, ExprFunctionExt, ExprSchemable,
+    LogicalPlan, Operator, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -102,6 +103,14 @@ fn analyze_internal(
     // like case:
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
     schema.merge(external_schema);
+
+    // Coerce filter predicates to boolean (handles `WHERE NULL`)
+    let plan = if let LogicalPlan::Filter(mut filter) = plan {
+        filter.predicate = filter.predicate.cast_to(&DataType::Boolean, &schema)?;
+        LogicalPlan::Filter(filter)
+    } else {
+        plan
+    };
 
     let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
 
@@ -458,14 +467,14 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     _ => args,
                 };
 
-                Ok(Transformed::yes(Expr::WindowFunction(WindowFunction::new(
-                    fun,
-                    args,
-                    partition_by,
-                    order_by,
-                    window_frame,
-                    null_treatment,
-                ))))
+                Ok(Transformed::yes(
+                    Expr::WindowFunction(WindowFunction::new(fun, args))
+                        .partition_by(partition_by)
+                        .order_by(order_by)
+                        .window_frame(window_frame)
+                        .null_treatment(null_treatment)
+                        .build()?,
+                ))
             }
             Expr::Alias(_)
             | Expr::Column(_)

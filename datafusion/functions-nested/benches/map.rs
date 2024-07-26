@@ -17,16 +17,19 @@
 
 extern crate criterion;
 
-use arrow::array::{Int32Array, ListArray, StringArray};
-use arrow::datatypes::{DataType, Field};
+use arrow_array::{Int32Array, ListArray, StringArray};
 use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+use arrow_schema::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_common::ScalarValue;
-use datafusion_expr::ColumnarValue;
-use datafusion_functions::core::{make_map, map};
 use rand::prelude::ThreadRng;
 use rand::Rng;
 use std::sync::Arc;
+
+use datafusion_common::ScalarValue;
+use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::{ColumnarValue, Expr};
+use datafusion_functions_nested::map::map_udf;
+use datafusion_functions_nested::planner::NestedFunctionPlanner;
 
 fn keys(rng: &mut ThreadRng) -> Vec<String> {
     let mut keys = vec![];
@@ -51,16 +54,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         let values = values(&mut rng);
         let mut buffer = Vec::new();
         for i in 0..1000 {
-            buffer.push(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                keys[i].clone(),
-            ))));
-            buffer.push(ColumnarValue::Scalar(ScalarValue::Int32(Some(values[i]))));
+            buffer.push(Expr::Literal(ScalarValue::Utf8(Some(keys[i].clone()))));
+            buffer.push(Expr::Literal(ScalarValue::Int32(Some(values[i]))));
         }
+
+        let planner = NestedFunctionPlanner {};
 
         b.iter(|| {
             black_box(
-                make_map()
-                    .invoke(&buffer)
+                planner
+                    .plan_make_map(buffer.clone())
                     .expect("map should work on valid values"),
             );
         });
@@ -89,7 +92,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                map()
+                map_udf()
                     .invoke(&[keys.clone(), values.clone()])
                     .expect("map should work on valid values"),
             );

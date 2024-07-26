@@ -59,7 +59,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             other => {
                 let plan = self.set_expr_to_plan(other, planner_context)?;
                 let order_by_rex = self.order_by_to_sort_expr(
-                    &query.order_by,
+                    query.order_by,
                     plan.schema(),
                     planner_context,
                     true,

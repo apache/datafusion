@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "datafusion-functions-array"
-description = "Array Function packages for the DataFusion query engine"
-keywords = ["datafusion", "logical", "plan", "expressions"]
+name = "datafusion-physical-optimizer"
+description = "DataFusion Physical Optimizer"
+keywords = ["datafusion", "query", "optimizer"]
 readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
@@ -31,32 +31,8 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
-[features]
-
-[lib]
-name = "datafusion_functions_array"
-path = "src/lib.rs"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-arrow = { workspace = true }
-arrow-array = { workspace = true }
-arrow-buffer = { workspace = true }
-arrow-ord = { workspace = true }
-arrow-schema = { workspace = true }
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
-datafusion-expr = { workspace = true }
-datafusion-functions = { workspace = true }
-datafusion-functions-aggregate = { workspace = true }
-itertools = { version = "0.12", features = ["use_std"] }
-log = { workspace = true }
-paste = "1.0.14"
-
-[dev-dependencies]
-criterion = { version = "0.5", features = ["async_tokio"] }
-
-[[bench]]
-harness = false
-name = "array_expression"
+datafusion-physical-expr = { workspace = true }
+datafusion-physical-plan = { workspace = true }

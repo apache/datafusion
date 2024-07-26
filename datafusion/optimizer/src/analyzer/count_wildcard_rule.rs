@@ -35,7 +35,7 @@ pub struct CountWildcardRule {}
 
 impl CountWildcardRule {
     pub fn new() -> Self {
-        CountWildcardRule {}
+        Self {}
     }
 }
 
@@ -59,14 +59,14 @@ fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
             func_def: AggregateFunctionDefinition::UDF(udf),
             args,
             ..
-        } if udf.name() == "count" && args.len() == 1 && is_wildcard(&args[0]))
+        } if udf.name() == "count" && (args.len() == 1 && is_wildcard(&args[0]) || args.is_empty()))
 }
 
 fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
     let args = &window_function.args;
     matches!(window_function.fun,
         WindowFunctionDefinition::AggregateUDF(ref udaf)
-            if udaf.name() == "count" && args.len() == 1 && is_wildcard(&args[0]))
+            if udaf.name() == "count" && (args.len() == 1 && is_wildcard(&args[0]) || args.is_empty()))
 }
 
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -101,6 +101,7 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr::expr::Sort;
+    use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
         col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
         out_ref_col, scalar_subquery, wildcard, WindowFrame, WindowFrameBound,
@@ -223,15 +224,14 @@ mod tests {
             .window(vec![Expr::WindowFunction(expr::WindowFunction::new(
                 WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 vec![wildcard()],
-                vec![],
-                vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
-                WindowFrame::new_bounds(
-                    WindowFrameUnits::Range,
-                    WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
-                    WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-                ),
-                None,
-            ))])?
+            ))
+            .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+            .window_frame(WindowFrame::new_bounds(
+                WindowFrameUnits::Range,
+                WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
+                WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
+            ))
+            .build()?])?
             .project(vec![count(wildcard())])?
             .build()?;
 

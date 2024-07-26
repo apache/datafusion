@@ -647,7 +647,7 @@ mod tests {
     #[test]
     fn test_static_pattern_regexp_replace_pattern_error() {
         let values = StringArray::from(vec!["abc"; 5]);
-        // Delibaretely using an invalid pattern to see how the single pattern
+        // Deliberately using an invalid pattern to see how the single pattern
         // error is propagated on regexp_replace.
         let patterns = StringArray::from(vec!["["; 5]);
         let replacements = StringArray::from(vec!["foo"; 5]);

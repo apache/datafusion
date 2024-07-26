@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
@@ -28,11 +28,11 @@ use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
 };
+
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, BooleanArray};
-use datafusion_common::cast::{as_boolean_array, as_null_array};
+use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -59,6 +59,7 @@ pub struct FilterExec {
     metrics: ExecutionPlanMetricsSet,
     /// Selectivity for statistics. 0 = no rows, 100 = all rows
     default_selectivity: u8,
+    /// Properties equivalence properties, partitioning, etc.
     cache: PlanProperties,
 }
 
@@ -73,19 +74,6 @@ impl FilterExec {
                 let default_selectivity = 20;
                 let cache =
                     Self::compute_properties(&input, &predicate, default_selectivity)?;
-                Ok(Self {
-                    predicate,
-                    input: Arc::clone(&input),
-                    metrics: ExecutionPlanMetricsSet::new(),
-                    default_selectivity,
-                    cache,
-                })
-            }
-            DataType::Null => {
-                let default_selectivity = 0;
-                let cache =
-                    Self::compute_properties(&input, &predicate, default_selectivity)?;
-
                 Ok(Self {
                     predicate,
                     input: Arc::clone(&input),
@@ -367,23 +355,15 @@ pub(crate) fn batch_filter(
         .evaluate(batch)
         .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
-            let filter_array = match as_boolean_array(&array) {
-                Ok(boolean_array) => Ok(boolean_array.to_owned()),
+            Ok(match as_boolean_array(&array) {
+                // apply filter array to record batch
+                Ok(filter_array) => filter_record_batch(batch, filter_array)?,
                 Err(_) => {
-                    let Ok(null_array) = as_null_array(&array) else {
-                        return internal_err!(
-                            "Cannot create filter_array from non-boolean predicates"
-                        );
-                    };
-
-                    // if the predicate is null, then the result is also null
-                    Ok::<BooleanArray, DataFusionError>(BooleanArray::new_null(
-                        null_array.len(),
-                    ))
+                    return internal_err!(
+                        "Cannot create filter_array from non-boolean predicates"
+                    );
                 }
-            }?;
-
-            Ok(filter_record_batch(batch, &filter_array)?)
+            })
         })
 }
 
@@ -396,26 +376,20 @@ impl Stream for FilterExecStream {
     ) -> Poll<Option<Self::Item>> {
         let poll;
         loop {
-            match self.input.poll_next_unpin(cx) {
-                Poll::Ready(value) => match value {
-                    Some(Ok(batch)) => {
-                        let timer = self.baseline_metrics.elapsed_compute().timer();
-                        let filtered_batch = batch_filter(&batch, &self.predicate)?;
-                        // skip entirely filtered batches
-                        if filtered_batch.num_rows() == 0 {
-                            continue;
-                        }
-                        timer.done();
-                        poll = Poll::Ready(Some(Ok(filtered_batch)));
-                        break;
+            match ready!(self.input.poll_next_unpin(cx)) {
+                Some(Ok(batch)) => {
+                    let timer = self.baseline_metrics.elapsed_compute().timer();
+                    let filtered_batch = batch_filter(&batch, &self.predicate)?;
+                    // skip entirely filtered batches
+                    if filtered_batch.num_rows() == 0 {
+                        continue;
                     }
-                    _ => {
-                        poll = Poll::Ready(value);
-                        break;
-                    }
-                },
-                Poll::Pending => {
-                    poll = Poll::Pending;
+                    timer.done();
+                    poll = Poll::Ready(Some(Ok(filtered_batch)));
+                    break;
+                }
+                value => {
+                    poll = Poll::Ready(value);
                     break;
                 }
             }

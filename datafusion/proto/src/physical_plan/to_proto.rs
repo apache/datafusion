@@ -23,10 +23,9 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    ArrayAgg, BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, DistinctArrayAgg,
-    InListExpr, IsNotNullExpr, IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr,
-    NthValue, Ntile, OrderSensitiveArrayAgg, Rank, RankType, RowNumber, TryCastExpr,
-    WindowShift,
+    BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, InListExpr, IsNotNullExpr,
+    IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr, NthValue, Ntile, Rank,
+    RankType, RowNumber, TryCastExpr, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -40,6 +39,7 @@ use datafusion::{
     physical_plan::expressions::LikeExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_expr::WindowFrame;
 
 use crate::protobuf::{
     self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
@@ -58,13 +58,17 @@ pub fn serialize_physical_aggr_expr(
 
     if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
         let name = a.fun().name().to_string();
+        let mut buf = Vec::new();
+        codec.try_encode_udaf(a.fun(), &mut buf)?;
         return Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                 protobuf::PhysicalAggregateExprNode {
                     aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
                     expr: expressions,
                     ordering_req,
-                    distinct: false,
+                    distinct: a.is_distinct(),
+                    ignore_nulls: a.ignore_nulls(),
+                    fun_definition: (!buf.is_empty()).then_some(buf)
                 },
             )),
         });
@@ -86,9 +90,53 @@ pub fn serialize_physical_aggr_expr(
                 expr: expressions,
                 ordering_req,
                 distinct,
+                ignore_nulls: false,
+                fun_definition: None,
             },
         )),
     })
+}
+
+fn serialize_physical_window_aggr_expr(
+    aggr_expr: &dyn AggregateExpr,
+    window_frame: &WindowFrame,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<(physical_window_expr_node::WindowFunction, Option<Vec<u8>>)> {
+    if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+        if a.is_distinct() || a.ignore_nulls() {
+            // TODO
+            return not_impl_err!(
+                "Distinct aggregate functions not supported in window expressions"
+            );
+        }
+
+        let mut buf = Vec::new();
+        codec.try_encode_udaf(a.fun(), &mut buf)?;
+        Ok((
+            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                a.fun().name().to_string(),
+            ),
+            (!buf.is_empty()).then_some(buf),
+        ))
+    } else {
+        let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(aggr_expr)?;
+        if distinct {
+            return not_impl_err!(
+                "Distinct aggregate functions not supported in window expressions"
+            );
+        }
+
+        if !window_frame.start_bound.is_unbounded() {
+            return Err(DataFusionError::Internal(format!(
+                "Unbounded start bound in WindowFrame = {window_frame}"
+            )));
+        }
+
+        Ok((
+            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32),
+            None,
+        ))
+    }
 }
 
 pub fn serialize_physical_window_expr(
@@ -99,7 +147,7 @@ pub fn serialize_physical_window_expr(
     let mut args = window_expr.expressions().to_vec();
     let window_frame = window_expr.get_window_frame();
 
-    let window_function = if let Some(built_in_window_expr) =
+    let (window_function, fun_definition) = if let Some(built_in_window_expr) =
         expr.downcast_ref::<BuiltInWindowExpr>()
     {
         let expr = built_in_window_expr.get_built_in_func_expr();
@@ -160,58 +208,26 @@ pub fn serialize_physical_window_expr(
             return not_impl_err!("BuiltIn function not supported: {expr:?}");
         };
 
-        physical_window_expr_node::WindowFunction::BuiltInFunction(builtin_fn as i32)
+        (
+            physical_window_expr_node::WindowFunction::BuiltInFunction(builtin_fn as i32),
+            None,
+        )
     } else if let Some(plain_aggr_window_expr) =
         expr.downcast_ref::<PlainAggregateWindowExpr>()
     {
-        let aggr_expr = plain_aggr_window_expr.get_aggregate_expr();
-        if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-                a.fun().name().to_string(),
-            )
-        } else {
-            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
-                plain_aggr_window_expr.get_aggregate_expr().as_ref(),
-            )?;
-
-            if distinct {
-                return not_impl_err!(
-                    "Distinct aggregate functions not supported in window expressions"
-                );
-            }
-
-            if !window_frame.start_bound.is_unbounded() {
-                return Err(DataFusionError::Internal(format!("Invalid PlainAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
-            }
-
-            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
-        }
+        serialize_physical_window_aggr_expr(
+            plain_aggr_window_expr.get_aggregate_expr().as_ref(),
+            window_frame,
+            codec,
+        )?
     } else if let Some(sliding_aggr_window_expr) =
         expr.downcast_ref::<SlidingAggregateWindowExpr>()
     {
-        let aggr_expr = sliding_aggr_window_expr.get_aggregate_expr();
-        if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-                a.fun().name().to_string(),
-            )
-        } else {
-            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
-                sliding_aggr_window_expr.get_aggregate_expr().as_ref(),
-            )?;
-
-            if distinct {
-                // TODO
-                return not_impl_err!(
-                    "Distinct aggregate functions not supported in window expressions"
-                );
-            }
-
-            if window_frame.start_bound.is_unbounded() {
-                return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
-            }
-
-            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
-        }
+        serialize_physical_window_aggr_expr(
+            sliding_aggr_window_expr.get_aggregate_expr().as_ref(),
+            window_frame,
+            codec,
+        )?
     } else {
         return not_impl_err!("WindowExpr not supported: {window_expr:?}");
     };
@@ -232,6 +248,7 @@ pub fn serialize_physical_window_expr(
         window_frame: Some(window_frame),
         window_function: Some(window_function),
         name: window_expr.name().to_string(),
+        fun_definition,
     })
 }
 
@@ -242,16 +259,9 @@ struct AggrFn {
 
 fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     let aggr_expr = expr.as_any();
-    let mut distinct = false;
 
-    let inner = if aggr_expr.downcast_ref::<ArrayAgg>().is_some() {
-        protobuf::AggregateFunction::ArrayAgg
-    } else if aggr_expr.downcast_ref::<DistinctArrayAgg>().is_some() {
-        distinct = true;
-        protobuf::AggregateFunction::ArrayAgg
-    } else if aggr_expr.downcast_ref::<OrderSensitiveArrayAgg>().is_some() {
-        protobuf::AggregateFunction::ArrayAgg
-    } else if aggr_expr.downcast_ref::<Min>().is_some() {
+    // TODO: remove Min and Max
+    let inner = if aggr_expr.downcast_ref::<Min>().is_some() {
         protobuf::AggregateFunction::Min
     } else if aggr_expr.downcast_ref::<Max>().is_some() {
         protobuf::AggregateFunction::Max
@@ -259,7 +269,10 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         return not_impl_err!("Aggregate function not supported: {expr:?}");
     };
 
-    Ok(AggrFn { inner, distinct })
+    Ok(AggrFn {
+        inner,
+        distinct: false,
+    })
 }
 
 pub fn serialize_physical_sort_exprs<I>(
@@ -323,11 +336,11 @@ pub fn serialize_physical_expr(
     } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
         let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
             l: Some(Box::new(serialize_physical_expr(
-                expr.left().clone(),
+                Arc::clone(expr.left()),
                 codec,
             )?)),
             r: Some(Box::new(serialize_physical_expr(
-                expr.right().clone(),
+                Arc::clone(expr.right()),
                 codec,
             )?)),
             op: format!("{:?}", expr.op()),
@@ -347,7 +360,7 @@ pub fn serialize_physical_expr(
                             expr: expr
                                 .expr()
                                 .map(|exp| {
-                                    serialize_physical_expr(exp.clone(), codec)
+                                    serialize_physical_expr(Arc::clone(exp), codec)
                                         .map(Box::new)
                                 })
                                 .transpose()?,
@@ -364,7 +377,7 @@ pub fn serialize_physical_expr(
                             else_expr: expr
                                 .else_expr()
                                 .map(|a| {
-                                    serialize_physical_expr(a.clone(), codec)
+                                    serialize_physical_expr(Arc::clone(a), codec)
                                         .map(Box::new)
                                 })
                                 .transpose()?,
@@ -461,18 +474,14 @@ pub fn serialize_physical_expr(
             ))),
         })
     } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
-        let args = serialize_physical_exprs(expr.args().to_vec(), codec)?;
-
         let mut buf = Vec::new();
         codec.try_encode_udf(expr.fun(), &mut buf)?;
-
-        let fun_definition = if buf.is_empty() { None } else { Some(buf) };
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
                 protobuf::PhysicalScalarUdfNode {
                     name: expr.name().to_string(),
-                    args,
-                    fun_definition,
+                    args: serialize_physical_exprs(expr.args().to_vec(), codec)?,
+                    fun_definition: (!buf.is_empty()).then_some(buf),
                     return_type: Some(expr.return_type().try_into()?),
                 },
             )),
@@ -552,8 +561,8 @@ fn serialize_when_then_expr(
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalWhenThen> {
     Ok(protobuf::PhysicalWhenThen {
-        when_expr: Some(serialize_physical_expr(when_expr.clone(), codec)?),
-        then_expr: Some(serialize_physical_expr(then_expr.clone(), codec)?),
+        when_expr: Some(serialize_physical_expr(Arc::clone(when_expr), codec)?),
+        then_expr: Some(serialize_physical_expr(Arc::clone(then_expr), codec)?),
     })
 }
 

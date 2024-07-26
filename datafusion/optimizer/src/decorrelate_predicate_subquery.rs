@@ -1232,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn in_subquery_muti_project_subquery_cols() -> Result<()> {
+    fn in_subquery_multi_project_subquery_cols() -> Result<()> {
         let table_scan = test_table_scan()?;
         let subquery_scan = test_table_scan_with_name("sq")?;
 

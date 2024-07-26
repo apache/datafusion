@@ -18,6 +18,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use datafusion::physical_expr_common::aggregate::AggregateExprBuilder;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -58,10 +59,10 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
-    udaf, AggregateExpr, ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
+    AggregateExpr, ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_expr::ScalarUDF;
+use datafusion_expr::{AggregateUDF, ScalarUDF};
 
 use crate::common::{byte_to_string, str_to_byte};
 use crate::convert_required;
@@ -186,33 +187,39 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     )),
                 }
             }
-            PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
-                parse_protobuf_file_scan_config(
+            PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(
+                CsvExec::builder(parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
                     extension_codec,
-                )?,
-                scan.has_header,
-                str_to_byte(&scan.delimiter, "delimiter")?,
-                str_to_byte(&scan.quote, "quote")?,
-                if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
-                    escape,
-                )) = &scan.optional_escape
-                {
-                    Some(str_to_byte(escape, "escape")?)
-                } else {
-                    None
-                },
-                if let Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
-                    comment,
-                )) = &scan.optional_comment
-                {
-                    Some(str_to_byte(comment, "comment")?)
-                } else {
-                    None
-                },
-                FileCompressionType::UNCOMPRESSED,
-            ))),
+                )?)
+                .with_has_header(scan.has_header)
+                .with_delimeter(str_to_byte(&scan.delimiter, "delimiter")?)
+                .with_quote(str_to_byte(&scan.quote, "quote")?)
+                .with_escape(
+                    if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                        escape,
+                    )) = &scan.optional_escape
+                    {
+                        Some(str_to_byte(escape, "escape")?)
+                    } else {
+                        None
+                    },
+                )
+                .with_comment(
+                    if let Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
+                        comment,
+                    )) = &scan.optional_comment
+                    {
+                        Some(str_to_byte(comment, "comment")?)
+                    } else {
+                        None
+                    },
+                )
+                .with_newlines_in_values(scan.newlines_in_values)
+                .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+                .build(),
+            )),
             #[cfg(feature = "parquet")]
             PhysicalPlanType::ParquetScan(scan) => {
                 let base_config = parse_protobuf_file_scan_config(
@@ -491,19 +498,18 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                                 &ordering_req,
                                                 &physical_schema,
                                                 name.to_string(),
-                                                false,
+                                                agg_node.ignore_nulls,
                                             )
                                         }
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
-                                            let agg_udf = registry.udaf(udaf_name)?;
-                                            // TODO: 'logical_exprs' is not supported for UDAF yet.
-                                            // approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
-                                            let logical_exprs = &[];
+                                            let agg_udf = match &agg_node.fun_definition {
+                                                Some(buf) => extension_codec.try_decode_udaf(udaf_name, buf)?,
+                                                None => registry.udaf(udaf_name)?
+                                            };
+
+                                            // TODO: approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
                                             // TODO: `order by` is not supported for UDAF yet
-                                            let sort_exprs = &[];
-                                            let ordering_req = &[];
-                                            let ignore_nulls = false;
-                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, logical_exprs, sort_exprs, ordering_req, &physical_schema, name, ignore_nulls, false)
+                                            AggregateExprBuilder::new(agg_udf, input_phy_expr).schema(Arc::clone(&physical_schema)).name(name).with_ignore_nulls(agg_node.ignore_nulls).with_distinct(agg_node.distinct).build()
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {
@@ -1101,7 +1107,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
     where
         Self: Sized,
     {
-        let plan_clone = plan.clone();
+        let plan_clone = Arc::clone(&plan);
         let plan = plan.as_any();
 
         if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
@@ -1128,7 +1134,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             let expr = exec
                 .expr()
                 .iter()
-                .map(|expr| serialize_physical_expr(expr.0.clone(), extension_codec))
+                .map(|expr| serialize_physical_expr(Arc::clone(&expr.0), extension_codec))
                 .collect::<Result<Vec<_>>>()?;
             let expr_name = exec.expr().iter().map(|expr| expr.1.clone()).collect();
             return Ok(protobuf::PhysicalPlanNode {
@@ -1169,7 +1175,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     protobuf::FilterExecNode {
                         input: Some(Box::new(input)),
                         expr: Some(serialize_physical_expr(
-                            exec.predicate().clone(),
+                            Arc::clone(exec.predicate()),
                             extension_codec,
                         )?),
                         default_filter_selectivity: exec.default_selectivity() as u32,
@@ -1576,6 +1582,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         } else {
                             None
                         },
+                        newlines_in_values: exec.newlines_in_values(),
                     },
                 )),
             });
@@ -1585,7 +1592,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
             let predicate = exec
                 .predicate()
-                .map(|pred| serialize_physical_expr(pred.clone(), extension_codec))
+                .map(|pred| serialize_physical_expr(Arc::clone(pred), extension_codec))
                 .transpose()?;
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
@@ -1810,13 +1817,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             let window_expr = exec
                 .window_expr()
                 .iter()
-                .map(|e| serialize_physical_window_expr(e.clone(), extension_codec))
+                .map(|e| serialize_physical_window_expr(Arc::clone(e), extension_codec))
                 .collect::<Result<Vec<protobuf::PhysicalWindowExprNode>>>()?;
 
             let partition_keys = exec
                 .partition_keys
                 .iter()
-                .map(|e| serialize_physical_expr(e.clone(), extension_codec))
+                .map(|e| serialize_physical_expr(Arc::clone(e), extension_codec))
                 .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
 
             return Ok(protobuf::PhysicalPlanNode {
@@ -1840,13 +1847,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             let window_expr = exec
                 .window_expr()
                 .iter()
-                .map(|e| serialize_physical_window_expr(e.clone(), extension_codec))
+                .map(|e| serialize_physical_window_expr(Arc::clone(e), extension_codec))
                 .collect::<Result<Vec<protobuf::PhysicalWindowExprNode>>>()?;
 
             let partition_keys = exec
                 .partition_keys
                 .iter()
-                .map(|e| serialize_physical_expr(e.clone(), extension_codec))
+                .map(|e| serialize_physical_expr(Arc::clone(e), extension_codec))
                 .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
 
             let input_order_mode = match &exec.input_order_mode {
@@ -1949,7 +1956,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         }
 
         let mut buf: Vec<u8> = vec![];
-        match extension_codec.try_encode(plan_clone.clone(), &mut buf) {
+        match extension_codec.try_encode(Arc::clone(&plan_clone), &mut buf) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalPlanNode> = plan_clone
                     .children()
@@ -2033,6 +2040,16 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
+    }
+
+    fn try_decode_udaf(&self, name: &str, _buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        not_impl_err!(
+            "PhysicalExtensionCodec is not provided for aggregate function {name}"
+        )
+    }
+
+    fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
     }
 }
 

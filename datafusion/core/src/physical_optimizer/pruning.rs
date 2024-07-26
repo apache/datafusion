@@ -173,10 +173,10 @@ pub trait PruningStatistics {
 /// 1. Arbitrary expressions (including user defined functions)
 ///
 /// 2. Vectorized evaluation (provide more than one set of statistics at a time)
-/// so it is suitable for pruning 1000s of containers.
+///    so it is suitable for pruning 1000s of containers.
 ///
 /// 3. Any source of information that implements the [`PruningStatistics`] trait
-/// (not just Parquet metadata).
+///    (not just Parquet metadata).
 ///
 /// # Example
 ///
@@ -278,17 +278,17 @@ pub trait PruningStatistics {
 /// 2. A predicate (expression that evaluates to a boolean)
 ///
 /// 3. [`PruningStatistics`] that provides information about columns in that
-/// schema, for multiple “containers”. For each column in each container, it
-/// provides optional information on contained values, min_values, max_values,
-/// null_counts counts, and row_counts counts.
+///    schema, for multiple “containers”. For each column in each container, it
+///    provides optional information on contained values, min_values, max_values,
+///    null_counts counts, and row_counts counts.
 ///
 /// **Outputs**:
 /// A (non null) boolean value for each container:
 /// * `true`: There MAY be rows that match the predicate
 ///
 /// * `false`: There are no rows that could possibly match the predicate (the
-/// predicate can never possibly be true). The container can be pruned (skipped)
-/// entirely.
+///   predicate can never possibly be true). The container can be pruned (skipped)
+///   entirely.
 ///
 /// Note that in order to be correct, `PruningPredicate` must return false
 /// **only** if it can determine that for all rows in the container, the
@@ -609,6 +609,8 @@ impl PruningPredicate {
     ///
     /// This happens if the predicate is a literal `true`  and
     /// literal_guarantees is empty.
+    ///
+    /// This can happen when a predicate is simplified to a constant `true`
     pub fn always_true(&self) -> bool {
         is_always_true(&self.predicate_expr) && self.literal_guarantees.is_empty()
     }
@@ -623,7 +625,7 @@ impl PruningPredicate {
     ///
     /// This is useful to avoid fetching statistics for columns that will not be
     /// used in the predicate. For example, it can be used to avoid reading
-    /// uneeded bloom filters (a non trivial operation).
+    /// unneeded bloom filters (a non trivial operation).
     pub fn literal_columns(&self) -> Vec<String> {
         let mut seen = HashSet::new();
         self.literal_guarantees
@@ -736,12 +738,25 @@ impl RequiredColumns {
         Self::default()
     }
 
-    /// Returns number of unique columns
-    pub(crate) fn n_columns(&self) -> usize {
-        self.iter()
-            .map(|(c, _s, _f)| c)
-            .collect::<HashSet<_>>()
-            .len()
+    /// Returns Some(column) if this is a single column predicate.
+    ///
+    /// Returns None if this is a multi-column predicate.
+    ///
+    /// Examples:
+    /// * `a > 5 OR a < 10` returns `Some(a)`
+    /// * `a > 5 OR b < 10` returns `None`
+    /// * `true` returns None
+    pub(crate) fn single_column(&self) -> Option<&phys_expr::Column> {
+        if self.columns.windows(2).all(|w| {
+            // check if all columns are the same (ignoring statistics and field)
+            let c1 = &w[0].0;
+            let c2 = &w[1].0;
+            c1 == c2
+        }) {
+            self.columns.first().map(|r| &r.0)
+        } else {
+            None
+        }
     }
 
     /// Returns an iterator over items in columns (see doc on

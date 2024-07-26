@@ -335,7 +335,7 @@ pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
 /// This function finds the longest prefix of the form 0, 1, 2, ... within the
 /// collection `sequence`. Examples:
 /// - For 0, 1, 2, 4, 5; we would produce 3, meaning 0, 1, 2 is the longest satisfying
-/// prefix.
+///   prefix.
 /// - For 1, 2, 3, 4; we would produce 0, meaning there is no such prefix.
 pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     sequence: impl IntoIterator<Item = T>,

@@ -24,7 +24,6 @@
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::{ConfigOptions, OptimizerOptions};
@@ -34,6 +33,7 @@ use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supp
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
 /// The SanityCheckPlan rule rejects the following query plans:

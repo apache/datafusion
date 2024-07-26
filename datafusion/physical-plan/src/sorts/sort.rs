@@ -30,13 +30,13 @@ use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use crate::sorts::streaming_merge::streaming_merge;
+use crate::spill::{read_spill_as_stream, spill_record_batches};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    read_spill_as_stream, spill_record_batches, DisplayAs, DisplayFormatType,
-    Distribution, EmptyRecordBatchStream, ExecutionMode, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
+    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn};
@@ -45,7 +45,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use arrow_array::{Array, RecordBatchOptions, UInt32Array};
 use arrow_schema::DataType;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -90,14 +90,14 @@ impl ExternalSorterMetrics {
 /// 1. get a non-empty new batch from input
 ///
 /// 2. check with the memory manager there is sufficient space to
-///   buffer the batch in memory 2.1 if memory sufficient, buffer
-///   batch in memory, go to 1.
+///    buffer the batch in memory 2.1 if memory sufficient, buffer
+///    batch in memory, go to 1.
 ///
 /// 2.2 if no more memory is available, sort all buffered batches and
 ///     spill to file.  buffer the next batch in memory, go to 1.
 ///
 /// 3. when input is exhausted, merge all in memory batches and spills
-/// to get a total order.
+///    to get a total order.
 ///
 /// # When data fits in available memory
 ///
@@ -321,7 +321,7 @@ impl ExternalSorter {
     /// 1. An in-memory sort/merge (if the input fit in memory)
     ///
     /// 2. A combined streaming merge incorporating both in-memory
-    /// batches and data from spill files on disk.
+    ///    batches and data from spill files on disk.
     fn sort(&mut self) -> Result<SendableRecordBatchStream> {
         if self.spilled_before() {
             let mut streams = vec![];
@@ -333,10 +333,7 @@ impl ExternalSorter {
 
             for spill in self.spills.drain(..) {
                 if !spill.path().exists() {
-                    return Err(DataFusionError::Internal(format!(
-                        "Spill file {:?} does not exist",
-                        spill.path()
-                    )));
+                    return internal_err!("Spill file {:?} does not exist", spill.path());
                 }
                 let stream = read_spill_as_stream(spill, Arc::clone(&self.schema), 2)?;
                 streams.push(stream);
@@ -602,7 +599,7 @@ pub fn sort_batch(
         .collect::<Result<Vec<_>>>()?;
 
     let indices = if is_multi_column_with_lists(&sort_columns) {
-        // lex_sort_to_indices doesn't support List with more than one colum
+        // lex_sort_to_indices doesn't support List with more than one column
         // https://github.com/apache/arrow-rs/issues/5454
         lexsort_to_indices_multi_columns(sort_columns, fetch)?
     } else {
@@ -802,12 +799,12 @@ impl DisplayAs for SortExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr = PhysicalSortExpr::format_list(&self.expr);
-                let preserve_partioning = self.preserve_partitioning;
+                let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partioning}]",)
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]",)
                     }
-                    None => write!(f, "SortExec: expr=[{expr}], preserve_partitioning=[{preserve_partioning}]"),
+                    None => write!(f, "SortExec: expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]"),
                 }
             }
         }

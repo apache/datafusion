@@ -42,7 +42,7 @@ pub use order_by::rewrite_sort_cols_by_aggs;
 ///
 /// For example, concatenating arrays `a || b` is represented as
 /// `Operator::ArrowAt`, but can be implemented by calling a function
-/// `array_concat` from the `functions-array` crate.
+/// `array_concat` from the `functions-nested` crate.
 // This is not used in datafusion internally, but it is still helpful for downstream project so don't remove it.
 pub trait FunctionRewrite {
     /// Return a human readable name for this rewrite
@@ -155,7 +155,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
         })
     })
     .data()
-    .expect("Unnormalize is infallable")
+    .expect("Unnormalize is infallible")
 }
 
 /// Create a Column from the Scalar Expr
@@ -201,7 +201,7 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
         })
     })
     .data()
-    .expect("strip_outer_reference is infallable")
+    .expect("strip_outer_reference is infallible")
 }
 
 /// Returns plan with expressions coerced to types compatible with

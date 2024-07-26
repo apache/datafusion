@@ -18,6 +18,7 @@
 use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::TimeUnit::Nanosecond;
@@ -27,9 +28,11 @@ use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
 };
 use datafusion_expr::{
+    dml::CopyTo,
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
-    ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, CreateExternalTable, DdlStatement, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -37,6 +40,7 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
+use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf,
 };
@@ -85,6 +89,7 @@ fn parse_decimals() {
                 parse_float_as_decimal: true,
                 enable_ident_normalization: false,
                 support_varchar_with_length: false,
+                enable_options_value_normalization: false,
             },
         );
     }
@@ -139,12 +144,77 @@ fn parse_ident_normalization() {
                 parse_float_as_decimal: false,
                 enable_ident_normalization,
                 support_varchar_with_length: false,
+                enable_options_value_normalization: false,
             },
         );
         if plan.is_ok() {
             assert_eq!(expected, format!("{plan:?}"));
         } else {
             assert_eq!(expected, plan.unwrap_err().strip_backtrace());
+        }
+    }
+}
+
+#[test]
+fn test_parse_options_value_normalization() {
+    let test_data = [
+        (
+            "CREATE EXTERNAL TABLE test OPTIONS ('location' 'LoCaTiOn') STORED AS PARQUET LOCATION 'fake_location'",
+            "CreateExternalTable: Bare { table: \"test\" }",
+            HashMap::from([("format.location", "LoCaTiOn")]),
+            false,
+        ),
+        (
+            "CREATE EXTERNAL TABLE test OPTIONS ('location' 'LoCaTiOn') STORED AS PARQUET LOCATION 'fake_location'",
+            "CreateExternalTable: Bare { table: \"test\" }",
+            HashMap::from([("format.location", "location")]),
+            true,
+        ),
+        (
+            "COPY test TO 'fake_location' STORED AS PARQUET OPTIONS ('location' 'LoCaTiOn')",
+            "CopyTo: format=csv output_url=fake_location options: (format.location LoCaTiOn)\n  TableScan: test",
+            HashMap::from([("format.location", "LoCaTiOn")]),
+            false,
+        ),
+        (
+            "COPY test TO 'fake_location' STORED AS PARQUET OPTIONS ('location' 'LoCaTiOn')",
+            "CopyTo: format=csv output_url=fake_location options: (format.location location)\n  TableScan: test",
+            HashMap::from([("format.location", "location")]),
+            true,
+        ),
+    ];
+
+    for (sql, expected_plan, expected_options, enable_options_value_normalization) in
+        test_data
+    {
+        let plan = logical_plan_with_options(
+            sql,
+            ParserOptions {
+                parse_float_as_decimal: false,
+                enable_ident_normalization: false,
+                support_varchar_with_length: false,
+                enable_options_value_normalization,
+            },
+        );
+        if let Ok(plan) = plan {
+            assert_eq!(expected_plan, format!("{plan:?}"));
+
+            match plan {
+                LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+                    CreateExternalTable { options, .. },
+                ))
+                | LogicalPlan::Copy(CopyTo { options, .. }) => {
+                    expected_options.iter().for_each(|(k, v)| {
+                        assert_eq!(Some(&v.to_string()), options.get(*k));
+                    });
+                }
+                _ => panic!(
+                    "Expected Ddl(CreateExternalTable) or Copy(CopyTo) but got {:?}",
+                    plan
+                ),
+            }
+        } else {
+            assert_eq!(expected_plan, plan.unwrap_err().strip_backtrace());
         }
     }
 }
@@ -1144,7 +1214,7 @@ fn select_aggregate_with_group_by_with_having_that_reuses_aggregate_multiple_tim
 }
 
 #[test]
-fn select_aggregate_with_group_by_with_having_using_aggreagate_not_in_select() {
+fn select_aggregate_with_group_by_with_having_using_aggregate_not_in_select() {
     let sql = "SELECT first_name, MAX(age)
                    FROM person
                    GROUP BY first_name
@@ -1185,7 +1255,7 @@ fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compo
 }
 
 #[test]
-fn select_aggregate_with_group_by_with_having_using_derived_column_aggreagate_not_in_select(
+fn select_aggregate_with_group_by_with_having_using_derived_column_aggregate_not_in_select(
 ) {
     let sql = "SELECT first_name, MAX(age)
                    FROM person
@@ -2694,7 +2764,8 @@ fn logical_plan_with_dialect_and_options(
         .with_udaf(approx_median_udaf())
         .with_udaf(count_udaf())
         .with_udaf(avg_udaf())
-        .with_udaf(grouping_udaf());
+        .with_udaf(grouping_udaf())
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
@@ -3271,7 +3342,7 @@ fn test_offset_before_limit() {
 #[test]
 fn test_distribute_by() {
     let sql = "select id from person distribute by state";
-    let expected = "Repartition: DistributeBy(state)\
+    let expected = "Repartition: DistributeBy(person.state)\
         \n  Projection: person.id\
         \n    TableScan: person";
     quick_test(sql, expected);
@@ -3627,7 +3698,7 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
     let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
     assert_eq!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: ParserError(\"Expected AS, found: SELECT\")"
+        "SQL error: ParserError(\"Expected: AS, found: SELECT\")"
     )
 }
 
@@ -3668,7 +3739,7 @@ fn test_non_prepare_statement_should_infer_types() {
 
 #[test]
 #[should_panic(
-    expected = "value: SQL(ParserError(\"Expected [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1\""
+    expected = "value: SQL(ParserError(\"Expected: [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1\""
 )]
 fn test_prepare_statement_to_plan_panic_is_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
@@ -4347,7 +4418,7 @@ fn test_parse_escaped_string_literal_value() {
     let sql = r"SELECT character_length(E'\000') AS len";
     assert_eq!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 25\")"
+        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column: 25\")"
     )
 }
 

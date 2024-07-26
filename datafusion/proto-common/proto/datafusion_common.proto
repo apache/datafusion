@@ -130,6 +130,12 @@ message Decimal{
   int32 scale = 4;
 }
 
+message Decimal256Type{
+  reserved 1, 2;
+  uint32 precision = 3;
+  int32 scale = 4;
+}
+
 message List{
   Field field_type = 1;
 }
@@ -335,6 +341,7 @@ message ArrowType{
     TimeUnit TIME64 = 22 ;
     IntervalUnit INTERVAL = 23 ;
     Decimal DECIMAL = 24 ;
+    Decimal256Type DECIMAL256 = 36;
     List LIST = 25;
     List LARGE_LIST = 26;
     FixedSizeList FIXED_SIZE_LIST = 27;
@@ -410,6 +417,7 @@ message CsvOptions {
   string null_value = 12; // Optional representation of null value
   bytes comment = 13; // Optional comment character as a byte
   bytes double_quote = 14; // Indicates if quotes are doubled
+  bytes newlines_in_values = 15; // Indicates if newlines are supported in values
 }
 
 // Options controlling CSV format
