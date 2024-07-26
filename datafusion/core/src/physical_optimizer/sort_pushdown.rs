@@ -176,6 +176,7 @@ fn pushdown_requirement_to_children(
         || plan.as_any().is::<ProjectionExec>()
         || is_limit(plan)
         || plan.as_any().is::<HashJoinExec>()
+        || pushdown_would_violate_requirements(parent_required, plan.as_ref())
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
         // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
@@ -209,6 +210,29 @@ fn pushdown_requirement_to_children(
         ))
     }
     // TODO: Add support for Projection push down
+}
+
+/// Return true if pushing the sort requirements through a node would violate
+/// the input sorting requirements for the plan
+fn pushdown_would_violate_requirements(
+    parent_required: LexRequirementRef,
+    child: &dyn ExecutionPlan,
+) -> bool {
+    child
+        .required_input_ordering()
+        .iter()
+        .any(|child_required| {
+            let Some(child_required) = child_required.as_ref() else {
+                // no requirements, so pushing down would not violate anything
+                return false;
+            };
+            // check if the plan's requirements would still e satisfied if we pushed
+            // down the parent requirements
+            child_required
+                .iter()
+                .zip(parent_required.iter())
+                .all(|(c, p)| !c.compatible(p))
+        })
 }
 
 /// Determine children requirements:
