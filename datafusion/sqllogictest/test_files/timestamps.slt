@@ -3021,3 +3021,45 @@ drop view t_utc;
 
 statement ok
 drop view t_timezone;
+
+# test comparisons across timestamps
+statement ok
+create table t AS
+VALUES
+  ('2024-01-01T00:00:01Z'),
+  ('2024-02-01T00:00:01Z'),
+  ('2024-03-01T00:00:01Z')
+;
+
+statement ok
+create view t_utc as
+select column1::timestamp AT TIME ZONE 'UTC' as "column1"
+from t;
+
+statement ok
+create view t_europe as
+select column1::timestamp AT TIME ZONE 'Europe/Brussels' as "column1"
+from t;
+
+query P
+SELECT column1 FROM t_utc WHERE column1 < '2024-02-01T00:00:00' AT TIME ZONE 'America/Los_Angeles';
+----
+2024-01-01T00:00:01Z
+2024-02-01T00:00:01Z
+
+query P
+SELECT column1 FROM t_europe WHERE column1 = '2024-01-31T16:00:01' AT TIME ZONE 'America/Los_Angeles';
+----
+2024-02-01T00:00:01+01:00
+
+query P
+SELECT column1 FROM t_europe WHERE column1 BETWEEN '2020-01-01T00:00:00' AT TIME ZONE 'Australia/Brisbane' AND '2024-02-01T00:00:00' AT TIME ZONE 'America/Los_Angeles';
+----
+2024-01-01T00:00:01+01:00
+2024-02-01T00:00:01+01:00
+
+query P
+SELECT column1 FROM t_utc WHERE column1 IN ('2024-01-31T16:00:01' AT TIME ZONE 'America/Los_Angeles');
+----
+2024-02-01T00:00:01Z
+

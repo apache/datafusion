@@ -28,7 +28,6 @@ use arrow::datatypes::{
     DataType, Field, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
-
 use datafusion_common::{exec_datafusion_err, plan_datafusion_err, plan_err, Result};
 
 /// The type signature of an instantiation of binary operator expression such as
@@ -155,7 +154,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                     rhs: rhs.clone(),
                     ret,
                 })
-            } else if let Some(coerced) = temporal_coercion(lhs, rhs) {
+            } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
                 let ret = get_result(&coerced, &coerced).map_err(|e| {
@@ -492,7 +491,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     }
     binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
-        .or_else(|| temporal_coercion(lhs_type, rhs_type))
+        .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
@@ -508,7 +507,7 @@ pub fn values_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
-        .or_else(|| temporal_coercion(lhs_type, rhs_type))
+        .or_else(|| temporal_coercion_strict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
 }
@@ -1034,29 +1033,44 @@ fn is_time_with_valid_unit(datatype: DataType) -> bool {
     )
 }
 
+/// Timezone coercion is handled by the following rules:
+/// - If only one has a timezone, coerce the other to match
+/// - If both have a timezone, coerce to the left type
+/// - "UTC" and "+00:00" are considered equivalent
+fn temporal_coercion_nonstrict_timezone(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    match (lhs_type, rhs_type) {
+        (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
+            let tz = match (lhs_tz, rhs_tz) {
+                (Some(lhs_tz), Some(rhs_tz)) => {
+                    match (lhs_tz.as_ref(), rhs_tz.as_ref()) {
+                        // UTC and "+00:00" are the same by definition. Most other timezones
+                        // do not have a 1-1 mapping between timezone and an offset from UTC
+                        ("UTC", "+00:00") | ("+00:00", "UTC") => Some(Arc::clone(lhs_tz)),
+                        (_lhs, _rhs) => Some(Arc::clone(lhs_tz))
+                    }
+                }
+                (Some(lhs_tz), None) => Some(Arc::clone(lhs_tz)),
+                (None, Some(rhs_tz)) => Some(Arc::clone(rhs_tz)),
+                (None, None) => None,
+            };
+
+            let unit = timeunit_coercion(lhs_unit, rhs_unit);
+
+            Some(Timestamp(unit, tz))
+        }
+        _ => temporal_coercion(lhs_type, rhs_type),
+    }
+}
+
 /// Coercion rules for Temporal columns: the type that both lhs and rhs can be
 /// casted to for the purpose of a date computation
 /// For interval arithmetic, it doesn't handle datetime type +/- interval
-fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn temporal_coercion_strict_timezone(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    use arrow::datatypes::IntervalUnit::*;
-    use arrow::datatypes::TimeUnit::*;
 
     match (lhs_type, rhs_type) {
-        (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
-        (Date64, Date32) | (Date32, Date64) => Some(Date64),
-        (Timestamp(_, None), Date64) | (Date64, Timestamp(_, None)) => {
-            Some(Timestamp(Nanosecond, None))
-        }
-        (Timestamp(_, _tz), Date64) | (Date64, Timestamp(_, _tz)) => {
-            Some(Timestamp(Nanosecond, None))
-        }
-        (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None)) => {
-            Some(Timestamp(Nanosecond, None))
-        }
-        (Timestamp(_, _tz), Date32) | (Date32, Timestamp(_, _tz)) => {
-            Some(Timestamp(Nanosecond, None))
-        }
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
                 (Some(lhs_tz), Some(rhs_tz)) => {
@@ -1076,28 +1090,57 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
                 (None, None) => None,
             };
 
-            let unit = match (lhs_unit, rhs_unit) {
-                (Second, Millisecond) => Second,
-                (Second, Microsecond) => Second,
-                (Second, Nanosecond) => Second,
-                (Millisecond, Second) => Second,
-                (Millisecond, Microsecond) => Millisecond,
-                (Millisecond, Nanosecond) => Millisecond,
-                (Microsecond, Second) => Second,
-                (Microsecond, Millisecond) => Millisecond,
-                (Microsecond, Nanosecond) => Microsecond,
-                (Nanosecond, Second) => Second,
-                (Nanosecond, Millisecond) => Millisecond,
-                (Nanosecond, Microsecond) => Microsecond,
-                (l, r) => {
-                    assert_eq!(l, r);
-                    *l
-                }
-            };
+            let unit = timeunit_coercion(lhs_unit, rhs_unit);
 
             Some(Timestamp(unit, tz))
         }
+        _ => temporal_coercion(lhs_type, rhs_type),
+    }
+}
+
+fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>{
+    use arrow::datatypes::DataType::*;
+    use arrow::datatypes::IntervalUnit::*;
+    use arrow::datatypes::TimeUnit::*;
+
+    match (lhs_type, rhs_type) {
+        (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
+        (Date64, Date32) | (Date32, Date64) => Some(Date64),
+        (Timestamp(_, None), Date64) | (Date64, Timestamp(_, None)) => {
+            Some(Timestamp(Nanosecond, None))
+        }
+        (Timestamp(_, _tz), Date64) | (Date64, Timestamp(_, _tz)) => {
+            Some(Timestamp(Nanosecond, None))
+        }
+        (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None)) => {
+            Some(Timestamp(Nanosecond, None))
+        }
+        (Timestamp(_, _tz), Date32) | (Date32, Timestamp(_, _tz)) => {
+            Some(Timestamp(Nanosecond, None))
+        }
         _ => None,
+    }
+}
+
+fn timeunit_coercion(lhs_unit: &TimeUnit, rhs_unit: &TimeUnit) -> TimeUnit {
+    use arrow::datatypes::TimeUnit::*;
+    match (lhs_unit, rhs_unit) {
+        (Second, Millisecond) => Second,
+        (Second, Microsecond) => Second,
+        (Second, Nanosecond) => Second,
+        (Millisecond, Second) => Second,
+        (Millisecond, Microsecond) => Millisecond,
+        (Millisecond, Nanosecond) => Millisecond,
+        (Microsecond, Second) => Second,
+        (Microsecond, Millisecond) => Millisecond,
+        (Microsecond, Nanosecond) => Microsecond,
+        (Nanosecond, Second) => Second,
+        (Nanosecond, Millisecond) => Millisecond,
+        (Nanosecond, Microsecond) => Microsecond,
+        (l, r) => {
+            assert_eq!(l, r);
+            *l
+        }
     }
 }
 
@@ -1723,6 +1766,27 @@ mod tests {
             DataType::LargeUtf8,
             Operator::Eq,
             DataType::LargeBinary
+        );
+
+        // Timestamps
+        let utc: Option<Arc<str>> = Some("UTC".into());
+        test_coercion_binary_rule!(
+            DataType::Timestamp(TimeUnit::Second, utc.clone()),
+            DataType::Timestamp(TimeUnit::Second, utc.clone()),
+            Operator::Eq,
+            DataType::Timestamp(TimeUnit::Second, utc.clone())
+        );
+        test_coercion_binary_rule!(
+            DataType::Timestamp(TimeUnit::Second, utc.clone()),
+            DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
+            Operator::Eq,
+            DataType::Timestamp(TimeUnit::Second, utc.clone())
+        );
+        test_coercion_binary_rule!(
+            DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into())),
+            DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
+            Operator::Eq,
+            DataType::Timestamp(TimeUnit::Second, utc.clone())
         );
 
         // TODO add other data type

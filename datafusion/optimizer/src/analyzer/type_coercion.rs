@@ -34,9 +34,7 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::Subquery;
-use datafusion_expr::type_coercion::binary::{
-    comparison_coercion, get_input_types, like_coercion,
-};
+use datafusion_expr::type_coercion::binary::{comparison_coercion, get_input_types, like_coercion};
 use datafusion_expr::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf,
 };
