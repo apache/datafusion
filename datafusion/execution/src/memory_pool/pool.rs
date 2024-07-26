@@ -416,4 +416,54 @@ mod tests {
         let err = r4.try_grow(30).unwrap_err().strip_backtrace();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 30 bytes for s4 with 0 bytes already allocated - maximum available is 20");
     }
+
+    #[test]
+    fn test_tracked_consumers_pool() {
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(TrackConsumersPool::new(GreedyMemoryPool::new(100), 3));
+
+        // Test: see error message when no consumers recorded yet
+        let mut r0 = MemoryConsumer::new("r0").register(&pool);
+        let expected = "Failed to allocate additional 150 bytes for r0 with 0 bytes already allocated - maximum available is 100. The top memory consumers (across reservations) are: r0 consumed 0 bytes";
+        assert!(
+            matches!(
+                r0.try_grow(150),
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+            ),
+            "should error when no other consumers are reported"
+        );
+
+        // Test: use all the different interfaces to change reservation size
+
+        // set r1=50, using grow and shrink
+        let mut r1 = MemoryConsumer::new("r1").register(&pool);
+        r1.grow(70);
+        r1.shrink(20);
+
+        // set r2=15 using try_grow
+        let mut r2 = MemoryConsumer::new("r2").register(&pool);
+        r2.try_grow(15)
+            .expect("should succeed in memory allotment for r2");
+
+        // set r3=20 using try_resize
+        let mut r3 = MemoryConsumer::new("r3").register(&pool);
+        r3.try_resize(25)
+            .expect("should succeed in memory allotment for r3");
+        r3.try_resize(20)
+            .expect("should succeed in memory allotment for r3");
+
+        // set r4=10
+        // this should not be reported in top 3
+        let mut r4 = MemoryConsumer::new("r4").register(&pool);
+        r4.grow(10);
+
+        // Test: reports if new reservation causes error
+        // using the previous set size for other consumers
+        let mut r5 = MemoryConsumer::new("r5").register(&pool);
+        let expected = "Failed to allocate additional 150 bytes for r5 with 0 bytes already allocated - maximum available is 5. The top memory consumers (across reservations) are: r1 consumed 50 bytes, r3 consumed 20 bytes, r2 consumed 15 bytes";
+        assert!(matches!(
+            r5.try_grow(150),
+            Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+        ));
+    }
 }
