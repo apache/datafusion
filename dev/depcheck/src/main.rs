@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
 
-use cargo::util::config::Config;
+use cargo::util::context::GlobalContext;
 
 /// Verifies that there are no circular dependencies between DataFusion crates
 /// (which prevents publishing on crates.io) by parsing the Cargo.toml files and
@@ -31,7 +31,7 @@ use cargo::util::config::Config;
 ///
 /// See https://github.com/apache/datafusion/issues/9278 for more details
 fn main() -> CargoResult<()> {
-    let config = Config::default()?;
+    let gctx = GlobalContext::default()?;
     // This is the path for the depcheck binary
     let path = env::var("CARGO_MANIFEST_DIR").unwrap();
     let root_cargo_toml = Path::new(&path)
@@ -47,7 +47,7 @@ fn main() -> CargoResult<()> {
         "Checking for circular dependencies in {}",
         root_cargo_toml.display()
     );
-    let workspace = cargo::core::Workspace::new(&root_cargo_toml, &config)?;
+    let workspace = cargo::core::Workspace::new(&root_cargo_toml, &gctx)?;
     let (_, resolve) = cargo::ops::resolve_ws(&workspace)?;
 
     let mut package_deps = HashMap::new();
