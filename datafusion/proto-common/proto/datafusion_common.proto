@@ -486,6 +486,7 @@ message ParquetOptions {
   uint64 maximum_buffered_record_batches_per_stream = 25; // default = 2
   bool bloom_filter_on_read = 26; // default = true
   bool bloom_filter_on_write = 27; // default = false
+  bool schema_force_string_view = 28; // default = false
 
   oneof metadata_size_hint_opt {
     uint64 metadata_size_hint = 4;

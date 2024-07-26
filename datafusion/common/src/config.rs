@@ -324,10 +324,6 @@ config_namespace! {
 
         /// Should DataFusion keep the columns used for partition_by in the output RecordBatches
         pub keep_partition_by_columns: bool, default = false
-
-        /// If true, listing tables will read columns of `Utf8/Utf8Large` with `Utf8View`,
-        /// and `Binary/BinaryLarge` with `BinaryView`.
-        pub schema_force_string_view: bool, default = false
     }
 }
 
@@ -473,6 +469,10 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
+
+        /// If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
+        /// and `Binary/BinaryLarge` with `BinaryView`.
+        pub schema_force_string_view: bool, default = false
     }
 }
 

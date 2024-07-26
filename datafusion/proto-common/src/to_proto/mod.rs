@@ -826,6 +826,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             allow_single_file_parallelism: value.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as u64,
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as u64,
+            schema_force_string_view: value.schema_force_string_view,
         })
     }
 }

@@ -18,6 +18,8 @@
 //! [`ParquetOpener`] for opening Parquet files
 
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
+use crate::datasource::file_format::transform_schema_to_view;
+use crate::datasource::physical_plan::parquet::page_filter::PagePruningPredicate;
 use crate::datasource::physical_plan::parquet::row_group_filter::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
     row_filter, should_enable_page_index, ParquetAccessPlan,
@@ -33,7 +35,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
-use parquet::arrow::arrow_reader::ArrowReaderOptions;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use std::sync::Arc;
@@ -56,6 +58,7 @@ pub(super) struct ParquetOpener {
     pub enable_page_index: bool,
     pub enable_bloom_filter: bool,
     pub schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    pub schema_force_string_view: bool,
 }
 
 impl FileOpener for ParquetOpener {
@@ -66,7 +69,7 @@ impl FileOpener for ParquetOpener {
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
 
-        let reader: Box<dyn AsyncFileReader> =
+        let mut reader: Box<dyn AsyncFileReader> =
             self.parquet_file_reader_factory.create_reader(
                 self.partition_index,
                 file_meta,
@@ -90,14 +93,27 @@ impl FileOpener for ParquetOpener {
         );
         let enable_bloom_filter = self.enable_bloom_filter;
         let limit = self.limit;
+        let schema_force_string_view = self.schema_force_string_view;
 
         Ok(Box::pin(async move {
+            let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
+
+            let metadata =
+                ArrowReaderMetadata::load_async(&mut reader, options.clone()).await?;
+            let mut schema = metadata.schema().clone();
+
+            if schema_force_string_view {
+                schema = Arc::new(transform_schema_to_view(&schema));
+            }
+
             let options = ArrowReaderOptions::new()
                 .with_page_index(enable_page_index)
-                .with_schema(table_schema.clone());
+                .with_schema(schema.clone());
+            let metadata =
+                ArrowReaderMetadata::try_new(metadata.metadata().clone(), options)?;
+
             let mut builder =
-                ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
-                    .await?;
+                ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata);
 
             let file_schema = builder.schema().clone();
 
