@@ -1490,21 +1490,24 @@ mod tests {
         let sort_exprs = sort_exprs.into_iter().collect();
         let projection: Vec<usize> = vec![0, 2, 3];
 
-        Arc::new(CsvExec::new(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
+        Arc::new(
+            CsvExec::builder(
+                FileScanConfig::new(
+                    ObjectStoreUrl::parse("test:///").unwrap(),
+                    schema.clone(),
+                )
+                .with_file(PartitionedFile::new("file_path".to_string(), 100))
+                .with_projection(Some(projection))
+                .with_output_ordering(vec![sort_exprs]),
             )
-            .with_file(PartitionedFile::new("file_path".to_string(), 100))
-            .with_projection(Some(projection))
-            .with_output_ordering(vec![sort_exprs]),
-            true,
-            0,
-            b'"',
-            None,
-            None,
-            false,
-            FileCompressionType::UNCOMPRESSED,
-        ))
+            .with_has_header(true)
+            .with_delimeter(0)
+            .with_quote(b'"')
+            .with_escape(None)
+            .with_comment(None)
+            .with_newlines_in_values(false)
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build(),
+        )
     }
 }

@@ -103,6 +103,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// assert if the node passed as argument is a final `AggregateExec` node that can be optimized:
 /// - its child (with possible intermediate layers) is a partial `AggregateExec` node
 /// - they both have no grouping expression
+///
 /// If this is the case, return a ref to the partial `AggregateExec`, else `None`.
 /// We would have preferred to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.

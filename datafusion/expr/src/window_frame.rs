@@ -303,11 +303,11 @@ impl WindowFrame {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WindowFrameBound {
     /// 1. UNBOUNDED PRECEDING
-    /// The frame boundary is the first row in the partition.
+    ///    The frame boundary is the first row in the partition.
     ///
     /// 2. `<expr>` PRECEDING
-    /// `<expr>` must be a non-negative constant numeric expression. The boundary is a row that
-    /// is `<expr>` "units" prior to the current row.
+    ///    `<expr>` must be a non-negative constant numeric expression. The boundary is a row that
+    ///    is `<expr>` "units" prior to the current row.
     Preceding(ScalarValue),
     /// 3. The current row.
     ///
@@ -317,10 +317,10 @@ pub enum WindowFrameBound {
     /// boundary.
     CurrentRow,
     /// 4. This is the same as "`<expr>` PRECEDING" except that the boundary is `<expr>` units after the
-    /// current rather than before the current row.
+    ///    current rather than before the current row.
     ///
     /// 5. UNBOUNDED FOLLOWING
-    /// The frame boundary is the last row in the partition.
+    ///    The frame boundary is the last row in the partition.
     Following(ScalarValue),
 }
 
