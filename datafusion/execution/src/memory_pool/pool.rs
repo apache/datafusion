@@ -362,16 +362,16 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
-        self.inner.try_grow(reservation, additional).map_err(|e| {
-            match e.find_root() {
+        self.inner
+            .try_grow(reservation, additional)
+            .map_err(|e| match e {
                 DataFusionError::ResourcesExhausted(e) => {
                     DataFusionError::ResourcesExhausted(
                         e.to_owned() + ". " + &self.report_top(),
                     )
                 }
                 _ => e,
-            }
-        })?;
+            })?;
 
         self.tracked_consumers
             .lock()
