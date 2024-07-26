@@ -26,6 +26,9 @@ use datafusion::assert_batches_eq;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::streaming::PartitionStream;
+use datafusion_execution::memory_pool::{
+    GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use futures::StreamExt;
@@ -370,6 +373,39 @@ async fn oom_parquet_sink() {
         .await
 }
 
+#[tokio::test]
+async fn oom_with_tracked_consumer_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.into_path().join("test.parquet");
+    let _ = File::create(path.clone()).await.unwrap();
+
+    TestCase::new()
+        .with_config(
+            SessionConfig::new()
+        )
+        .with_query(format!(
+            "
+            COPY (select * from t)
+            TO '{}'
+            STORED AS PARQUET OPTIONS (compression 'uncompressed');
+        ",
+            path.to_string_lossy()
+        ))
+        .with_expected_errors(vec![
+            "Failed to allocate additional",
+            "for ParquetSink(ArrowColumnWriter)",
+            "The top memory consumers (across reservations) are: ParquetSink(ArrowColumnWriter)"
+        ])
+        .with_memory_pool(Arc::new(
+            TrackConsumersPool::new(
+                GreedyMemoryPool::new(200_000),
+                2
+            )
+        ))
+        .run()
+        .await
+}
+
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
@@ -377,6 +413,7 @@ struct TestCase {
     query: Option<String>,
     expected_errors: Vec<String>,
     memory_limit: usize,
+    memory_pool: Option<Arc<dyn MemoryPool>>,
     config: SessionConfig,
     scenario: Scenario,
     /// How should the disk manager (that allows spilling) be
@@ -395,6 +432,7 @@ impl TestCase {
             expected_errors: vec![],
             memory_limit: 0,
             config: SessionConfig::new(),
+            memory_pool: None,
             scenario: Scenario::AccessLog,
             disk_manager_config: DiskManagerConfig::Disabled,
             expected_plan: vec![],
@@ -421,6 +459,15 @@ impl TestCase {
     /// Set the amount of memory that can be used
     fn with_memory_limit(mut self, memory_limit: usize) -> Self {
         self.memory_limit = memory_limit;
+        self
+    }
+
+    /// Set the memory pool to be used
+    ///
+    /// This will override the memory_limit requested,
+    /// as the memory pool includes the limit.
+    fn with_memory_pool(mut self, memory_pool: Arc<dyn MemoryPool>) -> Self {
+        self.memory_pool = Some(memory_pool);
         self
     }
 
@@ -464,6 +511,7 @@ impl TestCase {
             query,
             expected_errors,
             memory_limit,
+            memory_pool,
             config,
             scenario,
             disk_manager_config,
@@ -473,10 +521,14 @@ impl TestCase {
 
         let table = scenario.table();
 
-        let rt_config = RuntimeConfig::new()
+        let mut rt_config = RuntimeConfig::new()
             // disk manager setting controls the spilling
             .with_disk_manager(disk_manager_config)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
+
+        if let Some(pool) = memory_pool {
+            rt_config = rt_config.with_memory_pool(pool);
+        };
 
         let runtime = RuntimeEnv::new(rt_config).unwrap();
 
