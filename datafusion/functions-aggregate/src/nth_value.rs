@@ -134,10 +134,7 @@ impl AggregateUDFImpl for NthValueAgg {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new_list(
             format_state_name(self.name(), "nth_value"),
-            // TODO: The nullability of the list element should be configurable.
-            // The hard-coded `true` should be changed once the field for
-            // nullability is added to `StateFieldArgs` struct.
-            // See: https://github.com/apache/datafusion/pull/11063
+            // See COMMENTS.md to understand why nullable is set to true
             Field::new("item", args.input_type.clone(), true),
             false,
         )];
