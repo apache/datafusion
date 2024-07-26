@@ -250,6 +250,9 @@ fn insufficient_capacity_err(
 
 /// A [`MemoryPool`] that tracks the consumers that have
 /// reserved memory within the inner memory pool.
+///
+/// Tracking is per hashed [`MemoryConsumer`], not per [`MemoryReservation`].
+/// The same consumer can have multiple reservations.
 #[derive(Debug)]
 pub struct TrackConsumersPool<I> {
     inner: I,
@@ -296,9 +299,17 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
 impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
     fn register(&self, consumer: &MemoryConsumer) {
         self.inner.register(consumer);
-        self.tracked_consumers
-            .lock()
-            .insert_unique_unchecked(consumer.clone(), Default::default());
+
+        let mut guard = self.tracked_consumers.lock();
+        if let Some(already_reserved) = guard.insert(consumer.clone(), Default::default())
+        {
+            guard.entry_ref(consumer).and_modify(|bytes| {
+                bytes.fetch_add(
+                    already_reserved.load(Ordering::Acquire),
+                    Ordering::AcqRel,
+                );
+            });
+        }
     }
 
     fn unregister(&self, consumer: &MemoryConsumer) {
