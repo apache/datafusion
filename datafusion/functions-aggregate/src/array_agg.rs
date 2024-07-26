@@ -89,14 +89,14 @@ impl AggregateUDFImpl for ArrayAgg {
         if args.is_distinct {
             return Ok(vec![Field::new_list(
                 format_state_name(args.name, "distinct_array_agg"),
-                Field::new("item", args.input_type.clone(), true),
+                Field::new("item", args.input_type[0].clone(), true),
                 true,
             )]);
         }
 
         let mut fields = vec![Field::new_list(
             format_state_name(args.name, "array_agg"),
-            Field::new("item", args.input_type.clone(), true),
+            Field::new("item", args.input_type[0].clone(), true),
             true,
         )];
 
@@ -117,12 +117,14 @@ impl AggregateUDFImpl for ArrayAgg {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
             return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
-                acc_args.input_type,
+                &acc_args.input_type[0],
             )?));
         }
 
         if acc_args.sort_exprs.is_empty() {
-            return Ok(Box::new(ArrayAggAccumulator::try_new(acc_args.input_type)?));
+            return Ok(Box::new(ArrayAggAccumulator::try_new(
+                &acc_args.input_type[0],
+            )?));
         }
 
         let ordering_req = limited_convert_logical_sort_exprs_to_physical_with_dfschema(
@@ -136,7 +138,7 @@ impl AggregateUDFImpl for ArrayAgg {
             .collect::<Result<Vec<_>>>()?;
 
         OrderSensitiveArrayAggAccumulator::try_new(
-            acc_args.input_type,
+            &acc_args.input_type[0],
             &ordering_dtypes,
             ordering_req,
             acc_args.is_reversed,

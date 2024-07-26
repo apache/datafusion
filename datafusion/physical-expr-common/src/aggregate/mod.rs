@@ -15,31 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Debug;
+use std::{any::Any, sync::Arc};
+
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+
+use datafusion_common::exec_err;
+use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
+use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::type_coercion::aggregates::check_arg_count;
+use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_expr::ReversedUDAF;
+use datafusion_expr::{
+    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
+};
+
+use crate::physical_expr::PhysicalExpr;
+use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
+use crate::utils::reverse_order_bys;
+
+use self::utils::down_cast_any_ref;
+
 pub mod count_distinct;
 pub mod groups_accumulator;
 pub mod merge_arrays;
 pub mod stats;
 pub mod tdigest;
 pub mod utils;
-
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
-use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::type_coercion::aggregates::check_arg_count;
-use datafusion_expr::ReversedUDAF;
-use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
-};
-use std::fmt::Debug;
-use std::{any::Any, sync::Arc};
-
-use self::utils::down_cast_any_ref;
-use crate::physical_expr::PhysicalExpr;
-use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
-use crate::utils::reverse_order_bys;
-
-use datafusion_common::exec_err;
-use datafusion_expr::utils::AggregateOrderSensitivity;
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
@@ -225,7 +227,7 @@ impl AggregateExprBuilder {
             ignore_nulls,
             ordering_fields,
             is_distinct,
-            input_type: input_exprs_types[0].clone(),
+            input_type: input_exprs_types,
             is_reversed,
         }))
     }
@@ -466,7 +468,7 @@ pub struct AggregateFunctionExpr {
     ordering_fields: Vec<Field>,
     is_distinct: bool,
     is_reversed: bool,
-    input_type: DataType,
+    input_type: Vec<DataType>,
 }
 
 impl AggregateFunctionExpr {
