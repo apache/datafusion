@@ -590,6 +590,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if empty_from {
                     return plan_err!("SELECT * with no tables specified is not valid");
                 }
+                let preserve_wildcard_expression = self
+                    .context_provider
+                    .get_expr_planners()
+                    .iter()
+                    .any(|planner| planner.preserve_wildcard_expression());
+
+                if preserve_wildcard_expression {
+                    return Ok(vec![Expr::Wildcard { qualifier: None }]);
+                }
+
                 // do not expand from outer schema
                 let expanded_exprs =
                     expand_wildcard(plan.schema().as_ref(), plan, Some(&options))?;
@@ -610,6 +620,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
                 let qualifier = idents_to_table_reference(object_name.0, false)?;
+
+                let preserve_wildcard_expression = self
+                    .context_provider
+                    .get_expr_planners()
+                    .iter()
+                    .any(|planner| planner.preserve_wildcard_expression());
+
+                if preserve_wildcard_expression {
+                    return Ok(vec![Expr::Wildcard {
+                        qualifier: Some(qualifier),
+                    }]);
+                }
+
                 // do not expand from outer schema
                 let expanded_exprs = expand_qualified_wildcard(
                     &qualifier,

@@ -197,6 +197,17 @@ pub trait ExprPlanner: Send + Sync {
             "Default planner compound identifier hasn't been implemented for ExprPlanner"
         )
     }
+
+    /// Disable the expansion of wildcard expressions when selecting items.
+    /// This is used to keep the wildcard expression in the logical plan.
+    ///
+    /// Note:
+    /// Physical Planner doesn't support plan the wildcard expression.
+    /// If the wildcard expression is kept in the logical plan,
+    /// it should be transformed to the list of columns before physical planning.
+    fn preserve_wildcard_expression(&self) -> bool {
+        false
+    }
 }
 
 /// An operator with two arguments to plan

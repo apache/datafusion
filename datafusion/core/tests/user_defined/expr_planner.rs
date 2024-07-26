@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::RecordBatch;
+use arrow_array::{ArrayRef, RecordBatch, StringArray};
 use std::sync::Arc;
 
 use datafusion::common::{assert_batches_eq, DFSchema};
@@ -61,6 +61,10 @@ impl ExprPlanner for MyCustomPlanner {
             }
             _ => Ok(PlannerResult::Original(expr)),
         }
+    }
+
+    fn preserve_wildcard_expression(&self) -> bool {
+        true
     }
 }
 
@@ -120,4 +124,27 @@ async fn test_question_filter() {
         .unwrap();
     let expected = ["+---+", "| a |", "+---+", "| 1 |", "+---+"];
     assert_batches_eq!(&expected, &actual);
+}
+
+#[tokio::test]
+async fn test_keep_wildcard() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ctx.register_expr_planner(Arc::new(MyCustomPlanner))?;
+    ctx.register_batch("t", t_batch())?;
+
+    let actual = ctx.sql("select * from t").await?.into_optimized_plan()?;
+    let actual = format!("{:?}", actual);
+    let expected = "Projection: *\n  TableScan: t projection=[]";
+    assert_eq!(&expected, &actual);
+
+    let actual = ctx.sql("select t.* from t").await?.into_optimized_plan()?;
+    let actual = format!("{:?}", actual);
+    let expected = "Projection: t.*\n  TableScan: t projection=[]";
+    assert_eq!(&expected, &actual);
+    Ok(())
+}
+
+fn t_batch() -> RecordBatch {
+    let c1: ArrayRef = Arc::new(StringArray::from_iter_values(["a", "b", "c"]));
+    RecordBatch::try_from_iter(vec![("c1", c1)]).unwrap()
 }
