@@ -19,7 +19,6 @@
 
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::file_format::transform_schema_to_view;
-use crate::datasource::physical_plan::parquet::page_filter::PagePruningPredicate;
 use crate::datasource::physical_plan::parquet::row_group_filter::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
     row_filter, should_enable_page_index, ParquetAccessPlan,
