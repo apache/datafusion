@@ -20,6 +20,7 @@ exclude = ["datafusion-cli", "dev/depcheck"]
 members = [
     "datafusion/common",
     "datafusion/common-runtime",
+    "datafusion/catalog",
     "datafusion/core",
     "datafusion/expr",
     "datafusion/execution",
@@ -88,6 +89,7 @@ chrono = { version = "0.4.34", default-features = false }
 ctor = "0.2.0"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "40.0.0", default-features = false }
+datafusion-catalog = { path = "datafusion/catalog", version = "40.0.0" }
 datafusion-common = { path = "datafusion/common", version = "40.0.0", default-features = false }
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "40.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "40.0.0" }

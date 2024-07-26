@@ -22,9 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::catalog::schema::SchemaProvider;
-use crate::datasource::provider::TableProviderFactory;
-use crate::datasource::TableProvider;
+use crate::catalog::{SchemaProvider, TableProvider, TableProviderFactory};
 use crate::execution::context::SessionState;
 
 use datafusion_common::{Constraints, DFSchema, DataFusionError, TableReference};

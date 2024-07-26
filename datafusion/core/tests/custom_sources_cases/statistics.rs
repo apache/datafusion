@@ -20,7 +20,7 @@
 use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion::execution::context::TaskContext;
 use datafusion::{
     datasource::{TableProvider, TableType},
     error::Result,
@@ -36,6 +36,7 @@ use datafusion_common::{project_schema, stats::Precision};
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -89,7 +90,7 @@ impl TableProvider for StatisticsValidation {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         // limit is ignored because it is not mandatory for a `TableProvider` to honor it
