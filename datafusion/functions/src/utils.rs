@@ -183,6 +183,21 @@ pub mod test {
         };
     }
 
+    use arrow::datatypes::DataType;
     #[allow(unused_imports)]
     pub(crate) use test_function;
+
+    use super::*;
+
+    #[test]
+    fn string_to_int_type() {
+        let v = utf8_to_int_type(&DataType::Utf8, "test").unwrap();
+        assert_eq!(v, DataType::Int32);
+
+        let v = utf8_to_int_type(&DataType::Utf8View, "test").unwrap();
+        assert_eq!(v, DataType::Int32);
+
+        let v = utf8_to_int_type(&DataType::LargeUtf8, "test").unwrap();
+        assert_eq!(v, DataType::Int64);
+    }
 }
