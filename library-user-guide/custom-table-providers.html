@@ -671,7 +671,7 @@
 <span class="k">impl</span><span class="w"> </span><span class="n">TableProvider</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">CustomDataSource</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">scan</span><span class="p">(</span>
 <span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
-<span class="w">        </span><span class="n">_state</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">SessionState</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_state</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Session</span><span class="p">,</span>
 <span class="w">        </span><span class="n">projection</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;&gt;</span><span class="p">,</span>
 <span class="w">        </span><span class="c1">// filters and limit can be used here to inject some push-down operations if needed</span>
 <span class="w">        </span><span class="n">_filters</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">Expr</span><span class="p">],</span>
