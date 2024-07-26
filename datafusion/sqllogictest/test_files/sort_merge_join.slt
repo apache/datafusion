@@ -239,6 +239,7 @@ SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id
 NULL NULL NULL 55 w 3
 
 # FIXME(#TODO) fails with feature `force_hash_collisions`
+# https://github.com/apache/datafusion/issues/11659
 # equijoin_full_and_condition_from_both
 # query ITIITI rowsort
 # SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int
