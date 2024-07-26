@@ -17,9 +17,10 @@
 
 use crate::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
+use hashbrown::HashMap;
 use log::debug;
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// A [`MemoryPool`] that enforces no limit
 #[derive(Debug, Default)]
@@ -238,6 +239,110 @@ fn insufficient_capacity_err(
     available: usize,
 ) -> DataFusionError {
     resources_datafusion_err!("Failed to allocate additional {} bytes for {} with {} bytes already allocated - maximum available is {}", additional, reservation.registration.consumer.name, reservation.size, available)
+}
+
+/// A [`MemoryPool`] that tracks the consumers that have
+/// reserved memory within the inner memory pool.
+#[derive(Debug)]
+pub struct TrackConsumersPool<I> {
+    inner: I,
+    top: usize,
+    tracked_consumers: Mutex<HashMap<MemoryConsumer, AtomicU64>>,
+}
+
+impl<I: MemoryPool> TrackConsumersPool<I> {
+    /// Creates a new [`TrackConsumersPool`].
+    ///
+    /// The `top` determines how many Top K [`MemoryConsumer`]s to include
+    /// in the reported [`DataFusionError::ResourcesExhausted`].
+    pub fn new(inner: I, top: usize) -> Self {
+        Self {
+            inner,
+            top,
+            tracked_consumers: Default::default(),
+        }
+    }
+
+    /// The top consumers in a report string.
+    fn report_top(&self) -> String {
+        let mut consumers = self
+            .tracked_consumers
+            .lock()
+            .iter()
+            .map(|(consumer, reserved)| {
+                (consumer.name().to_owned(), reserved.load(Ordering::Acquire))
+            })
+            .collect::<Vec<_>>();
+        consumers.sort_by(|a, b| b.1.cmp(&a.1)); // inverse ordering
+
+        format!(
+            "The top memory consumers (across reservations) are: {}",
+            consumers[0..std::cmp::min(self.top, consumers.len())]
+                .iter()
+                .map(|(name, size)| format!("{name} consumed {:?} bytes", size))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
+    fn register(&self, consumer: &MemoryConsumer) {
+        self.inner.register(consumer);
+        self.tracked_consumers
+            .lock()
+            .insert_unique_unchecked(consumer.clone(), Default::default());
+    }
+
+    fn unregister(&self, consumer: &MemoryConsumer) {
+        self.inner.unregister(consumer);
+        self.tracked_consumers.lock().remove(consumer);
+    }
+
+    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+        self.inner.grow(reservation, additional);
+        self.tracked_consumers
+            .lock()
+            .entry_ref(reservation.consumer())
+            .and_modify(|bytes| {
+                bytes.fetch_add(additional as u64, Ordering::AcqRel);
+            });
+    }
+
+    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+        self.inner.shrink(reservation, shrink);
+        self.tracked_consumers
+            .lock()
+            .entry_ref(reservation.consumer())
+            .and_modify(|bytes| {
+                bytes.fetch_sub(shrink as u64, Ordering::AcqRel);
+            });
+    }
+
+    fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
+        self.inner.try_grow(reservation, additional).map_err(|e| {
+            match e.find_root() {
+                DataFusionError::ResourcesExhausted(e) => {
+                    DataFusionError::ResourcesExhausted(
+                        e.to_owned() + ". " + &self.report_top(),
+                    )
+                }
+                _ => e,
+            }
+        })?;
+
+        self.tracked_consumers
+            .lock()
+            .entry_ref(reservation.consumer())
+            .and_modify(|bytes| {
+                bytes.fetch_add(additional as u64, Ordering::AcqRel);
+            });
+        Ok(())
+    }
+
+    fn reserved(&self) -> usize {
+        self.inner.reserved()
+    }
 }
 
 #[cfg(test)]
