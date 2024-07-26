@@ -33,7 +33,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logical plan from an SQL query/subquery
     pub(crate) fn query_to_plan(
         &self,
-        mut query: Query,
+        query: Query,
         outer_planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // Each query has its own planner context, including CTEs that are visible within that query.
@@ -51,7 +51,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let select_into = select.into.take();
                 // Order-by expressions may refer to columns in the `FROM` clause,
                 // so we need to process `SELECT` and `ORDER BY` together.
-                let oby_exprs = to_order_by_exprs(query.order_by.take())?;
+                let oby_exprs = to_order_by_exprs(query.order_by)?;
                 let plan = self.select_to_plan(*select, oby_exprs, planner_context)?;
                 let plan = self.limit(plan, query.offset, query.limit)?;
                 // Process the `SELECT INTO` after `LIMIT`.
@@ -59,7 +59,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             other => {
                 let plan = self.set_expr_to_plan(other, planner_context)?;
-                let oby_exprs = to_order_by_exprs(query.order_by.take())?;
+                let oby_exprs = to_order_by_exprs(query.order_by)?;
                 let order_by_rex = self.order_by_to_sort_expr(
                     oby_exprs,
                     plan.schema(),
