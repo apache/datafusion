@@ -20,6 +20,7 @@
 //! - Adds a [`SortExec`] when a requirement is not met,
 //! - Removes an already-existing [`SortExec`] if it is possible to prove
 //!   that this sort is unnecessary
+//!
 //! The rule can work on valid *and* invalid physical plans with respect to
 //! sorting requirements, but always produces a valid physical plan in this sense.
 //!
@@ -49,7 +50,6 @@ use crate::physical_optimizer::utils::{
     is_coalesce_partitions, is_limit, is_repartition, is_sort, is_sort_preserving_merge,
     is_union, is_window,
 };
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -66,6 +66,7 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
@@ -631,6 +632,7 @@ mod tests {
     use datafusion_expr::JoinType;
     use datafusion_physical_expr::expressions::{col, Column, NotExpr};
 
+    use datafusion_physical_optimizer::PhysicalOptimizerRule;
     use rstest::rstest;
 
     fn create_test_schema() -> Result<SchemaRef> {

@@ -18,13 +18,12 @@
 //! This file implements the `ProjectionPushdown` physical optimization rule.
 //! The function [`remove_unnecessary_projections`] tries to push down all
 //! projections one by one if the operator below is amenable to this. If a
-//! projection reaches a source, it can even dissappear from the plan entirely.
+//! projection reaches a source, it can even disappear from the plan entirely.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::output_requirements::OutputRequirementExec;
-use super::PhysicalOptimizerRule;
 use crate::datasource::physical_plan::CsvExec;
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -55,6 +54,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
@@ -179,15 +179,17 @@ fn try_swapping_with_csv(
         );
         file_scan.projection = Some(new_projections);
 
-        Arc::new(CsvExec::new(
-            file_scan,
-            csv.has_header(),
-            csv.delimiter(),
-            csv.quote(),
-            csv.escape(),
-            csv.comment(),
-            csv.file_compression_type,
-        )) as _
+        Arc::new(
+            CsvExec::builder(file_scan)
+                .with_has_header(csv.has_header())
+                .with_delimeter(csv.delimiter())
+                .with_quote(csv.quote())
+                .with_escape(csv.escape())
+                .with_comment(csv.comment())
+                .with_newlines_in_values(csv.newlines_in_values())
+                .with_file_compression_type(csv.file_compression_type)
+                .build(),
+        ) as _
     })
 }
 
@@ -1688,20 +1690,24 @@ mod tests {
             Field::new("d", DataType::Int32, true),
             Field::new("e", DataType::Int32, true),
         ]));
-        Arc::new(CsvExec::new(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
+        Arc::new(
+            CsvExec::builder(
+                FileScanConfig::new(
+                    ObjectStoreUrl::parse("test:///").unwrap(),
+                    schema.clone(),
+                )
+                .with_file(PartitionedFile::new("x".to_string(), 100))
+                .with_projection(Some(vec![0, 1, 2, 3, 4])),
             )
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_projection(Some(vec![0, 1, 2, 3, 4])),
-            false,
-            0,
-            0,
-            None,
-            None,
-            FileCompressionType::UNCOMPRESSED,
-        ))
+            .with_has_header(false)
+            .with_delimeter(0)
+            .with_quote(0)
+            .with_escape(None)
+            .with_comment(None)
+            .with_newlines_in_values(false)
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build(),
+        )
     }
 
     fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
@@ -1711,20 +1717,24 @@ mod tests {
             Field::new("c", DataType::Int32, true),
             Field::new("d", DataType::Int32, true),
         ]));
-        Arc::new(CsvExec::new(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
+        Arc::new(
+            CsvExec::builder(
+                FileScanConfig::new(
+                    ObjectStoreUrl::parse("test:///").unwrap(),
+                    schema.clone(),
+                )
+                .with_file(PartitionedFile::new("x".to_string(), 100))
+                .with_projection(Some(vec![3, 2, 1])),
             )
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_projection(Some(vec![3, 2, 1])),
-            false,
-            0,
-            0,
-            None,
-            None,
-            FileCompressionType::UNCOMPRESSED,
-        ))
+            .with_has_header(false)
+            .with_delimeter(0)
+            .with_quote(0)
+            .with_escape(None)
+            .with_comment(None)
+            .with_newlines_in_values(false)
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build(),
+        )
     }
 
     fn create_projecting_memory_exec() -> Arc<dyn ExecutionPlan> {

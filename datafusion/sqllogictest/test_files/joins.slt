@@ -3532,7 +3532,7 @@ physical_plan
 03)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 04)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 
-# Currently datafusion cannot pushdown filter conditions with scalar UDF into
+# Currently datafusion can pushdown filter conditions with scalar UDF into
 # cross join.
 query TT
 EXPLAIN SELECT *
@@ -3540,19 +3540,16 @@ FROM annotated_data as t1, annotated_data as t2
 WHERE EXAMPLE(t1.a, t2.a) > 3
 ----
 logical_plan
-01)Filter: example(CAST(t1.a AS Float64), CAST(t2.a AS Float64)) > Float64(3)
-02)--CrossJoin:
-03)----SubqueryAlias: t1
-04)------TableScan: annotated_data projection=[a0, a, b, c, d]
-05)----SubqueryAlias: t2
-06)------TableScan: annotated_data projection=[a0, a, b, c, d]
+01)Inner Join:  Filter: example(CAST(t1.a AS Float64), CAST(t2.a AS Float64)) > Float64(3)
+02)--SubqueryAlias: t1
+03)----TableScan: annotated_data projection=[a0, a, b, c, d]
+04)--SubqueryAlias: t2
+05)----TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=2
-02)--FilterExec: example(CAST(a@1 AS Float64), CAST(a@6 AS Float64)) > 3
-03)----CrossJoinExec
-04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+01)NestedLoopJoinExec: join_type=Inner, filter=example(CAST(a@0 AS Float64), CAST(a@1 AS Float64)) > 3
+02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+03)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 
 ####
 # Config teardown
@@ -3844,7 +3841,7 @@ EXPLAIN SELECT * FROM (
 ----
 logical_plan EmptyRelation
 
-# Left ANTI join with empty right table 
+# Left ANTI join with empty right table
 query TT
 EXPLAIN SELECT * FROM (
 	SELECT 1 as a
@@ -3855,7 +3852,7 @@ logical_plan
 02)--Projection: Int64(1) AS a
 03)----EmptyRelation
 
-# Right ANTI join with empty left table 
+# Right ANTI join with empty left table
 query TT
 EXPLAIN SELECT * FROM (
 	SELECT 1 as a WHERE 1=0
@@ -4043,4 +4040,3 @@ physical_plan
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
 05)------MemoryExec: partitions=1, partition_sizes=[1]
-

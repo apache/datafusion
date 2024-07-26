@@ -32,7 +32,7 @@ use datafusion_expr::builder::get_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
-use sqlparser::ast::Ident;
+use sqlparser::ast::{Ident, Value};
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -263,11 +263,36 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
     }
 }
 
+pub(crate) fn value_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::SingleQuotedString(s) => Some(s.to_string()),
+        Value::DollarQuotedString(s) => Some(s.to_string()),
+        Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
+        Value::DoubleQuotedString(_)
+        | Value::EscapedStringLiteral(_)
+        | Value::NationalStringLiteral(_)
+        | Value::SingleQuotedByteStringLiteral(_)
+        | Value::DoubleQuotedByteStringLiteral(_)
+        | Value::TripleSingleQuotedString(_)
+        | Value::TripleDoubleQuotedString(_)
+        | Value::TripleSingleQuotedByteStringLiteral(_)
+        | Value::TripleDoubleQuotedByteStringLiteral(_)
+        | Value::SingleQuotedRawStringLiteral(_)
+        | Value::DoubleQuotedRawStringLiteral(_)
+        | Value::TripleSingleQuotedRawStringLiteral(_)
+        | Value::TripleDoubleQuotedRawStringLiteral(_)
+        | Value::HexStringLiteral(_)
+        | Value::Null
+        | Value::Placeholder(_) => None,
+    }
+}
+
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
 /// Given an expression which contains unnest expr as one of its children,
 /// Try transform depends on unnest type
 /// - For list column: unnest(col) with type list -> unnest(col) with type list::item
 /// - For struct column: unnest(struct(field1, field2)) -> unnest(struct).field1, unnest(struct).field2
+///
 /// The transformed exprs will be used in the outer projection
 /// If along the path from root to bottom, there are multiple unnest expressions, the transformation
 /// is done only for the bottom expression
@@ -325,7 +350,7 @@ pub(crate) fn transform_bottom_unnest(
             let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
 
             if let DataType::Struct(_) = data_type {
-                return internal_err!("unnest on struct can ony be applied at the root level of select expression");
+                return internal_err!("unnest on struct can only be applied at the root level of select expression");
             }
 
             let mut transformed_exprs = transform(&expr, arg)?;

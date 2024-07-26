@@ -84,7 +84,7 @@ impl ToLocalTimeFunc {
         let arg_type = time_value.data_type();
         match arg_type {
             DataType::Timestamp(_, None) => {
-                // if no timezone specificed, just return the input
+                // if no timezone specified, just return the input
                 Ok(time_value.clone())
             }
             // If has timezone, adjust the underlying time value. The current time value
@@ -165,7 +165,7 @@ impl ToLocalTimeFunc {
 
                         match array.data_type() {
                             Timestamp(_, None) => {
-                                // if no timezone specificed, just return the input
+                                // if no timezone specified, just return the input
                                 Ok(time_value.clone())
                             }
                             Timestamp(Nanosecond, Some(_)) => {

@@ -261,8 +261,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::Unnest(_)
-        | Expr::ScalarFunction(_) => {
+        | Expr::Unnest(_) => {
             is_evaluate = false;
             Ok(TreeNodeRecursion::Stop)
         }
@@ -284,7 +283,8 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Case(_)
         | Expr::Cast(_)
         | Expr::TryCast(_)
-        | Expr::InList { .. } => Ok(TreeNodeRecursion::Continue),
+        | Expr::InList { .. }
+        | Expr::ScalarFunction(_) => Ok(TreeNodeRecursion::Continue),
         Expr::Sort(_)
         | Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
@@ -557,7 +557,7 @@ fn push_down_join(
 /// * `predicates` the pushed down filter expression
 ///
 /// * `on_filters` filters from the join ON clause that have not already been
-/// identified as join predicates
+///   identified as join predicates
 ///
 fn infer_join_predicates(
     join: &Join,
@@ -1020,7 +1020,7 @@ impl OptimizerRule for PushDownFilter {
 /// ```
 fn rewrite_projection(
     predicates: Vec<Expr>,
-    projection: Projection,
+    mut projection: Projection,
 ) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
     // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
     // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
@@ -1053,11 +1053,13 @@ fn rewrite_projection(
             // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
             let new_filter = LogicalPlan::Filter(Filter::try_new(
                 replace_cols_by_name(expr, &non_volatile_map)?,
-                Arc::clone(&projection.input),
+                std::mem::take(&mut projection.input),
             )?);
 
+            projection.input = Arc::new(new_filter);
+
             Ok((
-                insert_below(LogicalPlan::Projection(projection), new_filter)?,
+                Transformed::yes(LogicalPlan::Projection(projection)),
                 conjunction(keep_predicates),
             ))
         }
@@ -1913,7 +1915,7 @@ mod tests {
         assert_optimized_plan_eq(plan, expected)
     }
 
-    /// post-join predicates with columns from both sides are converted to join filterss
+    /// post-join predicates with columns from both sides are converted to join filters
     #[test]
     fn filter_join_on_common_dependent() -> Result<()> {
         let table_scan = test_table_scan()?;

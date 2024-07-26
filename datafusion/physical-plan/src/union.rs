@@ -41,7 +41,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
+use datafusion_physical_expr::{calculate_union, EquivalenceProperties};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -99,7 +99,12 @@ impl UnionExec {
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
         let schema = union_schema(&inputs);
-        let cache = Self::compute_properties(&inputs, schema);
+        // The schema of the inputs and the union schema is consistent when:
+        // - They have the same number of fields, and
+        // - Their fields have same types at the same indices.
+        // Here, we know that schemas are consistent and the call below can
+        // not return an error.
+        let cache = Self::compute_properties(&inputs, schema).unwrap();
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -116,13 +121,13 @@ impl UnionExec {
     fn compute_properties(
         inputs: &[Arc<dyn ExecutionPlan>],
         schema: SchemaRef,
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let children_eqs = inputs
+        let children_eqps = inputs
             .iter()
-            .map(|child| child.equivalence_properties())
+            .map(|child| child.equivalence_properties().clone())
             .collect::<Vec<_>>();
-        let eq_properties = calculate_union_eq_properties(&children_eqs, schema);
+        let eq_properties = calculate_union(children_eqps, schema)?;
 
         // Calculate output partitioning; i.e. sum output partitions of the inputs.
         let num_partitions = inputs
@@ -134,70 +139,12 @@ impl UnionExec {
         // Determine execution mode:
         let mode = execution_mode_from_children(inputs.iter());
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            mode,
+        ))
     }
-}
-/// Calculate `EquivalenceProperties` for `UnionExec` from the `EquivalenceProperties`
-/// of its children.
-fn calculate_union_eq_properties(
-    children_eqs: &[&EquivalenceProperties],
-    schema: SchemaRef,
-) -> EquivalenceProperties {
-    // Calculate equivalence properties:
-    // TODO: In some cases, we should be able to preserve some equivalence
-    //       classes and constants. Add support for such cases.
-    let mut eq_properties = EquivalenceProperties::new(schema);
-    // Use the ordering equivalence class of the first child as the seed:
-    let mut meets = children_eqs[0]
-        .oeq_class()
-        .iter()
-        .map(|item| item.to_vec())
-        .collect::<Vec<_>>();
-    // Iterate over all the children:
-    for child_eqs in &children_eqs[1..] {
-        // Compute meet orderings of the current meets and the new ordering
-        // equivalence class.
-        let mut idx = 0;
-        while idx < meets.len() {
-            // Find all the meets of `current_meet` with this child's orderings:
-            let valid_meets = child_eqs.oeq_class().iter().filter_map(|ordering| {
-                child_eqs.get_meet_ordering(ordering, &meets[idx])
-            });
-            // Use the longest of these meets as others are redundant:
-            if let Some(next_meet) = valid_meets.max_by_key(|m| m.len()) {
-                meets[idx] = next_meet;
-                idx += 1;
-            } else {
-                meets.swap_remove(idx);
-            }
-        }
-    }
-    // We know have all the valid orderings after union, remove redundant
-    // entries (implicitly) and return:
-    eq_properties.add_new_orderings(meets);
-
-    let mut meet_constants = children_eqs[0].constants().to_vec();
-    // Iterate over all the children:
-    for child_eqs in &children_eqs[1..] {
-        let constants = child_eqs.constants();
-        meet_constants = meet_constants
-            .into_iter()
-            .filter_map(|meet_constant| {
-                for const_expr in constants {
-                    if const_expr.expr().eq(meet_constant.expr()) {
-                        // TODO: Check whether constant expressions evaluates the same value or not for each partition
-                        let across_partitions = false;
-                        return Some(
-                            ConstExpr::from(meet_constant.owned_expr())
-                                .with_across_partitions(across_partitions),
-                        );
-                    }
-                }
-                None
-            })
-            .collect::<Vec<_>>();
-    }
-    eq_properties.add_constants(meet_constants)
 }
 
 impl DisplayAs for UnionExec {
@@ -431,6 +378,12 @@ impl ExecutionPlan for InterleaveExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // New children are no longer interleavable, which might be a bug of optimization rewrite.
+        if !can_interleave(children.iter()) {
+            return internal_err!(
+                "Can not create InterleaveExec: new children can not be interleaved"
+            );
+        }
         Ok(Arc::new(InterleaveExec::try_new(children)?))
     }
 
@@ -633,8 +586,8 @@ mod tests {
 
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;
-    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+    use datafusion_physical_expr_common::expressions::column::col;
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -850,23 +803,31 @@ mod tests {
                     .with_sort_information(second_orderings),
             );
 
+            let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
+            union_expected_eq.add_new_orderings(union_expected_orderings);
+
             let union = UnionExec::new(vec![child1, child2]);
             let union_eq_properties = union.properties().equivalence_properties();
-            let union_actual_orderings = union_eq_properties.oeq_class();
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
                 test_idx, test_cases[test_idx]
             );
-            assert_eq!(
-                union_actual_orderings.len(),
-                union_expected_orderings.len(),
-                "{}",
-                err_msg
-            );
-            for expected in &union_expected_orderings {
-                assert!(union_actual_orderings.contains(expected), "{}", err_msg);
-            }
+            assert_eq_properties_same(union_eq_properties, &union_expected_eq, err_msg);
         }
         Ok(())
+    }
+
+    fn assert_eq_properties_same(
+        lhs: &EquivalenceProperties,
+        rhs: &EquivalenceProperties,
+        err_msg: String,
+    ) {
+        // Check whether orderings are same.
+        let lhs_orderings = lhs.oeq_class();
+        let rhs_orderings = &rhs.oeq_class.orderings;
+        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
+        for rhs_ordering in rhs_orderings {
+            assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
+        }
     }
 }

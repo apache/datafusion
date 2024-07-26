@@ -94,7 +94,7 @@ pub struct TopK {
 impl TopK {
     /// Create a new [`TopK`] that stores the top `k` values, as
     /// defined by the sort expressions in `expr`.
-    // TOOD: make a builder or some other nicer API to avoid the
+    // TODO: make a builder or some other nicer API to avoid the
     // clippy warning
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
@@ -258,7 +258,7 @@ impl TopKMetrics {
 /// Using the `Row` format handles things such as ascending vs
 /// descending and nulls first vs nulls last.
 struct TopKHeap {
-    /// The maximum number of elemenents to store in this heap.
+    /// The maximum number of elements to store in this heap.
     k: usize,
     /// The target number of rows for output batches
     batch_size: usize,
@@ -421,7 +421,7 @@ impl TopKHeap {
         let num_rows = self.inner.len();
         let (new_batch, mut topk_rows) = self.emit_with_state()?;
 
-        // clear all old entires in store (this invalidates all
+        // clear all old entries in store (this invalidates all
         // store_ids in `inner`)
         self.store.clear();
 
@@ -453,7 +453,7 @@ impl TopKHeap {
 
 /// Represents one of the top K rows held in this heap. Orders
 /// according to memcmp of row (e.g. the arrow Row format, but could
-/// also be primtive values)
+/// also be primitive values)
 ///
 /// Reuses allocations to minimize runtime overhead of creating new Vecs
 #[derive(Debug, PartialEq)]

@@ -51,7 +51,6 @@ use datafusion_common::{
     context, internal_datafusion_err, internal_err, not_impl_err, DataFusionError,
     Result, TableReference,
 };
-use datafusion_expr::Unnest;
 use datafusion_expr::{
     dml,
     logical_plan::{
@@ -60,8 +59,9 @@ use datafusion_expr::{
         EmptyRelation, Extension, Join, JoinConstraint, Limit, Prepare, Projection,
         Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
-    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, WindowUDF,
 };
+use datafusion_expr::{AggregateUDF, Unnest};
 
 use prost::bytes::BufMut;
 use prost::Message;
@@ -131,7 +131,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
 
     fn try_encode_file_format(
         &self,
-        _buf: &[u8],
+        _buf: &mut Vec<u8>,
         _node: Arc<dyn FileFormatFactory>,
     ) -> Result<()> {
         Ok(())
@@ -142,6 +142,24 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
     }
 
     fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    fn try_decode_udaf(&self, name: &str, _buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        not_impl_err!(
+            "LogicalExtensionCodec is not provided for aggregate function {name}"
+        )
+    }
+
+    fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    fn try_decode_udwf(&self, name: &str, _buf: &[u8]) -> Result<Arc<WindowUDF>> {
+        not_impl_err!("LogicalExtensionCodec is not provided for window function {name}")
+    }
+
+    fn try_encode_udwf(&self, _node: &WindowUDF, _buf: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
 }
@@ -1648,10 +1666,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     input,
                     extension_codec,
                 )?;
-
-                let buf = Vec::new();
+                let mut buf = Vec::new();
                 extension_codec
-                    .try_encode_file_format(&buf, file_type_to_format(file_type)?)?;
+                    .try_encode_file_format(&mut buf, file_type_to_format(file_type)?)?;
 
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CopyTo(Box::new(

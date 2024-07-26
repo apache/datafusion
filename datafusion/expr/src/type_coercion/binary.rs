@@ -370,7 +370,7 @@ impl From<&DataType> for TypeCategory {
 /// The rules in the document provide a clue, but adhering strictly to them doesn't precisely
 /// align with the behavior of Postgres. Therefore, we've made slight adjustments to the rules
 /// to better match the behavior of both Postgres and DuckDB. For example, we expect adjusted
-/// decimal percision and scale when coercing decimal types.
+/// decimal precision and scale when coercing decimal types.
 pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
@@ -720,7 +720,7 @@ pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         (Int16 | Int32 | Int64, Int8) | (Int32 | Int64, Int16) | (Int64, Int32) |
         // Left Float is larger than right Float.
         (Float32 | Float64, Float16) | (Float64, Float32) |
-        // Left String is larget than right String.
+        // Left String is larger than right String.
         (LargeUtf8, Utf8) |
         // Any left type is wider than a right hand side Null.
         (_, Null) => lhs.clone(),

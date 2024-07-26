@@ -1212,7 +1212,7 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     }
 }
 
-/// Build state name. State is the intermidiate state of the aggregate function.
+/// Build state name. State is the intermediate state of the aggregate function.
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
@@ -1253,8 +1253,8 @@ mod tests {
     use super::*;
     use crate::{
         col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup,
-        test::function_stub::sum_udaf, AggregateFunction, Cast, WindowFrame,
-        WindowFunctionDefinition,
+        test::function_stub::sum_udaf, AggregateFunction, Cast, ExprFunctionExt,
+        WindowFrame, WindowFunctionDefinition,
     };
 
     #[test]
@@ -1270,34 +1270,18 @@ mod tests {
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
-            vec![],
-            vec![],
-            WindowFrame::new(None),
-            None,
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
-            vec![],
-            vec![],
-            WindowFrame::new(None),
-            None,
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
             vec![col("name")],
-            vec![],
-            vec![],
-            WindowFrame::new(None),
-            None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
-            vec![],
-            vec![],
-            WindowFrame::new(None),
-            None,
         ));
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
         let result = group_window_expr_by_sort_keys(exprs.to_vec())?;
@@ -1317,35 +1301,32 @@ mod tests {
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
-            vec![],
-            vec![age_asc.clone(), name_desc.clone()],
-            WindowFrame::new(Some(false)),
-            None,
-        ));
+        ))
+        .order_by(vec![age_asc.clone(), name_desc.clone()])
+        .build()
+        .unwrap();
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
-            vec![],
-            vec![],
-            WindowFrame::new(None),
-            None,
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
             vec![col("name")],
-            vec![],
-            vec![age_asc.clone(), name_desc.clone()],
-            WindowFrame::new(Some(false)),
-            None,
-        ));
+        ))
+        .order_by(vec![age_asc.clone(), name_desc.clone()])
+        .build()
+        .unwrap();
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
-            vec![],
-            vec![name_desc.clone(), age_asc.clone(), created_at_desc.clone()],
-            WindowFrame::new(Some(false)),
-            None,
-        ));
+        ))
+        .order_by(vec![
+            name_desc.clone(),
+            age_asc.clone(),
+            created_at_desc.clone(),
+        ])
+        .build()
+        .unwrap();
         // FIXME use as_ref
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
         let result = group_window_expr_by_sort_keys(exprs.to_vec())?;
@@ -1373,26 +1354,26 @@ mod tests {
             Expr::WindowFunction(expr::WindowFunction::new(
                 WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
                 vec![col("name")],
-                vec![],
-                vec![
-                    Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
-                    Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
-                ],
-                WindowFrame::new(Some(false)),
-                None,
-            )),
+            ))
+            .order_by(vec![
+                Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
+                Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
+            ])
+            .window_frame(WindowFrame::new(Some(false)))
+            .build()
+            .unwrap(),
             Expr::WindowFunction(expr::WindowFunction::new(
                 WindowFunctionDefinition::AggregateUDF(sum_udaf()),
                 vec![col("age")],
-                vec![],
-                vec![
-                    Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
-                    Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
-                    Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true)),
-                ],
-                WindowFrame::new(Some(false)),
-                None,
-            )),
+            ))
+            .order_by(vec![
+                Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
+                Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
+                Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true)),
+            ])
+            .window_frame(WindowFrame::new(Some(false)))
+            .build()
+            .unwrap(),
         ];
         let expected = vec![
             Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),

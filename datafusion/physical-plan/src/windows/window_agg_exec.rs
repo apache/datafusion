@@ -126,7 +126,7 @@ impl WindowAggExec {
 
         // Get output partitioning:
         // Because we can have repartitioning using the partition keys this
-        // would be either 1 or more than 1 depending on the presense of repartitioning.
+        // would be either 1 or more than 1 depending on the presence of repartitioning.
         let output_partitioning = input.output_partitioning().clone();
 
         // Determine execution mode:

@@ -1136,6 +1136,16 @@ pub struct StatisticsConverter<'a> {
 }
 
 impl<'a> StatisticsConverter<'a> {
+    /// Return the index of the column in the parquet file, if any
+    pub fn parquet_index(&self) -> Option<usize> {
+        self.parquet_index
+    }
+
+    /// Return the arrow field of the column in the arrow schema
+    pub fn arrow_field(&self) -> &'a Field {
+        self.arrow_field
+    }
+
     /// Returns a [`UInt64Array`] with row counts for each row group
     ///
     /// # Return Value
@@ -1348,14 +1358,14 @@ impl<'a> StatisticsConverter<'a> {
     /// # Parameters:
     ///
     /// * `column_page_index`: The parquet column page indices, read from
-    /// `ParquetMetaData` column_index
+    ///   `ParquetMetaData` column_index
     ///
     /// * `column_offset_index`: The parquet column offset indices, read from
-    /// `ParquetMetaData` offset_index
+    ///   `ParquetMetaData` offset_index
     ///
     /// * `row_group_indices`: The indices of the row groups, that are used to
-    /// extract the column page index and offset index on a per row group
-    /// per column basis.
+    ///   extract the column page index and offset index on a per row group
+    ///   per column basis.
     ///
     /// # Return Value
     ///
@@ -1476,13 +1486,13 @@ impl<'a> StatisticsConverter<'a> {
     /// # Parameters:
     ///
     /// * `column_offset_index`: The parquet column offset indices, read from
-    /// `ParquetMetaData` offset_index
+    ///   `ParquetMetaData` offset_index
     ///
     /// * `row_group_metadatas`: The metadata slice of the row groups, read
-    /// from `ParquetMetaData` row_groups
+    ///   from `ParquetMetaData` row_groups
     ///
     /// * `row_group_indices`: The indices of the row groups, that are used to
-    /// extract the column offset index on a per row group per column basis.
+    ///   extract the column offset index on a per row group per column basis.
     ///
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_row_counts<I>(
@@ -2532,10 +2542,10 @@ mod test {
 
     fn timestamp_seconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampSecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }
@@ -2543,10 +2553,10 @@ mod test {
 
     fn timestamp_milliseconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampMillisecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }
@@ -2554,10 +2564,10 @@ mod test {
 
     fn timestamp_microseconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampMicrosecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }
@@ -2565,10 +2575,10 @@ mod test {
 
     fn timestamp_nanoseconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampNanosecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }

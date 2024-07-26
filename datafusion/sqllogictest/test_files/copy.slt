@@ -271,7 +271,7 @@ select * from validate_struct_with_array;
 {c0: foo, c1: [1, 2, 3], c2: {c0: bar, c1: [2, 3, 4]}}
 
 
-# Copy parquet with all supported statment overrides
+# Copy parquet with all supported statement overrides
 query IT
 COPY source_table
 TO 'test_files/scratch/copy/table_with_options/'
@@ -600,7 +600,7 @@ query error DataFusion error: Invalid or Unsupported Configuration: Config value
 COPY source_table  to 'test_files/scratch/copy/table.json' STORED AS JSON OPTIONS ('format.row_group_size' 55);
 
 # Incomplete statement
-query error DataFusion error: SQL error: ParserError\("Expected \), found: EOF"\)
+query error DataFusion error: SQL error: ParserError\("Expected: \), found: EOF"\)
 COPY (select col2, sum(col1) from source_table
 
 # Copy from table with non literal

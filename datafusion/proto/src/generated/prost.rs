@@ -756,6 +756,8 @@ pub struct AggregateUdfExprNode {
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, repeated, tag = "4")]
     pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "6")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -779,6 +781,8 @@ pub struct WindowExprNode {
     /// repeated LogicalExprNode filter = 7;
     #[prost(message, optional, tag = "8")]
     pub window_frame: ::core::option::Option<WindowFrame>,
+    #[prost(bytes = "vec", optional, tag = "10")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "window_expr_node::WindowFunction", tags = "1, 2, 3, 9")]
     pub window_function: ::core::option::Option<window_expr_node::WindowFunction>,
 }
@@ -1291,6 +1295,10 @@ pub struct PhysicalAggregateExprNode {
     pub ordering_req: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
+    #[prost(bool, tag = "6")]
+    pub ignore_nulls: bool,
+    #[prost(bytes = "vec", optional, tag = "7")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
     pub aggregate_function: ::core::option::Option<
         physical_aggregate_expr_node::AggregateFunction,
@@ -1320,6 +1328,8 @@ pub struct PhysicalWindowExprNode {
     pub window_frame: ::core::option::Option<WindowFrame>,
     #[prost(string, tag = "8")]
     pub name: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", optional, tag = "9")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2, 3")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
@@ -1532,6 +1542,8 @@ pub struct CsvScanExecNode {
     pub delimiter: ::prost::alloc::string::String,
     #[prost(string, tag = "4")]
     pub quote: ::prost::alloc::string::String,
+    #[prost(bool, tag = "7")]
+    pub newlines_in_values: bool,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
@@ -1929,12 +1941,11 @@ pub struct PartitionStats {
 #[repr(i32)]
 pub enum AggregateFunction {
     Min = 0,
-    Max = 1,
     /// SUM = 2;
     /// AVG = 3;
     /// COUNT = 4;
     /// APPROX_DISTINCT = 5;
-    ///
+    /// ARRAY_AGG = 6;
     /// VARIANCE = 7;
     /// VARIANCE_POP = 8;
     /// COVARIANCE = 9;
@@ -1963,7 +1974,7 @@ pub enum AggregateFunction {
     /// REGR_SXY = 34;
     /// STRING_AGG = 35;
     /// NTH_VALUE_AGG = 36;
-    ArrayAgg = 6,
+    Max = 1,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1974,7 +1985,6 @@ impl AggregateFunction {
         match self {
             AggregateFunction::Min => "MIN",
             AggregateFunction::Max => "MAX",
-            AggregateFunction::ArrayAgg => "ARRAY_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1982,7 +1992,6 @@ impl AggregateFunction {
         match value {
             "MIN" => Some(Self::Min),
             "MAX" => Some(Self::Max),
-            "ARRAY_AGG" => Some(Self::ArrayAgg),
             _ => None,
         }
     }

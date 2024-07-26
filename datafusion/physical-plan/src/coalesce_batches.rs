@@ -18,27 +18,25 @@
 //! CoalesceBatchesExec combines small batches into larger batches for more efficient use of
 //! vectorized processing by upstream operators.
 
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
+use arrow::compute::concat_batches;
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use arrow::array::{AsArray, StringViewBuilder};
 use arrow::datatypes::SchemaRef;
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
 use futures::stream::{Stream, StreamExt};
-use log::trace;
 
 /// CoalesceBatchesExec combines small batches into larger batches for more efficient use of
 /// vectorized processing by upstream operators.
@@ -233,11 +231,7 @@ impl CoalesceBatchesStream {
                             // check to see if we have enough batches yet
                             if self.buffered_rows >= self.target_batch_size {
                                 // combine the batches and return
-                                let batch = concat_batches(
-                                    &self.schema,
-                                    &self.buffer,
-                                    self.buffered_rows,
-                                )?;
+                                let batch = concat_batches(&self.schema, &self.buffer)?;
                                 // reset buffer state
                                 self.buffer.clear();
                                 self.buffered_rows = 0;
@@ -254,11 +248,7 @@ impl CoalesceBatchesStream {
                             return Poll::Ready(None);
                         } else {
                             // combine the batches and return
-                            let batch = concat_batches(
-                                &self.schema,
-                                &self.buffer,
-                                self.buffered_rows,
-                            )?;
+                            let batch = concat_batches(&self.schema, &self.buffer)?;
                             // reset buffer state
                             self.buffer.clear();
                             self.buffered_rows = 0;
@@ -278,20 +268,6 @@ impl RecordBatchStream for CoalesceBatchesStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
-}
-
-/// Concatenates an array of `RecordBatch` into one batch
-pub fn concat_batches(
-    schema: &SchemaRef,
-    batches: &[RecordBatch],
-    row_count: usize,
-) -> ArrowResult<RecordBatch> {
-    trace!(
-        "Combined {} batches containing {} rows",
-        batches.len(),
-        row_count
-    );
-    arrow::compute::concat_batches(schema, batches)
 }
 
 /// Heuristically compact [`StringViewArray`]s to reduce memory usage, if needed

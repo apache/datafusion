@@ -93,6 +93,8 @@ impl QueryBuilder {
             fetch: self.fetch.clone(),
             locks: self.locks.clone(),
             for_clause: self.for_clause.clone(),
+            settings: None,
+            format_clause: None,
         })
     }
     fn create_empty() -> Self {
@@ -234,6 +236,7 @@ impl SelectBuilder {
             value_table_mode: self.value_table_mode,
             connect_by: None,
             window_before_qualify: false,
+            prewhere: None,
         })
     }
     fn create_empty() -> Self {
@@ -245,7 +248,7 @@ impl SelectBuilder {
             from: Default::default(),
             lateral_views: Default::default(),
             selection: Default::default(),
-            group_by: Some(ast::GroupByExpr::Expressions(Vec::new())),
+            group_by: Some(ast::GroupByExpr::Expressions(Vec::new(), Vec::new())),
             cluster_by: Default::default(),
             distribute_by: Default::default(),
             sort_by: Default::default(),
@@ -494,7 +497,7 @@ impl Default for DerivedRelationBuilder {
 pub(super) struct UninitializedFieldError(&'static str);
 
 impl UninitializedFieldError {
-    /// Create a new `UnitializedFieldError` for the specified field name.
+    /// Create a new `UninitializedFieldError` for the specified field name.
     pub fn new(field_name: &'static str) -> Self {
         UninitializedFieldError(field_name)
     }

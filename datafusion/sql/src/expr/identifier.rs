@@ -15,14 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::Field;
+use sqlparser::ast::{Expr as SQLExpr, Ident};
+
 use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, Column, DFSchema, DataFusionError,
-    Result, ScalarValue, TableReference,
+    Result, TableReference,
 };
-use datafusion_expr::{expr::ScalarFunction, lit, Case, Expr};
-use sqlparser::ast::{Expr as SQLExpr, Ident};
+use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::{Case, Expr};
+
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_expr::UNNAMED_TABLE;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_identifier_to_expr(
@@ -46,41 +50,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // interpret names with '.' as if they were
             // compound identifiers, but this is not a compound
             // identifier. (e.g. it is "foo.bar" not foo.bar)
-            let normalize_ident = self.normalizer.normalize(id);
-            match schema.field_with_unqualified_name(normalize_ident.as_str()) {
-                Ok(_) => {
-                    // found a match without a qualified name, this is a inner table column
-                    Ok(Expr::Column(Column {
-                        relation: None,
-                        name: normalize_ident,
-                    }))
-                }
-                Err(_) => {
-                    // check the outer_query_schema and try to find a match
-                    if let Some(outer) = planner_context.outer_query_schema() {
-                        match outer.qualified_field_with_unqualified_name(
-                            normalize_ident.as_str(),
-                        ) {
-                            Ok((qualifier, field)) => {
-                                // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                                Ok(Expr::OuterReferenceColumn(
-                                    field.data_type().clone(),
-                                    Column::from((qualifier, field)),
-                                ))
-                            }
-                            Err(_) => Ok(Expr::Column(Column {
-                                relation: None,
-                                name: normalize_ident,
-                            })),
-                        }
-                    } else {
-                        Ok(Expr::Column(Column {
-                            relation: None,
-                            name: normalize_ident,
-                        }))
-                    }
+            let normalize_ident = self.ident_normalizer.normalize(id);
+
+            // Check for qualified field with unqualified name
+            if let Ok((qualifier, _)) =
+                schema.qualified_field_with_unqualified_name(normalize_ident.as_str())
+            {
+                return Ok(Expr::Column(Column {
+                    relation: qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
+                    name: normalize_ident,
+                }));
+            }
+
+            // Check the outer query schema
+            if let Some(outer) = planner_context.outer_query_schema() {
+                if let Ok((qualifier, field)) =
+                    outer.qualified_field_with_unqualified_name(normalize_ident.as_str())
+                {
+                    // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                    return Ok(Expr::OuterReferenceColumn(
+                        field.data_type().clone(),
+                        Column::from((qualifier, field)),
+                    ));
                 }
             }
+
+            // Default case
+            Ok(Expr::Column(Column {
+                relation: None,
+                name: normalize_ident,
+            }))
         }
     }
 
@@ -97,7 +96,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if ids[0].value.starts_with('@') {
             let var_names: Vec<_> = ids
                 .into_iter()
-                .map(|id| self.normalizer.normalize(id))
+                .map(|id| self.ident_normalizer.normalize(id))
                 .collect();
             let ty = self
                 .context_provider
@@ -111,7 +110,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let ids = ids
                 .into_iter()
-                .map(|id| self.normalizer.normalize(id))
+                .map(|id| self.ident_normalizer.normalize(id))
                 .collect::<Vec<_>>();
 
             // Currently not supporting more than one nested level
@@ -125,26 +124,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             match search_result {
                 // found matching field with spare identifier(s) for nested field(s) in structure
                 Some((field, qualifier, nested_names)) if !nested_names.is_empty() => {
-                    // TODO: remove when can support multiple nested identifiers
-                    if nested_names.len() > 1 {
-                        return not_impl_err!(
-                            "Nested identifiers not yet supported for column {}",
-                            Column::from((qualifier, field)).quoted_flat_name()
-                        );
+                    // found matching field with spare identifier(s) for nested field(s) in structure
+                    for planner in self.context_provider.get_expr_planners() {
+                        if let Ok(planner_result) = planner.plan_compound_identifier(
+                            field,
+                            qualifier,
+                            nested_names,
+                        ) {
+                            match planner_result {
+                                PlannerResult::Planned(expr) => return Ok(expr),
+                                PlannerResult::Original(_args) => {}
+                            }
+                        }
                     }
-                    let nested_name = nested_names[0].to_string();
-
-                    let col = Expr::Column(Column::from((qualifier, field)));
-                    if let Some(udf) =
-                        self.context_provider.get_function_meta("get_field")
-                    {
-                        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                            udf,
-                            vec![col, lit(ScalarValue::from(nested_name))],
-                        )))
-                    } else {
-                        internal_err!("get_field not found")
-                    }
+                    not_impl_err!(
+                        "Compound identifiers not supported by ExprPlanner: {ids:?}"
+                    )
                 }
                 // found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {

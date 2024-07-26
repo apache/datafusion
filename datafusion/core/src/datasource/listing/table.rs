@@ -287,17 +287,17 @@ impl ListingOptions {
     ///# Notes
     ///
     /// - If only one level (e.g. `year` in the example above) is
-    /// specified, the other levels are ignored but the files are
-    /// still read.
+    ///   specified, the other levels are ignored but the files are
+    ///   still read.
     ///
     /// - Files that don't follow this partitioning scheme will be
-    /// ignored.
+    ///   ignored.
     ///
     /// - Since the columns have the same value for all rows read from
-    /// each individual file (such as dates), they are typically
-    /// dictionary encoded for efficiency. You may use
-    /// [`wrap_partition_type_in_dict`] to request a
-    /// dictionary-encoded type.
+    ///   each individual file (such as dates), they are typically
+    ///   dictionary encoded for efficiency. You may use
+    ///   [`wrap_partition_type_in_dict`] to request a
+    ///   dictionary-encoded type.
     ///
     /// - The partition columns are solely extracted from the file path. Especially they are NOT part of the parquet files itself.
     ///
@@ -720,8 +720,8 @@ impl ListingTable {
     }
 
     /// Specify the SQL definition for this table, if any
-    pub fn with_definition(mut self, defintion: Option<String>) -> Self {
-        self.definition = defintion;
+    pub fn with_definition(mut self, definition: Option<String>) -> Self {
+        self.definition = definition;
         self
     }
 
@@ -1063,8 +1063,8 @@ mod tests {
     use crate::datasource::file_format::avro::AvroFormat;
     use crate::datasource::file_format::csv::CsvFormat;
     use crate::datasource::file_format::json::JsonFormat;
-    use crate::datasource::file_format::parquet::ParquetFormat;
     #[cfg(feature = "parquet")]
+    use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::physical_plan::collect;

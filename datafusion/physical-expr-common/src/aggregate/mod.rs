@@ -22,8 +22,8 @@ pub mod stats;
 pub mod tdigest;
 pub mod utils;
 
-use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{not_impl_err, Result};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::ReversedUDAF;
@@ -33,7 +33,7 @@ use datafusion_expr::{
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
-use self::utils::{down_cast_any_ref, ordering_fields};
+use self::utils::down_cast_any_ref;
 use crate::physical_expr::PhysicalExpr;
 use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
 use crate::utils::reverse_order_bys;
@@ -51,6 +51,12 @@ use datafusion_expr::utils::AggregateOrderSensitivity;
 ///
 /// `input_exprs` and `sort_exprs` are used for customizing Accumulator as the arguments in `AccumulatorArgs`,
 /// if you don't need them it is fine to pass empty slice `&[]`.
+///
+/// `is_reversed` is used to indicate whether the aggregation is running in reverse order,
+/// it could be used to hint Accumulator to accumulate in the reversed order,
+/// you can just set to false if you are not reversing expression
+///
+/// You can also create expression by [`AggregateExprBuilder`]
 #[allow(clippy::too_many_arguments)]
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
@@ -63,40 +69,228 @@ pub fn create_aggregate_expr(
     ignore_nulls: bool,
     is_distinct: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
-    debug_assert_eq!(sort_exprs.len(), ordering_req.len());
+    let mut builder =
+        AggregateExprBuilder::new(Arc::new(fun.clone()), input_phy_exprs.to_vec());
+    builder = builder.sort_exprs(sort_exprs.to_vec());
+    builder = builder.order_by(ordering_req.to_vec());
+    builder = builder.logical_exprs(input_exprs.to_vec());
+    builder = builder.schema(Arc::new(schema.clone()));
+    builder = builder.name(name);
 
-    let input_exprs_types = input_phy_exprs
-        .iter()
-        .map(|arg| arg.data_type(schema))
-        .collect::<Result<Vec<_>>>()?;
+    if ignore_nulls {
+        builder = builder.ignore_nulls();
+    }
+    if is_distinct {
+        builder = builder.distinct();
+    }
 
-    check_arg_count(
-        fun.name(),
-        &input_exprs_types,
-        &fun.signature().type_signature,
-    )?;
+    builder.build()
+}
 
-    let ordering_types = ordering_req
-        .iter()
-        .map(|e| e.expr.data_type(schema))
-        .collect::<Result<Vec<_>>>()?;
+#[allow(clippy::too_many_arguments)]
+// This is not for external usage, consider creating with `create_aggregate_expr` instead.
+pub fn create_aggregate_expr_with_dfschema(
+    fun: &AggregateUDF,
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    input_exprs: &[Expr],
+    sort_exprs: &[Expr],
+    ordering_req: &[PhysicalSortExpr],
+    dfschema: &DFSchema,
+    name: impl Into<String>,
+    ignore_nulls: bool,
+    is_distinct: bool,
+    is_reversed: bool,
+) -> Result<Arc<dyn AggregateExpr>> {
+    let mut builder =
+        AggregateExprBuilder::new(Arc::new(fun.clone()), input_phy_exprs.to_vec());
+    builder = builder.sort_exprs(sort_exprs.to_vec());
+    builder = builder.order_by(ordering_req.to_vec());
+    builder = builder.logical_exprs(input_exprs.to_vec());
+    builder = builder.dfschema(dfschema.clone());
+    let schema: Schema = dfschema.into();
+    builder = builder.schema(Arc::new(schema));
+    builder = builder.name(name);
 
-    let ordering_fields = ordering_fields(ordering_req, &ordering_types);
+    if ignore_nulls {
+        builder = builder.ignore_nulls();
+    }
+    if is_distinct {
+        builder = builder.distinct();
+    }
+    if is_reversed {
+        builder = builder.reversed();
+    }
 
-    Ok(Arc::new(AggregateFunctionExpr {
-        fun: fun.clone(),
-        args: input_phy_exprs.to_vec(),
-        logical_args: input_exprs.to_vec(),
-        data_type: fun.return_type(&input_exprs_types)?,
-        name: name.into(),
-        schema: schema.clone(),
-        sort_exprs: sort_exprs.to_vec(),
-        ordering_req: ordering_req.to_vec(),
-        ignore_nulls,
-        ordering_fields,
-        is_distinct,
-        input_type: input_exprs_types[0].clone(),
-    }))
+    builder.build()
+}
+
+/// Builder for physical [`AggregateExpr`]
+///
+/// `AggregateExpr` contains the information necessary to call
+/// an aggregate expression.
+#[derive(Debug, Clone)]
+pub struct AggregateExprBuilder {
+    fun: Arc<AggregateUDF>,
+    /// Physical expressions of the aggregate function
+    args: Vec<Arc<dyn PhysicalExpr>>,
+    /// Logical expressions of the aggregate function, it will be deprecated in <https://github.com/apache/datafusion/issues/11359>
+    logical_args: Vec<Expr>,
+    name: String,
+    /// Arrow Schema for the aggregate function
+    schema: SchemaRef,
+    /// Datafusion Schema for the aggregate function
+    dfschema: DFSchema,
+    /// The logical order by expressions, it will be deprecated in <https://github.com/apache/datafusion/issues/11359>
+    sort_exprs: Vec<Expr>,
+    /// The physical order by expressions
+    ordering_req: LexOrdering,
+    /// Whether to ignore null values
+    ignore_nulls: bool,
+    /// Whether is distinct aggregate function
+    is_distinct: bool,
+    /// Whether the expression is reversed
+    is_reversed: bool,
+}
+
+impl AggregateExprBuilder {
+    pub fn new(fun: Arc<AggregateUDF>, args: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        Self {
+            fun,
+            args,
+            logical_args: vec![],
+            name: String::new(),
+            schema: Arc::new(Schema::empty()),
+            dfschema: DFSchema::empty(),
+            sort_exprs: vec![],
+            ordering_req: vec![],
+            ignore_nulls: false,
+            is_distinct: false,
+            is_reversed: false,
+        }
+    }
+
+    pub fn build(self) -> Result<Arc<dyn AggregateExpr>> {
+        let Self {
+            fun,
+            args,
+            logical_args,
+            name,
+            schema,
+            dfschema,
+            sort_exprs,
+            ordering_req,
+            ignore_nulls,
+            is_distinct,
+            is_reversed,
+        } = self;
+        if args.is_empty() {
+            return internal_err!("args should not be empty");
+        }
+
+        let mut ordering_fields = vec![];
+
+        debug_assert_eq!(sort_exprs.len(), ordering_req.len());
+        if !ordering_req.is_empty() {
+            let ordering_types = ordering_req
+                .iter()
+                .map(|e| e.expr.data_type(&schema))
+                .collect::<Result<Vec<_>>>()?;
+
+            ordering_fields = utils::ordering_fields(&ordering_req, &ordering_types);
+        }
+
+        let input_exprs_types = args
+            .iter()
+            .map(|arg| arg.data_type(&schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        check_arg_count(
+            fun.name(),
+            &input_exprs_types,
+            &fun.signature().type_signature,
+        )?;
+
+        let data_type = fun.return_type(&input_exprs_types)?;
+
+        Ok(Arc::new(AggregateFunctionExpr {
+            fun: Arc::unwrap_or_clone(fun),
+            args,
+            logical_args,
+            data_type,
+            name,
+            schema: Arc::unwrap_or_clone(schema),
+            dfschema,
+            sort_exprs,
+            ordering_req,
+            ignore_nulls,
+            ordering_fields,
+            is_distinct,
+            input_type: input_exprs_types[0].clone(),
+            is_reversed,
+        }))
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    pub fn schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = schema;
+        self
+    }
+
+    pub fn dfschema(mut self, dfschema: DFSchema) -> Self {
+        self.dfschema = dfschema;
+        self
+    }
+
+    pub fn order_by(mut self, order_by: LexOrdering) -> Self {
+        self.ordering_req = order_by;
+        self
+    }
+
+    pub fn reversed(mut self) -> Self {
+        self.is_reversed = true;
+        self
+    }
+
+    pub fn with_reversed(mut self, is_reversed: bool) -> Self {
+        self.is_reversed = is_reversed;
+        self
+    }
+
+    pub fn distinct(mut self) -> Self {
+        self.is_distinct = true;
+        self
+    }
+
+    pub fn with_distinct(mut self, is_distinct: bool) -> Self {
+        self.is_distinct = is_distinct;
+        self
+    }
+
+    pub fn ignore_nulls(mut self) -> Self {
+        self.ignore_nulls = true;
+        self
+    }
+
+    pub fn with_ignore_nulls(mut self, ignore_nulls: bool) -> Self {
+        self.ignore_nulls = ignore_nulls;
+        self
+    }
+
+    /// This method will be deprecated in <https://github.com/apache/datafusion/issues/11359>
+    pub fn sort_exprs(mut self, sort_exprs: Vec<Expr>) -> Self {
+        self.sort_exprs = sort_exprs;
+        self
+    }
+
+    /// This method will be deprecated in <https://github.com/apache/datafusion/issues/11359>
+    pub fn logical_exprs(mut self, logical_args: Vec<Expr>) -> Self {
+        self.logical_args = logical_args;
+        self
+    }
 }
 
 /// An aggregate expression that:
@@ -261,6 +455,7 @@ pub struct AggregateFunctionExpr {
     data_type: DataType,
     name: String,
     schema: Schema,
+    dfschema: DFSchema,
     // The logical order by expressions
     sort_exprs: Vec<Expr>,
     // The physical order by expressions
@@ -270,6 +465,7 @@ pub struct AggregateFunctionExpr {
     // fields used for order sensitive aggregation functions
     ordering_fields: Vec<Field>,
     is_distinct: bool,
+    is_reversed: bool,
     input_type: DataType,
 }
 
@@ -282,6 +478,16 @@ impl AggregateFunctionExpr {
     /// Return if the aggregation is distinct
     pub fn is_distinct(&self) -> bool {
         self.is_distinct
+    }
+
+    /// Return if the aggregation ignores nulls
+    pub fn ignore_nulls(&self) -> bool {
+        self.ignore_nulls
+    }
+
+    /// Return if the aggregation is distinct
+    pub fn is_reversed(&self) -> bool {
+        self.is_reversed
     }
 }
 
@@ -315,12 +521,14 @@ impl AggregateExpr for AggregateFunctionExpr {
         let acc_args = AccumulatorArgs {
             data_type: &self.data_type,
             schema: &self.schema,
+            dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
             input_exprs: &self.logical_args,
             name: &self.name,
+            is_reversed: self.is_reversed,
         };
 
         self.fun.accumulator(acc_args)
@@ -330,18 +538,20 @@ impl AggregateExpr for AggregateFunctionExpr {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
             schema: &self.schema,
+            dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
             input_exprs: &self.logical_args,
             name: &self.name,
+            is_reversed: self.is_reversed,
         };
 
         let accumulator = self.fun.create_sliding_accumulator(args)?;
 
         // Accumulators that have window frame startings different
-        // than `UNBOUNDED PRECEDING`, such as `1 PRECEEDING`, need to
+        // than `UNBOUNDED PRECEDING`, such as `1 PRECEDING`, need to
         // implement retract_batch method in order to run correctly
         // currently in DataFusion.
         //
@@ -372,7 +582,7 @@ impl AggregateExpr for AggregateFunctionExpr {
         // 3. Third sum we add to the state sum value between `[2, 3)`
         // (`[0, 2)` is already in the state sum).  Also we need to
         // retract values between `[0, 1)` by this way we can obtain sum
-        // between [1, 3) which is indeed the apropriate range.
+        // between [1, 3) which is indeed the appropriate range.
         //
         // When we use `UNBOUNDED PRECEDING` in the query starting
         // index will always be 0 for the desired range, and hence the
@@ -400,12 +610,14 @@ impl AggregateExpr for AggregateFunctionExpr {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
             schema: &self.schema,
+            dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
             input_exprs: &self.logical_args,
             name: &self.name,
+            is_reversed: self.is_reversed,
         };
         self.fun.groups_accumulator_supported(args)
     }
@@ -414,12 +626,14 @@ impl AggregateExpr for AggregateFunctionExpr {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
             schema: &self.schema,
+            dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
             input_type: &self.input_type,
             input_exprs: &self.logical_args,
             name: &self.name,
+            is_reversed: self.is_reversed,
         };
         self.fun.create_groups_accumulator(args)
     }
@@ -457,16 +671,17 @@ impl AggregateExpr for AggregateFunctionExpr {
         else {
             return Ok(None);
         };
-        create_aggregate_expr(
+        create_aggregate_expr_with_dfschema(
             &updated_fn,
             &self.args,
             &self.logical_args,
             &self.sort_exprs,
             &self.ordering_req,
-            &self.schema,
+            &self.dfschema,
             self.name(),
             self.ignore_nulls,
             self.is_distinct,
+            self.is_reversed,
         )
         .map(Some)
     }
@@ -490,18 +705,24 @@ impl AggregateExpr for AggregateFunctionExpr {
                     })
                     .collect::<Vec<_>>();
                 let mut name = self.name().to_string();
-                replace_order_by_clause(&mut name);
+                // If the function is changed, we need to reverse order_by clause as well
+                // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
+                if self.fun().name() == reverse_udf.name() {
+                } else {
+                    replace_order_by_clause(&mut name);
+                }
                 replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
-                let reverse_aggr = create_aggregate_expr(
+                let reverse_aggr = create_aggregate_expr_with_dfschema(
                     &reverse_udf,
                     &self.args,
                     &self.logical_args,
                     &reverse_sort_exprs,
                     &reverse_ordering_req,
-                    &self.schema,
+                    &self.dfschema,
                     name,
                     self.ignore_nulls,
                     self.is_distinct,
+                    !self.is_reversed,
                 )
                 .unwrap();
 

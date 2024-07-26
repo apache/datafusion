@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::file_stream::FileStream;
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningPredicate, DisplayAs, FileGroupPartitioner,
+    parquet::page_filter::PagePruningAccessPlanFilter, DisplayAs, FileGroupPartitioner,
     FileScanConfig,
 };
 use crate::{
@@ -39,13 +39,11 @@ use crate::{
     },
 };
 
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
 use itertools::Itertools;
 use log::debug;
-use parquet::basic::{ConvertedType, LogicalType};
-use parquet::schema::types::ColumnDescriptor;
 
 mod access_plan;
 mod metrics;
@@ -121,32 +119,32 @@ pub use writer::plan_to_parquet;
 /// Supports the following optimizations:
 ///
 /// * Concurrent reads: Can read from one or more files in parallel as multiple
-/// partitions, including concurrently reading multiple row groups from a single
-/// file.
+///   partitions, including concurrently reading multiple row groups from a single
+///   file.
 ///
 /// * Predicate push down: skips row groups and pages based on
-/// min/max/null_counts in the row group metadata, the page index and bloom
-/// filters.
+///   min/max/null_counts in the row group metadata, the page index and bloom
+///   filters.
 ///
 /// * Projection pushdown: reads and decodes only the columns required.
 ///
 /// * Limit pushdown: stop execution early after some number of rows are read.
 ///
 /// * Custom readers: customize reading  parquet files, e.g. to cache metadata,
-/// coalesce I/O operations, etc. See [`ParquetFileReaderFactory`] for more
-/// details.
+///   coalesce I/O operations, etc. See [`ParquetFileReaderFactory`] for more
+///   details.
 ///
 /// * Schema adapters: read parquet files with different schemas into a unified
-/// table schema. This can be used to implement "schema evolution". See
-/// [`SchemaAdapterFactory`] for more details.
+///   table schema. This can be used to implement "schema evolution". See
+///   [`SchemaAdapterFactory`] for more details.
 ///
 /// * metadata_size_hint: controls the number of bytes read from the end of the
-/// file in the initial I/O when the default [`ParquetFileReaderFactory`]. If a
-/// custom reader is used, it supplies the metadata directly and this parameter
-/// is ignored. [`ParquetExecBuilder::with_metadata_size_hint`] for more details.
+///   file in the initial I/O when the default [`ParquetFileReaderFactory`]. If a
+///   custom reader is used, it supplies the metadata directly and this parameter
+///   is ignored. [`ParquetExecBuilder::with_metadata_size_hint`] for more details.
 ///
 /// * User provided  [`ParquetAccessPlan`]s to skip row groups and/or pages
-/// based on external information. See "Implementing External Indexes" below
+///   based on external information. See "Implementing External Indexes" below
 ///
 /// # Implementing External Indexes
 ///
@@ -193,22 +191,22 @@ pub use writer::plan_to_parquet;
 /// # Execution Overview
 ///
 /// * Step 1: [`ParquetExec::execute`] is called, returning a [`FileStream`]
-/// configured to open parquet files with a [`ParquetOpener`].
+///   configured to open parquet files with a [`ParquetOpener`].
 ///
 /// * Step 2: When the stream is polled, the [`ParquetOpener`] is called to open
-/// the file.
+///   the file.
 ///
 /// * Step 3: The `ParquetOpener` gets the [`ParquetMetaData`] (file metadata)
-/// via [`ParquetFileReaderFactory`], creating a [`ParquetAccessPlan`] by
-/// applying predicates to metadata. The plan and projections are used to
-/// determine what pages must be read.
+///   via [`ParquetFileReaderFactory`], creating a [`ParquetAccessPlan`] by
+///   applying predicates to metadata. The plan and projections are used to
+///   determine what pages must be read.
 ///
 /// * Step 4: The stream begins reading data, fetching the required pages
-/// and incrementally decoding them.
+///   and incrementally decoding them.
 ///
 /// * Step 5: As each [`RecordBatch]` is read, it may be adapted by a
-/// [`SchemaAdapter`] to match the table schema. By default missing columns are
-/// filled with nulls, but this can be customized via [`SchemaAdapterFactory`].
+///   [`SchemaAdapter`] to match the table schema. By default missing columns are
+///   filled with nulls, but this can be customized via [`SchemaAdapterFactory`].
 ///
 /// [`RecordBatch`]: arrow::record_batch::RecordBatch
 /// [`SchemaAdapter`]: crate::datasource::schema_adapter::SchemaAdapter
@@ -225,7 +223,7 @@ pub struct ParquetExec {
     /// Optional predicate for pruning row groups (derived from `predicate`)
     pruning_predicate: Option<Arc<PruningPredicate>>,
     /// Optional predicate for pruning pages (derived from `predicate`)
-    page_pruning_predicate: Option<Arc<PagePruningPredicate>>,
+    page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
     /// Optional hint for the size of the parquet metadata
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
@@ -381,19 +379,12 @@ impl ParquetExecBuilder {
             })
             .filter(|p| !p.always_true());
 
-        let page_pruning_predicate = predicate.as_ref().and_then(|predicate_expr| {
-            match PagePruningPredicate::try_new(predicate_expr, file_schema.clone()) {
-                Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
-                Err(e) => {
-                    debug!(
-                        "Could not create page pruning predicate for '{:?}': {}",
-                        pruning_predicate, e
-                    );
-                    predicate_creation_errors.add(1);
-                    None
-                }
-            }
-        });
+        let page_pruning_predicate = predicate
+            .as_ref()
+            .map(|predicate_expr| {
+                PagePruningAccessPlanFilter::new(predicate_expr, file_schema.clone())
+            })
+            .map(Arc::new);
 
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
@@ -739,7 +730,7 @@ impl ExecutionPlan for ParquetExec {
 
 fn should_enable_page_index(
     enable_page_index: bool,
-    page_pruning_predicate: &Option<Arc<PagePruningPredicate>>,
+    page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
 ) -> bool {
     enable_page_index
         && page_pruning_predicate.is_some()
@@ -747,26 +738,6 @@ fn should_enable_page_index(
             .as_ref()
             .map(|p| p.filter_number() > 0)
             .unwrap_or(false)
-}
-
-// Convert parquet column schema to arrow data type, and just consider the
-// decimal data type.
-pub(crate) fn parquet_to_arrow_decimal_type(
-    parquet_column: &ColumnDescriptor,
-) -> Option<DataType> {
-    let type_ptr = parquet_column.self_type_ptr();
-    match type_ptr.get_basic_info().logical_type() {
-        Some(LogicalType::Decimal { scale, precision }) => {
-            Some(DataType::Decimal128(precision as u8, scale as i8))
-        }
-        _ => match type_ptr.get_basic_info().converted_type() {
-            ConvertedType::DECIMAL => Some(DataType::Decimal128(
-                type_ptr.get_precision() as u8,
-                type_ptr.get_scale() as i8,
-            )),
-            _ => None,
-        },
-    }
 }
 
 #[cfg(test)]
@@ -798,7 +769,7 @@ mod tests {
     };
     use arrow::datatypes::{Field, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::Fields;
+    use arrow_schema::{DataType, Fields};
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;

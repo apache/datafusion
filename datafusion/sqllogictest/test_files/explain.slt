@@ -394,7 +394,7 @@ physical_plan_with_schema
 statement ok
 set datafusion.execution.collect_statistics = false;
 
-# Explain ArrayFuncions
+# Explain ArrayFunctions
 
 statement ok
 set datafusion.explain.physical_plan_only = false

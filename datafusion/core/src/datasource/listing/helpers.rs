@@ -49,7 +49,7 @@ use object_store::{ObjectMeta, ObjectStore};
 /// This means that if this function returns true:
 /// - the table provider can filter the table partition values with this expression
 /// - the expression can be marked as `TableProviderFilterPushDown::Exact` once this filtering
-/// was performed
+///   was performed
 pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(|expr| {
@@ -759,7 +759,7 @@ mod tests {
                 .otherwise(lit(false))
                 .expect("valid case expr"))
         ));
-        // static expression not relvant in this context but we
+        // static expression not relevant in this context but we
         // test it as an edge case anyway in case we want to generalize
         // this helper function
         assert!(expr_applicable_for_cols(&[], &lit(true)));

@@ -263,7 +263,7 @@ pub enum LogicalPlan {
     /// Prepare a statement and find any bind parameters
     /// (e.g. `?`). This is used to implement SQL-prepared statements.
     Prepare(Prepare),
-    /// Data Manipulaton Language (DML): Insert / Update / Delete
+    /// Data Manipulation Language (DML): Insert / Update / Delete
     Dml(DmlStatement),
     /// Data Definition Language (DDL): CREATE / DROP TABLES / VIEWS / SCHEMAS
     Ddl(DdlStatement),
@@ -496,18 +496,18 @@ impl LogicalPlan {
                 // The join keys in using-join must be columns.
                 let columns =
                     on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
-                        let Some(l) = l.try_as_col().cloned() else {
+                        let Some(l) = l.get_as_join_column() else {
                             return internal_err!(
                                 "Invalid join key. Expected column, found {l:?}"
                             );
                         };
-                        let Some(r) = r.try_as_col().cloned() else {
+                        let Some(r) = r.get_as_join_column() else {
                             return internal_err!(
                                 "Invalid join key. Expected column, found {r:?}"
                             );
                         };
-                        accumu.insert(l);
-                        accumu.insert(r);
+                        accumu.insert(l.to_owned());
+                        accumu.insert(r.to_owned());
                         Result::<_, DataFusionError>::Ok(accumu)
                     })?;
                 using_columns.push(columns);
@@ -1598,8 +1598,8 @@ impl LogicalPlan {
                             })
                             .collect();
 
-                        let elipse = if values.len() > 5 { "..." } else { "" };
-                        write!(f, "Values: {}{}", str_values.join(", "), elipse)
+                        let eclipse = if values.len() > 5 { "..." } else { "" };
+                        write!(f, "Values: {}{}", str_values.join(", "), eclipse)
                     }
 
                     LogicalPlan::TableScan(TableScan {
@@ -1910,19 +1910,19 @@ pub struct EmptyRelation {
 /// From the [Postgres Docs]:
 ///
 /// 1. Evaluate the non-recursive term. For `UNION` (but not `UNION ALL`),
-/// discard duplicate rows. Include all remaining rows in the result of the
-/// recursive query, and also place them in a temporary working table.
-//
+///    discard duplicate rows. Include all remaining rows in the result of the
+///    recursive query, and also place them in a temporary working table.
+///
 /// 2. So long as the working table is not empty, repeat these steps:
 ///
 /// * Evaluate the recursive term, substituting the current contents of the
-/// working table for the recursive self-reference. For `UNION` (but not `UNION
-/// ALL`), discard duplicate rows and rows that duplicate any previous result
-/// row. Include all remaining rows in the result of the recursive query, and
-/// also place them in a temporary intermediate table.
+///   working table for the recursive self-reference. For `UNION` (but not `UNION
+///   ALL`), discard duplicate rows and rows that duplicate any previous result
+///   row. Include all remaining rows in the result of the recursive query, and
+///   also place them in a temporary intermediate table.
 ///
 /// * Replace the contents of the working table with the contents of the
-/// intermediate table, then empty the intermediate table.
+///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -2003,7 +2003,7 @@ impl Projection {
 /// # Arguments
 ///
 /// * `input`: A reference to the input `LogicalPlan` for which the projection schema
-/// will be computed.
+///   will be computed.
 /// * `exprs`: A slice of `Expr` expressions representing the projection operation to apply.
 ///
 /// # Returns

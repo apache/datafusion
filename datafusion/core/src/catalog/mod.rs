@@ -141,12 +141,12 @@ pub trait CatalogList: CatalogProviderList {}
 /// Here are some examples of how to implement custom catalogs:
 ///
 /// * [`datafusion-cli`]: [`DynamicFileCatalogProvider`] catalog provider
-/// that treats files and directories on a filesystem as tables.
+///   that treats files and directories on a filesystem as tables.
 ///
 /// * The [`catalog.rs`]:  a simple directory based catalog.
 ///
 ///  * [delta-rs]:  [`UnityCatalogProvider`] implementation that can
-///  read from Delta Lake tables
+///    read from Delta Lake tables
 ///
 /// [`datafusion-cli`]: https://datafusion.apache.org/user-guide/cli/index.html
 /// [`DynamicFileCatalogProvider`]: https://github.com/apache/datafusion/blob/31b9b48b08592b7d293f46e75707aad7dadd7cbc/datafusion-cli/src/catalog.rs#L75
