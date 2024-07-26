@@ -102,9 +102,13 @@ where
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
-                let value = &mut self.values[group_index];
-                (self.prim_fn)(value, new_value);
+            |group_index, was_valid, new_value| {
+                if was_valid {
+                    let value = &mut self.values[group_index];
+                    (self.prim_fn)(value, new_value)
+                } else {
+                    self.values[group_index] = new_value
+                }
             },
         );
 

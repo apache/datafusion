@@ -288,10 +288,9 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
+            |group_index, _, new_value| {
                 let prod = &mut self.prods[group_index];
                 *prod = prod.mul_wrapping(new_value);
-
                 self.counts[group_index] += 1;
             },
         );
@@ -318,7 +317,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
             partial_counts,
             opt_filter,
             total_num_groups,
-            |group_index, partial_count| {
+            |group_index, _, partial_count| {
                 self.counts[group_index] += partial_count;
             },
         );
@@ -330,7 +329,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
             partial_prods,
             opt_filter,
             total_num_groups,
-            |group_index, new_value: <Float64Type as ArrowPrimitiveType>::Native| {
+            |group_index, _, new_value| {
                 let prod = &mut self.prods[group_index];
                 *prod = prod.mul_wrapping(new_value);
             },
