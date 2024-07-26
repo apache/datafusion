@@ -20,11 +20,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::catalog::{TableProvider, TableProviderFactory};
 use crate::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use crate::datasource::provider::TableProviderFactory;
-use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
@@ -33,6 +32,7 @@ use datafusion_common::{config_datafusion_err, Result};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 #[derive(Debug, Default)]
@@ -49,16 +49,18 @@ impl ListingTableFactory {
 impl TableProviderFactory for ListingTableFactory {
     async fn create(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
-        let file_format = state
+        // TODO remove downcast_ref from here. Should file format factory be an extension to session state?
+        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
+        let file_format = session_state
             .get_file_format_factory(cmd.file_type.as_str())
             .ok_or(config_datafusion_err!(
                 "Unable to create table with format {}! Could not find FileFormat.",
                 cmd.file_type
             ))?
-            .create(state, &cmd.options)?;
+            .create(session_state, &cmd.options)?;
 
         let file_extension = get_extension(cmd.location.as_str());
 
@@ -114,10 +116,12 @@ impl TableProviderFactory for ListingTableFactory {
             .with_table_partition_cols(table_partition_cols)
             .with_file_sort_order(cmd.order_exprs.clone());
 
-        options.validate_partitions(state, &table_path).await?;
+        options
+            .validate_partitions(session_state, &table_path)
+            .await?;
 
         let resolved_schema = match provided_schema {
-            None => options.infer_schema(state, &table_path).await?,
+            None => options.infer_schema(session_state, &table_path).await?,
             Some(s) => s,
         };
         let config = ListingTableConfig::new(table_path)

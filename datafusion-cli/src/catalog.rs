@@ -20,8 +20,7 @@ use std::sync::{Arc, Weak};
 
 use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
 
-use datafusion::catalog::schema::SchemaProvider;
-use datafusion::catalog::{CatalogProvider, CatalogProviderList};
+use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableUrl,
@@ -237,7 +236,7 @@ fn substitute_tilde(cur: String) -> String {
 mod tests {
     use super::*;
 
-    use datafusion::catalog::schema::SchemaProvider;
+    use datafusion::catalog::SchemaProvider;
     use datafusion::prelude::SessionContext;
 
     fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {

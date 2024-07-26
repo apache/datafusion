@@ -29,8 +29,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use crate::catalog::{CatalogProviderList, SchemaProvider, TableProvider};
 use crate::datasource::streaming::StreamingTable;
-use crate::datasource::TableProvider;
 use crate::execution::context::TaskContext;
 use crate::logical_expr::TableType;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
@@ -39,8 +39,6 @@ use crate::{
     config::{ConfigEntry, ConfigOptions},
     physical_plan::streaming::PartitionStream,
 };
-
-use super::{schema::SchemaProvider, CatalogProviderList};
 
 pub(crate) const INFORMATION_SCHEMA: &str = "information_schema";
 pub(crate) const TABLES: &str = "tables";

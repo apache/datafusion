@@ -29,12 +29,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::catalog::{TableProvider, TableProviderFactory};
 use crate::dataframe::DataFrame;
-use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
-use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
+use crate::datasource::{empty::EmptyTable, provider_as_source};
 use crate::error::Result;
-use crate::execution::context::{SessionState, TaskContext};
+use crate::execution::context::TaskContext;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
@@ -49,9 +49,9 @@ use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 use futures::Stream;
 use tempfile::TempDir;
-
 // backwards compatibility
 #[cfg(feature = "parquet")]
 pub use datafusion_common::test_util::parquet_test_data;
@@ -177,7 +177,7 @@ pub struct TestTableFactory {}
 impl TableProviderFactory for TestTableFactory {
     async fn create(
         &self,
-        _: &SessionState,
+        _: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
@@ -213,7 +213,7 @@ impl TableProvider for TestTableProvider {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,

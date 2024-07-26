@@ -25,9 +25,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::datasource::provider::TableProviderFactory;
-use crate::datasource::{create_ordering, TableProvider};
-use crate::execution::context::SessionState;
+use crate::catalog::{TableProvider, TableProviderFactory};
+use crate::datasource::create_ordering;
 
 use arrow_array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow_schema::SchemaRef;
@@ -42,6 +41,7 @@ use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 use futures::StreamExt;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
@@ -52,7 +52,7 @@ pub struct StreamTableFactory {}
 impl TableProviderFactory for StreamTableFactory {
     async fn create(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
@@ -322,7 +322,7 @@ impl TableProvider for StreamTable {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         limit: Option<usize>,
@@ -347,7 +347,7 @@ impl TableProvider for StreamTable {
 
     async fn insert_into(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
         _overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {

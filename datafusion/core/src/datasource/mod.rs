@@ -43,8 +43,8 @@ pub use self::default_table_source::{
     provider_as_source, source_as_provider, DefaultTableSource,
 };
 pub use self::memory::MemTable;
-pub use self::provider::TableProvider;
 pub use self::view::ViewTable;
+pub use crate::catalog::TableProvider;
 pub use crate::logical_expr::TableType;
 pub use statistics::get_statistics_with_limit;
 
