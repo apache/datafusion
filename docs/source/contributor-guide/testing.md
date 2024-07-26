@@ -29,7 +29,7 @@ and tries to follow the Rust standard [Testing Organization](https://doc.rust-la
 
 ## Unit tests
 
-Tests for code in an individual module are defined in the same source file with a `test` module, following Rust convention.
+Tests for code in an individual module are defined in the same source file with a `test` module, following Rust convention. If you need to perform assertions on RecordBatch you can leverage the `assert_batches_sorted_eq` and `assert_contains` macros provided by the [test_util](https://github.com/apache/datafusion/tree/main/datafusion/common/src/test_util.rs) module.
 
 ## sqllogictests Tests
 
