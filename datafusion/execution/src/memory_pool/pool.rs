@@ -565,4 +565,71 @@ mod tests {
             "should provide proper error with different hashed consumer (foo(can_spill=false)=30 bytes and foo(can_spill=true)=0 bytes, available=70)"
         );
     }
+
+    #[test]
+    fn test_tracked_consumers_pool_deregister() {
+        fn test_per_pool_type(pool: Arc<dyn MemoryPool>) {
+            // Baseline: see the 2 memory consumers
+            let mut r0 = MemoryConsumer::new("r0").register(&pool);
+            r0.grow(10);
+            let r1_consumer = MemoryConsumer::new("r1");
+            let mut r1 = r1_consumer.clone().register(&pool);
+            r1.grow(20);
+            let expected = "Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated - maximum available is 70. The top memory consumers (across reservations) are: r1 consumed 20 bytes, r0 consumed 10 bytes";
+            assert!(
+                matches!(
+                    r0.try_grow(150),
+                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+                ),
+                "should provide proper error with both consumers"
+            );
+
+            // Test: unregister one
+            // only the remaining one should be listed
+            pool.unregister(&r1_consumer);
+            let expected_consumers = "The top memory consumers (across reservations) are: r0 consumed 10 bytes";
+            assert!(
+                matches!(
+                    r0.try_grow(150),
+                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected_consumers)
+                ),
+                "should provide proper error with only 1 consumer left registered"
+            );
+
+            // Test: actual message we see is the `available is 70`. When it should be `available is 90`.
+            // This is because the pool.shrink() does not automatically occur within the inner_pool.deregister().
+            let expected_70_available = "Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated - maximum available is 70.";
+            assert!(
+                matches!(
+                    r0.try_grow(150),
+                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected_70_available)
+                ),
+                "inner pool will still count all bytes for the deregistered consumer, until the reservation is dropped"
+            );
+
+            // Test: the registration needs to free itself (or be dropped),
+            // for the proper error message
+            r1.free();
+            let expected_90_available = "Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated - maximum available is 90.";
+            assert!(
+                matches!(
+                    r0.try_grow(150),
+                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected_90_available)
+                ),
+                "after reservation is free, the inner pool should correctly account the total bytes"
+            );
+        }
+
+        let tracked_spill_pool: Arc<dyn MemoryPool> = Arc::new(TrackConsumersPool::new(
+            FairSpillPool::new(100),
+            NonZeroUsize::new(3).unwrap(),
+        ));
+        test_per_pool_type(tracked_spill_pool);
+
+        let tracked_greedy_pool: Arc<dyn MemoryPool> = Arc::new(TrackConsumersPool::new(
+            GreedyMemoryPool::new(100),
+            NonZeroUsize::new(3).unwrap(),
+        ));
+        test_per_pool_type(tracked_greedy_pool);
+    }
 }
