@@ -37,9 +37,32 @@ We use the Slack and Discord platforms for informal discussions and coordination
 meet other contributors and get guidance on where to contribute. It is important to note that any technical designs and
 decisions are made fully in the open, on GitHub.
 
-Most of us use the `#datafusion` and `#arrow-rust` channels in the [ASF Slack
+Most of us use the [ASF Slack
 workspace](https://s.apache.org/slack-invite) and the [Arrow Rust Discord
 server](https://discord.gg/Qw5gKqHxUM) for discussions.
+
+There are specific channels for Arrow, DataFusion, and the DataFusion subprojects (Ballista, Comet, Python, etc).
+
+In Slack we use these channels:
+
+- #arrow
+- #arrow-rust
+- #datafusion
+- #datafusion-ballista
+- #datafusion-comet
+- #datafusion-python
+
+In Discord we use these channels:
+
+- #ballista
+- #comet
+- #contrib-federation
+- #datafusion
+- #datafusion-python
+- #dolomite-optimizer
+- #general
+- #hiring
+- #incremental-materialized-views
 
 Unfortunately, due to spammers, the ASF Slack workspace requires an invitation
 to join. We are happy to invite you -- please ask for an invitation in the

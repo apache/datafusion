@@ -512,6 +512,8 @@ impl SessionState {
         ParserOptions {
             parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
             enable_ident_normalization: sql_parser_options.enable_ident_normalization,
+            enable_options_value_normalization: sql_parser_options
+                .enable_options_value_normalization,
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
         }
     }
@@ -657,8 +659,8 @@ impl SessionState {
     /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type
     /// coercion, and function rewrites.
     ///
-    /// Note: The expression is not [simplified] or otherwise optimized:  `a = 1
-    /// + 2` will not be simplified to `a = 3` as this is a more involved process.
+    /// Note: The expression is not [simplified] or otherwise optimized:
+    /// `a = 1 + 2` will not be simplified to `a = 3` as this is a more involved process.
     /// See the [expr_api] example for how to simplify expressions.
     ///
     /// # See Also:
