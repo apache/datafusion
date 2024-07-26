@@ -273,6 +273,17 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
         }
     }
 
+    /// Determine if there are multiple [`MemoryConsumer`]s registered
+    /// which have the same name.
+    ///
+    /// This is very tied to the implementation of the memory consumer.
+    fn has_multiple_consumers(&self, name: &String) -> bool {
+        let consumer = MemoryConsumer::new(name);
+        let consumer_with_spill = consumer.clone().with_can_spill(true);
+        let guard = self.tracked_consumers.lock();
+        guard.contains_key(&consumer) && guard.contains_key(&consumer_with_spill)
+    }
+
     /// The top consumers in a report string.
     fn report_top(&self) -> String {
         let mut consumers = self
@@ -280,7 +291,10 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
             .lock()
             .iter()
             .map(|(consumer, reserved)| {
-                (consumer.name().to_owned(), reserved.load(Ordering::Acquire))
+                (
+                    (consumer.name().to_owned(), consumer.can_spill()),
+                    reserved.load(Ordering::Acquire),
+                )
             })
             .collect::<Vec<_>>();
         consumers.sort_by(|a, b| b.1.cmp(&a.1)); // inverse ordering
@@ -289,7 +303,16 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
             "The top memory consumers (across reservations) are: {}",
             consumers[0..std::cmp::min(self.top.into(), consumers.len())]
                 .iter()
-                .map(|(name, size)| format!("{name} consumed {:?} bytes", size))
+                .map(|((name, can_spill), size)| {
+                    if self.has_multiple_consumers(name) {
+                        format!(
+                            "{name}(can_spill={}) consumed {:?} bytes",
+                            can_spill, size
+                        )
+                    } else {
+                        format!("{name} consumed {:?} bytes", size)
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -533,7 +556,7 @@ mod tests {
         let consumer_with_same_name_but_different_hash =
             MemoryConsumer::new(same_name).with_can_spill(true);
         let mut r2 = consumer_with_same_name_but_different_hash.register(&pool);
-        let expected = "Failed to allocate additional 150 bytes for foo with 0 bytes already allocated - maximum available is 70. The top memory consumers (across reservations) are: foo consumed 30 bytes, foo consumed 0 bytes";
+        let expected = "Failed to allocate additional 150 bytes for foo with 0 bytes already allocated - maximum available is 70. The top memory consumers (across reservations) are: foo(can_spill=false) consumed 30 bytes, foo(can_spill=true) consumed 0 bytes";
         assert!(
             matches!(
                 r2.try_grow(150),
