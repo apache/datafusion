@@ -185,6 +185,13 @@ impl OptimizerContext {
         self
     }
 
+    /// Specify whether to abort on optimization cycle, or continue query execution
+    /// with the current, not fully optimized plan
+    pub fn with_abort_on_optimization_cycle(mut self, b: bool) -> Self {
+        self.options.optimizer.abort_on_optimization_cycle = b;
+        self
+    }
+
     /// Specify how many times to attempt to optimize the plan
     pub fn with_max_passes(mut self, v: u8) -> Self {
         self.options.optimizer.max_passes = v as usize;
@@ -368,6 +375,8 @@ impl Optimizer {
 
         let mut previous_plans = HashSet::with_capacity(16);
         previous_plans.insert(LogicalPlanSignature::new(&new_plan));
+        let mut cycle_detection_started = false;
+        let mut rules_in_cycle = Vec::new();
 
         let mut i = 0;
         while i < options.optimizer.max_passes {
@@ -411,6 +420,9 @@ impl Optimizer {
                         new_plan = data;
                         observer(&new_plan, rule.as_ref());
                         if transformed {
+                            if cycle_detection_started {
+                                rules_in_cycle.push(rule.name());
+                            }
                             log_plan(rule.name(), &new_plan);
                         } else {
                             debug!(
@@ -448,9 +460,23 @@ impl Optimizer {
             let plan_is_fresh =
                 previous_plans.insert(LogicalPlanSignature::new(&new_plan));
             if !plan_is_fresh {
-                // plan did not change, so no need to continue trying to optimize
-                debug!("optimizer pass {} did not make changes", i);
-                break;
+                // optimization cycle
+                if !options.optimizer.abort_on_optimization_cycle {
+                    warn!("optimization cycle was detected, the current, not fully optimized, plan will be used");
+                    break;
+                }
+                if !cycle_detection_started {
+                    cycle_detection_started = true;
+                    previous_plans.clear();
+                    // Hack warning: reset the loop variable to guarantee the cycle is traversed again
+                    i = 0;
+                } else {
+                    return Err(DataFusionError::Internal(format!(
+                        "Optimization cycle detected with following rules involved: {:?}; current plan: {:?}",
+                        rules_in_cycle,
+                        new_plan
+                    )));
+                }
             }
             i += 1;
         }
