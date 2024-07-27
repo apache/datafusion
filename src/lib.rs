@@ -24,7 +24,7 @@ mod temporal;
 pub mod timezone;
 pub mod utils;
 
-pub use cast::Cast;
+pub use cast::{spark_cast, Cast};
 pub use error::{SparkError, SparkResult};
 pub use if_expr::IfExpr;
 pub use temporal::{DateTruncExpr, HourExpr, MinuteExpr, SecondExpr, TimestampTruncExpr};
