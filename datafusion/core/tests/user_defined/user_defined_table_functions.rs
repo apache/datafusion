@@ -24,11 +24,11 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
-use datafusion::execution::context::SessionState;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
+use datafusion_catalog::Session;
 use datafusion_common::{assert_batches_eq, DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
 use std::fs::File;
@@ -127,7 +127,7 @@ impl TableProvider for SimpleCsvTable {
 
     async fn scan(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
@@ -161,7 +161,7 @@ impl TableProvider for SimpleCsvTable {
 }
 
 impl SimpleCsvTable {
-    async fn interpreter_expr(&self, state: &SessionState) -> Result<i64> {
+    async fn interpreter_expr(&self, state: &dyn Session) -> Result<i64> {
         use datafusion::logical_expr::expr_rewriter::normalize_col;
         use datafusion::logical_expr::utils::columnize_expr;
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {

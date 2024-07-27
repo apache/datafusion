@@ -252,6 +252,7 @@ SELECT COUNT(*) FROM timestamp_with_tz;
 131072
 
 # FIXME(#TODO) fails with feature `force_hash_collisions`
+# https://github.com/apache/datafusion/issues/11660
 # Perform the query:
 # query IPT
 # SELECT

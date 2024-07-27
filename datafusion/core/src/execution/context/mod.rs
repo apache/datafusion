@@ -23,16 +23,18 @@ use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
 use crate::{
-    catalog::listing_schema::ListingSchemaProvider,
-    catalog::schema::MemorySchemaProvider,
-    catalog::{CatalogProvider, CatalogProviderList, MemoryCatalogProvider},
+    catalog::{
+        CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
+    },
+    catalog_common::listing_schema::ListingSchemaProvider,
+    catalog_common::memory::MemorySchemaProvider,
+    catalog_common::MemoryCatalogProvider,
     dataframe::DataFrame,
     datasource::{
         function::{TableFunction, TableFunctionImpl},
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
-        provider::TableProviderFactory,
     },
-    datasource::{provider_as_source, MemTable, TableProvider, ViewTable},
+    datasource::{provider_as_source, MemTable, ViewTable},
     error::{DataFusionError, Result},
     execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
     logical_expr::AggregateUDF,
@@ -1579,7 +1581,7 @@ mod tests {
 
     use datafusion_common_runtime::SpawnedTask;
 
-    use crate::catalog::schema::SchemaProvider;
+    use crate::catalog::SchemaProvider;
     use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
