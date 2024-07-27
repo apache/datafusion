@@ -598,7 +598,8 @@ Pyramid</a>
 and tries to follow the Rust standard <a class="reference external" href="https://doc.rust-lang.org/book/ch11-03-test-organization.html">Testing Organization</a> in the The Book.</p>
 <section id="unit-tests">
 <h2>Unit tests<a class="headerlink" href="#unit-tests" title="Link to this heading">¶</a></h2>
-<p>Tests for code in an individual module are defined in the same source file with a <code class="docutils literal notranslate"><span class="pre">test</span></code> module, following Rust convention.</p>
+<p>Tests for code in an individual module are defined in the same source file with a <code class="docutils literal notranslate"><span class="pre">test</span></code> module, following Rust convention.
+The <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/common/src/test_util.rs">test_util</a> module provides useful macros to write unit tests effectively, such as <code class="docutils literal notranslate"><span class="pre">assert_batches_sorted_eq</span></code> and <code class="docutils literal notranslate"><span class="pre">assert_batches_eq</span></code> for RecordBatches and <code class="docutils literal notranslate"><span class="pre">assert_contains</span></code> / <code class="docutils literal notranslate"><span class="pre">assert_not_contains</span></code> which are used extensively in the codebase.</p>
 </section>
 <section id="sqllogictests-tests">
 <h2>sqllogictests Tests<a class="headerlink" href="#sqllogictests-tests" title="Link to this heading">¶</a></h2>
