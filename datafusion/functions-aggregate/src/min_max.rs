@@ -160,7 +160,7 @@ impl AggregateUDFImpl for Max {
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         matches!(
-            args.data_type,
+            args.input_type,
             DataType::Int8
                 | DataType::Int16
                 | DataType::Int32
@@ -187,7 +187,7 @@ impl AggregateUDFImpl for Max {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        let data_type = args.data_type;
+        let data_type = args.input_type;
         match data_type {
             Int8 => instantiate_max_accumulator!(data_type, i8, Int8Type),
             Int16 => instantiate_max_accumulator!(data_type, i16, Int16Type),
@@ -863,7 +863,7 @@ impl AggregateUDFImpl for Min {
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         matches!(
-            args.data_type,
+            args.input_type,
             DataType::Int8
                 | DataType::Int16
                 | DataType::Int32
@@ -890,7 +890,7 @@ impl AggregateUDFImpl for Min {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        let data_type = args.data_type;
+        let data_type = args.input_type;
         match data_type {
             Int8 => instantiate_min_accumulator!(data_type, i8, Int8Type),
             Int16 => instantiate_min_accumulator!(data_type, i16, Int16Type),
