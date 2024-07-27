@@ -39,7 +39,8 @@ use datafusion_expr::utils::{
     find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    qualified_wildcard, wildcard, Aggregate, Expr, Filter, GroupingSet, LogicalPlan,
+    LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
@@ -515,8 +516,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
-    ///
-    /// Wildcards are expanded into the concrete list of columns.
     fn prepare_select_exprs(
         &self,
         plan: &LogicalPlan,
@@ -574,9 +573,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if empty_from {
                     return plan_err!("SELECT * with no tables specified is not valid");
                 }
-                // do not expand from outer schema
-                let expanded_exprs =
-                    expand_wildcard(plan.schema().as_ref(), plan, Some(&options))?;
                 // If there is a REPLACE statement, replace that column with the given
                 // replace expression. Column name remains the same.
                 if let Some(replace) = options.opt_replace {
@@ -584,22 +580,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         plan,
                         empty_from,
                         planner_context,
-                        expanded_exprs,
+                        vec![wildcard()],
                         replace,
                     )
                 } else {
-                    Ok(expanded_exprs)
+                    Ok(vec![wildcard()])
                 }
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
                 let qualifier = idents_to_table_reference(object_name.0, false)?;
-                // do not expand from outer schema
-                let expanded_exprs = expand_qualified_wildcard(
-                    &qualifier,
-                    plan.schema().as_ref(),
-                    Some(&options),
-                )?;
                 // If there is a REPLACE statement, replace that column with the given
                 // replace expression. Column name remains the same.
                 if let Some(replace) = options.opt_replace {
@@ -607,11 +597,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         plan,
                         empty_from,
                         planner_context,
-                        expanded_exprs,
+                        vec![qualified_wildcard(qualifier)],
                         replace,
                     )
                 } else {
-                    Ok(expanded_exprs)
+                    Ok(vec![qualified_wildcard(qualifier)])
                 }
             }
         }

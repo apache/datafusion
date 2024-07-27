@@ -37,7 +37,7 @@ use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{plan_err, Column, Result, ScalarValue};
+use datafusion_common::{plan_err, Column, Result, ScalarValue, TableReference};
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
@@ -120,6 +120,22 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 /// ```
 pub fn wildcard() -> Expr {
     Expr::Wildcard { qualifier: None }
+}
+
+/// Create an 't.*' [`Expr::Wildcard`] expression that matches all columns from a specific table
+///
+/// # Example
+///
+/// ```rust
+/// use datafusion_common::TableReference;
+/// use datafusion_expr::{qualified_wildcard};
+/// let p = qualified_wildcard(TableReference::bare("t"));
+/// assert_eq!(p.to_string(), "t.*")
+/// ```
+pub fn qualified_wildcard(qualifier: TableReference) -> Expr {
+    Expr::Wildcard {
+        qualifier: Some(qualifier),
+    }
 }
 
 /// Return a new expression `left <op> right`
