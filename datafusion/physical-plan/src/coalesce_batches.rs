@@ -18,17 +18,18 @@
 //! CoalesceBatchesExec combines small batches into larger batches for more efficient use of
 //! vectorized processing by upstream operators.
 
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
-use crate::{
-    DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
-};
-use arrow::compute::concat_batches;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
+use crate::{
+    DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+};
+
+use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -36,8 +37,12 @@ use datafusion_execution::TaskContext;
 
 use futures::stream::{Stream, StreamExt};
 
-/// CoalesceBatchesExec combines small batches into larger batches for more efficient use of
-/// vectorized processing by upstream operators.
+/// `CoalesceBatchesExec` combines small batches into larger batches for more
+/// efficient use of vectorized processing by later operators. The operator
+/// works by buffering batches until it collects `target_batch_size` rows. When
+/// only a limited number of rows are necessary (specified by the `fetch`
+/// parameter), the operator will stop buffering and return the final batch
+/// once the number of collected rows reaches the `fetch` value.
 #[derive(Debug)]
 pub struct CoalesceBatchesExec {
     /// The input plan
