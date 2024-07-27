@@ -49,6 +49,12 @@ pub struct ParquetFormat {
 pub struct AvroFormat {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NdJsonFormat {
+    #[prost(message, optional, tag = "1")]
+    pub options: ::core::option::Option<JsonOptions>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrimaryKeyConstraint {
     #[prost(uint64, repeated, tag = "1")]
     pub indices: ::prost::alloc::vec::Vec<u64>,

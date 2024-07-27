@@ -57,7 +57,8 @@ use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 #[derive(Default)]
 /// Factory struct used to create [JsonFormat]
 pub struct JsonFormatFactory {
-    options: Option<JsonOptions>,
+    /// the options carried by format factory
+    pub options: Option<JsonOptions>,
 }
 
 impl JsonFormatFactory {

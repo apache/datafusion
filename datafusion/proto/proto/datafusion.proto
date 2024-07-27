@@ -90,6 +90,7 @@ message ListingTableScanNode {
     datafusion_common.CsvFormat csv = 10;
     datafusion_common.ParquetFormat parquet = 11;
     datafusion_common.AvroFormat avro = 12;
+    datafusion_common.NdJsonFormat json = 15;
   }
   repeated LogicalExprNodeCollection file_sort_order = 13;
 }
