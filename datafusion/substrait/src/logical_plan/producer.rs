@@ -38,8 +38,6 @@ use crate::variation_const::{
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
     UNSIGNED_INTEGER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
@@ -59,8 +57,8 @@ use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
-    user_defined, IntervalDayToSecond, IntervalYearToMonth, List, Map, Struct,
-    UserDefined,
+    user_defined, IntervalDayToSecond, IntervalYearToMonth, List, Map, PrecisionTimestamp,
+    Struct, UserDefined,
 };
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
@@ -1413,20 +1411,31 @@ fn to_substrait_type(
                 nullability,
             })),
         }),
-        // Timezone is ignored.
-        DataType::Timestamp(unit, _) => {
-            let type_variation_reference = match unit {
-                TimeUnit::Second => TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-                TimeUnit::Millisecond => TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-                TimeUnit::Microsecond => TIMESTAMP_MICRO_TYPE_VARIATION_REF,
-                TimeUnit::Nanosecond => TIMESTAMP_NANO_TYPE_VARIATION_REF,
+        DataType::Timestamp(unit, tz) => {
+            let precision = match unit {
+                TimeUnit::Second => 0,
+                TimeUnit::Millisecond => 3,
+                TimeUnit::Microsecond => 6,
+                TimeUnit::Nanosecond => 9,
             };
-            Ok(substrait::proto::Type {
-                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
-                    type_variation_reference,
+            let kind = match tz {
+                None => r#type::Kind::PrecisionTimestamp(r#type::PrecisionTimestamp {
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                     nullability,
-                })),
-            })
+                    precision,
+                }),
+                Some(_) => {
+                    // If timezone is present, no matter what the actual tz value is, it indicates the
+                    // value of the timestamp is tied to UTC epoch. That's all that Substrait cares about.
+                    // As the timezone is lost, this conversion may be lossy for downstream use of the value.
+                    r#type::Kind::PrecisionTimestampTz(r#type::PrecisionTimestampTz {
+                        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                        nullability,
+                        precision,
+                    })
+                }
+            };
+            Ok(substrait::proto::Type { kind: Some(kind) })
         }
         DataType::Date32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Date(r#type::Date {
@@ -1835,21 +1844,64 @@ fn to_substrait_literal(
         ScalarValue::Float64(Some(f)) => {
             (LiteralType::Fp64(*f), DEFAULT_TYPE_VARIATION_REF)
         }
-        ScalarValue::TimestampSecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_SECOND_TYPE_VARIATION_REF,
+        ScalarValue::TimestampSecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 0,
+                value: *t as u64,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::TimestampMillisecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+        ScalarValue::TimestampMillisecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 3,
+                value: *t as u64,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::TimestampMicrosecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+        ScalarValue::TimestampMicrosecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 6,
+                value: *t as u64,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::TimestampNanosecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_NANO_TYPE_VARIATION_REF,
+        ScalarValue::TimestampNanosecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 9,
+                value: *t as u64,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        // If timezone is present, no matter what the actual tz value is, it indicates the
+        // value of the timestamp is tied to UTC epoch. That's all that Substrait cares about.
+        // As the timezone is lost, this conversion may be lossy for downstream use of the value.
+        ScalarValue::TimestampSecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 0,
+                value: *t as u64,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampMillisecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 3,
+                value: *t as u64,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampMicrosecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 6,
+                value: *t as u64,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampNanosecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 9,
+                value: *t as u64,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
         ScalarValue::Date32(Some(d)) => {
             (LiteralType::Date(*d), DATE_32_TYPE_VARIATION_REF)
@@ -2179,6 +2231,18 @@ mod test {
         round_trip_literal(ScalarValue::UInt64(Some(u64::MIN)))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MAX)))?;
 
+        for (ts, tz) in vec![
+            (Some(12345), None),
+            (None, None),
+            (Some(12345), Some("UTC".into())),
+            (None, Some("UTC".into())),
+        ] {
+            round_trip_literal(ScalarValue::TimestampSecond(ts, tz.clone()))?;
+            round_trip_literal(ScalarValue::TimestampMillisecond(ts, tz.clone()))?;
+            round_trip_literal(ScalarValue::TimestampMicrosecond(ts, tz.clone()))?;
+            round_trip_literal(ScalarValue::TimestampNanosecond(ts, tz))?;
+        }
+
         round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[ScalarValue::Float32(Some(1.0))],
             &DataType::Float32,
@@ -2308,10 +2372,14 @@ mod test {
         round_trip_type(DataType::UInt64)?;
         round_trip_type(DataType::Float32)?;
         round_trip_type(DataType::Float64)?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Second, None))?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Millisecond, None))?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Microsecond, None))?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Nanosecond, None))?;
+
+        for tz in vec![None, Some("UTC".into())] {
+            round_trip_type(DataType::Timestamp(TimeUnit::Second, tz.clone()))?;
+            round_trip_type(DataType::Timestamp(TimeUnit::Millisecond, tz.clone()))?;
+            round_trip_type(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))?;
+            round_trip_type(DataType::Timestamp(TimeUnit::Nanosecond, tz))?;
+        }
+
         round_trip_type(DataType::Date32)?;
         round_trip_type(DataType::Date64)?;
         round_trip_type(DataType::Binary)?;
