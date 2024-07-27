@@ -149,7 +149,7 @@ where
             output_type,
             map: hashbrown::raw::RawTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
-            builder: GenericByteViewBuilder::new(),
+            builder: GenericByteViewBuilder::new().with_block_size(2 * 1024 * 1024),
             random_state: RandomState::new(),
             hashes_buffer: vec![],
             null: None,
@@ -545,7 +545,7 @@ mod tests {
         // Much larger strings in strings2
         let strings2 = StringViewArray::from(vec![
             "FOO".repeat(1000),
-            "BAR larger than 12 bytes.".repeat(1000),
+            "BAR larger than 12 bytes.".repeat(100_000),
             "more unique.".repeat(1000),
             "more unique2.".repeat(1000),
             "FOO".repeat(3000),
