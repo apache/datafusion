@@ -164,7 +164,7 @@ mod tests {
         {
             test_character_length!(Some(String::from("chars")), Ok(Some(5)));
             test_character_length!(Some(String::from("josé")), Ok(Some(4)));
-            // test long strings
+            // test long strings (more than 12 bytes for StringView)
             test_character_length!(Some(String::from("joséjoséjoséjosé")), Ok(Some(16)));
             test_character_length!(Some(String::from("")), Ok(Some(0)));
             test_character_length!(None, Ok(None));
