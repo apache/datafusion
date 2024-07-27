@@ -28,8 +28,8 @@ use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema,
-    Result, TableReference,
+    not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema, Result,
+    TableReference,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -247,13 +247,7 @@ impl ExprSchemable for Expr {
                     )
                 })
             }
-            Expr::Wildcard { qualifier } => {
-                // Wildcard do not really have a type and do not appear in projections
-                match qualifier {
-                    Some(_) => internal_err!("QualifiedWildcard expressions are not valid in a logical query plan"),
-                    None => Ok(DataType::Null)
-                }
-            }
+            Expr::Wildcard { .. } => Ok(DataType::Null),
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
@@ -366,12 +360,7 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
-            Expr::Wildcard { qualifier } => match qualifier {
-                Some(_) => internal_err!(
-                    "QualifiedWildcard expressions are not valid in a logical query plan"
-                ),
-                None => Ok(false),
-            },
+            Expr::Wildcard { .. } => Ok(false),
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear
                 // in projections
@@ -552,7 +541,7 @@ mod tests {
     use super::*;
     use crate::{col, lit};
 
-    use datafusion_common::{DFSchema, ScalarValue};
+    use datafusion_common::{internal_err, DFSchema, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{

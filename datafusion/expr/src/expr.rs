@@ -2265,11 +2265,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             return internal_err!("Create name does not support sort expression")
         }
         Expr::Wildcard { qualifier } => match qualifier {
-            Some(qualifier) => {
-                return internal_err!(
-                    "Create name does not support qualified wildcard, got {qualifier}"
-                )
-            }
+            Some(qualifier) => write!(w, "{}.*", qualifier)?,
             None => write!(w, "*")?,
         },
         Expr::Placeholder(Placeholder { id, .. }) => write!(w, "{}", id)?,
