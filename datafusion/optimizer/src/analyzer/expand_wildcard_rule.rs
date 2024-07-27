@@ -47,12 +47,7 @@ impl AnalyzerRule for ExpandWildcardRule {
 
 fn analyzer_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     match plan {
-        LogicalPlan::Projection(Projection {
-            expr,
-            input,
-            schema,
-            ..
-        }) => {
+        LogicalPlan::Projection(Projection { expr, input, .. }) => {
             let mut projected_expr = vec![];
             for e in expr {
                 match e {

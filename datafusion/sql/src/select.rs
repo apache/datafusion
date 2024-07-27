@@ -35,8 +35,7 @@ use datafusion_expr::expr_rewriter::{
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_window_exprs,
+    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
     qualified_wildcard, wildcard, Aggregate, Expr, Filter, GroupingSet, LogicalPlan,
