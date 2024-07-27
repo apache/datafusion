@@ -70,20 +70,17 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     }
 
+    let fields: Fields = names
+        .into_iter()
+        .zip(&values)
+        .map(|(name, value)| Arc::new(Field::new(name, value.data_type().clone(), true)))
+        .collect::<Vec<_>>()
+        .into();
+
     let arrays = ColumnarValue::values_to_arrays(&values)?;
 
-    let fields = names
-        .into_iter()
-        .zip(arrays)
-        .map(|(name, value)| {
-            (
-                Arc::new(Field::new(name, value.data_type().clone(), true)),
-                value,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    Ok(ColumnarValue::Array(Arc::new(StructArray::from(fields))))
+    let struct_array = StructArray::new(fields, arrays, None);
+    Ok(ColumnarValue::Array(Arc::new(struct_array)))
 }
 
 #[derive(Debug)]
