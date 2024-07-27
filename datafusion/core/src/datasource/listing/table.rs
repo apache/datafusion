@@ -410,31 +410,8 @@ impl ListingOptions {
             .try_collect()
             .await?;
 
-        let mut schema = self.format.infer_schema(state, &store, &files).await?;
+        let schema = self.format.infer_schema(state, &store, &files).await?;
 
-        if state.config_options().execution.schema_force_string_view {
-            let transformed_fields: Vec<Arc<Field>> = schema
-                .fields
-                .iter()
-                .map(|field| match field.data_type() {
-                    DataType::Utf8 | DataType::LargeUtf8 => Arc::new(Field::new(
-                        field.name(),
-                        DataType::Utf8View,
-                        field.is_nullable(),
-                    )),
-                    DataType::Binary | DataType::LargeBinary => Arc::new(Field::new(
-                        field.name(),
-                        DataType::BinaryView,
-                        field.is_nullable(),
-                    )),
-                    _ => field.clone(),
-                })
-                .collect();
-            schema = Arc::new(Schema::new_with_metadata(
-                transformed_fields,
-                schema.metadata.clone(),
-            ));
-        }
         Ok(schema)
     }
 
