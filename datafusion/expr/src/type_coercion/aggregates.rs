@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::TypeSignature;
-
 use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
+use std::ops::Deref;
 
 use datafusion_common::{internal_err, plan_err, Result};
 
@@ -140,6 +140,22 @@ pub fn check_arg_count(
         }
     }
     Ok(())
+}
+
+pub fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
+    // make sure that the input types only has one element.
+    assert_eq!(input_types.len(), 1);
+    // min and max support the dictionary data type
+    // unpack the dictionary to get the value
+    match &input_types[0] {
+        DataType::Dictionary(_, dict_value_type) => {
+            // TODO add checker, if the value type is complex data type
+            Ok(vec![dict_value_type.deref().clone()])
+        }
+        // TODO add checker for datatype which min and max supported
+        // For example, the `Struct` and `Map` type are not supported in the MIN and MAX function
+        _ => Ok(input_types.to_vec()),
+    }
 }
 
 /// function return type of a sum
@@ -311,6 +327,15 @@ pub fn coerce_avg_type(func_name: &str, arg_types: &[DataType]) -> Result<Vec<Da
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_get_min_max_return_type_coerce_dictionary() -> Result<()> {
+        let data_type =
+            DataType::Dictionary(Box::new(DataType::Utf8), Box::new((DataType::Int32)));
+        let result = get_min_max_result_type(&[data_type])?;
+        assert_eq!(result, vec![DataType::Int32]);
+        Ok(())
+    }
+
     #[test]
     fn test_variance_return_data_type() -> Result<()> {
         let data_type = DataType::Float64;

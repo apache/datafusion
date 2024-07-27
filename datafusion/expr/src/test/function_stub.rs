@@ -373,7 +373,7 @@ impl AggregateUDFImpl for Min {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
-    fn get_minmax_desc(&self) -> Option<bool> {
+    fn is_descending(&self) -> Option<bool> {
         Some(false)
     }
 }
@@ -460,7 +460,7 @@ impl AggregateUDFImpl for Max {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
-    fn get_minmax_desc(&self) -> Option<bool> {
+    fn is_descending(&self) -> Option<bool> {
         Some(true)
     }
 }

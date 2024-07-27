@@ -36,7 +36,8 @@
 use arrow::array::{
     ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
     Decimal256Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeBinaryArray, LargeStringArray, StringArray, Time32MillisecondArray,
+    Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeStringArray, StringArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
@@ -46,47 +47,126 @@ use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type,
     Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
+use arrow_schema::IntervalUnit;
 use datafusion_common::{downcast_value, internal_err, DataFusionError, Result};
 use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use std::fmt::Debug;
 
+use arrow::datatypes::i256;
 use arrow::datatypes::{
     Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
     Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 
-use arrow::datatypes::i256;
-
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Signature, Volatility,
 };
-use datafusion_expr::{Expr, GroupsAccumulator};
+use datafusion_expr::{type_coercion, Expr, GroupsAccumulator};
+
+pub static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
+
+pub static SIGNED_INTEGERS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+];
+
+pub static UNSIGNED_INTEGERS: &[DataType] = &[
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+];
+
+pub static INTEGERS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+];
+
+pub static NUMERICS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+    DataType::Float32,
+    DataType::Float64,
+];
+
+pub static TIMESTAMPS: &[DataType] = &[
+    DataType::Timestamp(TimeUnit::Second, None),
+    DataType::Timestamp(TimeUnit::Millisecond, None),
+    DataType::Timestamp(TimeUnit::Microsecond, None),
+    DataType::Timestamp(TimeUnit::Nanosecond, None),
+];
+
+pub static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
+
+pub static BINARYS: &[DataType] = &[DataType::Binary, DataType::LargeBinary];
+
+pub static TIMES: &[DataType] = &[
+    DataType::Time32(TimeUnit::Second),
+    DataType::Time32(TimeUnit::Millisecond),
+    DataType::Time64(TimeUnit::Microsecond),
+    DataType::Time64(TimeUnit::Nanosecond),
+];
+
+pub static TIMES_INTERVALS: &[DataType] = &[
+    DataType::Interval(IntervalUnit::DayTime),
+    DataType::Interval(IntervalUnit::YearMonth),
+    DataType::Interval(IntervalUnit::MonthDayNano),
+];
 
 // Min/max aggregation can take Dictionary encode input but always produces unpacked
 // (aka non Dictionary) output. We need to adjust the output data type to reflect this.
 // The reason min/max aggregate produces unpacked output because there is only one
 // min/max value per group; there is no needs to keep them Dictionary encode
-fn min_max_aggregate_data_type(input_type: DataType) -> DataType {
+fn min_max_aggregate_data_type(input_type: &DataType) -> &DataType {
     if let DataType::Dictionary(_, value_type) = input_type {
-        *value_type
+        value_type
     } else {
         input_type
     }
 }
+
+fn min_max_signature() -> Signature {
+    let valid = STRINGS
+        .iter()
+        .chain(NUMERICS.iter())
+        .chain(TIMESTAMPS.iter())
+        .chain(DATES.iter())
+        .chain(TIMES.iter())
+        .chain(BINARYS.iter())
+        .chain(TIMES_INTERVALS.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    Signature::uniform(1, valid, Volatility::Immutable)
+}
+
 // MAX aggregate UDF
 #[derive(Debug)]
 pub struct Max {
-    signature: Signature,
     aliases: Vec<String>,
+    signature: Signature,
 }
 
 impl Max {
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
             aliases: vec!["max".to_owned()],
+            signature: min_max_signature(),
         }
     }
 }
@@ -147,11 +227,19 @@ impl AggregateUDFImpl for Max {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(min_max_aggregate_data_type(arg_types[0].clone()))
+        type_coercion::aggregates::get_min_max_result_type(arg_types)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "Expected at one input type for MAX aggregate function".to_string(),
+                )
+            })
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MaxAccumulator::try_new(acc_args.input_type)?))
+        let data_type = &min_max_aggregate_data_type(acc_args.data_type);
+        Ok(Box::new(MaxAccumulator::try_new(data_type)?))
     }
 
     fn aliases(&self) -> &[String] {
@@ -159,25 +247,26 @@ impl AggregateUDFImpl for Max {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        use DataType::*;
+        let data_type = min_max_aggregate_data_type(args.data_type);
         matches!(
-            args.input_type,
-            DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Float32
-                | DataType::Float64
-                | DataType::Decimal128(_, _)
-                | DataType::Decimal256(_, _)
-                | DataType::Date32
-                | DataType::Date64
-                | DataType::Time32(_)
-                | DataType::Time64(_)
-                | DataType::Timestamp(_, _)
+            data_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Decimal256(_, _)
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_)
+                | Timestamp(_, _)
         )
     }
 
@@ -187,7 +276,7 @@ impl AggregateUDFImpl for Max {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        let data_type = args.input_type;
+        let data_type = min_max_aggregate_data_type(args.data_type);
         match data_type {
             Int8 => instantiate_max_accumulator!(data_type, i8, Int8Type),
             Int16 => instantiate_max_accumulator!(data_type, i16, Int16Type),
@@ -248,11 +337,22 @@ impl AggregateUDFImpl for Max {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMaxAccumulator::try_new(args.input_type)?))
+        let data_type = min_max_aggregate_data_type(args.data_type);
+        Ok(Box::new(SlidingMaxAccumulator::try_new(data_type)?))
     }
 
-    fn get_minmax_desc(&self) -> Option<bool> {
+    fn is_descending(&self) -> Option<bool> {
         Some(true)
+    }
+    fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {
+        datafusion_expr::utils::AggregateOrderSensitivity::Insensitive
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        type_coercion::aggregates::get_min_max_result_type(arg_types)
+    }
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::Identical
     }
 }
 
@@ -380,6 +480,25 @@ macro_rules! min_max_batch {
                     $VALUES,
                     Time64NanosecondArray,
                     Time64Nanosecond,
+                    $OP
+                )
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    IntervalYearMonthArray,
+                    IntervalYearMonth,
+                    $OP
+                )
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                typed_min_max_batch!($VALUES, IntervalDayTimeArray, IntervalDayTime, $OP)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    IntervalMonthDayNanoArray,
+                    IntervalMonthDayNano,
                     $OP
                 )
             }
@@ -824,7 +943,7 @@ pub struct Min {
 impl Min {
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: min_max_signature(),
             aliases: vec!["min".to_owned()],
         }
     }
@@ -850,11 +969,19 @@ impl AggregateUDFImpl for Min {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(min_max_aggregate_data_type(arg_types[0].clone()))
+        type_coercion::aggregates::get_min_max_result_type(arg_types)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "Expected at one input type for MIN aggregate function".to_string(),
+                )
+            })
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MinAccumulator::try_new(acc_args.input_type)?))
+        let data_type = min_max_aggregate_data_type(acc_args.data_type);
+        Ok(Box::new(MinAccumulator::try_new(data_type)?))
     }
 
     fn aliases(&self) -> &[String] {
@@ -862,25 +989,26 @@ impl AggregateUDFImpl for Min {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        use DataType::*;
+        let data_type = min_max_aggregate_data_type(args.data_type);
         matches!(
-            args.input_type,
-            DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Float32
-                | DataType::Float64
-                | DataType::Date32
-                | DataType::Date64
-                | DataType::Time32(_)
-                | DataType::Time64(_)
-                | DataType::Timestamp(_, _)
-                | DataType::Decimal128(_, _)
-                | DataType::Decimal256(_, _)
+            data_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Decimal256(_, _)
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_)
+                | Timestamp(_, _)
         )
     }
 
@@ -890,7 +1018,7 @@ impl AggregateUDFImpl for Min {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        let data_type = args.input_type;
+        let data_type = min_max_aggregate_data_type(args.data_type);
         match data_type {
             Int8 => instantiate_min_accumulator!(data_type, i8, Int8Type),
             Int16 => instantiate_min_accumulator!(data_type, i16, Int16Type),
@@ -951,11 +1079,24 @@ impl AggregateUDFImpl for Min {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMinAccumulator::try_new(args.input_type)?))
+        let data_type = min_max_aggregate_data_type(args.data_type);
+        Ok(Box::new(SlidingMinAccumulator::try_new(data_type)?))
     }
 
-    fn get_minmax_desc(&self) -> Option<bool> {
+    fn is_descending(&self) -> Option<bool> {
         Some(false)
+    }
+
+    fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {
+        datafusion_expr::utils::AggregateOrderSensitivity::Insensitive
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        type_coercion::aggregates::get_min_max_result_type(arg_types)
+    }
+
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::Identical
     }
 }
 /// An accumulator to compute the minimum value
@@ -965,7 +1106,7 @@ pub struct MinAccumulator {
 }
 
 impl MinAccumulator {
-    /// new max accumulator
+    /// new min accumulator
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             min: ScalarValue::try_from(datatype)?,
@@ -1062,6 +1203,7 @@ impl Accumulator for SlidingMinAccumulator {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
     }
 }
+
 //
 // Moving min and moving max
 // The implementation is taken from https://github.com/spebern/moving_min_max/blob/master/src/lib.rs.
@@ -1453,5 +1595,24 @@ mod tests {
         moving_max_i32(100, 50)?;
         moving_max_i32(100, 100)?;
         Ok(())
+    }
+
+    #[test]
+    fn test_min_max_coerce_types() {
+        // the coerced types is same with input types
+        let funs: Vec<Box<dyn AggregateUDFImpl>> =
+            vec![Box::new(Min::new()), Box::new(Max::new())];
+        let input_types = vec![
+            vec![DataType::Int32],
+            vec![DataType::Decimal128(10, 2)],
+            vec![DataType::Decimal256(1, 1)],
+            vec![DataType::Utf8],
+        ];
+        for fun in funs {
+            for input_type in &input_types {
+                let result = fun.coerce_types(input_type);
+                assert_eq!(*input_type, result.unwrap());
+            }
+        }
     }
 }
