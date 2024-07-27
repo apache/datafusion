@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::planner::{
@@ -306,7 +306,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut intermediate_select_exprs = select_exprs;
 
         // impl memoization to store all previous unnest transformation
-        let mut memo = HashMap::new();
+        let mut memo = HashSet::new();
         // Each expr in select_exprs can contains multiple unnest stage
         // The transformation happen bottom up, one at a time for each iteration
         // Only exaust the loop if no more unnest transformation is found
@@ -442,6 +442,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // ```
         let mut intermediate_plan = unwrap_arc(input);
         let mut intermediate_select_exprs = group_expr;
+        let mut memo = HashSet::new();
 
         loop {
             let mut unnest_columns = vec![];
@@ -454,6 +455,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         &intermediate_plan,
                         &mut unnest_columns,
                         &mut inner_projection_exprs,
+                        &mut memo,
                         expr,
                     )
                 })
