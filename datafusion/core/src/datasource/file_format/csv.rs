@@ -344,22 +344,25 @@ impl FileFormat for CsvFormat {
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = CsvExec::new(
-            conf,
-            // If format options does not specify whether there is a header,
-            // we consult configuration options.
-            self.options
-                .has_header
-                .unwrap_or(state.config_options().catalog.has_header),
-            self.options.delimiter,
-            self.options.quote,
-            self.options.escape,
-            self.options.comment,
-            self.options
-                .newlines_in_values
-                .unwrap_or(state.config_options().catalog.newlines_in_values),
-            self.options.compression.into(),
-        );
+        // Consult configuration options for default values
+        let has_header = self
+            .options
+            .has_header
+            .unwrap_or(state.config_options().catalog.has_header);
+        let newlines_in_values = self
+            .options
+            .newlines_in_values
+            .unwrap_or(state.config_options().catalog.newlines_in_values);
+
+        let exec = CsvExec::builder(conf)
+            .with_has_header(has_header)
+            .with_delimeter(self.options.delimiter)
+            .with_quote(self.options.quote)
+            .with_escape(self.options.escape)
+            .with_comment(self.options.comment)
+            .with_newlines_in_values(newlines_in_values)
+            .with_file_compression_type(self.options.compression.into())
+            .build();
         Ok(Arc::new(exec))
     }
 

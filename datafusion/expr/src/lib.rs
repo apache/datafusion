@@ -60,6 +60,7 @@ pub mod type_coercion;
 pub mod utils;
 pub mod var_provider;
 pub mod window_frame;
+pub mod window_function;
 pub mod window_state;
 
 pub use accumulator::Accumulator;
@@ -86,7 +87,7 @@ pub use signature::{
 };
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use udaf::{AggregateExt, AggregateUDF, AggregateUDFImpl, ReversedUDAF};
+pub use udaf::{AggregateUDF, AggregateUDFImpl, ReversedUDAF};
 pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::{WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

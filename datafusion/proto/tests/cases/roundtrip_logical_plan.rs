@@ -23,6 +23,8 @@ use arrow::datatypes::{
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
     DECIMAL256_MAX_PRECISION,
 };
+use datafusion::datasource::file_format::json::JsonFormatFactory;
+use datafusion_common::parsers::CompressionTypeVariant;
 use prost::Message;
 use std::any::Any;
 use std::collections::HashMap;
@@ -30,12 +32,11 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 use std::vec;
 
+use datafusion::catalog::{TableProvider, TableProviderFactory};
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
 use datafusion::datasource::file_format::{format_as_file_type, DefaultFileType};
-use datafusion::datasource::provider::TableProviderFactory;
-use datafusion::datasource::TableProvider;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::count::count_udaf;
@@ -44,7 +45,7 @@ use datafusion::functions_aggregate::expr_fn::{
     count_distinct, covar_pop, covar_samp, first_value, grouping, median, stddev,
     stddev_pop, sum, var_pop, var_sample,
 };
-use datafusion::functions_array::map::map;
+use datafusion::functions_nested::map::map;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -60,14 +61,14 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    Accumulator, AggregateExt, AggregateFunction, AggregateUDF, ColumnarValue,
+    Accumulator, AggregateFunction, AggregateUDF, ColumnarValue, ExprFunctionExt,
     ExprSchemable, Literal, LogicalPlan, Operator, PartitionEvaluator, ScalarUDF,
     Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
-    array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
+    approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_proto::bytes::{
@@ -75,7 +76,8 @@ use datafusion_proto::bytes::{
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
 use datafusion_proto::logical_plan::file_formats::{
-    ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, ParquetLogicalExtensionCodec,
+    ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, JsonLogicalExtensionCodec,
+    ParquetLogicalExtensionCodec,
 };
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::{
@@ -508,9 +510,88 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Assume create_json_scan creates a logical plan for scanning a JSON file
+    let input = create_json_scan(&ctx).await?;
+
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut json_format = table_options.json;
+
+    // Set specific JSON format options
+    json_format.compression = CompressionTypeVariant::GZIP;
+    json_format.schema_infer_max_rec = 1000;
+
+    let file_type = format_as_file_type(Arc::new(JsonFormatFactory::new_with_options(
+        json_format.clone(),
+    )));
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.json".to_string(),
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        file_type,
+        options: Default::default(),
+    });
+
+    // Assume JsonLogicalExtensionCodec is implemented similarly to CsvLogicalExtensionCodec
+    let codec = JsonLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.json", copy_to.output_url);
+            assert_eq!("json".to_string(), copy_to.file_type.get_ext());
+            assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
+
+            let file_type = copy_to
+                .file_type
+                .as_ref()
+                .as_any()
+                .downcast_ref::<DefaultFileType>()
+                .unwrap();
+
+            let format_factory = file_type.as_format_factory();
+            let json_factory = format_factory
+                .as_ref()
+                .as_any()
+                .downcast_ref::<JsonFormatFactory>()
+                .unwrap();
+            let json_config = json_factory.options.as_ref().unwrap();
+            assert_eq!(json_format.compression, json_config.compression);
+            assert_eq!(
+                json_format.schema_infer_max_rec,
+                json_config.schema_infer_max_rec
+            );
+        }
+        _ => panic!(),
+    }
+
+    Ok(())
+}
+
 async fn create_csv_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
+
+    let input = ctx.table("t1").await?.into_optimized_plan()?;
+    Ok(input)
+}
+
+async fn create_json_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
+    ctx.register_json(
+        "t1",
+        "../core/tests/data/1.json",
+        NdJsonReadOptions::default(),
+    )
+    .await?;
 
     let input = ctx.table("t1").await?.into_optimized_plan()?;
     Ok(input)
@@ -717,6 +798,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         var_pop(lit(2.2)),
         stddev(lit(2.2)),
         stddev_pop(lit(2.2)),
+        approx_distinct(lit(2)),
         approx_median(lit(2)),
         approx_percentile_cont(lit(2), lit(0.5)),
         approx_percentile_cont_with_weight(lit(2), lit(1), lit(0.5)),
@@ -2073,11 +2155,12 @@ fn roundtrip_window() {
             datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
-        vec![col("col1")],
-        vec![col("col2")],
-        WindowFrame::new(Some(false)),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .build()
+    .unwrap();
 
     // 2. with default window_frame
     let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
@@ -2085,11 +2168,12 @@ fn roundtrip_window() {
             datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
-        vec![col("col1")],
-        vec![col("col2")],
-        WindowFrame::new(Some(false)),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(false, true)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .build()
+    .unwrap();
 
     // 3. with window_frame with row numbers
     let range_number_frame = WindowFrame::new_bounds(
@@ -2103,11 +2187,12 @@ fn roundtrip_window() {
             datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
-        vec![col("col1")],
-        vec![col("col2")],
-        range_number_frame,
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(false, false)])
+    .window_frame(range_number_frame)
+    .build()
+    .unwrap();
 
     // 4. test with AggregateFunction
     let row_number_frame = WindowFrame::new_bounds(
@@ -2119,11 +2204,12 @@ fn roundtrip_window() {
     let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
         vec![col("col1")],
-        vec![col("col1")],
-        vec![col("col2")],
-        row_number_frame.clone(),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, true)])
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
 
     // 5. test with AggregateUDF
     #[derive(Debug)]
@@ -2168,11 +2254,12 @@ fn roundtrip_window() {
     let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(Arc::new(dummy_agg.clone())),
         vec![col("col1")],
-        vec![col("col1")],
-        vec![col("col2")],
-        row_number_frame.clone(),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, true)])
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
     ctx.register_udaf(dummy_agg);
 
     // 6. test with WindowUDF
@@ -2244,20 +2331,20 @@ fn roundtrip_window() {
     let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(Arc::new(dummy_window_udf.clone())),
         vec![col("col1")],
-        vec![col("col1")],
-        vec![col("col2")],
-        row_number_frame.clone(),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, true)])
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
 
     let text_expr7 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
-        vec![],
-        vec![],
-        row_number_frame.clone(),
-        None,
-    ));
+    ))
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
 
     ctx.register_udwf(dummy_window_udf);
 

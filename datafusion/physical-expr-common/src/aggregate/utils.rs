@@ -207,7 +207,7 @@ impl<T: DecimalType> DecimalAverager<T> {
     /// target_scale and target_precision and reporting overflow.
     ///
     /// * sum: The total sum value stored as Decimal128 with sum_scale
-    /// (passed to `Self::try_new`)
+    ///   (passed to `Self::try_new`)
     /// * count: total count, stored as a i128/i256 (*NOT* a Decimal128/Decimal256 value)
     #[inline(always)]
     pub fn avg(&self, sum: T::Native, count: T::Native) -> Result<T::Native> {

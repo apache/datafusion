@@ -19,17 +19,14 @@ use std::sync::Arc;
 
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
+    exec_datafusion_err, internal_err, plan_datafusion_err, Result, ScalarValue,
     TableReference, UnnestOptions,
 };
-use datafusion_expr::expr::Unnest;
-use datafusion_expr::expr::{Alias, Placeholder};
-use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    expr::{self, InList, Sort, WindowFunction},
+    expr::{self, Alias, InList, Placeholder, Sort, Unnest, WindowFunction},
     logical_plan::{PlanType, StringifiedPlan},
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr,
-    GroupingSet,
+    ExprFunctionExt, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -288,25 +285,22 @@ pub fn parse_expr(
                 .window_frame
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
-                    let window_frame = window_frame.clone().try_into()?;
-                    check_window_frame(&window_frame, order_by.len())
+                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                    window_frame
+                        .regularize_order_bys(&mut order_by)
                         .map(|_| window_frame)
                 })
                 .transpose()?
                 .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "missing window frame during deserialization".to_string(),
-                    )
+                    exec_datafusion_err!("missing window frame during deserialization")
                 })?;
-            // TODO: support proto for null treatment
-            let null_treatment = None;
-            regularize_window_order_by(&window_frame, &mut order_by)?;
 
+            // TODO: support proto for null treatment
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {
                     let aggr_function = parse_i32_to_aggregate_function(i)?;
 
-                    Ok(Expr::WindowFunction(WindowFunction::new(
+                    Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::AggregateFunction(aggr_function),
                         vec![parse_required_expr(
                             expr.expr.as_deref(),
@@ -314,11 +308,12 @@ pub fn parse_expr(
                             "expr",
                             codec,
                         )?],
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        None,
-                    )))
+                    ))
+                    .partition_by(partition_by)
+                    .order_by(order_by)
+                    .window_frame(window_frame)
+                    .build()
+                    .map_err(Error::DataFusionError)
                 }
                 window_expr_node::WindowFunction::BuiltInFunction(i) => {
                     let built_in_function = protobuf::BuiltInWindowFunction::try_from(*i)
@@ -330,16 +325,17 @@ pub fn parse_expr(
                             .map(|e| vec![e])
                             .unwrap_or_else(Vec::new);
 
-                    Ok(Expr::WindowFunction(WindowFunction::new(
+                    Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    )))
+                    ))
+                    .partition_by(partition_by)
+                    .order_by(order_by)
+                    .window_frame(window_frame)
+                    .build()
+                    .map_err(Error::DataFusionError)
                 }
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
@@ -351,14 +347,15 @@ pub fn parse_expr(
                         parse_optional_expr(expr.expr.as_deref(), registry, codec)?
                             .map(|e| vec![e])
                             .unwrap_or_else(Vec::new);
-                    Ok(Expr::WindowFunction(WindowFunction::new(
+                    Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::AggregateUDF(udaf_function),
                         args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        None,
-                    )))
+                    ))
+                    .partition_by(partition_by)
+                    .order_by(order_by)
+                    .window_frame(window_frame)
+                    .build()
+                    .map_err(Error::DataFusionError)
                 }
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
                     let udwf_function = match &expr.fun_definition {
@@ -370,14 +367,15 @@ pub fn parse_expr(
                         parse_optional_expr(expr.expr.as_deref(), registry, codec)?
                             .map(|e| vec![e])
                             .unwrap_or_else(Vec::new);
-                    Ok(Expr::WindowFunction(WindowFunction::new(
+                    Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::WindowUDF(udwf_function),
                         args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        None,
-                    )))
+                    ))
+                    .partition_by(partition_by)
+                    .order_by(order_by)
+                    .window_frame(window_frame)
+                    .build()
+                    .map_err(Error::DataFusionError)
                 }
             }
         }

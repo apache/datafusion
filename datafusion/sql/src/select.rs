@@ -101,7 +101,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Order-by expressions prioritize referencing columns from the select list,
         // then from the FROM clause.
         let order_by_rex = self.order_by_to_sort_expr(
-            &order_by,
+            order_by,
             projected_plan.schema().as_ref(),
             planner_context,
             true,
@@ -576,7 +576,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let name = self.normalizer.normalize(alias);
+                let name = self.ident_normalizer.normalize(alias);
                 // avoiding adding an alias if the column name is the same.
                 let expr = match &col {
                     Expr::Column(column) if column.name.eq(&name) => col,

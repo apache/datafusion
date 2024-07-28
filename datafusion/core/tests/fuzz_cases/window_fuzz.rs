@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -45,6 +45,7 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
 use hashbrown::HashMap;
+use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -607,25 +608,6 @@ fn convert_bound_to_current_row_if_applicable(
     }
 }
 
-/// This utility determines whether a given window frame can be executed with
-/// multiple ORDER BY expressions. As an example, range frames with offset (such
-/// as `RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`) cannot have ORDER BY clauses
-/// of the form `\[ORDER BY a ASC, b ASC, ...]`
-fn can_accept_multi_orderby(window_frame: &WindowFrame) -> bool {
-    match window_frame.units {
-        WindowFrameUnits::Rows => true,
-        WindowFrameUnits::Range => {
-            // Range can only accept multi ORDER BY clauses when bounds are
-            // CURRENT ROW or UNBOUNDED PRECEDING/FOLLOWING:
-            (window_frame.start_bound.is_unbounded()
-                || window_frame.start_bound == WindowFrameBound::CurrentRow)
-                && (window_frame.end_bound.is_unbounded()
-                    || window_frame.end_bound == WindowFrameBound::CurrentRow)
-        }
-        WindowFrameUnits::Groups => true,
-    }
-}
-
 /// Perform batch and running window same input
 /// and verify outputs of `WindowAggExec` and `BoundedWindowAggExec` are equal
 async fn run_window_test(
@@ -649,7 +631,7 @@ async fn run_window_test(
             options: SortOptions::default(),
         })
     }
-    if orderby_exprs.len() > 1 && !can_accept_multi_orderby(&window_frame) {
+    if orderby_exprs.len() > 1 && !window_frame.can_accept_multi_orderby() {
         orderby_exprs = orderby_exprs[0..1].to_vec();
     }
     let mut partitionby_exprs = vec![];
@@ -733,11 +715,30 @@ async fn run_window_test(
     )?) as _;
     let task_ctx = ctx.task_ctx();
     let collected_usual = collect(usual_window_exec, task_ctx.clone()).await?;
-    let collected_running = collect(running_window_exec, task_ctx).await?;
+    let collected_running = collect(running_window_exec, task_ctx)
+        .await?
+        .into_iter()
+        .filter(|b| b.num_rows() > 0)
+        .collect::<Vec<_>>();
 
     // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
     // Otherwise it means that we cannot generate result in running mode.
-    assert!(collected_running.len() > collected_usual.len());
+    let err_msg = format!("Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, random_seed: {random_seed:?}, search_mode: {search_mode:?}, partition_by_columns:{partition_by_columns:?}, orderby_columns: {orderby_columns:?}");
+    // Below check makes sure that, streaming execution generates more chunks than the bulk execution.
+    // Since algorithms and operators works on sliding windows in the streaming execution.
+    // However, in the current test setup for some random generated window frame clauses: It is not guaranteed
+    // for streaming execution to generate more chunk than its non-streaming counter part in the Linear mode.
+    // As an example window frame `OVER(PARTITION BY d ORDER BY a RANGE BETWEEN CURRENT ROW AND 9 FOLLOWING)`
+    // needs to receive a=10 to generate result for the rows where a=0. If the input data generated is between the range [0, 9].
+    // even in streaming mode, generated result will be single bulk as in the non-streaming version.
+    if search_mode != Linear {
+        assert!(
+            collected_running.len() > collected_usual.len(),
+            "{}",
+            err_msg
+        );
+    }
+
     // compare
     let usual_formatted = pretty_format_batches(&collected_usual)?.to_string();
     let running_formatted = pretty_format_batches(&collected_running)?.to_string();
@@ -767,10 +768,17 @@ async fn run_window_test(
     Ok(())
 }
 
+fn generate_random_string(rng: &mut StdRng, length: usize) -> String {
+    rng.sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
+}
+
 /// Return randomly sized record batches with:
 /// three sorted int32 columns 'a', 'b', 'c' ranged from 0..DISTINCT as columns
 /// one random int32 column x
-fn make_staggered_batches<const STREAM: bool>(
+pub(crate) fn make_staggered_batches<const STREAM: bool>(
     len: usize,
     n_distinct: usize,
     random_seed: u64,
@@ -779,6 +787,7 @@ fn make_staggered_batches<const STREAM: bool>(
     let mut rng = StdRng::seed_from_u64(random_seed);
     let mut input123: Vec<(i32, i32, i32)> = vec![(0, 0, 0); len];
     let mut input4: Vec<i32> = vec![0; len];
+    let mut input5: Vec<String> = vec!["".to_string(); len];
     input123.iter_mut().for_each(|v| {
         *v = (
             rng.gen_range(0..n_distinct) as i32,
@@ -788,10 +797,15 @@ fn make_staggered_batches<const STREAM: bool>(
     });
     input123.sort();
     rng.fill(&mut input4[..]);
+    input5.iter_mut().for_each(|v| {
+        *v = generate_random_string(&mut rng, 1);
+    });
+    input5.sort();
     let input1 = Int32Array::from_iter_values(input123.iter().map(|k| k.0));
     let input2 = Int32Array::from_iter_values(input123.iter().map(|k| k.1));
     let input3 = Int32Array::from_iter_values(input123.iter().map(|k| k.2));
     let input4 = Int32Array::from_iter_values(input4);
+    let input5 = StringArray::from_iter_values(input5);
 
     // split into several record batches
     let mut remainder = RecordBatch::try_from_iter(vec![
@@ -799,6 +813,7 @@ fn make_staggered_batches<const STREAM: bool>(
         ("b", Arc::new(input2) as ArrayRef),
         ("c", Arc::new(input3) as ArrayRef),
         ("x", Arc::new(input4) as ArrayRef),
+        ("string_field", Arc::new(input5) as ArrayRef),
     ])
     .unwrap();
 
@@ -807,6 +822,7 @@ fn make_staggered_batches<const STREAM: bool>(
         while remainder.num_rows() > 0 {
             let batch_size = rng.gen_range(0..50);
             if remainder.num_rows() < batch_size {
+                batches.push(remainder);
                 break;
             }
             batches.push(remainder.slice(0, batch_size));

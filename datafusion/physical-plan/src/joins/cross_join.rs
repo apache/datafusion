@@ -18,13 +18,10 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
-use std::{any::Any, sync::Arc, task::Poll};
-
 use super::utils::{
     adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
     StatefulStreamResult,
 };
-use crate::coalesce_batches::concat_batches;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
@@ -33,6 +30,8 @@ use crate::{
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use arrow::compute::concat_batches;
+use std::{any::Any, sync::Arc, task::Poll};
 
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -155,27 +154,22 @@ async fn load_left_input(
     let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
-    let (batches, num_rows, _, reservation) = stream
-        .try_fold(
-            (Vec::new(), 0usize, metrics, reservation),
-            |mut acc, batch| async {
-                let batch_size = batch.get_array_memory_size();
-                // Reserve memory for incoming batch
-                acc.3.try_grow(batch_size)?;
-                // Update metrics
-                acc.2.build_mem_used.add(batch_size);
-                acc.2.build_input_batches.add(1);
-                acc.2.build_input_rows.add(batch.num_rows());
-                // Update rowcount
-                acc.1 += batch.num_rows();
-                // Push batch to output
-                acc.0.push(batch);
-                Ok(acc)
-            },
-        )
+    let (batches, _metrics, reservation) = stream
+        .try_fold((Vec::new(), metrics, reservation), |mut acc, batch| async {
+            let batch_size = batch.get_array_memory_size();
+            // Reserve memory for incoming batch
+            acc.2.try_grow(batch_size)?;
+            // Update metrics
+            acc.1.build_mem_used.add(batch_size);
+            acc.1.build_input_batches.add(1);
+            acc.1.build_input_rows.add(batch.num_rows());
+            // Push batch to output
+            acc.0.push(batch);
+            Ok(acc)
+        })
         .await?;
 
-    let merged_batch = concat_batches(&left_schema, &batches, num_rows)?;
+    let merged_batch = concat_batches(&left_schema, &batches)?;
 
     Ok((merged_batch, reservation))
 }

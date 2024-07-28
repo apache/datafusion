@@ -22,4 +22,4 @@ name = "depcheck"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cargo = "0.78.1"
+cargo = "0.81.0"

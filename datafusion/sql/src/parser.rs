@@ -625,6 +625,7 @@ impl<'a> DFParser<'a> {
             expr,
             asc,
             nulls_first,
+            with_fill: None,
         })
     }
 
@@ -1206,6 +1207,7 @@ mod tests {
                     }),
                     asc,
                     nulls_first,
+                    with_fill: None,
                 }]],
                 if_not_exists: false,
                 unbounded: false,
@@ -1235,6 +1237,7 @@ mod tests {
                     }),
                     asc: Some(true),
                     nulls_first: None,
+                    with_fill: None,
                 },
                 OrderByExpr {
                     expr: Identifier(Ident {
@@ -1243,6 +1246,7 @@ mod tests {
                     }),
                     asc: Some(false),
                     nulls_first: Some(true),
+                    with_fill: None,
                 },
             ]],
             if_not_exists: false,
@@ -1278,6 +1282,7 @@ mod tests {
                 },
                 asc: Some(true),
                 nulls_first: None,
+                with_fill: None,
             }]],
             if_not_exists: false,
             unbounded: false,
@@ -1321,6 +1326,7 @@ mod tests {
                 },
                 asc: Some(true),
                 nulls_first: None,
+                with_fill: None,
             }]],
             if_not_exists: true,
             unbounded: true,
@@ -1526,10 +1532,10 @@ mod tests {
     /// that:
     ///
     /// 1. parsing `sql` results in the same [`Statement`] as parsing
-    /// `canonical`.
+    ///    `canonical`.
     ///
     /// 2. re-serializing the result of parsing `sql` produces the same
-    /// `canonical` sql string
+    ///    `canonical` sql string
     fn one_statement_parses_to(sql: &str, canonical: &str) -> Statement {
         let mut statements = DFParser::parse_sql(sql).unwrap();
         assert_eq!(statements.len(), 1);

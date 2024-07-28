@@ -202,7 +202,7 @@ datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.skip_metadata true
-datafusion.execution.parquet.statistics_enabled NULL
+datafusion.execution.parquet.statistics_enabled page
 datafusion.execution.parquet.write_batch_size 1024
 datafusion.execution.parquet.writer_version 1.0
 datafusion.execution.planning_concurrency 13
@@ -239,6 +239,7 @@ datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
+datafusion.sql_parser.enable_options_value_normalization true
 datafusion.sql_parser.parse_float_as_decimal false
 datafusion.sql_parser.support_varchar_with_length true
 
@@ -287,7 +288,7 @@ datafusion.execution.parquet.pruning true (reading) If true, the parquet reader 
 datafusion.execution.parquet.pushdown_filters false (reading) If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded. This optimization is sometimes called "late materialization".
 datafusion.execution.parquet.reorder_filters false (reading) If true, filter expressions evaluated during the parquet decoding operation will be reordered heuristically to minimize the cost of evaluation. If false, the filters are applied in the same order as written in the query
 datafusion.execution.parquet.skip_metadata true (reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata
-datafusion.execution.parquet.statistics_enabled NULL (writing) Sets if statistics are enabled for any column Valid values are: "none", "chunk", and "page" These values are not case sensitive. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.statistics_enabled page (writing) Sets if statistics are enabled for any column Valid values are: "none", "chunk", and "page" These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.write_batch_size 1024 (writing) Sets write_batch_size in bytes
 datafusion.execution.parquet.writer_version 1.0 (writing) Sets parquet writer version valid values are "1.0" and "2.0"
 datafusion.execution.planning_concurrency 13 Fan-out during initial physical planning. This is mostly use to plan `UNION` children in parallel. Defaults to the number of CPU cores on the system
@@ -324,6 +325,7 @@ datafusion.optimizer.skip_failed_rules false When set to true, the logical plan 
 datafusion.optimizer.top_down_join_key_reordering true When set to true, the physical plan optimizer will run a top down process to reorder the join keys
 datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
 datafusion.sql_parser.enable_ident_normalization true When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
+datafusion.sql_parser.enable_options_value_normalization true When set to true, SQL parser will normalize options value (convert value to lowercase)
 datafusion.sql_parser.parse_float_as_decimal false When set to true, SQL parser will parse float as decimal type
 datafusion.sql_parser.support_varchar_with_length true If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but ignore the length. If false, error if a `VARCHAR` with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.
 

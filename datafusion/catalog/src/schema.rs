@@ -23,11 +23,8 @@ use datafusion_common::{exec_err, DataFusionError};
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::TableProvider;
-use crate::error::Result;
-
-// backwards compatibility
-pub use super::MemorySchemaProvider;
+use crate::table::TableProvider;
+use datafusion_common::Result;
 
 /// Represents a schema, comprising a number of named tables.
 ///

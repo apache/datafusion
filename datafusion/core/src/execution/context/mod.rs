@@ -23,16 +23,18 @@ use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
 use crate::{
-    catalog::listing_schema::ListingSchemaProvider,
-    catalog::schema::MemorySchemaProvider,
-    catalog::{CatalogProvider, CatalogProviderList, MemoryCatalogProvider},
+    catalog::{
+        CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
+    },
+    catalog_common::listing_schema::ListingSchemaProvider,
+    catalog_common::memory::MemorySchemaProvider,
+    catalog_common::MemoryCatalogProvider,
     dataframe::DataFrame,
     datasource::{
         function::{TableFunction, TableFunctionImpl},
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
-        provider::TableProviderFactory,
     },
-    datasource::{provider_as_source, MemTable, TableProvider, ViewTable},
+    datasource::{provider_as_source, MemTable, ViewTable},
     error::{DataFusionError, Result},
     execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
     logical_expr::AggregateUDF,
@@ -205,21 +207,21 @@ where
 /// The objects are:
 ///
 /// 1. [`SessionContext`]: Most users should use a `SessionContext`. It contains
-/// all information required to execute queries including  high level APIs such
-/// as [`SessionContext::sql`]. All queries run with the same `SessionContext`
-/// share the same configuration and resources (e.g. memory limits).
+///    all information required to execute queries including  high level APIs such
+///    as [`SessionContext::sql`]. All queries run with the same `SessionContext`
+///    share the same configuration and resources (e.g. memory limits).
 ///
 /// 2. [`SessionState`]: contains information required to plan and execute an
-/// individual query (e.g. creating a [`LogicalPlan`] or [`ExecutionPlan`]).
-/// Each query is planned and executed using its own `SessionState`, which can
-/// be created with [`SessionContext::state`]. `SessionState` allows finer
-/// grained control over query execution, for example disallowing DDL operations
-/// such as `CREATE TABLE`.
+///    individual query (e.g. creating a [`LogicalPlan`] or [`ExecutionPlan`]).
+///    Each query is planned and executed using its own `SessionState`, which can
+///    be created with [`SessionContext::state`]. `SessionState` allows finer
+///    grained control over query execution, for example disallowing DDL operations
+///    such as `CREATE TABLE`.
 ///
 /// 3. [`TaskContext`] contains the state required for query execution (e.g.
-/// [`ExecutionPlan::execute`]). It contains a subset of information in
-/// [`SessionState`]. `TaskContext` allows executing [`ExecutionPlan`]s
-/// [`PhysicalExpr`]s without requiring a full [`SessionState`].
+///    [`ExecutionPlan::execute`]). It contains a subset of information in
+///    [`SessionState`]. `TaskContext` allows executing [`ExecutionPlan`]s
+///    [`PhysicalExpr`]s without requiring a full [`SessionState`].
 ///
 /// [`PhysicalExpr`]: crate::physical_expr::PhysicalExpr
 #[derive(Clone)]
@@ -578,8 +580,8 @@ impl SessionContext {
     /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type
     /// coercion and function rewrites.
     ///
-    /// Note: The expression is not [simplified] or otherwise optimized:  `a = 1
-    /// + 2` will not be simplified to `a = 3` as this is a more involved process.
+    /// Note: The expression is not [simplified] or otherwise optimized:
+    /// `a = 1 + 2` will not be simplified to `a = 3` as this is a more involved process.
     /// See the [expr_api] example for how to simplify expressions.
     ///
     /// # Example
@@ -980,6 +982,7 @@ impl SessionContext {
     ///
     /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
     /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
+    ///
     /// Any functions registered with the udf name or its aliases will be overwritten with this new function
     pub fn register_udf(&self, f: ScalarUDF) {
         let mut state = self.state.write();
@@ -1324,11 +1327,11 @@ impl SessionContext {
     /// Notes:
     ///
     /// 1. `query_execution_start_time` is set to the current time for the
-    /// returned state.
+    ///    returned state.
     ///
     /// 2. The returned state is not shared with the current session state
-    /// and this changes to the returned `SessionState` such as changing
-    /// [`ConfigOptions`] will not be reflected in this `SessionContext`.
+    ///    and this changes to the returned `SessionState` such as changing
+    ///    [`ConfigOptions`] will not be reflected in this `SessionContext`.
     ///
     /// [`ConfigOptions`]: crate::config::ConfigOptions
     pub fn state(&self) -> SessionState {
@@ -1578,7 +1581,7 @@ mod tests {
 
     use datafusion_common_runtime::SpawnedTask;
 
-    use crate::catalog::schema::SchemaProvider;
+    use crate::catalog::SchemaProvider;
     use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;

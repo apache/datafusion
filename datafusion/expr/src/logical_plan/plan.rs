@@ -1910,19 +1910,19 @@ pub struct EmptyRelation {
 /// From the [Postgres Docs]:
 ///
 /// 1. Evaluate the non-recursive term. For `UNION` (but not `UNION ALL`),
-/// discard duplicate rows. Include all remaining rows in the result of the
-/// recursive query, and also place them in a temporary working table.
-//
+///    discard duplicate rows. Include all remaining rows in the result of the
+///    recursive query, and also place them in a temporary working table.
+///
 /// 2. So long as the working table is not empty, repeat these steps:
 ///
 /// * Evaluate the recursive term, substituting the current contents of the
-/// working table for the recursive self-reference. For `UNION` (but not `UNION
-/// ALL`), discard duplicate rows and rows that duplicate any previous result
-/// row. Include all remaining rows in the result of the recursive query, and
-/// also place them in a temporary intermediate table.
+///   working table for the recursive self-reference. For `UNION` (but not `UNION
+///   ALL`), discard duplicate rows and rows that duplicate any previous result
+///   row. Include all remaining rows in the result of the recursive query, and
+///   also place them in a temporary intermediate table.
 ///
 /// * Replace the contents of the working table with the contents of the
-/// intermediate table, then empty the intermediate table.
+///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -2003,7 +2003,7 @@ impl Projection {
 /// # Arguments
 ///
 /// * `input`: A reference to the input `LogicalPlan` for which the projection schema
-/// will be computed.
+///   will be computed.
 /// * `exprs`: A slice of `Expr` expressions representing the projection operation to apply.
 ///
 /// # Returns

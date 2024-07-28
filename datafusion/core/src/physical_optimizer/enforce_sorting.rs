@@ -20,6 +20,7 @@
 //! - Adds a [`SortExec`] when a requirement is not met,
 //! - Removes an already-existing [`SortExec`] if it is possible to prove
 //!   that this sort is unnecessary
+//!
 //! The rule can work on valid *and* invalid physical plans with respect to
 //! sorting requirements, but always produces a valid physical plan in this sense.
 //!

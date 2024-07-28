@@ -354,7 +354,7 @@ mod tests {
     use super::*;
     use crate::test::*;
     use datafusion_expr::expr::{self, GroupingSet};
-    use datafusion_expr::AggregateExt;
+    use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
         lit, logical_plan::builder::LogicalPlanBuilder, max, min, AggregateFunction,
     };

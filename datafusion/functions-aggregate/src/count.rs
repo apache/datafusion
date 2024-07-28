@@ -125,6 +125,7 @@ impl AggregateUDFImpl for Count {
         if args.is_distinct {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "count distinct"),
+                // See COMMENTS.md to understand why nullable is set to true
                 Field::new("item", args.input_type.clone(), true),
                 false,
             )])

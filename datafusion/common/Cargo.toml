@@ -39,6 +39,7 @@ path = "src/lib.rs"
 avro = ["apache-avro"]
 backtrace = []
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
+force_hash_collisions = []
 
 [dependencies]
 ahash = { workspace = true }

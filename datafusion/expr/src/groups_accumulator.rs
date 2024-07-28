@@ -84,13 +84,13 @@ pub trait GroupsAccumulator: Send {
     /// * `values`: the input arguments to the accumulator
     ///
     /// * `group_indices`: To which groups do the rows in `values`
-    /// belong, group id)
+    ///   belong, group id)
     ///
     /// * `opt_filter`: if present, only update aggregate state using
-    /// `values[i]` if `opt_filter[i]` is true
+    ///   `values[i]` if `opt_filter[i]` is true
     ///
     /// * `total_num_groups`: the number of groups (the largest
-    /// group_index is thus `total_num_groups - 1`).
+    ///   group_index is thus `total_num_groups - 1`).
     ///
     /// Note that subsequent calls to update_batch may have larger
     /// total_num_groups as new groups are seen.

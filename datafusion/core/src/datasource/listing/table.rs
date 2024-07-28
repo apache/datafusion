@@ -24,9 +24,8 @@ use std::{any::Any, sync::Arc};
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
-use crate::datasource::{
-    create_ordering, get_statistics_with_limit, TableProvider, TableType,
-};
+use crate::catalog::TableProvider;
+use crate::datasource::{create_ordering, get_statistics_with_limit, TableType};
 use crate::datasource::{
     file_format::{file_compression_type::FileCompressionType, FileFormat},
     listing::ListingTableUrl,
@@ -52,6 +51,7 @@ use datafusion_physical_expr::{
 };
 
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -287,17 +287,17 @@ impl ListingOptions {
     ///# Notes
     ///
     /// - If only one level (e.g. `year` in the example above) is
-    /// specified, the other levels are ignored but the files are
-    /// still read.
+    ///   specified, the other levels are ignored but the files are
+    ///   still read.
     ///
     /// - Files that don't follow this partitioning scheme will be
-    /// ignored.
+    ///   ignored.
     ///
     /// - Since the columns have the same value for all rows read from
-    /// each individual file (such as dates), they are typically
-    /// dictionary encoded for efficiency. You may use
-    /// [`wrap_partition_type_in_dict`] to request a
-    /// dictionary-encoded type.
+    ///   each individual file (such as dates), they are typically
+    ///   dictionary encoded for efficiency. You may use
+    ///   [`wrap_partition_type_in_dict`] to request a
+    ///   dictionary-encoded type.
     ///
     /// - The partition columns are solely extracted from the file path. Especially they are NOT part of the parquet files itself.
     ///
@@ -736,13 +736,16 @@ impl TableProvider for ListingTable {
 
     async fn scan(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let (mut partitioned_file_lists, statistics) =
-            self.list_files_for_scan(state, filters, limit).await?;
+        // TODO remove downcast_ref from here?
+        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
+        let (mut partitioned_file_lists, statistics) = self
+            .list_files_for_scan(session_state, filters, limit)
+            .await?;
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
@@ -805,7 +808,7 @@ impl TableProvider for ListingTable {
         self.options
             .format
             .create_physical_plan(
-                state,
+                session_state,
                 FileScanConfig::new(object_store_url, Arc::clone(&self.file_schema))
                     .with_file_groups(partitioned_file_lists)
                     .with_statistics(statistics)
@@ -852,7 +855,7 @@ impl TableProvider for ListingTable {
 
     async fn insert_into(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
         overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -878,8 +881,10 @@ impl TableProvider for ListingTable {
         // Get the object store for the table path.
         let store = state.runtime_env().object_store(table_path)?;
 
+        // TODO remove downcast_ref from here?
+        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let file_list_stream = pruned_partition_list(
-            state,
+            session_state,
             store.as_ref(),
             table_path,
             &[],
@@ -890,7 +895,7 @@ impl TableProvider for ListingTable {
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
         let keep_partition_by_columns =
-            state.config().options().execution.keep_partition_by_columns;
+            state.config_options().execution.keep_partition_by_columns;
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
@@ -926,7 +931,7 @@ impl TableProvider for ListingTable {
 
         self.options()
             .format
-            .create_writer_physical_plan(input, state, config, order_requirements)
+            .create_writer_physical_plan(input, session_state, config, order_requirements)
             .await
     }
 

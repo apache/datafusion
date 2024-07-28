@@ -35,12 +35,12 @@ use std::fmt::Debug;
 /// * compute the final value from its internal state via [`evaluate`]
 ///
 /// * retract an update to its state from given inputs via
-/// [`retract_batch`] (when used as a window aggregate [window
-/// function])
+///   [`retract_batch`] (when used as a window aggregate [window
+///   function])
 ///
 /// * convert its internal state to a vector of aggregate values via
-/// [`state`] and combine the state from multiple accumulators'
-/// via [`merge_batch`], as part of efficient multi-phase grouping.
+///   [`state`] and combine the state from multiple accumulators'
+///   via [`merge_batch`], as part of efficient multi-phase grouping.
 ///
 /// [`GroupsAccumulator`]: crate::GroupsAccumulator
 /// [`update_batch`]: Self::update_batch

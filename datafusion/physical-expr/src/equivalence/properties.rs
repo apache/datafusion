@@ -1056,22 +1056,22 @@ impl EquivalenceProperties {
 ///
 /// Order information can be retrieved as:
 /// - If it is a leaf node, we directly find the order of the node by looking
-/// at the given sort expression and equivalence properties if it is a `Column`
-/// leaf, or we mark it as unordered. In the case of a `Literal` leaf, we mark
-/// it as singleton so that it can cooperate with all ordered columns.
+///   at the given sort expression and equivalence properties if it is a `Column`
+///   leaf, or we mark it as unordered. In the case of a `Literal` leaf, we mark
+///   it as singleton so that it can cooperate with all ordered columns.
 /// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
-/// and operator has its own rules on how to propagate the children orderings.
-/// However, before we engage in recursion, we check whether this intermediate
-/// node directly matches with the sort expression. If there is a match, the
-/// sort expression emerges at that node immediately, discarding the recursive
-/// result coming from its children.
+///   and operator has its own rules on how to propagate the children orderings.
+///   However, before we engage in recursion, we check whether this intermediate
+///   node directly matches with the sort expression. If there is a match, the
+///   sort expression emerges at that node immediately, discarding the recursive
+///   result coming from its children.
 ///
 /// Range information is calculated as:
 /// - If it is a `Literal` node, we set the range as a point value. If it is a
-/// `Column` node, we set the datatype of the range, but cannot give an interval
-/// for the range, yet.
+///   `Column` node, we set the datatype of the range, but cannot give an interval
+///   for the range, yet.
 /// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
-/// and operator has its own rules on how to propagate the children range.
+///   and operator has its own rules on how to propagate the children range.
 fn update_properties(
     mut node: ExprPropertiesNode,
     eq_properties: &EquivalenceProperties,

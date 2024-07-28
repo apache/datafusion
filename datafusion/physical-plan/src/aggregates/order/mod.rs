@@ -87,7 +87,7 @@ impl GroupOrdering {
     /// Called when new groups are added in a batch
     ///
     /// * `total_num_groups`: total number of groups (so max
-    /// group_index is total_num_groups - 1).
+    ///   group_index is total_num_groups - 1).
     ///
     /// * `group_values`: group key values for *each row* in the batch
     ///

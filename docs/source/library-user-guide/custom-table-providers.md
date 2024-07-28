@@ -112,7 +112,7 @@ impl CustomDataSource {
 impl TableProvider for CustomDataSource {
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         // filters and limit can be used here to inject some push-down operations if needed
         _filters: &[Expr],

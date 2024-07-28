@@ -22,7 +22,7 @@ use crate::expr::{
     Cast, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, Sort,
     TryCast, Unnest, WindowFunction,
 };
-use crate::Expr;
+use crate::{Expr, ExprFunctionExt};
 
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
@@ -294,14 +294,13 @@ impl TreeNode for Expr {
                 transform_vec(order_by, &mut f)
             )?
             .update_data(|(new_args, new_partition_by, new_order_by)| {
-                Expr::WindowFunction(WindowFunction::new(
-                    fun,
-                    new_args,
-                    new_partition_by,
-                    new_order_by,
-                    window_frame,
-                    null_treatment,
-                ))
+                Expr::WindowFunction(WindowFunction::new(fun, new_args))
+                    .partition_by(new_partition_by)
+                    .order_by(new_order_by)
+                    .window_frame(window_frame)
+                    .null_treatment(null_treatment)
+                    .build()
+                    .unwrap()
             }),
             Expr::AggregateFunction(AggregateFunction {
                 args,

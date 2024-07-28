@@ -81,3 +81,7 @@ name = "in_list"
 [[bench]]
 harness = false
 name = "case_when"
+
+[[bench]]
+harness = false
+name = "is_null"

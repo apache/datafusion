@@ -26,7 +26,6 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::utils::{asymmetric_join_output_partitioning, need_produce_result_in_final};
-use crate::coalesce_batches::concat_batches;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
@@ -44,6 +43,7 @@ use crate::{
 use arrow::array::{
     BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
 };
+use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -364,19 +364,17 @@ async fn collect_left_input(
     let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
-    let (batches, num_rows, metrics, mut reservation) = stream
+    let (batches, metrics, mut reservation) = stream
         .try_fold(
-            (Vec::new(), 0usize, join_metrics, reservation),
+            (Vec::new(), join_metrics, reservation),
             |mut acc, batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
-                acc.3.try_grow(batch_size)?;
+                acc.2.try_grow(batch_size)?;
                 // Update metrics
-                acc.2.build_mem_used.add(batch_size);
-                acc.2.build_input_batches.add(1);
-                acc.2.build_input_rows.add(batch.num_rows());
-                // Update rowcount
-                acc.1 += batch.num_rows();
+                acc.1.build_mem_used.add(batch_size);
+                acc.1.build_input_batches.add(1);
+                acc.1.build_input_rows.add(batch.num_rows());
                 // Push batch to output
                 acc.0.push(batch);
                 Ok(acc)
@@ -384,7 +382,7 @@ async fn collect_left_input(
         )
         .await?;
 
-    let merged_batch = concat_batches(&schema, &batches, num_rows)?;
+    let merged_batch = concat_batches(&schema, &batches)?;
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {

@@ -44,7 +44,7 @@ use crate::{
 /// 1. For simple use cases, use [`create_udf`] (examples in [`simple_udf.rs`]).
 ///
 /// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
-/// access (examples in  [`advanced_udf.rs`]).
+///    access (examples in  [`advanced_udf.rs`]).
 ///
 /// # API Note
 ///

@@ -84,6 +84,7 @@ fn roundtrip_statement() -> Result<()> {
             "select 1;",
             "select 1 limit 0;",
             "select ta.j1_id from j1 ta join (select 1 as j1_id) tb on ta.j1_id = tb.j1_id;",
+            "select ta.j1_id from j1 ta join (select 1 as j1_id) tb using (j1_id);",
             "select ta.j1_id from j1 ta join (select 1 as j1_id) tb on ta.j1_id = tb.j1_id where ta.j1_id > 1;",
             "select ta.j1_id from (select 1 as j1_id) ta;",
             "select ta.j1_id from j1 ta;",
@@ -142,6 +143,7 @@ fn roundtrip_statement() -> Result<()> {
             r#"SELECT id, count(distinct id) over (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             sum(id) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) from person"#,
             "SELECT id, sum(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) from person",
+            "WITH t1 AS (SELECT j1_id AS id, j1_string name FROM j1), t2 AS (SELECT j2_id AS id, j2_string name FROM j2) SELECT * FROM t1 JOIN t2 USING (id, name)",
         ];
 
     // For each test sql string, we transform as follows:

@@ -109,7 +109,7 @@ fn distribute_by() -> Result<()> {
     // regression test for https://github.com/apache/datafusion/issues/3234
     let sql = "SELECT col_int32, col_utf8 FROM test DISTRIBUTE BY (col_utf8)";
     let plan = test_sql(sql)?;
-    let expected = "Repartition: DistributeBy(col_utf8)\
+    let expected = "Repartition: DistributeBy(test.col_utf8)\
     \n  TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())

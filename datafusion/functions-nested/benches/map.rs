@@ -28,8 +28,8 @@ use std::sync::Arc;
 use datafusion_common::ScalarValue;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{ColumnarValue, Expr};
-use datafusion_functions_array::map::map_udf;
-use datafusion_functions_array::planner::ArrayFunctionPlanner;
+use datafusion_functions_nested::map::map_udf;
+use datafusion_functions_nested::planner::NestedFunctionPlanner;
 
 fn keys(rng: &mut ThreadRng) -> Vec<String> {
     let mut keys = vec![];
@@ -58,7 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             buffer.push(Expr::Literal(ScalarValue::Int32(Some(values[i]))));
         }
 
-        let planner = ArrayFunctionPlanner {};
+        let planner = NestedFunctionPlanner {};
 
         b.iter(|| {
             black_box(

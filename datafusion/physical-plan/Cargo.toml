@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+force_hash_collisions = []
+
 [lib]
 name = "datafusion_physical_plan"
 path = "src/lib.rs"

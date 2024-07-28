@@ -20,13 +20,13 @@
 //! This crate provides:
 //!
 //! 1. A SQL parser, [`DFParser`], that translates SQL query text into
-//! an abstract syntax tree (AST), [`Statement`].
+//!    an abstract syntax tree (AST), [`Statement`].
 //!
 //! 2. A SQL query planner [`SqlToRel`] that creates [`LogicalPlan`]s
-//! from [`Statement`]s.
+//!    from [`Statement`]s.
 //!
 //! 3. A SQL [`unparser`] that converts [`Expr`]s and [`LogicalPlan`]s
-//! into SQL query text.
+//!    into SQL query text.
 //!
 //! [`DFParser`]: parser::DFParser
 //! [`Statement`]: parser::Statement

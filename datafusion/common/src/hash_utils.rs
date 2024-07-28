@@ -17,22 +17,27 @@
 
 //! Functionality used both on logical and physical plans
 
+#[cfg(not(feature = "force_hash_collisions"))]
 use std::sync::Arc;
 
 use ahash::RandomState;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::row::Rows;
+#[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use arrow_buffer::IntervalDayTime;
 use arrow_buffer::IntervalMonthDayNano;
 
+#[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
     as_boolean_array, as_fixed_size_list_array, as_generic_binary_array,
     as_large_list_array, as_list_array, as_map_array, as_primitive_array,
     as_string_array, as_struct_array,
 };
-use crate::error::{Result, _internal_err};
+use crate::error::Result;
+#[cfg(not(feature = "force_hash_collisions"))]
+use crate::error::_internal_err;
 
 // Combines two hashes into one hash
 #[inline]
@@ -41,6 +46,7 @@ pub fn combine_hashes(l: u64, r: u64) -> u64 {
     hash.wrapping_mul(37).wrapping_add(r)
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: bool) {
     if mul_col {
         hashes_buffer.iter_mut().for_each(|hash| {
@@ -90,6 +96,7 @@ hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
 /// Builds hash values of PrimitiveArray and writes them into `hashes_buffer`
 /// If `rehash==true` this combines the previous hash value in the buffer
 /// with the new hash using `combine_hashes`
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
     random_state: &RandomState,
@@ -135,6 +142,7 @@ fn hash_array_primitive<T>(
 /// Hashes one array into the `hashes_buffer`
 /// If `rehash==true` this combines the previous hash value in the buffer
 /// with the new hash using `combine_hashes`
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array<T>(
     array: T,
     random_state: &RandomState,
@@ -180,6 +188,7 @@ fn hash_array<T>(
 }
 
 /// Hash the values in a dictionary array
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_dictionary<K: ArrowDictionaryKeyType>(
     array: &DictionaryArray<K>,
     random_state: &RandomState,
@@ -210,6 +219,7 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     Ok(())
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_struct_array(
     array: &StructArray,
     random_state: &RandomState,
@@ -270,6 +280,7 @@ fn hash_map_array(
     Ok(())
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_list_array<OffsetSize>(
     array: &GenericListArray<OffsetSize>,
     random_state: &RandomState,
@@ -303,6 +314,7 @@ where
     Ok(())
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_fixed_list_array(
     array: &FixedSizeListArray,
     random_state: &RandomState,
@@ -488,7 +500,11 @@ pub fn create_row_hashes_v2<'a>(
 
 #[cfg(test)]
 mod tests {
-    use arrow::{array::*, datatypes::*};
+    use std::sync::Arc;
+
+    use arrow::array::*;
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::datatypes::*;
 
     use super::*;
 

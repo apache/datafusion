@@ -210,6 +210,9 @@ config_namespace! {
         /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
 
+        /// When set to true, SQL parser will normalize options value (convert value to lowercase)
+        pub enable_options_value_normalization: bool, default = true
+
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
         pub dialect: String, default = "generic".to_string()
@@ -397,7 +400,7 @@ config_namespace! {
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub statistics_enabled: Option<String>, default = None
+        pub statistics_enabled: Option<String>, default = Some("page".into())
 
         /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
@@ -1207,7 +1210,7 @@ impl ConfigField for TableOptions {
     /// # Parameters
     ///
     /// * `key`: The configuration key specifying which setting to adjust, prefixed with the format (e.g., "format.delimiter")
-    /// for CSV format.
+    ///   for CSV format.
     /// * `value`: The value to set for the specified configuration key.
     ///
     /// # Returns

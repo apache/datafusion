@@ -794,7 +794,7 @@ select round(column1, column2) from values (3.14, 2), (3.14, 3), (3.14, 21474836
 query RRR rowsort
 select signum(-2), signum(0), signum(2);
 ----
--1 1 1
+-1 0 1
 
 # signum scalar nulls
 query R rowsort

@@ -557,7 +557,7 @@ fn push_down_join(
 /// * `predicates` the pushed down filter expression
 ///
 /// * `on_filters` filters from the join ON clause that have not already been
-/// identified as join predicates
+///   identified as join predicates
 ///
 fn infer_join_predicates(
     join: &Join,

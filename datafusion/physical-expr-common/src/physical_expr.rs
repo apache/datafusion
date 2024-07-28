@@ -81,7 +81,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// # Arguments
     ///
     /// * `children` are the intervals for the children (inputs) of this
-    /// expression.
+    ///   expression.
     ///
     /// # Example
     ///
