@@ -317,7 +317,7 @@ impl TestFull {
             schema,
             file_name,
             file_size,
-        } = TEST_DATA;
+        } = &*TEST_DATA;
 
         let mut partitioned_file = PartitionedFile::new(file_name, *file_size);
 
