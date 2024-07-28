@@ -730,6 +730,12 @@ impl AggregateExpr for AggregateFunctionExpr {
             }
         }
     }
+
+    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        self.fun
+            .get_minmax_desc()
+            .and_then(|flag| self.field().ok().map(|f| (f, flag)))
+    }
 }
 
 impl PartialEq<dyn Any> for AggregateFunctionExpr {
