@@ -19,17 +19,19 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
-use datafusion_catalog::Session;
-use datafusion_common::Column;
-use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
-
 use crate::{
     error::Result,
     logical_expr::{Expr, LogicalPlan},
     physical_plan::ExecutionPlan,
 };
+use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
+use datafusion_catalog::Session;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Column;
+use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
+use datafusion_optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
+use datafusion_optimizer::Analyzer;
 
 use crate::datasource::{TableProvider, TableType};
 
@@ -50,6 +52,7 @@ impl ViewTable {
         logical_plan: LogicalPlan,
         definition: Option<String>,
     ) -> Result<Self> {
+        let logical_plan = Self::apply_required_rule(logical_plan)?;
         let table_schema = logical_plan.schema().as_ref().to_owned().into();
 
         let view = Self {
@@ -59,6 +62,15 @@ impl ViewTable {
         };
 
         Ok(view)
+    }
+
+    fn apply_required_rule(logical_plan: LogicalPlan) -> Result<LogicalPlan> {
+        let options = ConfigOptions::default();
+        Analyzer::with_rules(vec![Arc::new(ExpandWildcardRule::new())]).execute_and_check(
+            logical_plan,
+            &options,
+            |_, _| {},
+        )
     }
 
     /// Get definition ref

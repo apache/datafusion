@@ -713,7 +713,6 @@ impl SessionContext {
             }
             (_, Err(_)) => {
                 let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
-
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }

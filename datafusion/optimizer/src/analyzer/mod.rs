@@ -91,9 +91,11 @@ impl Analyzer {
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(InlineTableScan::new()),
+            // Every rule that will generate [Expr::Wildcard] should be placed in front of [ExpandWildcardRule].
+            Arc::new(ExpandWildcardRule::new()),
+            // [Expr::Wildcard] should be expanded before [TypeCoercion]
             Arc::new(TypeCoercion::new()),
             Arc::new(CountWildcardRule::new()),
-            Arc::new(ExpandWildcardRule::new()),
         ];
         Self::with_rules(rules)
     }

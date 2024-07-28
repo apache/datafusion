@@ -18,9 +18,10 @@
 use crate::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{Expr, LogicalPlan, Projection};
+use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -37,7 +38,7 @@ impl AnalyzerRule for ExpandWildcardRule {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
         // Because the wildcard expansion is based on the schema of the input plan,
         // using `transform_up_with_subqueries` here.
-        plan.transform_up_with_subqueries(analyzer_internal).data()
+        plan.transform_up_with_subqueries(expand_internal).data()
     }
 
     fn name(&self) -> &str {
@@ -45,7 +46,7 @@ impl AnalyzerRule for ExpandWildcardRule {
     }
 }
 
-fn analyzer_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     match plan {
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
             let mut projected_expr = vec![];
@@ -66,46 +67,76 @@ fn analyzer_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                             )?);
                         }
                     }
+                    // A workaround to handle the case when the column name is "*".
+                    // We transform the expression to a Expr::Column through [Column::from_name] in many places.
+                    // It would also convert the wildcard expression to a column expression with name "*".
+                    Expr::Column(Column {
+                        ref relation,
+                        ref name,
+                    }) => {
+                        if name.eq("*") {
+                            if let Some(qualifier) = relation {
+                                projected_expr.extend(expand_qualified_wildcard(
+                                    qualifier,
+                                    input.schema(),
+                                    None,
+                                )?);
+                            } else {
+                                projected_expr.extend(expand_wildcard(
+                                    input.schema(),
+                                    &input,
+                                    None,
+                                )?);
+                            }
+                        } else {
+                            projected_expr.push(e.clone());
+                        }
+                    }
                     _ => projected_expr.push(e),
                 }
             }
-            validate_unique_names("Projections", projected_expr.iter())?;
             Ok(Transformed::yes(
-                Projection::try_new(projected_expr, Arc::clone(&input))
-                    .map(LogicalPlan::Projection)?,
+                Projection::try_new(
+                    to_unique_names(projected_expr.iter())?,
+                    Arc::clone(&input),
+                )
+                .map(LogicalPlan::Projection)?,
+            ))
+        }
+        // Teh schema of the plan should also be updated if the child plan is transformed.
+        LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+            Ok(Transformed::yes(
+                SubqueryAlias::try_new(input, alias).map(LogicalPlan::SubqueryAlias)?,
             ))
         }
         _ => Ok(Transformed::no(plan)),
     }
 }
 
-fn validate_unique_names<'a>(
-    node_name: &str,
+fn to_unique_names<'a>(
     expressions: impl IntoIterator<Item = &'a Expr>,
-) -> Result<()> {
+) -> Result<Vec<Expr>> {
     let mut unique_names = HashMap::new();
-
-    expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
-        let name = expr.display_name()?;
-        match unique_names.get(&name) {
-            None => {
-                unique_names.insert(name, (position, expr));
-                Ok(())
-            },
-            Some((existing_position, existing_expr)) => {
-                plan_err!("{node_name} require unique expression names \
-                             but the expression \"{existing_expr}\" at position {existing_position} and \"{expr}\" \
-                             at position {position} have the same name. Consider aliasing (\"AS\") one of them."
-                            )
+    let mut unique_expr = vec![];
+    expressions
+        .into_iter()
+        .enumerate()
+        .try_for_each(|(position, expr)| {
+            let name = expr.display_name()?;
+            if let Entry::Vacant(e) = unique_names.entry(name) {
+                e.insert((position, expr));
+                unique_expr.push(expr.to_owned());
             }
-        }
-    })
+            Ok::<(), DataFusionError>(())
+        })?;
+    Ok(unique_expr)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test::{assert_analyzed_plan_eq_display_indent, test_table_scan};
+    use crate::Analyzer;
     use datafusion_common::TableReference;
     use datafusion_expr::{
         col, in_subquery, qualified_wildcard, wildcard, LogicalPlanBuilder,
@@ -180,5 +211,25 @@ mod tests {
         \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_subquery_schema() -> Result<()> {
+        let analyzer = Analyzer::with_rules(vec![Arc::new(ExpandWildcardRule::new())]);
+        let options = ConfigOptions::default();
+        let subquery = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![wildcard()])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(subquery)
+            .alias("sub")?
+            .project(vec![wildcard()])?
+            .build()?;
+        let analyzed_plan = analyzer.execute_and_check(plan, &options, |_, _| {})?;
+        for x in analyzed_plan.inputs() {
+            for field in x.schema().fields() {
+                assert_ne!(field.name(), "*");
+            }
+        }
+        Ok(())
     }
 }
