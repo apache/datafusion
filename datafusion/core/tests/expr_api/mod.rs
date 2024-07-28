@@ -28,7 +28,7 @@ use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
 use sqlparser::ast::NullTreatment;
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 mod parse_sql_expr;
 mod simplification;
@@ -320,7 +320,7 @@ async fn test_aggregate_ext_null_treatment() {
 /// Evaluates the specified expr as an aggregate and compares the result to the
 /// expected result.
 async fn evaluate_agg_test(expr: Expr, expected_lines: Vec<&str>) {
-    let batch = test_batch();
+    let batch = TEST_BATCH.clone();
 
     let ctx = SessionContext::new();
     let group_expr = vec![];
@@ -347,7 +347,7 @@ async fn evaluate_agg_test(expr: Expr, expected_lines: Vec<&str>) {
 /// Converts the `Expr` to a `PhysicalExpr`, evaluates it against the provided
 /// `RecordBatch` and compares the result to the expected result.
 fn evaluate_expr_test(expr: Expr, expected_lines: Vec<&str>) {
-    let batch = test_batch();
+    let batch = TEST_BATCH.clone();
     let df_schema = DFSchema::try_from(batch.schema()).unwrap();
     let physical_expr = SessionContext::new()
         .create_physical_expr(expr, &df_schema)
@@ -365,39 +365,33 @@ fn evaluate_expr_test(expr: Expr, expected_lines: Vec<&str>) {
     );
 }
 
-static TEST_BATCH: OnceLock<RecordBatch> = OnceLock::new();
+static TEST_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
+    let string_array: ArrayRef = Arc::new(StringArray::from(vec!["1", "2", "3"]));
+    let int_array: ArrayRef =
+        Arc::new(Int64Array::from_iter(vec![Some(10), None, Some(5)]));
 
-fn test_batch() -> RecordBatch {
-    TEST_BATCH
-        .get_or_init(|| {
-            let string_array: ArrayRef = Arc::new(StringArray::from(vec!["1", "2", "3"]));
-            let int_array: ArrayRef =
-                Arc::new(Int64Array::from_iter(vec![Some(10), None, Some(5)]));
+    // { a: "2021-02-01" } { a: "2021-02-02" } { a: "2021-02-03" }
+    let struct_array: ArrayRef = Arc::from(StructArray::from(vec![(
+        Arc::new(Field::new("a", DataType::Utf8, false)),
+        Arc::new(StringArray::from(vec![
+            "2021-02-01",
+            "2021-02-02",
+            "2021-02-03",
+        ])) as _,
+    )]));
 
-            // { a: "2021-02-01" } { a: "2021-02-02" } { a: "2021-02-03" }
-            let struct_array: ArrayRef = Arc::from(StructArray::from(vec![(
-                Arc::new(Field::new("a", DataType::Utf8, false)),
-                Arc::new(StringArray::from(vec![
-                    "2021-02-01",
-                    "2021-02-02",
-                    "2021-02-03",
-                ])) as _,
-            )]));
+    // ["one"] ["two", "three", "four"] ["five"]
+    let mut builder = ListBuilder::new(StringBuilder::new());
+    builder.append_value([Some("one")]);
+    builder.append_value([Some("two"), Some("three"), Some("four")]);
+    builder.append_value([Some("five")]);
+    let list_array: ArrayRef = Arc::new(builder.finish());
 
-            // ["one"] ["two", "three", "four"] ["five"]
-            let mut builder = ListBuilder::new(StringBuilder::new());
-            builder.append_value([Some("one")]);
-            builder.append_value([Some("two"), Some("three"), Some("four")]);
-            builder.append_value([Some("five")]);
-            let list_array: ArrayRef = Arc::new(builder.finish());
-
-            RecordBatch::try_from_iter(vec![
-                ("id", string_array),
-                ("i", int_array),
-                ("props", struct_array),
-                ("list", list_array),
-            ])
-            .unwrap()
-        })
-        .clone()
-}
+    RecordBatch::try_from_iter(vec![
+        ("id", string_array),
+        ("i", int_array),
+        ("props", struct_array),
+        ("list", list_array),
+    ])
+    .unwrap()
+});

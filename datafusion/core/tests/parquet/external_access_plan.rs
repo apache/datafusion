@@ -33,7 +33,7 @@ use datafusion_physical_plan::ExecutionPlan;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 use tempfile::NamedTempFile;
 
 #[tokio::test]
@@ -317,7 +317,7 @@ impl TestFull {
             schema,
             file_name,
             file_size,
-        } = get_test_data();
+        } = TEST_DATA;
 
         let mut partitioned_file = PartitionedFile::new(file_name, *file_size);
 
@@ -369,46 +369,42 @@ struct TestData {
     file_size: u64,
 }
 
-static TEST_DATA: OnceLock<TestData> = OnceLock::new();
+/// A parquet file with 2 row groups each with 5 rows
+static TEST_DATA: LazyLock<TestData> = LazyLock::new(|| {
+    let scenario = Scenario::UTF8;
+    let row_per_group = 5;
 
-/// Return a parquet file with 2 row groups each with 5 rows
-fn get_test_data() -> &'static TestData {
-    TEST_DATA.get_or_init(|| {
-        let scenario = Scenario::UTF8;
-        let row_per_group = 5;
+    let mut temp_file = tempfile::Builder::new()
+        .prefix("user_access_plan")
+        .suffix(".parquet")
+        .tempfile()
+        .expect("tempfile creation");
 
-        let mut temp_file = tempfile::Builder::new()
-            .prefix("user_access_plan")
-            .suffix(".parquet")
-            .tempfile()
-            .expect("tempfile creation");
+    let props = WriterProperties::builder()
+        .set_max_row_group_size(row_per_group)
+        .build();
 
-        let props = WriterProperties::builder()
-            .set_max_row_group_size(row_per_group)
-            .build();
+    let batches = create_data_batch(scenario);
+    let schema = batches[0].schema();
 
-        let batches = create_data_batch(scenario);
-        let schema = batches[0].schema();
+    let mut writer =
+        ArrowWriter::try_new(&mut temp_file, schema.clone(), Some(props)).unwrap();
 
-        let mut writer =
-            ArrowWriter::try_new(&mut temp_file, schema.clone(), Some(props)).unwrap();
+    for batch in batches {
+        writer.write(&batch).expect("writing batch");
+    }
+    writer.close().unwrap();
 
-        for batch in batches {
-            writer.write(&batch).expect("writing batch");
-        }
-        writer.close().unwrap();
+    let file_name = temp_file.path().to_string_lossy().to_string();
+    let file_size = temp_file.path().metadata().unwrap().len();
 
-        let file_name = temp_file.path().to_string_lossy().to_string();
-        let file_size = temp_file.path().metadata().unwrap().len();
-
-        TestData {
-            temp_file,
-            schema,
-            file_name,
-            file_size,
-        }
-    })
-}
+    TestData {
+        temp_file,
+        schema,
+        file_name,
+        file_size,
+    }
+});
 
 /// Return the total value of the specified metric name
 fn metric_value(parquet_metrics: &MetricsSet, metric_name: &str) -> Option<usize> {

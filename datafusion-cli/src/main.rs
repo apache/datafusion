@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
@@ -295,9 +295,8 @@ impl ByteUnit {
 }
 
 fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
-    fn byte_suffixes() -> &'static HashMap<&'static str, ByteUnit> {
-        static BYTE_SUFFIXES: OnceLock<HashMap<&'static str, ByteUnit>> = OnceLock::new();
-        BYTE_SUFFIXES.get_or_init(|| {
+    static BYTE_SUFFIXES: LazyLock<HashMap<&'static str, ByteUnit>> =
+        LazyLock::new(|| {
             let mut m = HashMap::new();
             m.insert("b", ByteUnit::Byte);
             m.insert("k", ByteUnit::KiB);
@@ -309,23 +308,20 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
             m.insert("t", ByteUnit::TiB);
             m.insert("tb", ByteUnit::TiB);
             m
-        })
-    }
+        });
 
-    fn suffix_re() -> &'static regex::Regex {
-        static SUFFIX_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-        SUFFIX_REGEX.get_or_init(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap())
-    }
+    static SUFFIX_REGEX: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap());
 
     let lower = size.to_lowercase();
-    if let Some(caps) = suffix_re().captures(&lower) {
+    if let Some(caps) = SUFFIX_REGEX.captures(&lower) {
         let num_str = caps.get(1).unwrap().as_str();
         let num = num_str.parse::<usize>().map_err(|_| {
             format!("Invalid numeric value in memory pool size '{}'", size)
         })?;
 
         let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("b");
-        let unit = byte_suffixes()
+        let unit = BYTE_SUFFIXES
             .get(suffix)
             .ok_or_else(|| format!("Invalid memory pool size '{}'", size))?;
         let memory_pool_size = usize::try_from(unit.multiplier())

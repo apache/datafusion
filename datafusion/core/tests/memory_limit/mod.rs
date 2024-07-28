@@ -30,7 +30,7 @@ use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use futures::StreamExt;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 use tokio::fs::File;
 
 use datafusion::datasource::streaming::StreamingTable;
@@ -568,7 +568,10 @@ impl Scenario {
             single_row_batches, ..
         } = self
         {
-            batches_byte_size(&maybe_split_batches(dict_batches(), *single_row_batches))
+            batches_byte_size(&maybe_split_batches(
+                DICT_BATCHES.clone(),
+                *single_row_batches,
+            ))
         } else {
             panic!("Scenario does not support partition size");
         }
@@ -604,7 +607,7 @@ impl Scenario {
             } => {
                 use datafusion::physical_expr::expressions::col;
                 let batches: Vec<Vec<_>> = std::iter::repeat(maybe_split_batches(
-                    dict_batches(),
+                    DICT_BATCHES.clone(),
                     *single_row_batches,
                 ))
                 .take(*partitions)
@@ -686,18 +689,11 @@ fn maybe_split_batches(
         .collect()
 }
 
-static DICT_BATCHES: OnceLock<Vec<RecordBatch>> = OnceLock::new();
-
-/// Returns 5 sorted string dictionary batches each with 50 rows with
-/// this schema.
+/// 5 sorted string dictionary batches each with 50 rows with this schema.
 ///
 /// a: Dictionary<Utf8, Int32>,
 /// b: Dictionary<Utf8, Int32>,
-fn dict_batches() -> Vec<RecordBatch> {
-    DICT_BATCHES.get_or_init(make_dict_batches).clone()
-}
-
-fn make_dict_batches() -> Vec<RecordBatch> {
+static DICT_BATCHES: LazyLock<Vec<RecordBatch>> = LazyLock::new(|| {
     let batch_size = 50;
 
     let mut i = 0;
@@ -731,7 +727,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
     });
 
     batches
-}
+});
 
 // How many bytes does the memory from dict_batches consume?
 fn batches_byte_size(batches: &[RecordBatch]) -> usize {

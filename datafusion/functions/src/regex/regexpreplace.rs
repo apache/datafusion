@@ -36,7 +36,7 @@ use regex::Regex;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 #[derive(Debug)]
 pub struct RegexpReplaceFunc {
     signature: Signature,
@@ -118,6 +118,7 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
         }
     }
 }
+
 fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => specialize_regexp_replace::<i32>(args),
@@ -127,14 +128,14 @@ fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
         }
     }
 }
-/// replace POSIX capture groups (like \1) with Rust Regex group (like ${1})
+
+/// Replace POSIX capture groups (like \1) with Rust Regex group (like ${1})
 /// used by regexp_replace
 fn regex_replace_posix_groups(replacement: &str) -> String {
-    fn capture_groups_re() -> &'static Regex {
-        static CAPTURE_GROUPS_RE_LOCK: OnceLock<Regex> = OnceLock::new();
-        CAPTURE_GROUPS_RE_LOCK.get_or_init(|| Regex::new(r"(\\)(\d*)").unwrap())
-    }
-    capture_groups_re()
+    static CAPTURE_GROUPS_RE_LOCK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(\\)(\d*)").unwrap());
+
+    CAPTURE_GROUPS_RE_LOCK
         .replace_all(replacement, "$${$2}")
         .into_owned()
 }
