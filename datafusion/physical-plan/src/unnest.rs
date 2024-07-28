@@ -62,6 +62,8 @@ pub struct UnnestExec {
     input: Arc<dyn ExecutionPlan>,
     /// The schema once the unnest is applied
     schema: SchemaRef,
+    /// which original columns are transformed into which columns
+    transformed_col: HashMap<Column, Vec<Column>>,
     /// indices of the list-typed columns in the input schema
     list_column_indices: Vec<usize>,
     /// indices of the struct-typed columns in the input schema
@@ -80,6 +82,7 @@ impl UnnestExec {
         input: Arc<dyn ExecutionPlan>,
         list_column_indices: Vec<usize>,
         struct_column_indices: Vec<usize>,
+        transformed_col: HashMap<Column, Vec<Column>>,
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
@@ -88,6 +91,7 @@ impl UnnestExec {
         UnnestExec {
             input,
             schema,
+            transformed_col,
             list_column_indices,
             struct_column_indices,
             options,
@@ -150,6 +154,7 @@ impl ExecutionPlan for UnnestExec {
             Arc::clone(&children[0]),
             self.list_column_indices.clone(),
             self.struct_column_indices.clone(),
+            self.transformed_col.clone(),
             Arc::clone(&self.schema),
             self.options.clone(),
         )))
@@ -169,6 +174,7 @@ impl ExecutionPlan for UnnestExec {
 
         Ok(Box::pin(UnnestStream {
             input,
+            transformed_col: self.transformed_col,
             schema: Arc::clone(&self.schema),
             list_type_columns: self.list_column_indices.clone(),
             struct_column_indices: self.struct_column_indices.iter().copied().collect(),
@@ -226,6 +232,8 @@ struct UnnestStream {
     input: SendableRecordBatchStream,
     /// Unnested schema
     schema: Arc<Schema>,
+    /// Which original columns are transformed into which columns
+    transformed_col: HashMap<Column, Vec<Column>>,
     /// The unnest columns
     list_type_columns: Vec<usize>,
     struct_column_indices: HashSet<usize>,
