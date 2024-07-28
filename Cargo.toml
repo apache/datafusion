@@ -66,22 +66,22 @@ version = "40.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "52.1.0", features = [
+arrow = { version = "52.2.0", features = [
     "prettyprint",
 ] }
-arrow-array = { version = "52.1.0", default-features = false, features = [
+arrow-array = { version = "52.2.0", default-features = false, features = [
     "chrono-tz",
 ] }
-arrow-buffer = { version = "52.1.0", default-features = false }
-arrow-flight = { version = "52.1.0", features = [
+arrow-buffer = { version = "52.2.0", default-features = false }
+arrow-flight = { version = "52.2.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "52.1.0", default-features = false, features = [
+arrow-ipc = { version = "52.2.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "52.1.0", default-features = false }
-arrow-schema = { version = "52.1.0", default-features = false }
-arrow-string = { version = "52.1.0", default-features = false }
+arrow-ord = { version = "52.2.0", default-features = false }
+arrow-schema = { version = "52.2.0", default-features = false }
+arrow-string = { version = "52.2.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
@@ -118,7 +118,7 @@ log = "^0.4"
 num_cpus = "1.13.0"
 object_store = { version = "0.10.1", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "52.1.0", default-features = false, features = [
+parquet = { version = "52.2.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
