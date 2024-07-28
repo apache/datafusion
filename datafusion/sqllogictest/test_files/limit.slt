@@ -372,7 +372,7 @@ physical_plan
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------ProjectionExec: expr=[]
 06)----------GlobalLimitExec: skip=6, fetch=3
-07)------------CoalesceBatchesExec: target_batch_size=8192
+07)------------CoalesceBatchesExec: target_batch_size=8192, fetch=9
 08)--------------FilterExec: a@0 > 3
 09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -546,9 +546,7 @@ explain SELECT * FROM data LIMIT 3;
 logical_plan
 01)Limit: skip=0, fetch=3
 02)--TableScan: data projection=[column1, column2], fetch=3
-physical_plan
-01)GlobalLimitExec: skip=0, fetch=3
-02)--StreamingTableExec: partition_sizes=1, projection=[column1, column2], infinite_source=true, fetch=3, output_ordering=[column1@0 ASC NULLS LAST, column2@1 ASC NULLS LAST]
+physical_plan StreamingTableExec: partition_sizes=1, projection=[column1, column2], infinite_source=true, fetch=3, output_ordering=[column1@0 ASC NULLS LAST, column2@1 ASC NULLS LAST]
 
 
 statement ok

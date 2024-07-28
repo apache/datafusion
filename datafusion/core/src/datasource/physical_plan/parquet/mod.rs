@@ -726,6 +726,24 @@ impl ExecutionPlan for ParquetExec {
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.projected_statistics.clone())
     }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let new_config = self.base_config.clone().with_limit(limit);
+
+        Some(Arc::new(Self {
+            base_config: new_config,
+            projected_statistics: self.projected_statistics.clone(),
+            metrics: self.metrics.clone(),
+            predicate: self.predicate.clone(),
+            pruning_predicate: self.pruning_predicate.clone(),
+            page_pruning_predicate: self.page_pruning_predicate.clone(),
+            metadata_size_hint: self.metadata_size_hint,
+            parquet_file_reader_factory: self.parquet_file_reader_factory.clone(),
+            cache: self.cache.clone(),
+            table_parquet_options: self.table_parquet_options.clone(),
+            schema_adapter_factory: self.schema_adapter_factory.clone(),
+        }))
+    }
 }
 
 fn should_enable_page_index(

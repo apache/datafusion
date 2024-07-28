@@ -426,6 +426,24 @@ impl ExecutionPlan for CsvExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let new_config = self.base_config.clone().with_limit(limit);
+
+        Some(Arc::new(Self {
+            base_config: new_config,
+            projected_statistics: self.projected_statistics.clone(),
+            has_header: self.has_header,
+            delimiter: self.delimiter,
+            quote: self.quote,
+            escape: self.escape,
+            comment: self.comment,
+            newlines_in_values: self.newlines_in_values,
+            metrics: self.metrics.clone(),
+            file_compression_type: self.file_compression_type,
+            cache: self.cache.clone(),
+        }))
+    }
 }
 
 /// A Config for [`CsvOpener`]
