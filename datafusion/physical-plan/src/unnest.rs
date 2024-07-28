@@ -34,7 +34,7 @@ use arrow::array::{
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{cast, is_not_null, kernels, sum};
-use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Int32Type, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Int64Array, Scalar, StructArray};
 use arrow_ord::cmp::lt;
@@ -407,6 +407,31 @@ fn build_batch(
     transformed
 }
 
+/// TODO: only prototype
+/// This function does not handle NULL yet
+pub fn length_recursive(array: &dyn Array, depth: usize) -> Result<ArrayRef> {
+    let list = array.as_list::<i32>();
+    if depth == 1 {
+        return Ok(length(array)?);
+    }
+    let a: Vec<i32> = list
+        .iter()
+        .map(|x| {
+            if x.is_none() {
+                return 0;
+            }
+            let ret = length_recursive(&x.unwrap(), depth - 1).unwrap();
+            let a = ret.as_primitive::<Int32Type>();
+            if a.is_empty() {
+                0
+            } else {
+                sum(a).unwrap()
+            }
+        })
+        .collect();
+    Ok(Arc::new(PrimitiveArray::<Int32Type>::from(a)))
+}
+
 /// Find the longest list length among the given list arrays for each row.
 ///
 /// For example if we have the following two list arrays:
@@ -439,11 +464,18 @@ fn find_longest_length(
     } else {
         Scalar::new(Int64Array::from_value(0, 1))
     };
+    // col1: [[1,2]]|[[2,3]]
+    // unnest(col1): [1,2]|[2,3] => length = 2
+    // unnest(unnest(col1)): 1|2|2|3 => length = 4
+    // col2: [3]|[4] => length =2
+    // unnest(col2): 3|4 => length = 2
+    // unnest(col1), unnest(unnest(col1)), unnest(col2)
     let list_lengths: Vec<ArrayRef> = list_arrays
         .iter()
         .map(|list_array| {
-            let mut length_array = length(list_array)?;
+            let mut length_array = length_recursive(list_array, 1)?;
             // Make sure length arrays have the same type. Int64 is the most general one.
+            // Respect the depth of unnest( current func only get the length of 1 level of unnest)
             length_array = cast(&length_array, &DataType::Int64)?;
             length_array =
                 zip(&is_not_null(&length_array)?, &length_array, &null_length)?;
@@ -667,7 +699,7 @@ fn flatten_list_cols_from_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{Field, Int32Type};
     use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 
@@ -750,6 +782,35 @@ mod tests {
         let unnested_array = unnest_list_array(list_array, &length_array, 3 * 6)?;
         let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
         assert_eq!(strs, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_length_recursive() -> datafusion_common::Result<()> {
+        // [[1,2,3],null,[4,5]]
+        let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+            Some(vec![Some(7), Some(8), Some(9), Some(10)]),
+            None,
+            Some(vec![Some(11), Some(12), Some(13)]),
+        ]);
+        let list_arr_ref = Arc::new(list_arr) as ArrayRef;
+        let offsets = OffsetBuffer::from_lengths([3, 3]);
+        let nested_list_arr = ListArray::new(
+            Arc::new(Field::new_list_field(
+                list_arr_ref.data_type().to_owned(),
+                true,
+            )),
+            offsets,
+            list_arr_ref,
+            None,
+        );
+        let b = length_recursive(&(Arc::new(nested_list_arr) as ArrayRef), 2)?;
+        // [3, 0, 2]
+        // if depth = 2, length should be 5
+        println!("{:?}", b);
         Ok(())
     }
 
