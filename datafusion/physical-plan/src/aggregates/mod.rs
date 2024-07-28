@@ -59,11 +59,20 @@ pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 
 /// Hash aggregate modes
+///
+/// See [`Accumulator::state`] for background information on multi-phase
+/// aggregation and how these modes are used.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
-    /// Partial aggregate that can be applied in parallel across input partitions
+    /// Partial aggregate that can be applied in parallel across input
+    /// partitions.
+    ///
+    /// This is the first phase of a multi-phase aggregation.
     Partial,
-    /// Final aggregate that produces a single partition of output
+    /// Final aggregate that produces a single partition of output by combining
+    /// the output of multiple partial aggregates.
+    ///
+    /// This is the second phase of a multi-phase aggregation.
     Final,
     /// Final aggregate that works on pre-partitioned data.
     ///
@@ -75,12 +84,15 @@ pub enum AggregateMode {
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
+    ///
     /// This mode requires that the input is a single partition (like Final)
     Single,
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
-    /// This mode requires that the input is partitioned by group key (like FinalPartitioned)
+    ///
+    /// This mode requires that the input is partitioned by group key (like
+    /// FinalPartitioned)
     SinglePartitioned,
 }
 

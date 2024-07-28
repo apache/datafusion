@@ -62,10 +62,12 @@ pub(crate) enum ExecutionState {
     /// When producing output, the remaining rows to output are stored
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
-    /// Indicates that GroupedHashAggregateStream should produce
-    /// intermediate aggregate state for each input rows without
-    /// their aggregation
+    /// Produce intermediate aggregate state for each input row without
+    /// aggregation.
+    ///
+    /// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
     SkippingAggregation,
+    /// All input has been consumed and all groups have been emitted
     Done,
 }
 
@@ -94,6 +96,9 @@ struct SpillState {
     merging_group_by: PhysicalGroupBy,
 }
 
+/// Tracks if the aggregate should skip partial aggregations
+///
+/// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
 struct SkipAggregationProbe {
     /// Number of processed input rows
     input_rows: usize,
@@ -204,7 +209,7 @@ impl SkipAggregationProbe {
 /// of `x` and one accumulator for `SUM(y)`, specialized for the data
 /// type of `y`.
 ///
-/// # Description
+/// # Discussion
 ///
 /// [`group_values`] does not store any aggregate state inline. It only
 /// assigns "group indices", one for each (distinct) group value. The
@@ -222,7 +227,25 @@ impl SkipAggregationProbe {
 ///
 /// [`group_values`]: Self::group_values
 ///
-/// # Spilling
+/// # Partial Aggregate and multi-phase grouping
+///
+/// As described on [`Accumulator::state`], this operator is used in the context
+/// "multi-phase" grouping when the mode is [`AggregateMode::Partial`].
+///
+/// An important optimization for multi-phase partial aggregation is to skip
+/// partial aggregation when it is not effective enough to warrant the memory or
+/// CPU cost, as is often the case for queries many distinct groups (high
+/// cardinality group by). Memory is particularly important because each Partial
+/// aggregator must store the intermediate state for each group.
+///
+/// If the ratio of the number of groups to the number of input rows exceeds a
+/// threshold, and [`GroupsAccumulator::convert_to_state_supported`] is
+/// supported, this operator will stop applying Partial aggregation and directly
+/// pass the input rows to the next aggregation phase.
+///
+/// [`Accumulator::state`]: datafusion_expr::Accumulator::state
+///
+/// # Spilling (to disk)
 ///
 /// The sizes of group values and accumulators can become large. Before that causes out of memory,
 /// this hash aggregator outputs partial states early for partial aggregation or spills to local
@@ -344,7 +367,7 @@ pub(crate) struct GroupedHashAggregateStream {
     group_values_soft_limit: Option<usize>,
 
     /// Optional probe for skipping data aggregation, if supported by
-    /// current stream
+    /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 }
 

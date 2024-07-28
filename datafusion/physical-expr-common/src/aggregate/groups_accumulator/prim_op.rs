@@ -134,6 +134,12 @@ where
         self.update_batch(values, group_indices, opt_filter, total_num_groups)
     }
 
+    /// Converts an input batch directly to a state batch
+    ///
+    /// The state is:
+    /// - self.prim_fn for all non null, non filtered values
+    /// - null otherwise
+    ///
     fn convert_to_state(
         &self,
         values: &[ArrayRef],

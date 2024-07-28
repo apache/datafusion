@@ -343,12 +343,15 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Return the fields used to store the intermediate state of this accumulator.
     ///
+    /// See [`Accumulator::state`] for background information.
+    ///
     /// # Arguments:
     /// 1. `name`: the name of the expression (e.g. AVG, SUM, etc)
     /// 2. `value_type`: Aggregate function output returned by [`Self::return_type`] if defined, otherwise
     ///    it is equivalent to the data type of the first arguments
     /// 3. `ordering_fields`: the fields used to order the input arguments, if any.
     ///    Empty if no ordering expression is provided.
+    ///
     ///
     /// # Notes:
     ///
@@ -384,7 +387,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// # Notes
     ///
     /// Even if this function returns true, DataFusion will still use
-    /// `Self::accumulator` for certain queries, such as when this aggregate is
+    /// [`Self::accumulator`] for certain queries, such as when this aggregate is
     /// used as a window function or when there no GROUP BY columns in the
     /// query.
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
