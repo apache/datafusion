@@ -29,23 +29,23 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("struct requires at least one argument");
     }
 
-    let vec: Vec<_> = args
+    let fields = args
         .iter()
         .enumerate()
         .map(|(i, arg)| {
             let field_name = format!("c{i}");
-            Ok((
-                Arc::new(Field::new(
-                    field_name.as_str(),
-                    arg.data_type().clone(),
-                    true,
-                )),
-                Arc::clone(arg),
-            ))
+            Ok(Arc::new(Field::new(
+                field_name.as_str(),
+                arg.data_type().clone(),
+                true,
+            )))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?
+        .into();
 
-    Ok(Arc::new(StructArray::from(vec)))
+    let arrays = args.to_vec();
+
+    Ok(Arc::new(StructArray::new(fields, arrays, None)))
 }
 
 /// put values in a struct array.
@@ -53,6 +53,7 @@ fn struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(args)?;
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
 }
+
 #[derive(Debug)]
 pub struct StructFunc {
     signature: Signature,
