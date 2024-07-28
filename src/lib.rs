@@ -20,9 +20,12 @@ mod error;
 mod if_expr;
 
 mod kernels;
+pub mod scalar_funcs;
+pub mod spark_hash;
 mod temporal;
 pub mod timezone;
 pub mod utils;
+mod xxhash64;
 
 pub use cast::{spark_cast, Cast};
 pub use error::{SparkError, SparkResult};

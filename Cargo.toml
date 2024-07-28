@@ -41,10 +41,13 @@ chrono-tz = { workspace = true }
 num = { workspace = true }
 regex = { workspace = true }
 thiserror = { workspace = true }
+unicode-segmentation = "1.11.0"
 
 [dev-dependencies]
+arrow-data = {workspace = true}
 criterion = "0.5.1"
-rand = "0.8.5"
+rand = { workspace = true}
+twox-hash = "1.6.3"
 
 [lib]
 name = "datafusion_comet_spark_expr"
