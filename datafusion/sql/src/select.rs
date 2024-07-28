@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::planner::{
@@ -305,12 +305,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut intermediate_plan = input;
         let mut intermediate_select_exprs = select_exprs;
 
-        // impl memoization to store all previous unnest transformation
-        let mut memo = HashSet::new();
         // Each expr in select_exprs can contains multiple unnest stage
         // The transformation happen bottom up, one at a time for each iteration
         // Only exaust the loop if no more unnest transformation is found
         for i in 0.. {
+            // impl memoization to store all previous unnest transformation
+            let mut memo = HashMap::new();
             let mut unnest_columns = vec![];
             // from which column used for projection, before the unnest happen
             // including non unnest column and unnest column
@@ -351,17 +351,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-                // deduplicate expr in inner_projection_exprs
-                // BIGTODO: retain projection order instead of sorting
-                let mut checklist = HashSet::new();
-                inner_projection_exprs.retain(|expr| -> bool {
-                    if checklist.get(&expr.display_name().unwrap()).is_some() {
-                        false
-                    } else {
-                        checklist.insert(expr.display_name().unwrap());
-                        true
-                    }
-                });
 
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(inner_projection_exprs.clone())?
@@ -371,16 +360,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 intermediate_select_exprs = outer_projection_exprs;
             }
         }
-
-        let mut checklist = HashSet::new();
-        intermediate_select_exprs.retain(|expr| -> bool {
-            if checklist.get(&expr.display_name().unwrap()).is_some() {
-                false
-            } else {
-                checklist.insert(expr.display_name().unwrap());
-                true
-            }
-        });
 
         let ret = LogicalPlanBuilder::from(intermediate_plan)
             .project(intermediate_select_exprs)?

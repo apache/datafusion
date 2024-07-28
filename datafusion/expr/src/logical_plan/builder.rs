@@ -1136,7 +1136,7 @@ impl LogicalPlanBuilder {
     /// Unnest the given columns with the given [`UnnestOptions`]
     pub fn unnest_columns_with_options(
         self,
-        columns: Vec<Column>,
+        columns: HashMap<Column, Vec<Column>>,
         options: UnnestOptions,
     ) -> Result<Self> {
         Ok(Self::from(unnest_with_options(
@@ -1646,14 +1646,16 @@ pub fn get_unnested_columns(
 /// Create a [`LogicalPlan::Unnest`] plan with options
 pub fn unnest_with_options(
     input: LogicalPlan,
-    columns: Vec<Column>,
+    columns: HashMap<Column, Vec<Column>>,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
     let mut list_columns = Vec::with_capacity(columns.len());
     let mut struct_columns = Vec::with_capacity(columns.len());
     let column_by_original_index = columns
         .iter()
-        .map(|c| Ok((input.schema().index_of_column(c)?, c)))
+        .map(|(inner_col, outer_cols)| {
+            Ok((input.schema().index_of_column(inner_col)?, inner_col))
+        })
         .collect::<Result<HashMap<usize, &Column>>>()?;
 
     let input_schema = input.schema();
@@ -1668,6 +1670,8 @@ pub fn unnest_with_options(
         .map(|(index, (original_qualifier, original_field))| {
             match column_by_original_index.get(&index) {
                 Some(&column_to_unnest) => {
+                    let transformed_cols = columns.get(&column_to_unnest).unwrap();
+                    println!("columnto unnest name  {}", column_to_unnest.name);
                     let flatten_columns = get_unnested_columns(
                         &column_to_unnest.name,
                         original_field.data_type(),

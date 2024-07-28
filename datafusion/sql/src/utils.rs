@@ -26,6 +26,7 @@ use arrow_schema::{
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
+use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{
     exec_err, internal_err, plan_err, Column, DataFusionError, Result, ScalarValue,
 };
@@ -277,7 +278,7 @@ pub(crate) fn transform_bottom_unnest(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<String>,
     inner_projection_exprs: &mut Vec<Expr>,
-    memo: &mut HashSet<Expr>,
+    memo: &mut HashMap<Column, Vec<Column>>,
     original_expr: &Expr,
 ) -> Result<Vec<Expr>> {
     let mut transform = |level: usize,
@@ -285,20 +286,27 @@ pub(crate) fn transform_bottom_unnest(
                          struct_allowed: bool,
                          inner_projection_exprs: &mut Vec<Expr>|
      -> Result<Vec<Expr>> {
-        let already_projected = memo.get(expr_in_unnest).is_some();
+        let col = match expr_in_unnest {
+            Expr::Column(col) => col,
+            _ => {
+                return internal_err!("unnesting on non-column expr is not supported");
+            }
+        };
+        let already_projected = memo.get(col);
+        let (already_projected, transformed_cols) = match memo.get_mut(col) {
+            Some(vec) => (true, vec),
+            _ => {
+                memo.insert(col.clone(), vec![]);
+                (false, memo.get_mut(col).unwrap())
+            }
+        };
         // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
         // inside unnest execution, each column inside the inner projection
         // will be transformed into new columns. Thus we need to keep track of these placeholding column names
         // let placeholder_name = unnest_expr.display_name()?;
-        let placeholder_name = format!(
-            "unnest_placeholder({})",
-            expr_in_unnest.display_name().unwrap(),
-        );
-        let post_unnest_name = format!(
-            "unnest_placeholder({},depth={})",
-            expr_in_unnest.display_name().unwrap(),
-            level
-        );
+        let placeholder_name = format!("unnest_placeholder({})", col.name());
+        let post_unnest_name =
+            format!("unnest_placeholder({},depth={})", col.name(), level);
 
         // Add alias for the argument expression, to avoid naming conflicts
         // with other expressions in the select list. For example: `select unnest(col1), col1 from t`.
@@ -323,10 +331,14 @@ pub(crate) fn transform_bottom_unnest(
             get_unnested_columns(&post_unnest_name, &data_type)?;
         let expr = outer_projection_columns
             .iter()
-            .map(|col| Expr::Column(col.0.clone()))
+            .map(|col| {
+                if !transformed_cols.contains(&col.0) {
+                    transformed_cols.push(col.0.clone());
+                }
+                Expr::Column(col.0.clone())
+            })
             .collect::<Vec<_>>();
 
-        memo.insert(expr_in_unnest.clone());
         Ok(expr)
     };
     let latest_visited_unnest = RefCell::new(None);
@@ -401,9 +413,7 @@ pub(crate) fn transform_bottom_unnest(
                     if &expr == original_expr {
                         return Ok(Transformed::no(expr));
                     }
-                    if let DataType::Struct(_) = data_type {
-                        return internal_err!("unnest on struct can only be applied at the root level of select expression");
-                    }
+
                     let depth = unnest_stack.len();
                     let struct_allowed = (&expr == original_expr) && depth == 1;
 
@@ -475,10 +485,8 @@ mod tests {
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
-    use datafusion_common::{DFSchema, Result, UnnestOptions};
-    use datafusion_expr::{
-        col, lit, unnest, EmptyRelation, LogicalPlan, LogicalPlanBuilder,
-    };
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::{col, lit, unnest, EmptyRelation, LogicalPlan};
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
 
