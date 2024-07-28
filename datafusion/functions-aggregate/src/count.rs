@@ -441,6 +441,11 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(vec![Arc::new(counts) as ArrayRef])
     }
 
+    /// Converts an input batch directly to a state batch
+    ///
+    /// The state of `COUNT` is always a single Int64Array:
+    /// * `1` (for non-null, non filtered values)
+    /// * `0` (for null values)
     fn convert_to_state(
         &self,
         values: &[ArrayRef],

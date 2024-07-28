@@ -128,6 +128,9 @@ pub trait GroupsAccumulator: Send {
     /// Returns the intermediate aggregate state for this accumulator,
     /// used for multi-phase grouping, resetting its internal state.
     ///
+    /// See [`Accumulator::state`] for more information on multi-phase
+    /// aggregation.
+    ///
     /// For example, `AVG` might return two arrays: `SUM` and `COUNT`
     /// but the `MIN` aggregate would just return a single array.
     ///
@@ -135,11 +138,13 @@ pub trait GroupsAccumulator: Send {
     /// single `StructArray` rather than multiple arrays.
     ///
     /// See [`Self::evaluate`] for details on the required output
-    /// order and  `emit_to`.
+    /// order and `emit_to`.
+    ///
+    /// [`Accumulator::state`]: crate::Accumulator::state
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
     /// Merges intermediate state (the output from [`Self::state`])
-    /// into this accumulator's values.
+    /// into this accumulator's current state.
     ///
     /// For some aggregates (such as `SUM`), `merge_batch` is the same
     /// as `update_batch`, but for some aggregates (such as `COUNT`,
@@ -158,9 +163,41 @@ pub trait GroupsAccumulator: Send {
         total_num_groups: usize,
     ) -> Result<()>;
 
-    /// Converts input batch to intermediate aggregate state,
-    /// without grouping (each input row considered as a separate
-    /// group).
+    /// Converts an input batch directly the intermediate aggregate state.
+    ///
+    /// This is the equivalent of treating each input row as its own group. It
+    /// is invoked when the Partial phase of a multi-phase aggregation is not
+    /// reducing the cardinality enough to warrant spending more effort on
+    /// pre-aggregation (see `Background` section below), and switches to
+    /// passing intermediate state directly on to the next aggregation phase.
+    ///
+    /// Examples:
+    /// * `COUNT`: an array of 1s for each row in the input batch.
+    /// * `SUM/MIN/MAX`: the input values themselves.
+    ///
+    /// # Arguments
+    /// * `values`: the input arguments to the accumulator
+    /// * `opt_filter`: if present, any row where `opt_filter[i]` is false should be ignored
+    ///
+    /// # Background
+    ///
+    /// In a multi-phase aggregation (see [`Accumulator::state`]), the initial
+    /// Partial phase reduces the cardinality of the input data as soon as
+    /// possible in the plan.
+    ///
+    /// This strategy is very effective for queries with a small number of
+    /// groups, as most of the data is aggregated immediately and only a small
+    /// amount of data must be repartitioned (see [`Accumulator::state`] for
+    /// background)
+    ///
+    /// However, for queries with a large number of groups, the Partial phase
+    /// often does not reduce the cardinality enough to warrant the memory and
+    /// CPU cost of actually performing the aggregation. For such cases, the
+    /// HashAggregate operator will dynamically switch to passing intermediate
+    /// state directly to the next aggregation phase with minimal processing
+    /// using this method.
+    ///
+    /// [`Accumulator::state`]: crate::Accumulator::state
     fn convert_to_state(
         &self,
         _values: &[ArrayRef],
@@ -169,15 +206,16 @@ pub trait GroupsAccumulator: Send {
         not_impl_err!("Input batch conversion to state not implemented")
     }
 
-    /// Returns `true` is groups accumulator supports input batch
-    /// to intermediate aggregate state conversion (`convert_to_state`
-    /// method is implemented).
+    /// Returns `true` if [`Self::convert_to_state`] is implemented to support
+    /// intermediate aggregate state conversion.
     fn supports_convert_to_state(&self) -> bool {
         false
     }
 
     /// Amount of memory used to store the state of this accumulator,
-    /// in bytes. This function is called once per batch, so it should
-    /// be `O(n)` to compute, not `O(num_groups)`
+    /// in bytes.
+    ///
+    /// This function is called once per batch, so it should be `O(n)` to
+    /// compute, not `O(num_groups)`
     fn size(&self) -> usize;
 }
