@@ -57,7 +57,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
-03)----CoalesceBatchesExec: target_batch_size=8192
+03)----CoalesceBatchesExec: target_batch_size=8192, fetch=5
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)], projection=[a@1]
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
 06)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -100,7 +100,7 @@ physical_plan
 01)GlobalLimitExec: skip=0, fetch=10
 02)--SortPreservingMergeExec: [a2@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10
 03)----ProjectionExec: expr=[a@0 as a2, b@1 as b]
-04)------CoalesceBatchesExec: target_batch_size=8192
+04)------CoalesceBatchesExec: target_batch_size=8192, fetch=10
 05)--------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)], projection=[a@0, b@1]
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
 07)----------CoalesceBatchesExec: target_batch_size=8192

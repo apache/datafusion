@@ -217,16 +217,17 @@ fn transformed_limit(
     })))
 }
 
-/// Combines two limits into a single
+/// Computes the `skip` and `fetch` parameters of a single limit that would be
+/// equivalent to two consecutive limits with the given `skip`/`fetch` parameters.
 ///
-/// Returns the combined limit `(skip, fetch)`
+/// There are multiple cases to consider:
 ///
-/// # Case 0: Parent and Child are disjoint. (`child_fetch <= skip`)
+/// # Case 0: Parent and child are disjoint (`child_fetch <= skip`).
 ///
 /// ```text
 ///   Before merging:
-///                     |........skip........|---fetch-->|              Parent Limit
-///    |...child_skip...|---child_fetch-->|                             Child Limit
+///                     |........skip........|---fetch-->|     Parent limit
+///    |...child_skip...|---child_fetch-->|                    Child limit
 /// ```
 ///
 ///   After merging:
@@ -234,10 +235,12 @@ fn transformed_limit(
 ///    |.........(child_skip + skip).........|
 /// ```
 ///
+/// # Case 1: Parent is beyond child's range (`skip < child_fetch <= skip + fetch`).
+///
 ///   Before merging:
 /// ```text
-///                     |...skip...|------------fetch------------>|     Parent Limit
-///    |...child_skip...|-------------child_fetch------------>|         Child Limit
+///                     |...skip...|------------fetch------------>|   Parent limit
+///    |...child_skip...|-------------child_fetch------------>|       Child limit
 /// ```
 ///
 ///   After merging:
@@ -245,31 +248,19 @@ fn transformed_limit(
 ///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
 /// ```
 ///
-/// # Case 1: Parent is beyond the range of Child. (`skip < child_fetch <= skip + fetch`)
+///  # Case 2: Parent is within child's range (`skip + fetch < child_fetch`).
 ///
 ///   Before merging:
 /// ```text
-///                     |...skip...|------------fetch------------>|     Parent Limit
-///    |...child_skip...|-------------child_fetch------------>|         Child Limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
-/// ```
-///
-///  # Case 2: Parent is in the range of Child. (`skip + fetch < child_fetch`)
-///   Before merging:
-/// ```text
-///                     |...skip...|---fetch-->|                        Parent Limit
-///    |...child_skip...|-------------child_fetch------------>|         Child Limit
+///                     |...skip...|---fetch-->|                   Parent limit
+///    |...child_skip...|-------------child_fetch------------>|    Child limit
 /// ```
 ///
 ///   After merging:
 /// ```text
 ///    |....(child_skip + skip)....|---fetch-->|
 /// ```
-fn combine_limit(
+pub fn combine_limit(
     parent_skip: usize,
     parent_fetch: Option<usize>,
     child_skip: usize,
