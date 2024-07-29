@@ -92,8 +92,10 @@ pub trait SchemaMapper: Debug + Send + Sync {
     ) -> datafusion_common::Result<RecordBatch>;
 }
 
+/// Basic implementation of [`SchemaAdapterFactory`] that maps columns by name
+/// and casts columns to the expected type.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct DefaultSchemaAdapterFactory {}
+pub struct DefaultSchemaAdapterFactory {}
 
 impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
     fn create(&self, table_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
