@@ -131,51 +131,83 @@ impl GroupValues for GroupValuesRows {
         // tracks to which group each of the input rows belongs
         groups.clear();
 
-        // 1.1 Calculate the group keys for the group values
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-
         if let Some(hash_values) = hash_values {
             let hash_array = hash_values.as_primitive::<UInt64Type>();
-            let hash_values: Vec<u64> = hash_array.clone().values().clone().into();
-            batch_hashes.extend(hash_values)
+            for (row, hash) in hash_array.iter().enumerate() {
+                let hash = hash.unwrap();
+
+                // TODO: I guess at final aggregate mode, the group values we have are all unique
+                // If it is true, we could avoid map
+
+                let entry = self.map.get_mut(hash, |(_hash, group_idx)| {
+                    // verify that a group that we are inserting with hash is
+                    // actually the same key value as the group in
+                    // existing_idx  (aka group_values @ row)
+                    group_rows.row(row) == group_values.row(*group_idx)
+                });
+
+                let group_idx = match entry {
+                    // Existing group_index for this group value
+                    Some((_hash, group_idx)) => *group_idx,
+                    //  1.2 Need to create new entry for the group
+                    None => {
+                        // Add new entry to aggr_state and save newly created index
+                        let group_idx = group_values.num_rows();
+                        group_values.push(group_rows.row(row));
+                        store_gp_hashes.push(hash);
+
+                        // for hasher function, use precomputed hash value
+                        self.map.insert_accounted(
+                            (hash, group_idx),
+                            |(hash, _group_index)| *hash,
+                            &mut self.map_size,
+                        );
+                        group_idx
+                    }
+                };
+                groups.push(group_idx);
+            }
         } else {
+            // 1.1 Calculate the group keys for the group values
+            let batch_hashes = &mut self.hashes_buffer;
+            batch_hashes.clear();
             batch_hashes.resize(n_rows, 0);
             create_hashes(cols, &self.random_state, batch_hashes)?;
-        }
+            for (row, &hash) in batch_hashes.iter().enumerate() {
+                let entry = self.map.get_mut(hash, |(_hash, group_idx)| {
+                    // verify that a group that we are inserting with hash is
+                    // actually the same key value as the group in
+                    // existing_idx  (aka group_values @ row)
+                    group_rows.row(row) == group_values.row(*group_idx)
+                });
 
-        for (row, &hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.get_mut(hash, |(_hash, group_idx)| {
-                // verify that a group that we are inserting with hash is
-                // actually the same key value as the group in
-                // existing_idx  (aka group_values @ row)
-                group_rows.row(row) == group_values.row(*group_idx)
-            });
+                let group_idx = match entry {
+                    // Existing group_index for this group value
+                    Some((_hash, group_idx)) => *group_idx,
+                    //  1.2 Need to create new entry for the group
+                    None => {
+                        // Add new entry to aggr_state and save newly created index
+                        let group_idx = group_values.num_rows();
+                        group_values.push(group_rows.row(row));
+                        store_gp_hashes.push(hash);
 
-            let group_idx = match entry {
-                // Existing group_index for this group value
-                Some((_hash, group_idx)) => *group_idx,
-                //  1.2 Need to create new entry for the group
-                None => {
-                    // Add new entry to aggr_state and save newly created index
-                    let group_idx = group_values.num_rows();
-                    group_values.push(group_rows.row(row));
-                    store_gp_hashes.push(hash);
-
-                    // for hasher function, use precomputed hash value
-                    self.map.insert_accounted(
-                        (hash, group_idx),
-                        |(hash, _group_index)| *hash,
-                        &mut self.map_size,
-                    );
-                    group_idx
-                }
-            };
-            groups.push(group_idx);
+                        // for hasher function, use precomputed hash value
+                        self.map.insert_accounted(
+                            (hash, group_idx),
+                            |(hash, _group_index)| *hash,
+                            &mut self.map_size,
+                        );
+                        group_idx
+                    }
+                };
+                groups.push(group_idx);
+            }
         }
 
         self.group_values = Some(group_values);
-        self.group_hashes = Some(store_gp_hashes);
+        if !store_gp_hashes.is_empty() {
+            self.group_hashes = Some(store_gp_hashes);
+        }
 
         Ok(())
     }

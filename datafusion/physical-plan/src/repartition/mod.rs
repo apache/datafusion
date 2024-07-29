@@ -263,42 +263,49 @@ impl BatchPartitioner {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
-                    let arrays = exprs
-                        .iter()
-                        .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
-                        .collect::<Result<Vec<_>>>()?;
+                    // let arrays = exprs
+                    //     .iter()
+                    //     .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
+                    //     .collect::<Result<Vec<_>>>()?;
 
                     // hash_buffer.clear();
                     // hash_buffer.resize(batch.num_rows(), 0);
 
                     let mut indices: Vec<_> = (0..*partitions)
-                    .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
-                    .collect();
+                        .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
+                        .collect();
 
-                    let hash_values = batch.column_by_name("hash_value");
-                    if let Some(hash_values) = hash_values {
-                        let hash_array = hash_values.as_primitive::<UInt64Type>();
-                        for (index, hash) in hash_array.iter().enumerate() {
-                            let hash = hash.unwrap();
-                            indices[(hash % *partitions as u64) as usize]
-                                .append_value(index as u64);
-                        }
-
-                        // let hash_values: Vec<u64> = hash_array.clone().values().clone().into();
-                        // for (index, hash) in hash_values.iter().enumerate() {
-                        //     indices[(*hash % *partitions as u64) as usize]
-                        //         .append_value(index as u64);
-                        // }
-                    } else {
-                        unreachable!("something wrongs");
-                        // hash_buffer.clear();
-                        // hash_buffer.resize(batch.num_rows(), 0);
-                        // create_hashes(&arrays, random_state, hash_buffer)?;
-                        // for (index, hash) in hash_buffer.iter().enumerate() {
-                        //     indices[(*hash % *partitions as u64) as usize]
-                        //         .append_value(index as u64);
-                        // }
+                    // println!("batch: {:?}", batch);
+                    // let hash_values = batch.column_by_name("hash_value");
+                    let hash_values = batch.column(2).as_primitive::<UInt64Type>();
+                    for (index, hash) in hash_values.iter().enumerate() {
+                        let hash = hash.unwrap();
+                        indices[(hash % *partitions as u64) as usize]
+                            .append_value(index as u64);
                     }
+                    // if let Some(hash_values) = hash_values {
+                    //     let hash_array = hash_values.as_primitive::<UInt64Type>();
+                    //     for (index, hash) in hash_array.iter().enumerate() {
+                    //         let hash = hash.unwrap();
+                    //         indices[(hash % *partitions as u64) as usize]
+                    //             .append_value(index as u64);
+                    //     }
+
+                    //     // let hash_values: Vec<u64> = hash_array.clone().values().clone().into();
+                    //     // for (index, hash) in hash_values.iter().enumerate() {
+                    //     //     indices[(*hash % *partitions as u64) as usize]
+                    //     //         .append_value(index as u64);
+                    //     // }
+                    // } else {
+                    //     unreachable!("something wrongs");
+                    //     // hash_buffer.clear();
+                    //     // hash_buffer.resize(batch.num_rows(), 0);
+                    //     // create_hashes(&arrays, random_state, hash_buffer)?;
+                    //     // for (index, hash) in hash_buffer.iter().enumerate() {
+                    //     //     indices[(*hash % *partitions as u64) as usize]
+                    //     //         .append_value(index as u64);
+                    //     // }
+                    // }
 
                     // Finished building index-arrays for output partitions
                     timer.done();

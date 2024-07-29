@@ -556,9 +556,6 @@ impl GroupedHashAggregateStream {
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
 
-            // println!("mode: {:?}", self.mode);
-            // println!("group_values: {:?}", group_values);
-
             self.group_values.intern(
                 group_values,
                 &mut self.current_group_indices,
