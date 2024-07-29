@@ -410,7 +410,9 @@ impl ListingOptions {
             .try_collect()
             .await?;
 
-        self.format.infer_schema(state, &store, &files).await
+        let schema = self.format.infer_schema(state, &store, &files).await?;
+
+        Ok(schema)
     }
 
     /// Infers the partition columns stored in `LOCATION` and compares
