@@ -297,7 +297,7 @@ pub(crate) fn transform_bottom_unnests(
         .iter()
         .map(|expr| {
             transform_bottom_unnest(
-                &input,
+                input,
                 unnest_placeholder_columns,
                 inner_projection_exprs,
                 expr,
