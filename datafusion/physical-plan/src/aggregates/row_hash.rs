@@ -302,13 +302,13 @@ impl GroupedHashAggregateStream {
         let aggregate_arguments = aggregates::aggregate_expressions(
             &agg.aggr_expr,
             &agg.mode,
-            agg_group_by.expr.len(),
+            agg_group_by.expr.len() + 1, // +1 for hash values
         )?;
         // arguments for aggregating spilled data is the same as the one for final aggregation
         let merging_aggregate_arguments = aggregates::aggregate_expressions(
             &agg.aggr_expr,
             &AggregateMode::Final,
-            agg_group_by.expr.len(),
+            agg_group_by.expr.len() + 1,
         )?;
 
         let filter_expressions = match agg.mode {
@@ -537,6 +537,13 @@ impl GroupedHashAggregateStream {
             evaluate_many(&self.aggregate_arguments, &batch)?
         };
 
+        let hash_values = batch.column_by_name("hash_value");
+
+        // println!("group_by_values: {:?}", group_by_values);
+        // println!("input_values: {:?}", input_values);
+        // println!("self.aggregate_arguments: {:?}", self.aggregate_arguments);
+        // println!("batcj:{:?}", batch);
+
         // Evaluate the filter expressions, if any, against the inputs
         let filter_values = if self.spill_state.is_stream_merging {
             let filter_expressions = vec![None; self.accumulators.len()];
@@ -548,9 +555,16 @@ impl GroupedHashAggregateStream {
         for group_values in &group_by_values {
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
+
+            // println!("mode: {:?}", self.mode);
+            // println!("group_values: {:?}", group_values);
+
             self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
+                .intern(group_values, &mut self.current_group_indices, hash_values)?;
             let group_indices = &self.current_group_indices;
+            // println!("arr: {:?}", group_values);
+            // println!("group_indices: {:?}", group_indices);
+            // println!("starting_num_groups: {:?} self.group_values.len(): {:?}", starting_num_groups, self.group_values.len());
 
             // Update ordering information if necessary
             let total_num_groups = self.group_values.len();
@@ -633,8 +647,10 @@ impl GroupedHashAggregateStream {
         if self.group_values.is_empty() {
             return Ok(RecordBatch::new_empty(schema));
         }
+        // println!("schema: {:?}", schema);
 
         let mut output = self.group_values.emit(emit_to)?;
+        // println!("output: {:?}", output);
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
         }
@@ -658,6 +674,7 @@ impl GroupedHashAggregateStream {
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
+        // println!("final output: {:?}", output);
         let batch = RecordBatch::try_new(schema, output)?;
         Ok(batch)
     }

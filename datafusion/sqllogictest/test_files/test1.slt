@@ -1,0 +1,32 @@
+statement ok
+CREATE EXTERNAL TABLE hits
+STORED AS PARQUET
+LOCATION '../core/tests/data/clickbench_hits_10.parquet';
+
+query ITI
+SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
+----
+376160620089546609 (empty) 16841629782096518909 1
+7418527520126366595 (empty) 13953252326272321372 1
+-2461439046089301801 (empty) 5312241681679389548 5
+519640690937130534 (empty) 3658907435562510249 2
+427738049800818189 (empty) 2196488280597824415 1
+
+query TT
+explain SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
+----
+logical_plan
+01)Limit: skip=0, fetch=10
+02)--Sort: count(*) DESC NULLS FIRST, fetch=10
+03)----Aggregate: groupBy=[[hits.UserID, hits.SearchPhrase]], aggr=[[count(Int64(1)) AS count(*)]]
+04)------TableScan: hits projection=[UserID, SearchPhrase]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=10
+02)--SortPreservingMergeExec: [count(*)@2 DESC], fetch=10
+03)----SortExec: TopK(fetch=10), expr=[count(*)@2 DESC], preserve_partitioning=[true]
+04)------AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(*)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([UserID@0, SearchPhrase@1], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(*)]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase]
