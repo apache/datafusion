@@ -29,7 +29,6 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
@@ -38,8 +37,8 @@ use crate::sorts::streaming_merge;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{ArrayRef, AsArray, UInt64Builder};
+use arrow::datatypes::{SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::transpose;
 use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
@@ -269,18 +268,36 @@ impl BatchPartitioner {
                         .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
                         .collect::<Result<Vec<_>>>()?;
 
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
-
-                    create_hashes(&arrays, random_state, hash_buffer)?;
+                    // hash_buffer.clear();
+                    // hash_buffer.resize(batch.num_rows(), 0);
 
                     let mut indices: Vec<_> = (0..*partitions)
-                        .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
-                        .collect();
+                    .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
+                    .collect();
 
-                    for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize]
-                            .append_value(index as u64);
+                    let hash_values = batch.column_by_name("hash_value");
+                    if let Some(hash_values) = hash_values {
+                        let hash_array = hash_values.as_primitive::<UInt64Type>();
+                        for (index, hash) in hash_array.iter().enumerate() {
+                            let hash = hash.unwrap();
+                            indices[(hash % *partitions as u64) as usize]
+                                .append_value(index as u64);
+                        }
+
+                        // let hash_values: Vec<u64> = hash_array.clone().values().clone().into();
+                        // for (index, hash) in hash_values.iter().enumerate() {
+                        //     indices[(*hash % *partitions as u64) as usize]
+                        //         .append_value(index as u64);
+                        // }
+                    } else {
+                        unreachable!("something wrongs");
+                        // hash_buffer.clear();
+                        // hash_buffer.resize(batch.num_rows(), 0);
+                        // create_hashes(&arrays, random_state, hash_buffer)?;
+                        // for (index, hash) in hash_buffer.iter().enumerate() {
+                        //     indices[(*hash % *partitions as u64) as usize]
+                        //         .append_value(index as u64);
+                        // }
                     }
 
                     // Finished building index-arrays for output partitions
