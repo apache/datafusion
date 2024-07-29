@@ -494,12 +494,14 @@ mod tests {
         // using the previously set sizes for other consumers
         let mut r5 = MemoryConsumer::new("r5").register(&pool);
         let expected = "Failed to allocate additional 150 bytes for r5 with 0 bytes already allocated - maximum available is 5. The top memory consumers (across reservations) are: r1 consumed 50 bytes, r3 consumed 20 bytes, r2 consumed 15 bytes";
+        let res = r5.try_grow(150);
         assert!(
             matches!(
-                r5.try_grow(150),
-                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+                &res,
+                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
             ),
-            "should provide list of top memory consumers"
+            "should provide list of top memory consumers, instead found {:?}",
+            res
         );
     }
 
@@ -515,12 +517,13 @@ mod tests {
         // Test: see error message when no consumers recorded yet
         let mut r0 = MemoryConsumer::new(same_name).register(&pool);
         let expected = "Failed to allocate additional 150 bytes for foo with 0 bytes already allocated - maximum available is 100. The top memory consumers (across reservations) are: foo consumed 0 bytes";
+        let res = r0.try_grow(150);
         assert!(
             matches!(
-                r0.try_grow(150),
-                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+                &res,
+                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
             ),
-            "should provide proper error when no reservations have been made yet"
+            "should provide proper error when no reservations have been made yet, instead found {:?}", res
         );
 
         // API: multiple registrations using the same hashed consumer,
@@ -533,23 +536,25 @@ mod tests {
         // TODO: the insufficient_capacity_err() message is per reservation, not per consumer.
         // a followup PR will clarify this message "0 bytes already allocated for this reservation"
         let expected = "Failed to allocate additional 150 bytes for foo with 0 bytes already allocated - maximum available is 90. The top memory consumers (across reservations) are: foo consumed 10 bytes";
+        let res = r1.try_grow(150);
         assert!(
             matches!(
-                r1.try_grow(150),
-                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+                &res,
+                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
             ),
-            "should provide proper error with same hashed consumer (a single foo=10 bytes, available=90)"
+            "should provide proper error with same hashed consumer (a single foo=10 bytes, available=90), instead found {:?}", res
         );
 
         // Test: will accumulate size changes per consumer, not per reservation
         r1.grow(20);
         let expected = "Failed to allocate additional 150 bytes for foo with 20 bytes already allocated - maximum available is 70. The top memory consumers (across reservations) are: foo consumed 30 bytes";
+        let res = r1.try_grow(150);
         assert!(
             matches!(
-                r1.try_grow(150),
-                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+                &res,
+                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
             ),
-            "should provide proper error with same hashed consumer (a single foo=30 bytes, available=70)"
+            "should provide proper error with same hashed consumer (a single foo=30 bytes, available=70), instead found {:?}", res
         );
 
         // Test: different hashed consumer, (even with the same name),
@@ -558,12 +563,13 @@ mod tests {
             MemoryConsumer::new(same_name).with_can_spill(true);
         let mut r2 = consumer_with_same_name_but_different_hash.register(&pool);
         let expected = "Failed to allocate additional 150 bytes for foo with 0 bytes already allocated - maximum available is 70. The top memory consumers (across reservations) are: foo(can_spill=false) consumed 30 bytes, foo(can_spill=true) consumed 0 bytes";
+        let res = r2.try_grow(150);
         assert!(
             matches!(
-                r2.try_grow(150),
-                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+                &res,
+                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
             ),
-            "should provide proper error with different hashed consumer (foo(can_spill=false)=30 bytes and foo(can_spill=true)=0 bytes, available=70)"
+            "should provide proper error with different hashed consumer (foo(can_spill=false)=30 bytes and foo(can_spill=true)=0 bytes, available=70), instead found {:?}", res
         );
     }
 
@@ -577,47 +583,52 @@ mod tests {
             let mut r1 = r1_consumer.clone().register(&pool);
             r1.grow(20);
             let expected = "Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated - maximum available is 70. The top memory consumers (across reservations) are: r1 consumed 20 bytes, r0 consumed 10 bytes";
+            let res = r0.try_grow(150);
             assert!(
                 matches!(
-                    r0.try_grow(150),
-                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected)
+                    &res,
+                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
                 ),
-                "should provide proper error with both consumers"
+                "should provide proper error with both consumers, instead found {:?}",
+                res
             );
 
             // Test: unregister one
             // only the remaining one should be listed
             pool.unregister(&r1_consumer);
             let expected_consumers = "The top memory consumers (across reservations) are: r0 consumed 10 bytes";
+            let res = r0.try_grow(150);
             assert!(
                 matches!(
-                    r0.try_grow(150),
-                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected_consumers)
+                    &res,
+                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected_consumers)
                 ),
-                "should provide proper error with only 1 consumer left registered"
+                "should provide proper error with only 1 consumer left registered, instead found {:?}", res
             );
 
             // Test: actual message we see is the `available is 70`. When it should be `available is 90`.
             // This is because the pool.shrink() does not automatically occur within the inner_pool.deregister().
             let expected_70_available = "Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated - maximum available is 70.";
+            let res = r0.try_grow(150);
             assert!(
                 matches!(
-                    r0.try_grow(150),
-                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected_70_available)
+                    &res,
+                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected_70_available)
                 ),
-                "inner pool will still count all bytes for the deregistered consumer, until the reservation is dropped"
+                "should find that the inner pool will still count all bytes for the deregistered consumer until the reservation is dropped, instead found {:?}", res
             );
 
             // Test: the registration needs to free itself (or be dropped),
             // for the proper error message
             r1.free();
             let expected_90_available = "Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated - maximum available is 90.";
+            let res = r0.try_grow(150);
             assert!(
                 matches!(
-                    r0.try_grow(150),
-                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected_90_available)
+                    &res,
+                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected_90_available)
                 ),
-                "after reservation is free, the inner pool should correctly account the total bytes"
+                "should correctly account the total bytes after reservation is free, instead found {:?}", res
             );
         }
 
