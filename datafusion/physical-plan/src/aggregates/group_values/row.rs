@@ -26,7 +26,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::{Array, ArrayRef, StringViewArray};
 use arrow_schema::{DataType, SchemaRef};
-// use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::hash_utils::{combine_hashes, create_hashes};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::RawTableAllocExt;
 use datafusion_expr::EmitTo;
@@ -81,6 +81,11 @@ pub struct GroupValuesRows {
     /// [`Row`]: arrow::row::Row
     group_values: Option<Rows>,
 
+    /// reused buffer to store hashes
+    final_hash_buffer: Vec<u64>,
+
+    tmp_hash_buffer: Vec<u64>,
+
     /// reused buffer to store rows
     rows_buffer: Rows,
 
@@ -121,6 +126,8 @@ impl GroupValuesRows {
             map,
             map_size: 0,
             group_values: None,
+            final_hash_buffer: Default::default(),
+            tmp_hash_buffer: Default::default(),
             rows_buffer,
             var_len_map,
             random_state: Default::default(),
@@ -128,14 +135,25 @@ impl GroupValuesRows {
     }
 
     fn transform_col_to_fixed_len(&mut self, input: &[ArrayRef]) -> Vec<ArrayRef> {
+        let n_rows = input[0].len();
+        // 1.1 Calculate the group keys for the group values
+        let final_hash_buffer = &mut self.final_hash_buffer;
+        final_hash_buffer.clear();
+        final_hash_buffer.resize(n_rows, 0);
+        let tmp_hash_buffer = &mut self.tmp_hash_buffer;
+        tmp_hash_buffer.clear();
+        tmp_hash_buffer.resize(n_rows, 0);
+
         let mut cur_var_len_idx = 0;
         let transformed_cols: Vec<ArrayRef> = input
             .iter()
             .map(|c| {
                 if let DataType::Utf8View = c.data_type() {
+                    create_hashes(&[Arc::clone(c)], &self.random_state, tmp_hash_buffer)
+                        .unwrap();
                     let mut var_groups = Vec::with_capacity(c.len());
                     let group_values = &mut self.var_len_map[cur_var_len_idx];
-                    group_values.map.insert_if_new(
+                    group_values.map.insert_if_new_with_hash(
                         c,
                         |_value| {
                             let group_idx = group_values.num_groups;
@@ -145,12 +163,27 @@ impl GroupValuesRows {
                         |group_idx| {
                             var_groups.push(group_idx);
                         },
+                        tmp_hash_buffer,
                     );
                     cur_var_len_idx += 1;
+                    final_hash_buffer
+                        .iter_mut()
+                        .zip(tmp_hash_buffer.iter())
+                        .for_each(|(result, tmp)| {
+                            *result = combine_hashes(*result, *tmp);
+                        });
                     std::sync::Arc::new(arrow_array::UInt32Array::from(var_groups))
                         as ArrayRef
                 } else {
-                    c.clone()
+                    create_hashes(&[Arc::clone(c)], &self.random_state, tmp_hash_buffer)
+                        .unwrap();
+                    final_hash_buffer
+                        .iter_mut()
+                        .zip(tmp_hash_buffer.iter())
+                        .for_each(|(result, tmp)| {
+                            *result = combine_hashes(*result, *tmp);
+                        });
+                    Arc::clone(c)
                 }
             })
             .collect();
@@ -186,7 +219,7 @@ impl GroupValuesRows {
                         StringViewArray::new_unchecked(
                             views.into(),
                             map_content.data_buffers().to_vec(),
-                            map_content.nulls().map(|v| v.clone()),
+                            map_content.nulls().cloned(),
                         )
                     };
                     cur_var_len_idx += 1;
@@ -216,14 +249,12 @@ impl GroupValues for GroupValuesRows {
         // tracks to which group each of the input rows belongs
         groups.clear();
 
-        for row in group_rows.iter() {
-            let hash = self.random_state.hash_one(row.as_ref());
-            let entry = self.map.get_mut(hash, |(_hash, group_idx)| {
+        for (row, hash) in group_rows.iter().zip(self.final_hash_buffer.iter()) {
+            let entry = self.map.get_mut(*hash, |(_hash, group_idx)| {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
-                row.as_ref().len() == group_values.row(*group_idx).as_ref().len()
-                    && row == group_values.row(*group_idx)
+                row == group_values.row(*group_idx)
             });
             let group_idx = match entry {
                 // Existing group_index for this group value
@@ -236,7 +267,7 @@ impl GroupValues for GroupValuesRows {
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
-                        (hash, group_idx),
+                        (*hash, group_idx),
                         |(hash, _group_index)| *hash,
                         &mut self.map_size,
                     );
