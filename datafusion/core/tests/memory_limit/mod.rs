@@ -243,17 +243,18 @@ async fn sort_preserving_merge() {
             // SortPreservingMergeExec (not a Sort which would compete
             // with the SortPreservingMergeExec for memory)
             &[
-                "+---------------+-------------------------------------------------------------------------------------------------------------+",
-                "| plan_type     | plan                                                                                                        |",
-                "+---------------+-------------------------------------------------------------------------------------------------------------+",
-                "| logical_plan  | Limit: skip=0, fetch=10                                                                                     |",
-                "|               |   Sort: t.a ASC NULLS LAST, t.b ASC NULLS LAST, fetch=10                                                    |",
-                "|               |     TableScan: t projection=[a, b]                                                                          |",
-                "| physical_plan | GlobalLimitExec: skip=0, fetch=10                                                                           |",
-                "|               |   SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10                                |",
-                "|               |     MemoryExec: partitions=2, partition_sizes=[5, 5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
-                "|               |                                                                                                             |",
-                "+---------------+-------------------------------------------------------------------------------------------------------------+",
+                "+---------------+---------------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                          |",
+                "+---------------+---------------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Limit: skip=0, fetch=10                                                                                       |",
+                "|               |   Sort: t.a ASC NULLS LAST, t.b ASC NULLS LAST, fetch=10                                                      |",
+                "|               |     TableScan: t projection=[a, b]                                                                            |",
+                "| physical_plan | GlobalLimitExec: skip=0, fetch=10                                                                             |",
+                "|               |   SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10                                  |",
+                "|               |     LocalLimitExec: fetch=10                                                                                  |",
+                "|               |       MemoryExec: partitions=2, partition_sizes=[5, 5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
+                "|               |                                                                                                               |",
+                "+---------------+---------------------------------------------------------------------------------------------------------------+",
             ]
         )
         .run()

@@ -51,6 +51,11 @@ message ParquetFormat {
 
 message AvroFormat {}
 
+message NdJsonFormat {
+  JsonOptions options = 1;
+}
+
+
 message PrimaryKeyConstraint{
   repeated uint64 indices = 1;
 }

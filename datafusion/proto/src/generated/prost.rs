@@ -118,7 +118,7 @@ pub struct ListingTableScanNode {
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
-    #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12")]
+    #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12, 15")]
     pub file_format_type: ::core::option::Option<
         listing_table_scan_node::FileFormatType,
     >,
@@ -134,6 +134,8 @@ pub mod listing_table_scan_node {
         Parquet(super::super::datafusion_common::ParquetFormat),
         #[prost(message, tag = "12")]
         Avro(super::super::datafusion_common::AvroFormat),
+        #[prost(message, tag = "15")]
+        Json(super::super::datafusion_common::NdJsonFormat),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]

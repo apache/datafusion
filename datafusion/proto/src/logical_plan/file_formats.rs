@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use datafusion::{
-    config::CsvOptions,
+    config::{CsvOptions, JsonOptions},
     datasource::file_format::{
         arrow::ArrowFormatFactory, csv::CsvFormatFactory, json::JsonFormatFactory,
         parquet::ParquetFormatFactory, FileFormatFactory,
@@ -31,7 +31,7 @@ use datafusion_common::{
 };
 use prost::Message;
 
-use crate::protobuf::CsvOptions as CsvOptionsProto;
+use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
 
 use super::LogicalExtensionCodec;
 
@@ -222,6 +222,34 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
     }
 }
 
+impl JsonOptionsProto {
+    fn from_factory(factory: &JsonFormatFactory) -> Self {
+        if let Some(options) = &factory.options {
+            JsonOptionsProto {
+                compression: options.compression as i32,
+                schema_infer_max_rec: options.schema_infer_max_rec as u64,
+            }
+        } else {
+            JsonOptionsProto::default()
+        }
+    }
+}
+
+impl From<&JsonOptionsProto> for JsonOptions {
+    fn from(proto: &JsonOptionsProto) -> Self {
+        JsonOptions {
+            compression: match proto.compression {
+                0 => CompressionTypeVariant::GZIP,
+                1 => CompressionTypeVariant::BZIP2,
+                2 => CompressionTypeVariant::XZ,
+                3 => CompressionTypeVariant::ZSTD,
+                _ => CompressionTypeVariant::UNCOMPRESSED,
+            },
+            schema_infer_max_rec: proto.schema_infer_max_rec as usize,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct JsonLogicalExtensionCodec;
 
@@ -267,17 +295,44 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
 
     fn try_decode_file_format(
         &self,
-        __buf: &[u8],
-        __ctx: &SessionContext,
+        buf: &[u8],
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
-        Ok(Arc::new(JsonFormatFactory::new()))
+        let proto = JsonOptionsProto::decode(buf).map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Failed to decode JsonOptionsProto: {:?}",
+                e
+            ))
+        })?;
+        let options: JsonOptions = (&proto).into();
+        Ok(Arc::new(JsonFormatFactory {
+            options: Some(options),
+        }))
     }
 
     fn try_encode_file_format(
         &self,
-        __buf: &mut Vec<u8>,
-        __node: Arc<dyn FileFormatFactory>,
+        buf: &mut Vec<u8>,
+        node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
+        let options = if let Some(json_factory) =
+            node.as_any().downcast_ref::<JsonFormatFactory>()
+        {
+            json_factory.options.clone().unwrap_or_default()
+        } else {
+            return Err(DataFusionError::Execution(
+                "Unsupported FileFormatFactory type".to_string(),
+            ));
+        };
+
+        let proto = JsonOptionsProto::from_factory(&JsonFormatFactory {
+            options: Some(options),
+        });
+
+        proto.encode(buf).map_err(|e| {
+            DataFusionError::Execution(format!("Failed to encode JsonOptions: {:?}", e))
+        })?;
+
         Ok(())
     }
 }

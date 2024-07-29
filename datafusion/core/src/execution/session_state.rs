@@ -77,10 +77,23 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Execution context for registering data sources and executing queries.
-/// See [`SessionContext`] for a higher level API.
+/// `SessionState` contains all the necessary state to plan and execute queries,
+/// such as configuration, functions, and runtime environment. Please see the
+/// documentation on [`SessionContext`] for more information.
 ///
-/// Use the [`SessionStateBuilder`] to build a SessionState object.
+///
+/// # Example: `SessionState` from a [`SessionContext`]
+///
+/// ```
+/// use datafusion::prelude::*;
+/// let ctx = SessionContext::new();
+/// let state = ctx.state();
+/// ```
+///
+/// # Example: `SessionState` via [`SessionStateBuilder`]
+///
+/// You can also use [`SessionStateBuilder`] to build a `SessionState` object
+/// directly:
 ///
 /// ```
 /// use datafusion::prelude::*;

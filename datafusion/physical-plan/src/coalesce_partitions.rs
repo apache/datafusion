@@ -174,6 +174,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
     fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
     }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

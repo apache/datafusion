@@ -30,7 +30,7 @@ rust-version = "1.76"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "52.1.0" }
+arrow = { version = "52.2.0" }
 async-trait = "0.1.41"
 aws-config = "0.55"
 aws-credential-types = "0.55"
@@ -51,7 +51,7 @@ futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.10.1", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
-parquet = { version = "52.1.0", default-features = false }
+parquet = { version = "52.2.0", default-features = false }
 regex = "1.8"
 rustyline = "11.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
