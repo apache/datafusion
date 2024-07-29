@@ -420,7 +420,7 @@ impl<'a> ColOpLit<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::OnceLock;
+    use std::sync::LazyLock;
 
     use super::*;
     use crate::planner::logical2physical;
@@ -835,8 +835,7 @@ mod test {
     /// Tests that analyzing expr results in the expected guarantees
     fn test_analyze(expr: Expr, expected: Vec<LiteralGuarantee>) {
         println!("Begin analyze of {expr}");
-        let schema = schema();
-        let physical_expr = logical2physical(&expr, &schema);
+        let physical_expr = logical2physical(&expr, &SCHEMA);
 
         let actual = LiteralGuarantee::analyze(&physical_expr);
         assert_eq!(
@@ -869,15 +868,10 @@ mod test {
         LiteralGuarantee::try_new(column, Guarantee::NotIn, literals.iter()).unwrap()
     }
 
-    // Schema for testing
-    fn schema() -> SchemaRef {
-        Arc::clone(SCHEMA.get_or_init(|| {
-            Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Utf8, false),
-                Field::new("b", DataType::Int32, false),
-            ]))
-        }))
-    }
-
-    static SCHEMA: OnceLock<SchemaRef> = OnceLock::new();
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int32, false),
+        ]))
+    });
 }

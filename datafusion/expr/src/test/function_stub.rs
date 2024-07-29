@@ -20,6 +20,7 @@
 //! These are used to avoid a dependence on `datafusion-functions-aggregate` which live in a different crate
 
 use std::any::Any;
+use std::sync::{Arc, LazyLock};
 
 use arrow::datatypes::{
     DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
@@ -43,18 +44,13 @@ macro_rules! create_func {
             /// Singleton instance of [$UDAF], ensures the UDAF is only created once
             /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
             #[allow(non_upper_case_globals)]
-            static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<crate::AggregateUDF>> =
-            std::sync::OnceLock::new();
+            static [< STATIC_ $UDAF >]: LazyLock<Arc<crate::AggregateUDF>> = LazyLock::new(|| {
+                Arc::new(crate::AggregateUDF::from(<$UDAF>::default()))
+            });
 
-            /// AggregateFunction that returns a [AggregateUDF] for [$UDAF]
-            ///
-            /// [AggregateUDF]: crate::AggregateUDF
+            #[doc = concat!("AggregateFunction that returns a [AggregateUDF](crate::AggregateUDF) for [`", stringify!($UDAF), "`]")]
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<crate::AggregateUDF> {
-                [< STATIC_ $UDAF >]
-                    .get_or_init(|| {
-                        std::sync::Arc::new(crate::AggregateUDF::from(<$UDAF>::default()))
-                    })
-                    .clone()
+                [< STATIC_ $UDAF >].clone()
             }
         }
     }
