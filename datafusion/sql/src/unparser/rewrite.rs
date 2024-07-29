@@ -138,16 +138,24 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     let inner_exprs = inner_p
         .expr
         .iter()
-        .map(|f| {
-            if let Expr::Alias(alias) = f {
+        .enumerate()
+        .map(|(i, f)| match f {
+            Expr::Alias(alias) => {
                 let a = Expr::Column(alias.name.clone().into());
                 map.insert(a.clone(), f.clone());
                 a
-            } else {
-                // inner expr may have different type to outer expr: e.g. a + 1 is a column of
-                // string in outer, but a expr of math in inner
-                map.insert(Expr::Column(f.to_string().into()), f.clone());
+            }
+            Expr::Column(_) => {
+                map.insert(
+                    Expr::Column(inner_p.schema.field(i).name().into()),
+                    f.clone(),
+                );
                 f.clone()
+            }
+            _ => {
+                let a = Expr::Column(inner_p.schema.field(i).name().into());
+                map.insert(a.clone(), f.clone());
+                a
             }
         })
         .collect::<Vec<_>>();
@@ -159,8 +167,10 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         }
     }
 
-    // inner expr may have different type to outer expr: e.g. a + 1 is a column of
-    // string in outer, but a expr of math in inner
+    // Compare outer collects Expr::to_string with inner collected transformed values
+    // alias -> alias column
+    // column -> remain
+    // others, extract schema field name
     let outer_collects = collects.iter().map(Expr::to_string).collect::<HashSet<_>>();
     let inner_collects = inner_exprs
         .iter()
@@ -236,11 +246,14 @@ pub(super) fn subquery_alias_inner_query_and_columns(
             return (plan, vec![]);
         };
 
-        let expr = outer_alias.expr.clone();
+        // inner projection schema fields store the projection name which is used in outer
+        // projection expr
+        let inner_expr_string = match inner_expr {
+            Expr::Column(_) => inner_expr.to_string(),
+            _ => inner_projection.schema.field(i).name().clone(),
+        };
 
-        // inner expr may have different type to outer expr: e.g. a + 1 is a column of
-        // string in outer, but a expr of math in inner
-        if expr.to_string() != inner_expr.to_string() {
+        if outer_alias.expr.to_string() != inner_expr_string {
             return (plan, vec![]);
         };
 
