@@ -122,9 +122,10 @@ fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Array(rhs)) => {
             let lhs_s = lhs.to_scalar()?;
+            let lhs_a = lhs.to_array_of_size(rhs.len())?;
             let array = nullif(
                 // nullif in arrow-select dodes not support Datum, so we need to convert to array
-                lhs.to_array_of_size(rhs.len())?.as_ref(),
+                lhs_a.as_ref(),
                 &eq(&lhs_s, &rhs)?,
             )?;
             Ok(ColumnarValue::Array(array))
