@@ -33,7 +33,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Array(array),
         ];
         c.bench_function(&format!("nullif scalar array: {}", size), |b| {
-            b.iter(|| black_box(nullif.invoke(&args)))
+            b.iter(|| black_box(nullif.invoke(&args).unwrap()))
         });
     }
 }
