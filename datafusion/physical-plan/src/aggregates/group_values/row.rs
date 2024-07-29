@@ -131,6 +131,7 @@ impl GroupValues for GroupValuesRows {
         // tracks to which group each of the input rows belongs
         groups.clear();
 
+        // let hash_values: Option<&ArrayRef> = None;
         if let Some(hash_values) = hash_values {
             let hash_array = hash_values.as_primitive::<UInt64Type>();
             for (row, hash) in hash_array.iter().enumerate() {
@@ -145,6 +146,7 @@ impl GroupValues for GroupValuesRows {
                 let group_idx = match entry {
                     // Existing group_index for this group value
                     Some((_hash, group_idx)) => {
+                        // println!("existing group: {:?}", *group_idx);
                         *group_idx
                     }
                     //  1.2 Need to create new entry for the group
@@ -160,6 +162,7 @@ impl GroupValues for GroupValuesRows {
                             |(hash, _group_index)| *hash,
                             &mut self.map_size,
                         );
+                        // println!("new group: {:?}", group_idx);
                         group_idx
                     }
                 };
