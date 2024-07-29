@@ -1786,7 +1786,7 @@ mod tests {
             DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into())),
             DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
             Operator::Eq,
-            DataType::Timestamp(TimeUnit::Second, utc.clone())
+            DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()))
         );
 
         // TODO add other data type
