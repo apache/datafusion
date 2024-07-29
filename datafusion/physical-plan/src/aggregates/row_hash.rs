@@ -537,7 +537,9 @@ impl GroupedHashAggregateStream {
             evaluate_many(&self.aggregate_arguments, &batch)?
         };
 
+        // println!("batch: {:?}", batch);
         let hash_values = batch.column_by_name("hash_value");
+        // let hash_values = Some(batch.column(2));
 
         // println!("group_by_values: {:?}", group_by_values);
         // println!("input_values: {:?}", input_values);

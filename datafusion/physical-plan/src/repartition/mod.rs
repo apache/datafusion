@@ -276,8 +276,8 @@ impl BatchPartitioner {
                         .collect();
 
                     // println!("batch: {:?}", batch);
-                    // let hash_values = batch.column_by_name("hash_value");
-                    let hash_values = batch.column(2).as_primitive::<UInt64Type>();
+                    let hash_values = batch.column_by_name("hash_value").unwrap().as_primitive::<UInt64Type>();
+                    // let hash_values = batch.column(2).as_primitive::<UInt64Type>();
                     for (index, hash) in hash_values.iter().enumerate() {
                         let hash = hash.unwrap();
                         indices[(hash % *partitions as u64) as usize]
