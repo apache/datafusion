@@ -37,8 +37,8 @@ use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
 
-use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 
 /// `CoalesceBatchesExec` combines small batches into larger batches for more
 /// efficient use of vectorized processing by later operators. The operator
@@ -401,10 +401,10 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_array::{StringViewArray, UInt32Array};
     use arrow_array::builder::ArrayBuilder;
+    use arrow_array::{StringViewArray, UInt32Array};
 
-    use crate::{memory::MemoryExec, Partitioning, repartition::RepartitionExec};
+    use crate::{memory::MemoryExec, repartition::RepartitionExec, Partitioning};
 
     use super::*;
 
