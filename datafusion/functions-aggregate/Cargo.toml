@@ -50,4 +50,14 @@ paste = "1.0.14"
 sqlparser = { workspace = true }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
+criterion = "0.5"
 rand = { workspace = true }
+
+[[bench]]
+name = "count"
+harness = false
+
+[[bench]]
+name = "sum"
+harness = false
