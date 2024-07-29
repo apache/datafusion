@@ -1121,9 +1121,7 @@ logical_plan
 01)Limit: skip=0, fetch=5
 02)--Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
 03)----TableScan: annotated_data_finite2 projection=[a]
-physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], limit=5, output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 query I
 SELECT a FROM annotated_data_finite2

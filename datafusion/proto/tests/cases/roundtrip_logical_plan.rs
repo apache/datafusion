@@ -23,6 +23,8 @@ use arrow::datatypes::{
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
     DECIMAL256_MAX_PRECISION,
 };
+use datafusion::datasource::file_format::json::JsonFormatFactory;
+use datafusion_common::parsers::CompressionTypeVariant;
 use prost::Message;
 use std::any::Any;
 use std::collections::HashMap;
@@ -74,7 +76,8 @@ use datafusion_proto::bytes::{
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
 use datafusion_proto::logical_plan::file_formats::{
-    ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, ParquetLogicalExtensionCodec,
+    ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, JsonLogicalExtensionCodec,
+    ParquetLogicalExtensionCodec,
 };
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::{
@@ -507,9 +510,88 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Assume create_json_scan creates a logical plan for scanning a JSON file
+    let input = create_json_scan(&ctx).await?;
+
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut json_format = table_options.json;
+
+    // Set specific JSON format options
+    json_format.compression = CompressionTypeVariant::GZIP;
+    json_format.schema_infer_max_rec = 1000;
+
+    let file_type = format_as_file_type(Arc::new(JsonFormatFactory::new_with_options(
+        json_format.clone(),
+    )));
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.json".to_string(),
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        file_type,
+        options: Default::default(),
+    });
+
+    // Assume JsonLogicalExtensionCodec is implemented similarly to CsvLogicalExtensionCodec
+    let codec = JsonLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.json", copy_to.output_url);
+            assert_eq!("json".to_string(), copy_to.file_type.get_ext());
+            assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
+
+            let file_type = copy_to
+                .file_type
+                .as_ref()
+                .as_any()
+                .downcast_ref::<DefaultFileType>()
+                .unwrap();
+
+            let format_factory = file_type.as_format_factory();
+            let json_factory = format_factory
+                .as_ref()
+                .as_any()
+                .downcast_ref::<JsonFormatFactory>()
+                .unwrap();
+            let json_config = json_factory.options.as_ref().unwrap();
+            assert_eq!(json_format.compression, json_config.compression);
+            assert_eq!(
+                json_format.schema_infer_max_rec,
+                json_config.schema_infer_max_rec
+            );
+        }
+        _ => panic!(),
+    }
+
+    Ok(())
+}
+
 async fn create_csv_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
+
+    let input = ctx.table("t1").await?.into_optimized_plan()?;
+    Ok(input)
+}
+
+async fn create_json_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
+    ctx.register_json(
+        "t1",
+        "../core/tests/data/1.json",
+        NdJsonReadOptions::default(),
+    )
+    .await?;
 
     let input = ctx.table("t1").await?.into_optimized_plan()?;
     Ok(input)
