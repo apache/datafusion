@@ -652,8 +652,10 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
                 Ok((name.clone(), data_type))
             })
             .collect::<Result<Vec<_>>>()?;
+        let object_store_url = url::Url::parse(&conf.object_store_url)
+            .map_err(|e| DataFusionError::Internal(format!("{e}")))?;
         Ok(Self {
-            object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
+            object_store_url: object_store_url,
             file_groups,
             table_paths,
             output_schema: Arc::new(convert_required!(conf.output_schema)?),

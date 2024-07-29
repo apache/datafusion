@@ -718,7 +718,8 @@ impl DataSink for ParquetSink {
 
         let object_store = context
             .runtime_env()
-            .object_store(&self.config.object_store_url)?;
+            .object_store_registry
+            .get_store(&self.config.object_store_url)?;
 
         let parquet_opts = &self.parquet_options;
         let allow_single_file_parallelism =
@@ -2064,7 +2065,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
 
         let file_sink_config = FileSinkConfig {
-            object_store_url: object_store_url.clone(),
+            object_store_url: AsRef::<url::Url>::as_ref(&object_store_url).clone(),
             file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
             table_paths: vec![ListingTableUrl::parse("file:///")?],
             output_schema: schema.clone(),
@@ -2159,7 +2160,7 @@ mod tests {
 
         // set file config to include partitioning on field_a
         let file_sink_config = FileSinkConfig {
-            object_store_url: object_store_url.clone(),
+            object_store_url: AsRef::<url::Url>::as_ref(&object_store_url).clone(),
             file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
             table_paths: vec![ListingTableUrl::parse("file:///")?],
             output_schema: schema.clone(),
@@ -2242,7 +2243,7 @@ mod tests {
             let object_store_url = ObjectStoreUrl::local_filesystem();
 
             let file_sink_config = FileSinkConfig {
-                object_store_url: object_store_url.clone(),
+                object_store_url: AsRef::<url::Url>::as_ref(&object_store_url).clone(),
                 file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
                 table_paths: vec![ListingTableUrl::parse("file:///")?],
                 output_schema: schema.clone(),

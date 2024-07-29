@@ -267,7 +267,8 @@ impl DataSink for ArrowFileSink {
     ) -> Result<u64> {
         let object_store = context
             .runtime_env()
-            .object_store(&self.config.object_store_url)?;
+            .object_store_registry
+            .get_store(&self.config.object_store_url)?;
 
         let part_col = if !self.config.table_partition_cols.is_empty() {
             Some(self.config.table_partition_cols.clone())
