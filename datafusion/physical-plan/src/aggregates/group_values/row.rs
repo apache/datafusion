@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::AggregateMode;
 use ahash::RandomState;
 use arrow::array::AsArray;
 use arrow::compute::cast;
@@ -105,7 +106,12 @@ impl GroupValuesRows {
 }
 
 impl GroupValues for GroupValuesRows {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>, hash_values: Option<&ArrayRef>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hash_values: Option<&ArrayRef>,
+    ) -> Result<()> {
         // Convert the group keys into the row format
         let group_rows = &mut self.rows_buffer;
         group_rows.clear();
@@ -119,7 +125,7 @@ impl GroupValues for GroupValuesRows {
 
         let mut store_gp_hashes = match self.group_hashes.take() {
             Some(group_hashes) => group_hashes,
-            None => vec![]
+            None => vec![],
         };
 
         // tracks to which group each of the input rows belongs
@@ -194,19 +200,25 @@ impl GroupValues for GroupValuesRows {
             .unwrap_or(0)
     }
 
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+    fn emit(&mut self, emit_to: EmitTo, mode: AggregateMode) -> Result<Vec<ArrayRef>> {
         let mut group_values = self
             .group_values
             .take()
             .expect("Can not emit from empty rows");
 
-        let group_hashes = self.group_hashes.take().expect("Can not emit from empty rows");
+        let group_hashes = self
+            .group_hashes
+            .take()
+            .expect("Can not emit from empty rows");
 
+        // println!("emit_to: {:?}", emit_to);
         let mut output = match emit_to {
             EmitTo::All => {
                 let mut output = self.row_converter.convert_rows(&group_values)?;
-                let arr = Arc::new(UInt64Array::from(group_hashes)) as ArrayRef;
-                output.push(arr);
+                if mode == AggregateMode::Partial {
+                    let arr = Arc::new(UInt64Array::from(group_hashes)) as ArrayRef;
+                    output.push(arr);
+                }
                 group_values.clear();
                 output
             }

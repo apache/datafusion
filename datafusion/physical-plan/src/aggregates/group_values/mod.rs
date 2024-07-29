@@ -31,10 +31,17 @@ mod bytes;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
+use super::AggregateMode;
+
 /// An interning store for group keys
 pub trait GroupValues: Send {
     /// Calculates the `groups` for each input row of `cols`
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>, hash_values: Option<&ArrayRef>) -> Result<()>;
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        hash_values: Option<&ArrayRef>,
+    ) -> Result<()>;
 
     /// Returns the number of bytes used by this [`GroupValues`]
     fn size(&self) -> usize;
@@ -46,7 +53,7 @@ pub trait GroupValues: Send {
     fn len(&self) -> usize;
 
     /// Emits the group values
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+    fn emit(&mut self, emit_to: EmitTo, mode: AggregateMode) -> Result<Vec<ArrayRef>>;
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, batch: &RecordBatch);

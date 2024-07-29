@@ -311,6 +311,10 @@ impl AggregateExec {
             mode,
         )?;
 
+        // println!("mode: {:?}", mode);
+        // println!("schema: {:?}", schema);
+        // println!("input_schema: {:?}", input_schema);
+
         let schema = Arc::new(schema);
         AggregateExec::try_new_with_schema(
             mode,
@@ -796,11 +800,13 @@ fn create_schema(
         ))
     }
 
-    // Hash values
-    fields.push(Field::new("hash_value", DataType::UInt64, true));
-
     match mode {
         AggregateMode::Partial => {
+            if !group_expr.is_empty() {
+                // Hash values
+                fields.push(Field::new("hash_value", DataType::UInt64, true));
+            }
+
             // in partial mode, the fields of the accumulator's state
             for expr in aggr_expr {
                 fields.extend(expr.state_fields()?.iter().cloned())

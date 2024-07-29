@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::{group_values::GroupValues, AggregateMode};
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
@@ -45,7 +45,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
-        _hash_values: Option<&ArrayRef>
+        _hash_values: Option<&ArrayRef>,
     ) -> datafusion_common::Result<()> {
         assert_eq!(cols.len(), 1);
 
@@ -85,7 +85,11 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
         self.num_groups
     }
 
-    fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
+    fn emit(
+        &mut self,
+        emit_to: EmitTo,
+        _mode: AggregateMode,
+    ) -> datafusion_common::Result<Vec<ArrayRef>> {
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
 

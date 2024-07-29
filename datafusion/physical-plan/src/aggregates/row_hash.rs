@@ -559,8 +559,11 @@ impl GroupedHashAggregateStream {
             // println!("mode: {:?}", self.mode);
             // println!("group_values: {:?}", group_values);
 
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices, hash_values)?;
+            self.group_values.intern(
+                group_values,
+                &mut self.current_group_indices,
+                hash_values,
+            )?;
             let group_indices = &self.current_group_indices;
             // println!("arr: {:?}", group_values);
             // println!("group_indices: {:?}", group_indices);
@@ -649,8 +652,10 @@ impl GroupedHashAggregateStream {
         }
         // println!("schema: {:?}", schema);
 
-        let mut output = self.group_values.emit(emit_to)?;
-        // println!("output: {:?}", output);
+        let mut output = self.group_values.emit(emit_to, self.mode)?;
+        // if matches!(self.mode, AggregateMode::Partial) {
+        //     output.pop();
+        // }
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
         }
@@ -674,6 +679,7 @@ impl GroupedHashAggregateStream {
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
+        // println!("final schema: {:?}", schema);
         // println!("final output: {:?}", output);
         let batch = RecordBatch::try_new(schema, output)?;
         Ok(batch)
