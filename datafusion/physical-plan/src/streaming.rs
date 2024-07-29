@@ -264,6 +264,19 @@ impl ExecutionPlan for StreamingTableExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(StreamingTableExec {
+            partitions: self.partitions.clone(),
+            projection: self.projection.clone(),
+            projected_schema: Arc::clone(&self.projected_schema),
+            projected_output_ordering: self.projected_output_ordering.clone(),
+            infinite: self.infinite,
+            limit,
+            cache: self.cache.clone(),
+            metrics: self.metrics.clone(),
+        }))
+    }
 }
 
 #[cfg(test)]

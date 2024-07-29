@@ -62,8 +62,7 @@ jobs:
             ~/.cargo/git/db/
             ./target/
             ./datafusion-cli/target/
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-benchmark-${{ hashFiles('datafusion/**/Cargo.toml', 'benchmarks/Cargo.toml', 'datafusion-cli/Cargo.toml') }}
+          key: cargo-cache-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
 
       - name: Check datafusion without default features
         # Some of the test binaries require the parquet feature still

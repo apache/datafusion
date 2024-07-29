@@ -379,7 +379,7 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    use crate::config::{ColumnOptions, ParquetOptions};
+    use crate::config::{ParquetColumnOptions, ParquetOptions};
 
     use super::*;
 
@@ -388,8 +388,8 @@ mod tests {
     /// Take the column defaults provided in [`ParquetOptions`], and generate a non-default col config.
     fn column_options_with_non_defaults(
         src_col_defaults: &ParquetOptions,
-    ) -> ColumnOptions {
-        ColumnOptions {
+    ) -> ParquetColumnOptions {
+        ParquetColumnOptions {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
             statistics_enabled: Some("none".into()),
@@ -446,10 +446,10 @@ mod tests {
     fn extract_column_options(
         props: &WriterProperties,
         col: ColumnPath,
-    ) -> ColumnOptions {
+    ) -> ParquetColumnOptions {
         let bloom_filter_default_props = props.bloom_filter_properties(&col);
 
-        ColumnOptions {
+        ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
             encoding: props.encoding(&col).map(|s| s.to_string()),
             dictionary_enabled: Some(props.dictionary_enabled(&col)),

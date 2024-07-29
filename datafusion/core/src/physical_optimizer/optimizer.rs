@@ -28,6 +28,7 @@ use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAgg
 use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
 use crate::physical_optimizer::enforce_sorting::EnforceSorting;
 use crate::physical_optimizer::join_selection::JoinSelection;
+use crate::physical_optimizer::limit_pushdown::LimitPushdown;
 use crate::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::physical_optimizer::output_requirements::OutputRequirements;
 use crate::physical_optimizer::sanity_checker::SanityCheckPlan;
@@ -98,6 +99,10 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // The LimitPushdown rule tries to push limits down as far as possible,
+            // replacing operators with fetching variants, or adding limits
+            // past operators that support limit pushdown.
+            Arc::new(LimitPushdown::new()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query

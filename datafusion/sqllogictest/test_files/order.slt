@@ -1037,8 +1037,9 @@ physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--SortPreservingMergeExec: [c_bigint@0 ASC NULLS LAST], fetch=5
 03)----ProjectionExec: expr=[CAST(c@0 AS Int64) as c_bigint]
-04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+04)------LocalLimitExec: fetch=5
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
 
 statement ok
 drop table ordered_table; 
@@ -1111,8 +1112,9 @@ physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
 03)----ProjectionExec: expr=[abs(c@0) as abs_c]
-04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+04)------LocalLimitExec: fetch=5
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
 
 # Boolean to integer casts preserve the order.
 statement ok

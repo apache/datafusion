@@ -358,7 +358,7 @@ OPTIONS (
 )
 
 # errors for invalid property (not stating `format.metadata`)
-statement error DataFusion error: Invalid or Unsupported Configuration: Config value "wrong-metadata" not found on ColumnOptions
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "wrong-metadata" not found on ParquetColumnOptions
 COPY source_table
 TO 'test_files/scratch/copy/table_with_metadata/'
 STORED AS PARQUET
