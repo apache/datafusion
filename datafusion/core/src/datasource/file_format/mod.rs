@@ -42,6 +42,7 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
+use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
@@ -202,6 +203,28 @@ pub fn file_type_to_format(
         Some(source) => Ok(source.file_format_factory.clone()),
         _ => internal_err!("FileType was not DefaultFileType"),
     }
+}
+
+/// Transform a schema to use view types for Utf8 and Binary
+pub fn transform_schema_to_view(schema: &Schema) -> Schema {
+    let transformed_fields: Vec<Arc<Field>> = schema
+        .fields
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Utf8 | DataType::LargeUtf8 => Arc::new(Field::new(
+                field.name(),
+                DataType::Utf8View,
+                field.is_nullable(),
+            )),
+            DataType::Binary | DataType::LargeBinary => Arc::new(Field::new(
+                field.name(),
+                DataType::BinaryView,
+                field.is_nullable(),
+            )),
+            _ => field.clone(),
+        })
+        .collect();
+    Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
 }
 
 #[cfg(test)]

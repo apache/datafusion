@@ -16,6 +16,7 @@
 // under the License.
 
 use ahash::RandomState;
+use datafusion_physical_expr_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use std::collections::HashSet;
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};
@@ -234,6 +235,9 @@ impl AggregateUDFImpl for Count {
 
             DataType::Utf8 => {
                 Box::new(BytesDistinctCountAccumulator::<i32>::new(OutputType::Utf8))
+            }
+            DataType::Utf8View => {
+                Box::new(BytesViewDistinctCountAccumulator::new(OutputType::Utf8))
             }
             DataType::LargeUtf8 => {
                 Box::new(BytesDistinctCountAccumulator::<i64>::new(OutputType::Utf8))

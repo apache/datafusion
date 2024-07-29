@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
-use super::{FileFormat, FileFormatFactory, FileScanConfig};
+use super::{transform_schema_to_view, FileFormat, FileFormatFactory, FileScanConfig};
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -315,6 +315,17 @@ impl FileFormat for ParquetFormat {
         } else {
             Schema::try_merge(schemas)
         }?;
+
+        let schema = if state
+            .config_options()
+            .execution
+            .parquet
+            .schema_force_string_view
+        {
+            transform_schema_to_view(&schema)
+        } else {
+            schema
+        };
 
         Ok(Arc::new(schema))
     }
