@@ -1037,7 +1037,10 @@ fn is_time_with_valid_unit(datatype: DataType) -> bool {
 /// - If only one has a timezone, coerce the other to match
 /// - If both have a timezone, coerce to the left type
 /// - "UTC" and "+00:00" are considered equivalent
-fn temporal_coercion_nonstrict_timezone(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn temporal_coercion_nonstrict_timezone(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
     match (lhs_type, rhs_type) {
@@ -1048,7 +1051,7 @@ fn temporal_coercion_nonstrict_timezone(lhs_type: &DataType, rhs_type: &DataType
                         // UTC and "+00:00" are the same by definition. Most other timezones
                         // do not have a 1-1 mapping between timezone and an offset from UTC
                         ("UTC", "+00:00") | ("+00:00", "UTC") => Some(Arc::clone(lhs_tz)),
-                        (_lhs, _rhs) => Some(Arc::clone(lhs_tz))
+                        (_lhs, _rhs) => Some(Arc::clone(lhs_tz)),
                     }
                 }
                 (Some(lhs_tz), None) => Some(Arc::clone(lhs_tz)),
@@ -1067,7 +1070,10 @@ fn temporal_coercion_nonstrict_timezone(lhs_type: &DataType, rhs_type: &DataType
 /// Coercion rules for Temporal columns: the type that both lhs and rhs can be
 /// casted to for the purpose of a date computation
 /// For interval arithmetic, it doesn't handle datetime type +/- interval
-fn temporal_coercion_strict_timezone(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn temporal_coercion_strict_timezone(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
     match (lhs_type, rhs_type) {
@@ -1098,7 +1104,7 @@ fn temporal_coercion_strict_timezone(lhs_type: &DataType, rhs_type: &DataType) -
     }
 }
 
-fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>{
+fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     use arrow::datatypes::IntervalUnit::*;
     use arrow::datatypes::TimeUnit::*;
