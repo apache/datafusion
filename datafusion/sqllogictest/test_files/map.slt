@@ -203,13 +203,12 @@ create table t as values
 ('b', 2, 'k3', 30, ['k3'], [3]),
 ('d', 4, 'k5', 50, ['k5'], [5]);
 
-query error
+query ?
 SELECT make_map(column1, column2, column3, column4) FROM t;
-# TODO: support array value
-# ----
-# {a: 1, k1: 10}
-# {b: 2, k3: 30}
-# {d: 4, k5: 50}
+----
+{a: 1, k1: 10}
+{b: 2, k3: 30}
+{d: 4, k5: 50}
 
 query error
 SELECT map(column5, column6) FROM t;

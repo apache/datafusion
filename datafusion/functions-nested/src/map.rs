@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use arrow::array::ArrayData;
 use arrow::compute::concat;
-use arrow_array::{Array, ArrayRef, MapArray, StructArray};
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_schema::{DataType, Field, SchemaBuilder};
 
-use datafusion_common::cast::as_list_array;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
@@ -61,11 +61,19 @@ fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarV
         );
     }
 
-    let can_evaluate_to_const = can_evaluate_to_const(args);
-
-    let key = get_first_array_ref(&args[0])?;
-    let value = get_first_array_ref(&args[1])?;
-    make_map_batch_internal(key, value, can_evaluate_to_const)
+    match args[0] {
+        ColumnarValue::Scalar(_) => {
+            let can_evaluate_to_const = can_evaluate_to_const(args);
+            let key = get_first_array_ref(&args[0])?;
+            let value = get_first_array_ref(&args[1])?;
+            make_map_batch_internal(key, value, can_evaluate_to_const)
+        }
+        _ => {
+            let key = get_first_array_ref(&args[0])?;
+            let value = get_first_array_ref(&args[1])?;
+            return handle_array::<i32>(key, value);
+        }
+    }
 }
 
 fn get_first_array_ref(
@@ -98,10 +106,6 @@ fn make_map_batch_internal(
 
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
-    }
-
-    if keys.data_type().is_nested() && values.data_type().is_nested() {
-        return handle_array(keys, values);
     }
 
     let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
@@ -143,25 +147,25 @@ fn make_map_batch_internal(
     })
 }
 
-fn handle_array(
+fn handle_array<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,
 ) -> datafusion_common::Result<ColumnarValue> {
     let key_count = keys.len();
-    let keys = as_list_array(keys.as_ref())?;
-    let values = as_list_array(values.as_ref())?;
+    let keys = keys.as_list::<O>();
+    let values = values.as_list::<O>();
 
     let mut keys_ref = vec![];
     let mut values_ref = vec![];
     let mut offsets = vec![];
-    offsets.push(0);
+    offsets.push(O::usize_as(0));
     let keys = keys.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
     let values = values.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
 
-    let mut o = 0;
+    let mut current_offset: O = O::usize_as(0);
     for (k, v) in keys.iter().zip(values.iter()) {
-        o += k.len() as i32;
-        offsets.push(o);
+        current_offset = current_offset.add(O::usize_as(k.len()));
+        offsets.push(current_offset);
         keys_ref.push(k.as_ref());
         values_ref.push(v.as_ref());
     }
@@ -173,6 +177,7 @@ fn handle_array(
         Field::new("key", keys_ref[0].data_type().clone(), false),
         Field::new("value", values_ref[0].data_type().clone(), true),
     ];
+
     let struct_data = ArrayData::builder(DataType::Struct(fields.clone().into()))
         .len(flattened_keys.len())
         .offset(0)
@@ -195,8 +200,8 @@ fn handle_array(
     .add_child_data(struct_data.clone())
     .build()
     .unwrap();
-    let map_array = Arc::new(MapArray::from(map_data));
-    Ok(ColumnarValue::Array(map_array))
+
+    Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
 }
 
 #[derive(Debug)]
