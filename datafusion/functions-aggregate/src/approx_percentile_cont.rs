@@ -394,7 +394,7 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
-        // respect nulls by default
+        // Remove any nulls before computing the percentile
         let mut values = Arc::clone(&values[0]);
         if values.nulls().is_some() {
             values = filter(&values, &is_not_null(&values)?)?;
