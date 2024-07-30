@@ -15,31 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Debug;
+use std::{any::Any, sync::Arc};
+
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+
+use datafusion_common::exec_err;
+use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
+use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::type_coercion::aggregates::check_arg_count;
+use datafusion_expr::utils::AggregateOrderSensitivity;
+use datafusion_expr::ReversedUDAF;
+use datafusion_expr::{
+    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
+};
+
+use crate::physical_expr::PhysicalExpr;
+use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
+use crate::utils::reverse_order_bys;
+
+use self::utils::down_cast_any_ref;
+
 pub mod count_distinct;
 pub mod groups_accumulator;
 pub mod merge_arrays;
 pub mod stats;
 pub mod tdigest;
 pub mod utils;
-
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
-use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::type_coercion::aggregates::check_arg_count;
-use datafusion_expr::ReversedUDAF;
-use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDF, Expr, GroupsAccumulator,
-};
-use std::fmt::Debug;
-use std::{any::Any, sync::Arc};
-
-use self::utils::down_cast_any_ref;
-use crate::physical_expr::PhysicalExpr;
-use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
-use crate::utils::reverse_order_bys;
-
-use datafusion_common::exec_err;
-use datafusion_expr::utils::AggregateOrderSensitivity;
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
 /// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
@@ -225,7 +227,7 @@ impl AggregateExprBuilder {
             ignore_nulls,
             ordering_fields,
             is_distinct,
-            input_type: input_exprs_types[0].clone(),
+            input_types: input_exprs_types,
             is_reversed,
         }))
     }
@@ -466,7 +468,7 @@ pub struct AggregateFunctionExpr {
     ordering_fields: Vec<Field>,
     is_distinct: bool,
     is_reversed: bool,
-    input_type: DataType,
+    input_types: Vec<DataType>,
 }
 
 impl AggregateFunctionExpr {
@@ -504,7 +506,7 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn state_fields(&self) -> Result<Vec<Field>> {
         let args = StateFieldsArgs {
             name: &self.name,
-            input_type: &self.input_type,
+            input_types: &self.input_types,
             return_type: &self.data_type,
             ordering_fields: &self.ordering_fields,
             is_distinct: self.is_distinct,
@@ -525,7 +527,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
-            input_type: &self.input_type,
+            input_types: &self.input_types,
             input_exprs: &self.logical_args,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -542,7 +544,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
-            input_type: &self.input_type,
+            input_types: &self.input_types,
             input_exprs: &self.logical_args,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -614,7 +616,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
-            input_type: &self.input_type,
+            input_types: &self.input_types,
             input_exprs: &self.logical_args,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -630,7 +632,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
             is_distinct: self.is_distinct,
-            input_type: &self.input_type,
+            input_types: &self.input_types,
             input_exprs: &self.logical_args,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -729,6 +731,12 @@ impl AggregateExpr for AggregateFunctionExpr {
                 Some(reverse_aggr)
             }
         }
+    }
+
+    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        self.fun
+            .is_descending()
+            .and_then(|flag| self.field().ok().map(|f| (f, flag)))
     }
 }
 

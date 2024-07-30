@@ -249,6 +249,14 @@ impl AggregateUDF {
     pub fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         self.inner.simplify()
     }
+
+    /// Returns true if the function is max, false if the function is min
+    /// None in all other cases, used in certain optimizations or
+    /// or aggregate
+    ///
+    pub fn is_descending(&self) -> Option<bool> {
+        self.inner.is_descending()
+    }
 }
 
 impl<F> From<F> for AggregateUDF
@@ -535,6 +543,16 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         self.name().hash(hasher);
         self.signature().hash(hasher);
         hasher.finish()
+    }
+
+    /// If this function is max, return true
+    /// if the function is min, return false
+    /// otherwise return None (the default)
+    ///
+    ///
+    /// Note: this is used to use special aggregate implementations in certain conditions
+    fn is_descending(&self) -> Option<bool> {
+        None
     }
 }
 

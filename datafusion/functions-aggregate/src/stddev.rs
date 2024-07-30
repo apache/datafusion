@@ -335,7 +335,7 @@ mod tests {
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            input_type: &DataType::Float64,
+            input_types: &[DataType::Float64],
             input_exprs: &[datafusion_expr::col("a")],
         };
 
@@ -348,7 +348,7 @@ mod tests {
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            input_type: &DataType::Float64,
+            input_types: &[DataType::Float64],
             input_exprs: &[datafusion_expr::col("a")],
         };
 

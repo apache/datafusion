@@ -114,7 +114,7 @@ impl AggregateUDFImpl for NthValueAgg {
 
         NthValueAccumulator::try_new(
             n,
-            acc_args.input_type,
+            &acc_args.input_types[0],
             &ordering_dtypes,
             ordering_req,
         )
@@ -125,7 +125,7 @@ impl AggregateUDFImpl for NthValueAgg {
         let mut fields = vec![Field::new_list(
             format_state_name(self.name(), "nth_value"),
             // See COMMENTS.md to understand why nullable is set to true
-            Field::new("item", args.input_type.clone(), true),
+            Field::new("item", args.input_types[0].clone(), true),
             false,
         )];
         let orderings = args.ordering_fields.to_vec();

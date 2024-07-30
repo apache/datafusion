@@ -19,5 +19,6 @@ mod bytes;
 mod native;
 
 pub use bytes::BytesDistinctCountAccumulator;
+pub use bytes::BytesViewDistinctCountAccumulator;
 pub use native::FloatDistinctCountAccumulator;
 pub use native::PrimitiveDistinctCountAccumulator;

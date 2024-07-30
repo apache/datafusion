@@ -30,7 +30,8 @@ use arrow::datatypes::{
 use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator};
 use datafusion_common::{
     config::{
-        ColumnOptions, CsvOptions, JsonOptions, ParquetOptions, TableParquetOptions,
+        CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
+        TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
     parsers::CompressionTypeVariant,
@@ -826,14 +827,17 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             allow_single_file_parallelism: value.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as u64,
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as u64,
+            schema_force_string_view: value.schema_force_string_view,
         })
     }
 }
 
-impl TryFrom<&ColumnOptions> for protobuf::ColumnOptions {
+impl TryFrom<&ParquetColumnOptions> for protobuf::ColumnOptions {
     type Error = DataFusionError;
 
-    fn try_from(value: &ColumnOptions) -> datafusion_common::Result<Self, Self::Error> {
+    fn try_from(
+        value: &ParquetColumnOptions,
+    ) -> datafusion_common::Result<Self, Self::Error> {
         Ok(protobuf::ColumnOptions {
             compression_opt: value
                 .compression
