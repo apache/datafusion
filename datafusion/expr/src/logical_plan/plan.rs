@@ -2906,7 +2906,7 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
-    use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
+    use crate::{col, exists, ident, in_subquery, lit, placeholder, GroupingSet};
 
     use datafusion_common::tree_node::{TransformedResult, TreeNodeVisitor};
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
@@ -3511,5 +3511,44 @@ digraph {
                         \n    TableScan: ?table?";
         let actual = format!("{}", plan.display_indent());
         assert_eq!(expected.to_string(), actual)
+    }
+
+    #[test]
+    fn test_display_unqualifed_ident() {
+        let schema = Schema::new(vec![
+            Field::new("max(id)", DataType::Int32, false),
+            Field::new("state", DataType::Utf8, false),
+        ]);
+
+        let plan = table_scan(Some("t"), &schema, None)
+            .unwrap()
+            .filter(col("state").eq(lit("CO")))
+            .unwrap()
+            .project(vec![col("max(id)")])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Projection: t.\"max(id)\"\n  Filter: t.state = Utf8(\"CO\")\n    TableScan: t";
+        let actual = format!("{}", plan.display_indent());
+        assert_eq!(expected.to_string(), actual);
+
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("t.id", DataType::Int32, false),
+        ]);
+
+        let plan = table_scan(Some("t"), &schema, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        let projection = LogicalPlan::Projection(
+            Projection::try_new(vec![col("t.id"), ident("t.id")], Arc::new(plan))
+                .unwrap(),
+        );
+
+        let expected = "Projection: t.id, \"t.id\"\n  TableScan: t";
+        let actual = format!("{}", projection.display_indent());
+        assert_eq!(expected.to_string(), actual);
     }
 }

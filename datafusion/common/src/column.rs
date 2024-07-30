@@ -372,7 +372,7 @@ impl FromStr for Column {
 
 impl fmt::Display for Column {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.flat_name())
+        write!(f, "{}", self.quoted_flat_name())
     }
 }
 
@@ -454,5 +454,13 @@ mod tests {
         assert_eq!(err.strip_backtrace(), expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_display() {
+        let col = Column::new(Some("t1"), "a");
+        assert_eq!(col.to_string(), "t1.a");
+        let col = Column::new(TableReference::none(), "t1.a");
+        assert_eq!(col.to_string(), r#""t1.a""#);
     }
 }
