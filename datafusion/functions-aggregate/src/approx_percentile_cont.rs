@@ -401,9 +401,9 @@ impl Accumulator for ApproxPercentileAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
         // respect nulls by default
-        let mut values = values[0];
-        if let Some(nulls) = values.nulls() {
-            values = filter(&values, &is_not_null(values)?)?;
+        let mut values = Arc::clone(&values[0]);
+        if values.nulls().is_some() {
+            values = filter(&values, &is_not_null(&values)?)?;
         }
         let sorted_values = &arrow::compute::sort(&values, None)?;
         let sorted_values = ApproxPercentileAccumulator::convert_to_float(sorted_values)?;
