@@ -91,7 +91,8 @@ macro_rules! create_func {
             static [< STATIC_ $UDF >]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
                 std::sync::OnceLock::new();
 
-            #[doc = concat!("ScalarFunction that returns a [`ScalarUDF`](datafusion_expr::ScalarUDF) for [`", stringify!($UDF), "`]")]
+            #[doc = concat!("ScalarFunction that returns a [`ScalarUDF`](datafusion_expr::ScalarUDF) for ")]
+            #[doc = stringify!($UDF)]
             pub fn $SCALAR_UDF_FN() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
                 [< STATIC_ $UDF >]
                     .get_or_init(|| {
