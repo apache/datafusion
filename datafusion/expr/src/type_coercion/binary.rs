@@ -1033,6 +1033,13 @@ fn is_time_with_valid_unit(datatype: DataType) -> bool {
     )
 }
 
+/// Non-strict Timezone Coercion is useful in scenarios where we can guarantee
+/// a stable relationship between two timestamps of different timezones.
+///
+/// An example of this is binary comparisons (<, >, ==, etc). Arrow stores timestamps
+/// as relative to UTC epoch, and then adds the timezone as an offset. As a result, we can always
+/// do a binary comparison between the two times.
+///
 /// Timezone coercion is handled by the following rules:
 /// - If only one has a timezone, coerce the other to match
 /// - If both have a timezone, coerce to the left type
@@ -1046,14 +1053,8 @@ fn temporal_coercion_nonstrict_timezone(
     match (lhs_type, rhs_type) {
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
-                (Some(lhs_tz), Some(rhs_tz)) => {
-                    match (lhs_tz.as_ref(), rhs_tz.as_ref()) {
-                        // UTC and "+00:00" are the same by definition. Most other timezones
-                        // do not have a 1-1 mapping between timezone and an offset from UTC
-                        ("UTC", "+00:00") | ("+00:00", "UTC") => Some(Arc::clone(lhs_tz)),
-                        (_lhs, _rhs) => Some(Arc::clone(lhs_tz)),
-                    }
-                }
+                // If both have a timezone, use the left timezone.
+                (Some(lhs_tz), Some(_rhs_tz)) => Some(Arc::clone(lhs_tz)),
                 (Some(lhs_tz), None) => Some(Arc::clone(lhs_tz)),
                 (None, Some(rhs_tz)) => Some(Arc::clone(rhs_tz)),
                 (None, None) => None,
@@ -1067,9 +1068,19 @@ fn temporal_coercion_nonstrict_timezone(
     }
 }
 
+/// Strict Timezone coercion is useful in scenarios where we cannot guarantee a stable relationship
+/// between two timestamps with different timezones or do not want implicit coercion between them.
+///
+/// An example of this when attempting to coerce function arguments. Functions already have a mechanism
+/// for defining which timestamp types they want to support, so we do not want to do any further coercion.
+///
 /// Coercion rules for Temporal columns: the type that both lhs and rhs can be
 /// casted to for the purpose of a date computation
 /// For interval arithmetic, it doesn't handle datetime type +/- interval
+/// Timezone coercion is handled by the following rules:
+/// - If only one has a timezone, coerce the other to match
+/// - If both have a timezone, throw an error
+/// - "UTC" and "+00:00" are considered equivalent
 fn temporal_coercion_strict_timezone(
     lhs_type: &DataType,
     rhs_type: &DataType,
@@ -1793,6 +1804,12 @@ mod tests {
             DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
             Operator::Eq,
             DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()))
+        );
+        test_coercion_binary_rule!(
+            DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
+            DataType::Timestamp(TimeUnit::Second, utc.clone()),
+            Operator::Eq,
+            DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into()))
         );
 
         // TODO add other data type
