@@ -1,28 +1,4 @@
 statement ok
-create table t(a int, b varchar) as values 
-    (1, 'a'),
-    (2, 'a'),
-    (3, 'a'),
-    (1, 'b'),
-    (2, 'c'),
-    (2, 'cd'),
-    (2, 'cd'),
-    (2, 'cd'),
-    (4, 'a');
-
-query ITI
-select a, b, count(*) from t group by a, b order by count(*) desc limit 10;
-----
-2 cd 3
-2 c 1
-1 a 1
-3 a 1
-4 a 1
-2 a 1
-1 b 1
-
-
-statement ok
 CREATE EXTERNAL TABLE hits
 STORED AS PARQUET
 LOCATION '../core/tests/data/clickbench_hits_10.parquet';
@@ -55,6 +31,11 @@ physical_plan
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase]
 
-
-# query ITI
-# SELECT "UserID", concat("SearchPhrase", repeat('hello', 100)) as s, COUNT(*) FROM hits GROUP BY "UserID", s ORDER BY COUNT(*) DESC;
+query ITI rowsort
+SELECT "UserID", concat("SearchPhrase", repeat('hello', 20)) as s, COUNT(*) FROM hits GROUP BY "UserID", s ORDER BY COUNT(*) DESC;
+----
+-2461439046089301801 hellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohello 5
+376160620089546609 hellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohello 1
+427738049800818189 hellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohello 1
+519640690937130534 hellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohello 2
+7418527520126366595 hellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohellohello 1

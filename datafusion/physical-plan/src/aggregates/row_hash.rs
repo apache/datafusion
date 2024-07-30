@@ -537,14 +537,7 @@ impl GroupedHashAggregateStream {
             evaluate_many(&self.aggregate_arguments, &batch)?
         };
 
-        // println!("batch: {:?}", batch);
         let hash_values = batch.column_by_name("hash_value");
-        // let hash_values = Some(batch.column(2));
-
-        // println!("group_by_values: {:?}", group_by_values);
-        // println!("input_values: {:?}", input_values);
-        // println!("self.aggregate_arguments: {:?}", self.aggregate_arguments);
-        // println!("batcj:{:?}", batch);
 
         // Evaluate the filter expressions, if any, against the inputs
         let filter_values = if self.spill_state.is_stream_merging {
@@ -564,9 +557,6 @@ impl GroupedHashAggregateStream {
                 hash_values,
             )?;
             let group_indices = &self.current_group_indices;
-            // println!("arr: {:?}", group_values);
-            // println!("group_indices: {:?}", group_indices);
-            // println!("starting_num_groups: {:?} self.group_values.len(): {:?}", starting_num_groups, self.group_values.len());
 
             // Update ordering information if necessary
             let total_num_groups = self.group_values.len();

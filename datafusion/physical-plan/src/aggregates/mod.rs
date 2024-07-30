@@ -311,10 +311,6 @@ impl AggregateExec {
             mode,
         )?;
 
-        // println!("mode: {:?}", mode);
-        // println!("schema: {:?}", schema);
-        // println!("input_schema: {:?}", input_schema);
-
         let schema = Arc::new(schema);
         AggregateExec::try_new_with_schema(
             mode,

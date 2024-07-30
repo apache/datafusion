@@ -100,7 +100,8 @@ impl GroupValuesRows {
             group_hashes: Default::default(),
             hashes_buffer: Default::default(),
             rows_buffer,
-            random_state: Default::default(),
+            // random_state: Default::default(),
+            random_state: RandomState::with_seeds(0, 0, 0, 0),
         })
     }
 }
@@ -131,7 +132,6 @@ impl GroupValues for GroupValuesRows {
         // tracks to which group each of the input rows belongs
         groups.clear();
 
-        // let hash_values: Option<&ArrayRef> = None;
         if let Some(hash_values) = hash_values {
             let hash_array = hash_values.as_primitive::<UInt64Type>();
             for (row, hash) in hash_array.iter().enumerate() {
@@ -174,6 +174,7 @@ impl GroupValues for GroupValuesRows {
             batch_hashes.clear();
             batch_hashes.resize(n_rows, 0);
             create_hashes(cols, &self.random_state, batch_hashes)?;
+
             for (row, &hash) in batch_hashes.iter().enumerate() {
                 let entry = self.map.get_mut(hash, |(_hash, group_idx)| {
                     // verify that a group that we are inserting with hash is
@@ -242,7 +243,6 @@ impl GroupValues for GroupValuesRows {
             .take()
             .expect("Can not emit from empty rows");
 
-        // println!("emit_to: {:?}", emit_to);
         let mut output = match emit_to {
             EmitTo::All => {
                 let mut output = self.row_converter.convert_rows(&group_values)?;
@@ -295,7 +295,7 @@ impl GroupValues for GroupValuesRows {
         }
 
         self.group_values = Some(group_values);
-        self.group_hashes = None;
+        // self.group_hashes = None;
         Ok(output)
     }
 
@@ -304,6 +304,10 @@ impl GroupValues for GroupValuesRows {
         self.group_values = self.group_values.take().map(|mut rows| {
             rows.clear();
             rows
+        });
+        self.group_hashes = self.group_hashes.take().map(|mut gp_hashes| {
+            gp_hashes.clear();
+            gp_hashes
         });
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
