@@ -252,6 +252,9 @@ fn insufficient_capacity_err(
 /// A [`MemoryPool`] that tracks the consumers that have
 /// reserved memory within the inner memory pool.
 ///
+/// By tracking memory reservations more carefully this pool
+/// can provide better error messages on the largest memory users
+///
 /// Tracking is per hashed [`MemoryConsumer`], not per [`MemoryReservation`].
 /// The same consumer can have multiple reservations.
 #[derive(Debug)]
