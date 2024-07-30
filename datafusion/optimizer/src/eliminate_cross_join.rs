@@ -409,8 +409,8 @@ fn remove_join_expressions(expr: Expr, join_keys: &JoinKeySet) -> Option<Expr> {
                     op,
                     Box::new(rr),
                 ))),
-               // When either `left` or `right` is empty, it means they are `true`
-               // so OR'ing anything with them will also be true
+                // When either `left` or `right` is empty, it means they are `true`
+                // so OR'ing anything with them will also be true
                 _ => None,
             }
         }
