@@ -1040,17 +1040,17 @@ impl DefaultPhysicalPlanner {
                         Partitioning::RoundRobinBatch(*n)
                     }
                     LogicalPartitioning::Hash(expr, n) => {
-                        let runtime_expr = expr
-                            .iter()
-                            .map(|e| {
-                                self.create_physical_expr(
-                                    e,
-                                    input_dfschema,
-                                    session_state,
-                                )
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        Partitioning::Hash(runtime_expr, *n)
+                        // let runtime_expr = expr
+                        //     .iter()
+                        //     .map(|e| {
+                        //         self.create_physical_expr(
+                        //             e,
+                        //             input_dfschema,
+                        //             session_state,
+                        //         )
+                        //     })
+                        //     .collect::<Result<Vec<_>>>()?;
+                        Partitioning::Hash(vec![], *n)
                     }
                     LogicalPartitioning::DistributeBy(_) => {
                         return not_impl_err!(

@@ -203,8 +203,8 @@ impl BatchPartitioner {
                     next_idx: 0,
                 }
             }
-            Partitioning::Hash(exprs, num_partitions) => BatchPartitionerState::Hash {
-                exprs,
+            Partitioning::Hash(_exprs, num_partitions) => BatchPartitionerState::Hash {
+                exprs: vec![],
                 num_partitions,
                 // Use fixed random hash
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),

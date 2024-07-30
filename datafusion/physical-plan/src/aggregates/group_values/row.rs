@@ -100,7 +100,6 @@ impl GroupValuesRows {
             group_hashes: Default::default(),
             hashes_buffer: Default::default(),
             rows_buffer,
-            // random_state: Default::default(),
             random_state: RandomState::with_seeds(0, 0, 0, 0),
         })
     }
@@ -162,7 +161,6 @@ impl GroupValues for GroupValuesRows {
                             |(hash, _group_index)| *hash,
                             &mut self.map_size,
                         );
-                        // println!("new group: {:?}", group_idx);
                         group_idx
                     }
                 };
