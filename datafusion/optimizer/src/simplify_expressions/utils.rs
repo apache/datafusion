@@ -341,3 +341,45 @@ pub fn distribute_negation(expr: Expr) -> Expr {
         _ => Expr::Negative(Box::new(expr)),
     }
 }
+
+pub fn can_rearrange_literals(left: &Expr, op: Operator, right: &Expr) -> bool {
+    if let Expr::BinaryExpr(BinaryExpr {
+        left: l_left,
+        op: l_op,
+        right: l_right,
+    }) = left
+    {
+        if l_op == &op
+            && matches!(**l_left, Expr::Column(_))
+            && matches!(**l_right, Expr::Literal(_))
+            && matches!(right, Expr::Literal(_))
+        {
+            return true;
+        }
+    };
+    false
+}
+
+pub fn rearrange_literals(left: Expr, op: Operator, right: Expr) -> Expr {
+    if let Expr::BinaryExpr(BinaryExpr {
+        left: l_left,
+        op: l_op,
+        right: l_right,
+    }) = &left
+    {
+        if l_op == &op
+            && matches!(**l_left, Expr::Column(_))
+            && matches!(**l_right, Expr::Literal(_))
+            && matches!(right, Expr::Literal(_))
+        {
+            let right_expr = Expr::BinaryExpr(BinaryExpr {
+                left: l_right.clone(),
+                op,
+                right: Box::new(right),
+            });
+            return Expr::BinaryExpr(BinaryExpr::new(l_left.clone(), op, Box::new(right_expr)));
+        }
+    };
+
+    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+}
