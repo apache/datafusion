@@ -113,7 +113,7 @@ impl AggregateUDFImpl for ApproxMedian {
 
         Ok(Box::new(ApproxPercentileAccumulator::new(
             0.5_f64,
-            acc_args.input_type.clone(),
+            acc_args.input_types[0].clone(),
         )))
     }
 }

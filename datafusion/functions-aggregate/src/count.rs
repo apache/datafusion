@@ -127,7 +127,7 @@ impl AggregateUDFImpl for Count {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "count distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.input_type.clone(), true),
+                Field::new("item", args.input_types[0].clone(), true),
                 false,
             )])
         } else {
@@ -148,7 +148,7 @@ impl AggregateUDFImpl for Count {
             return not_impl_err!("COUNT DISTINCT with multiple arguments");
         }
 
-        let data_type = acc_args.input_type;
+        let data_type = &acc_args.input_types[0];
         Ok(match data_type {
             // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
             DataType::Int8 => Box::new(
