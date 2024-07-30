@@ -105,12 +105,6 @@ impl ApproxPercentileCont {
             None
         };
 
-        if args.ignore_nulls {
-            return not_impl_err!(
-                "IGNORE NULLS clause not yet supported for APPROX_PERCENTILE_CONT"
-            );
-        }
-
         let accumulator: ApproxPercentileAccumulator = match args.input_type {
             t @ (DataType::UInt8
             | DataType::UInt16
