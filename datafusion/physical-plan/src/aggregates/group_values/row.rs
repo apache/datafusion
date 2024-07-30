@@ -125,7 +125,8 @@ impl GroupValues for GroupValuesRows {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
-                target_hash == *exist_hash && group_rows.row(row) == group_values.row(*group_idx)
+                target_hash == *exist_hash
+                    && group_rows.row(row) == group_values.row(*group_idx)
             });
 
             let group_idx = match entry {
