@@ -733,7 +733,7 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn get_minmax_desc(&self) -> Option<(Field, bool)> {
         self.fun
-            .get_minmax_desc()
+            .is_descending()
             .and_then(|flag| self.field().ok().map(|f| (f, flag)))
     }
 }

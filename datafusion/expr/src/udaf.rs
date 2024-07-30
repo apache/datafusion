@@ -254,8 +254,8 @@ impl AggregateUDF {
     /// None in all other cases, used in certain optimizations or
     /// or aggregate
     ///
-    pub fn get_minmax_desc(&self) -> Option<bool> {
-        self.inner.get_minmax_desc()
+    pub fn is_descending(&self) -> Option<bool> {
+        self.inner.is_descending()
     }
 }
 
@@ -551,7 +551,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     ///
     /// Note: this is used to use special aggregate implementations in certain conditions
-    fn get_minmax_desc(&self) -> Option<bool> {
+    fn is_descending(&self) -> Option<bool> {
         None
     }
 }
