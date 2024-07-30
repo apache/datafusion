@@ -19,7 +19,8 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
+use arrow::array::{Array, RecordBatch};
+use arrow::compute::{filter, is_not_null};
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -103,6 +104,12 @@ impl ApproxPercentileCont {
         } else {
             None
         };
+
+        if args.ignore_nulls {
+            return not_impl_err!(
+                "IGNORE NULLS clause not yet supported for APPROX_PERCENTILE_CONT"
+            );
+        }
 
         let accumulator: ApproxPercentileAccumulator = match args.input_type {
             t @ (DataType::UInt8
@@ -393,8 +400,12 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
-        let values = &values[0];
-        let sorted_values = &arrow::compute::sort(values, None)?;
+        // respect nulls by default
+        let mut values = values[0];
+        if let Some(nulls) = values.nulls() {
+            values = filter(&values, &is_not_null(values)?)?;
+        }
+        let sorted_values = &arrow::compute::sort(&values, None)?;
         let sorted_values = ApproxPercentileAccumulator::convert_to_float(sorted_values)?;
         self.digest = self.digest.merge_sorted_f64(&sorted_values);
         Ok(())
