@@ -327,8 +327,10 @@ pub(crate) fn transform_bottom_unnest(
             }
         }
 
+        // TODO: refactor get_unnested_columns or use a different function
+        // depth = 1 has no meaning here, just to provide enough argument
         let outer_projection_columns =
-            get_unnested_columns(&post_unnest_name, &data_type)?;
+            get_unnested_columns(&post_unnest_name, &data_type, 1)?;
         let expr = outer_projection_columns
             .iter()
             .map(|col| {

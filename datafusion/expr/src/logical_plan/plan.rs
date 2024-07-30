@@ -2887,7 +2887,7 @@ pub struct Unnest {
     pub exec_columns: Vec<Column>,
     /// refer to the indices(in the input schema) of columns
     /// that have type list to run unnest on
-    pub list_type_columns: Vec<usize>,
+    pub list_type_columns: Vec<(usize, usize)>,
     /// refer to the indices (in the input schema) of columns
     /// that have type struct to run unnest on
     pub struct_type_columns: Vec<usize>,

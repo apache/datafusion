@@ -234,8 +234,10 @@ struct UnnestStream {
     schema: Arc<Schema>,
     /// Which original columns are transformed into which columns
     transformed_col: HashMap<Column, Vec<Column>>,
-    /// The unnest columns
-    list_type_columns: Vec<usize>,
+    /// represents all unnest operations to be applied to the input (input index, depth)
+    /// e.g unnest(col1),unnest(unnest(col1)) where col1 has index 1 in original input schema
+    /// then list_type_columns = [(1,1),(1,2)]
+    list_type_columns: Vec<(usize, usize)>,
     struct_column_indices: HashSet<usize>,
     /// Options
     options: UnnestOptions,
@@ -355,18 +357,21 @@ fn flatten_struct_cols(
 fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
-    list_type_columns: &[usize],
+    list_type_columns: &[(usize, usize)],
     struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
 ) -> Result<RecordBatch> {
     let transformed = match list_type_columns.len() {
         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
         _ => {
-            let list_arrays: Vec<ArrayRef> = list_type_columns
+            let list_arrays: Vec<(ArrayRef, usize)> = list_type_columns
                 .iter()
-                .map(|index| {
-                    ColumnarValue::Array(Arc::clone(batch.column(*index)))
-                        .into_array(batch.num_rows())
+                .map(|(index, depth)| {
+                    Ok((
+                        ColumnarValue::Array(Arc::clone(batch.column(*index)))
+                            .into_array(batch.num_rows())?,
+                        *depth,
+                    ))
                 })
                 .collect::<Result<_>>()?;
 
@@ -389,7 +394,7 @@ fn build_batch(
             let unnested_array_map: HashMap<_, _> = unnested_arrays
                 .into_iter()
                 .zip(list_type_columns.iter())
-                .map(|(array, column)| (*column, array))
+                .map(|(array, (column, depth))| (*column, (array, depth)))
                 .collect();
 
             // Create the take indices array for other columns
@@ -455,7 +460,7 @@ pub fn length_recursive(array: &dyn Array, depth: usize) -> Result<ArrayRef> {
 /// ```
 ///
 fn find_longest_length(
-    list_arrays: &[ArrayRef],
+    list_arrays: &[(ArrayRef, usize)],
     options: &UnnestOptions,
 ) -> Result<ArrayRef> {
     // The length of a NULL list
@@ -472,8 +477,8 @@ fn find_longest_length(
     // unnest(col1), unnest(unnest(col1)), unnest(col2)
     let list_lengths: Vec<ArrayRef> = list_arrays
         .iter()
-        .map(|list_array| {
-            let mut length_array = length_recursive(list_array, 1)?;
+        .map(|(list_array, depth)| {
+            let mut length_array = length_recursive(list_array, *depth)?;
             // Make sure length arrays have the same type. Int64 is the most general one.
             // Respect the depth of unnest( current func only get the length of 1 level of unnest)
             length_array = cast(&length_array, &DataType::Int64)?;
@@ -537,19 +542,21 @@ impl ListArrayType for FixedSizeListArray {
 
 /// Unnest multiple list arrays according to the length array.
 fn unnest_list_arrays(
-    list_arrays: &[ArrayRef],
+    list_arrays: &[(ArrayRef, usize)],
     length_array: &PrimitiveArray<Int64Type>,
     capacity: usize,
 ) -> Result<Vec<ArrayRef>> {
     let typed_arrays = list_arrays
         .iter()
-        .map(|list_array| match list_array.data_type() {
-            DataType::List(_) => Ok(list_array.as_list::<i32>() as &dyn ListArrayType),
+        .map(|(list_array, depth)| match list_array.data_type() {
+            DataType::List(_) => {
+                Ok((list_array.as_list::<i32>() as &dyn ListArrayType, depth))
+            }
             DataType::LargeList(_) => {
-                Ok(list_array.as_list::<i64>() as &dyn ListArrayType)
+                Ok((list_array.as_list::<i64>() as &dyn ListArrayType, depth))
             }
             DataType::FixedSizeList(_, _) => {
-                Ok(list_array.as_fixed_size_list() as &dyn ListArrayType)
+                Ok((list_array.as_fixed_size_list() as &dyn ListArrayType, depth))
             }
             other => exec_err!("Invalid unnest datatype {other }"),
         })
@@ -557,7 +564,9 @@ fn unnest_list_arrays(
 
     typed_arrays
         .iter()
-        .map(|list_array| unnest_list_array(*list_array, length_array, capacity))
+        .map(|(list_array, depth)| {
+            unnest_list_array(*list_array, length_array, capacity, **depth)
+        })
         .collect::<Result<_>>()
 }
 
@@ -586,7 +595,9 @@ fn unnest_list_array(
     list_array: &dyn ListArrayType,
     length_array: &PrimitiveArray<Int64Type>,
     capacity: usize,
+    depth: usize,
 ) -> Result<ArrayRef> {
+    let st = list_array.as_list();
     let values = list_array.values();
     let mut take_indicies_builder = PrimitiveArray::<Int64Type>::builder(capacity);
     for row in 0..list_array.len() {
@@ -681,7 +692,7 @@ fn create_take_indicies(
 ///
 fn flatten_list_cols_from_indices(
     batch: &RecordBatch,
-    unnested_list_arrays: &HashMap<usize, ArrayRef>,
+    unnested_list_arrays: &HashMap<usize, (ArrayRef, usize)>,
     indices: &PrimitiveArray<Int64Type>,
 ) -> Result<Vec<Arc<dyn Array>>> {
     let arrays = batch
@@ -689,7 +700,7 @@ fn flatten_list_cols_from_indices(
         .iter()
         .enumerate()
         .map(|(col_idx, arr)| match unnested_list_arrays.get(&col_idx) {
-            Some(unnested_array) => Ok(Arc::clone(unnested_array)),
+            Some((unnested_array, depth)) => Ok(Arc::clone(unnested_array)),
             None => Ok(kernels::take::take(arr, indices, None)?),
         })
         .collect::<Result<Vec<_>>>()?;
@@ -779,7 +790,7 @@ mod tests {
         expected: Vec<Option<&str>>,
     ) -> datafusion_common::Result<()> {
         let length_array = Int64Array::from(lengths);
-        let unnested_array = unnest_list_array(list_array, &length_array, 3 * 6)?;
+        let unnested_array = unnest_list_array(list_array, &length_array, 3 * 6, 1)?;
         let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
         assert_eq!(strs, expected);
         Ok(())
@@ -860,7 +871,7 @@ mod tests {
     }
 
     fn verify_longest_length(
-        list_arrays: &[ArrayRef],
+        list_arrays: &[(ArrayRef, usize)],
         preserve_nulls: bool,
         expected: Vec<i64>,
     ) -> datafusion_common::Result<()> {
