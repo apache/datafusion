@@ -191,9 +191,9 @@ pub use writer::plan_to_parquet;
 /// # Execution Overview
 ///
 /// * Step 1: [`ParquetExec::execute`] is called, returning a [`FileStream`]
-///   configured to open parquet files with a [`ParquetOpener`].
+///   configured to open parquet files with a `ParquetOpener`.
 ///
-/// * Step 2: When the stream is polled, the [`ParquetOpener`] is called to open
+/// * Step 2: When the stream is polled, the `ParquetOpener` is called to open
 ///   the file.
 ///
 /// * Step 3: The `ParquetOpener` gets the [`ParquetMetaData`] (file metadata)

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`StringAgg`] and [`StringAggAccumulator`] accumulator for the `string_agg` function
+//! [`StringAgg`]  accumulator for the `string_agg` function
 
 use arrow::array::ArrayRef;
 use arrow_schema::DataType;

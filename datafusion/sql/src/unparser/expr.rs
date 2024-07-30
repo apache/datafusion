@@ -522,8 +522,9 @@ impl Unparser<'_> {
         }
     }
 
-    /// This function can convert more [`Expr`] types than `expr_to_sql`, returning an [`Unparsed`]
-    /// like `Sort` expressions to `OrderByExpr` expressions.
+    /// This function can convert more [`Expr`] types than `expr_to_sql`,
+    /// returning an [`Unparsed`] like `Sort` expressions to `OrderByExpr`
+    /// expressions.
     pub fn expr_to_unparsed(&self, expr: &Expr) -> Result<Unparsed> {
         match expr {
             Expr::Sort(Sort {

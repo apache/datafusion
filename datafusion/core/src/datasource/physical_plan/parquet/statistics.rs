@@ -1125,7 +1125,7 @@ where
 ///
 /// The parquet_schema and arrow_schema do not have to be identical (for
 /// example, the columns may be in different orders and one or the other schemas
-/// may have additional columns). The function [`parquet_column`] is used to
+/// may have additional columns). The function `parquet_column` is used to
 /// match the column in the parquet file to the column in the arrow schema.
 #[derive(Debug)]
 pub struct StatisticsConverter<'a> {
