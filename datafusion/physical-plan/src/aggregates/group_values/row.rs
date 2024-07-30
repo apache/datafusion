@@ -295,7 +295,6 @@ impl GroupValues for GroupValuesRows {
         }
 
         self.group_values = Some(group_values);
-        // self.group_hashes = None;
         Ok(output)
     }
 
