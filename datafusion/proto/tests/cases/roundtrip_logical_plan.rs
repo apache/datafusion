@@ -636,7 +636,7 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
                 .unwrap();
             let parquet_config = parquet_factory.options.as_ref().unwrap();
             assert_eq!(parquet_config.key_value_metadata, key_value_metadata);
-            assert_eq!(parquet_config.global.allow_single_file_parallelism, false);
+            assert!(!parquet_config.global.allow_single_file_parallelism);
             assert_eq!(parquet_config.global.created_by, "test".to_string());
         }
         _ => panic!(),
