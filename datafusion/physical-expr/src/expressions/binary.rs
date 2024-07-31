@@ -27,9 +27,7 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
-use arrow::compute::kernels::comparison::{
-    regexp_is_match_utf8, regexp_is_match_utf8_scalar,
-};
+use arrow::compute::kernels::comparison::regexp_is_match_utf8;
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
@@ -41,6 +39,7 @@ use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 
+use datafusion_physical_expr_common::expressions::Literal;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -48,13 +47,16 @@ use kernels::{
 };
 
 /// Binary expression
-#[derive(Debug, Hash, Clone)]
+#[derive(Clone)]
 pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
+    /// Only used when evaluating literal regex expressions. Example regex expression: c1 ~ '^a'
+    /// It's helpful saving time of compiling literal pattern string for each execution.
+    precompiled_regexp: Option<regex::Regex>,
 }
 
 impl BinaryExpr {
@@ -64,11 +66,13 @@ impl BinaryExpr {
         op: Operator,
         right: Arc<dyn PhysicalExpr>,
     ) -> Self {
+        let precompiled_regexp = Self::precompile_regexp_pattern(&op, &right);
         Self {
             left,
             op,
             right,
             fail_on_overflow: false,
+            precompiled_regexp,
         }
     }
 
@@ -79,6 +83,7 @@ impl BinaryExpr {
             op: self.op,
             right: self.right,
             fail_on_overflow,
+            precompiled_regexp: self.precompiled_regexp,
         }
     }
 
@@ -95,6 +100,56 @@ impl BinaryExpr {
     /// Get the operator for this binary expression
     pub fn op(&self) -> &Operator {
         &self.op
+    }
+
+    /// Get pre-compiled regexp
+    fn precompile_regexp_pattern(
+        op: &Operator,
+        lit: &Arc<dyn PhysicalExpr>,
+    ) -> Option<regex::Regex> {
+        match op {
+            Operator::RegexMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotIMatch => lit
+                .as_any()
+                .downcast_ref::<Literal>()
+                .and_then(|pattern| match pattern.value() {
+                    ScalarValue::Utf8(pattern) | ScalarValue::LargeUtf8(pattern) => {
+                        pattern.as_ref().map(|p| {
+                            let string_value = match op {
+                                Operator::RegexIMatch | Operator::RegexNotIMatch => {
+                                    ["(?i)", p.as_str()].join("")
+                                }
+                                _ => p.clone(),
+                            };
+                            regex::Regex::new(string_value.as_str()).unwrap()
+                        })
+                    }
+                    _ => None,
+                }),
+            _ => None,
+        }
+    }
+}
+
+impl std::hash::Hash for BinaryExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.left.hash(state);
+        self.op.hash(state);
+        self.right.hash(state);
+        self.fail_on_overflow.hash(state);
+    }
+}
+
+impl std::fmt::Debug for BinaryExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BinaryExpr")
+            .field("left", &self.left)
+            .field("op", &self.op)
+            .field("right", &self.right)
+            .field("fail_on_overflow", &self.fail_on_overflow)
+            .finish()
     }
 }
 
@@ -211,13 +266,13 @@ macro_rules! compute_utf8_flag_op {
 }
 
 macro_rules! binary_string_array_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
             DataType::Utf8 => {
-                compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
+                compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT)
             }
             DataType::LargeUtf8 => {
-                compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
+                compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT)
             }
             other => internal_err!(
                 "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
@@ -230,26 +285,17 @@ macro_rules! binary_string_array_flag_op_scalar {
 
 /// Invoke a compute kernel on a data array and a scalar value with flag
 macro_rules! compute_utf8_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr) => {{
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$ARRAYTYPE>()
             .expect("compute_utf8_flag_op_scalar failed to downcast array");
 
-        if let ScalarValue::Utf8(Some(string_value))|ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT {
-            let flag = if $FLAG { Some("i") } else { None };
-            let mut array =
-                paste::expr! {[<$OP _utf8_scalar>]}(&ll, &string_value, flag)?;
-            if $NOT {
-                array = not(&array).unwrap();
-            }
-            Ok(Arc::new(array))
-        } else {
-            internal_err!(
-                "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
-                $RIGHT, stringify!($OP)
-            )
+        let mut array = $OP(&ll, &$RIGHT)?;
+        if $NOT {
+            array = not(&array).unwrap();
         }
+        Ok(Arc::new(array))
     }};
 }
 
@@ -567,30 +613,26 @@ impl BinaryExpr {
         let scalar_result = match &self.op {
             RegexMatch => binary_string_array_flag_op_scalar!(
                 array,
-                scalar,
-                regexp_is_match,
-                false,
+                self.precompiled_regexp.as_ref().unwrap(),
+                regexp_scalar_match,
                 false
             ),
             RegexIMatch => binary_string_array_flag_op_scalar!(
                 array,
-                scalar,
-                regexp_is_match,
-                false,
-                true
+                self.precompiled_regexp.as_ref().unwrap(),
+                regexp_scalar_match,
+                false
             ),
             RegexNotMatch => binary_string_array_flag_op_scalar!(
                 array,
-                scalar,
-                regexp_is_match,
-                true,
-                false
+                self.precompiled_regexp.as_ref().unwrap(),
+                regexp_scalar_match,
+                true
             ),
             RegexNotIMatch => binary_string_array_flag_op_scalar!(
                 array,
-                scalar,
-                regexp_is_match,
-                true,
+                self.precompiled_regexp.as_ref().unwrap(),
+                regexp_scalar_match,
                 true
             ),
             BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
@@ -676,6 +718,38 @@ pub fn binary(
     _input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
+}
+
+/// It is used for scalar regexp matching
+fn regexp_scalar_match<OffsetSize: OffsetSizeTrait>(
+    array: &GenericStringArray<OffsetSize>,
+    regex: &regex::Regex,
+) -> Result<BooleanArray, arrow_schema::ArrowError> {
+    let null_bit_buffer = array.nulls().map(|x| x.inner().sliced());
+    let mut result = BooleanBufferBuilder::new(array.len());
+
+    if regex.as_str().is_empty() {
+        result.append_n(array.len(), true);
+    } else {
+        for i in 0..array.len() {
+            let value = array.value(i);
+            result.append(regex.is_match(value));
+        }
+    }
+
+    let buffer = result.into();
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            array.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![buffer],
+            vec![],
+        )
+    };
+    Ok(BooleanArray::from(data))
 }
 
 #[cfg(test)]
@@ -4119,5 +4193,144 @@ mod tests {
             .to_string()
             .contains("Overflow happened on: 2147483647 * 2"));
         Ok(())
+    }
+
+    macro_rules! test_regex_match_scalar {
+        (
+            $A_ARRAY:ident,
+            $A_TYPE:expr,
+            $A_VEC:expr,
+            $B_SCALAR:expr,
+            $OP:expr,
+            $C_ARRAY:ident,
+            $C_TYPE:expr,
+            $VEC:expr,
+        ) => {{
+            let schema = Schema::new(vec![
+                Field::new("a", $A_TYPE, false),
+            ]);
+            let a = $A_ARRAY::from($A_VEC);
+
+            let left = col("a", &schema).unwrap();
+            let right = lit($B_SCALAR);
+
+            // verify that we can construct the expression
+            let expression = binary(left, $OP, right, &schema).unwrap();
+            let batch = RecordBatch::try_new(
+                Arc::new(schema.clone()),
+                vec![Arc::new(a)],
+            ).unwrap();
+
+            // verify that the expression's type is correct
+            assert_eq!(expression.data_type(&schema).unwrap(), $C_TYPE);
+
+            // compute
+            let result = expression.evaluate(&batch)
+                .unwrap()
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array");
+
+            // verify that the array's data_type is correct
+            assert_eq!(*result.data_type(), $C_TYPE);
+
+            // verify that the data itself is downcastable
+            let result = result
+                .as_any()
+                .downcast_ref::<$C_ARRAY>()
+                .expect("failed to downcast");
+            // verify that the result itself is correct
+            for (i, x) in $VEC.iter().enumerate() {
+                let v = result.value(i);
+                assert_eq!(
+                    v,
+                    *x,
+                    "Unexpected output at position {i}:\n\nActual:\n{v}\n\nExpected:\n{x}"
+                );
+            }
+        }};
+    }
+
+    #[test]
+    fn test_regex_match_scalr() {
+        test_regex_match_scalar!(
+            StringArray,
+            DataType::Utf8,
+            vec!["abc", "bbb", "ABC", "ba", "cba"],
+            "^a",
+            Operator::RegexMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [true, false, false, false, false],
+        );
+        test_regex_match_scalar!(
+            StringArray,
+            DataType::Utf8,
+            vec!["abc", "bbb", "ABC", "ba", "cba"],
+            "^a",
+            Operator::RegexIMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [true, false, true, false, false],
+        );
+        test_regex_match_scalar!(
+            StringArray,
+            DataType::Utf8,
+            vec!["abc", "bbb", "ABC", "ba", "cba"],
+            "^a",
+            Operator::RegexNotMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [false, true, true, true, true],
+        );
+        test_regex_match_scalar!(
+            StringArray,
+            DataType::Utf8,
+            vec!["abc", "bbb", "ABC", "ba", "cba"],
+            "^a",
+            Operator::RegexNotIMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [false, true, false, true, true],
+        );
+        test_regex_match_scalar!(
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["abc", "bbb", "ABC", "ba", "cba"],
+            "^a",
+            Operator::RegexMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [true, false, false, false, false],
+        );
+        test_regex_match_scalar!(
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["abc", "bbb", "ABC", "ba", "cba"],
+            "^a",
+            Operator::RegexIMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [true, false, true, false, false],
+        );
+        test_regex_match_scalar!(
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["abc", "bbb", "ABC", "ba", "cba"],
+            "^a",
+            Operator::RegexNotMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [false, true, true, true, true],
+        );
+        test_regex_match_scalar!(
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["abc", "bbb", "ABC", "ba", "cba"],
+            "^a",
+            Operator::RegexNotIMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [false, true, false, true, true],
+        );
     }
 }
