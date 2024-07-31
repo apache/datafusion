@@ -21,9 +21,10 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
-use arrow::compute::{can_cast_types, cast};
-use arrow_array::{new_null_array, RecordBatch, RecordBatchOptions};
-use arrow_schema::{Schema, SchemaRef};
+use arrow_array::builder::StringBuilder;
+use arrow_array::cast::AsArray;
+use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, RecordBatchOptions};
+use arrow_schema::{ArrowError, DataType, Schema, SchemaRef};
 use datafusion_common::plan_err;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -162,6 +163,38 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             }),
             projection,
         ))
+    }
+}
+
+// Workaround arrow-rs bug in can_cast_types
+// External error: query failed: DataFusion error: Arrow error: Cast error: Casting from BinaryView to Utf8 not supported
+fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
+    arrow::compute::can_cast_types(from_type, to_type)
+        || matches!(
+            (from_type, to_type),
+            (DataType::BinaryView, DataType::Utf8 | DataType::LargeUtf8)
+                | (DataType::Utf8 | DataType::LargeUtf8, DataType::BinaryView)
+        )
+}
+
+// Work around arrow-rs casting bug
+// External error: query failed: DataFusion error: Arrow error: Cast error: Casting from BinaryView to Utf8 not supported
+fn cast(array: &dyn Array, to_type: &DataType) -> Result<ArrayRef, ArrowError> {
+    match (array.data_type(), to_type) {
+        (DataType::BinaryView, DataType::Utf8) => {
+            let array = array.as_binary_view();
+            let mut builder = StringBuilder::with_capacity(array.len(), 8 * 1024);
+            for value in array.iter() {
+                // check if the value is valid utf8 (should do this once, not each value)
+                let value = value.map(|value| std::str::from_utf8(value)).transpose()?;
+
+                builder.append_option(value);
+            }
+
+            Ok(Arc::new(builder.finish()))
+        }
+        // fallback to arrow kernel
+        (_, _) => arrow::compute::cast(array, to_type),
     }
 }
 
