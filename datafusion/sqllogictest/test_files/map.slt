@@ -210,13 +210,12 @@ SELECT make_map(column1, column2, column3, column4) FROM t;
 {b: 2, k3: 30}
 {d: 4, k5: 50}
 
-query error
+query ?
 SELECT map(column5, column6) FROM t;
-# TODO: support array value
-# ----
-# {k1:1, k2:2}
-# {k3: 3}
-# {k5: 5}
+----
+{k1:1, k2:2}
+{k3: 3}
+{k5: 5}
 
 query ?
 SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', 30, 'OPTION', 29, 'GET', 27, 'PUT', 25, 'DELETE', 24) AS method_count from t;

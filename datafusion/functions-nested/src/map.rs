@@ -20,7 +20,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::ArrayData;
-use arrow::compute::concat;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::{Buffer, ToByteSlice};
@@ -68,10 +67,10 @@ fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarV
             let value = get_first_array_ref(&args[1])?;
             make_map_batch_internal(key, value, can_evaluate_to_const)
         }
-        _ => {
+        ColumnarValue::Array(_) => {
             let key = get_first_array_ref(&args[0])?;
             let value = get_first_array_ref(&args[1])?;
-            return handle_array::<i32>(key, value);
+            make_map_array_internal::<i32>(key, value)
         }
     }
 }
@@ -147,61 +146,77 @@ fn make_map_batch_internal(
     })
 }
 
-fn handle_array<O: OffsetSizeTrait>(
+fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,
 ) -> datafusion_common::Result<ColumnarValue> {
-    let key_count = keys.len();
-    let keys = keys.as_list::<O>();
-    let values = values.as_list::<O>();
+    let mut offset_buffer = vec![O::usize_as(0)];
+    let mut running_offset = O::usize_as(0);
+    // FIXME: Can we use ColumnarValue::values_to_arrays() over here
+    let keys = keys
+        .as_list::<O>()
+        .iter()
+        .flatten()
+        .map(|x| match x.data_type() {
+            DataType::List(_) => x.as_list::<i32>().value(0),
+            _ => x,
+        })
+        .collect::<Vec<_>>();
+    // each item is an array
+    let values = values
+        .as_list::<O>()
+        .iter()
+        .flatten()
+        .map(|x| match x.data_type() {
+            DataType::List(_) => x.as_list::<i32>().value(0),
+            _ => x,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(keys.len(), values.len());
 
-    let mut keys_ref = vec![];
-    let mut values_ref = vec![];
-    let mut offsets = vec![];
-    offsets.push(O::usize_as(0));
-    let keys = keys.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
-    let values = values.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
-
-    let mut current_offset: O = O::usize_as(0);
+    let mut key_array_vec = vec![];
+    let mut value_array_vec = vec![];
     for (k, v) in keys.iter().zip(values.iter()) {
-        current_offset = current_offset.add(O::usize_as(k.len()));
-        offsets.push(current_offset);
-        keys_ref.push(k.as_ref());
-        values_ref.push(v.as_ref());
+        running_offset = running_offset.add(O::usize_as(k.len()));
+        offset_buffer.push(running_offset);
+        key_array_vec.push(k.as_ref());
+        value_array_vec.push(v.as_ref());
     }
 
-    let flattened_keys = concat(&keys_ref).unwrap();
-    let flattened_values = concat(&values_ref).unwrap();
+    // concatenate all the arrays in t
+    let flattened_keys = arrow::compute::concat(key_array_vec.as_ref()).unwrap();
+    let flattened_values = arrow::compute::concat(value_array_vec.as_ref()).unwrap();
 
     let fields = vec![
-        Field::new("key", keys_ref[0].data_type().clone(), false),
-        Field::new("value", values_ref[0].data_type().clone(), true),
+        Arc::new(Field::new("key", flattened_keys.data_type().clone(), false)),
+        Arc::new(Field::new(
+            "value",
+            flattened_values.data_type().clone(),
+            true,
+        )),
     ];
-
-    let struct_data = ArrayData::builder(DataType::Struct(fields.clone().into()))
+    let struct_data = ArrayData::builder(DataType::Struct(fields.into()))
         .len(flattened_keys.len())
-        .offset(0)
         .add_child_data(flattened_keys.to_data())
         .add_child_data(flattened_values.to_data())
         .build()
         .unwrap();
-
-    let map_data = ArrayData::builder(DataType::Map(
+    // Data should be struct array
+    // offer should be partition of the struct array
+    let data = ArrayData::builder(DataType::Map(
         Arc::new(Field::new(
             "entries",
-            DataType::Struct(fields.clone().into()),
+            struct_data.data_type().clone(),
             false,
         )),
         false,
     ))
-    .len(key_count)
-    .offset(0)
-    .add_buffer(Buffer::from_slice_ref(offsets.as_slice()))
-    .add_child_data(struct_data.clone())
+    .len(keys.len())
+    .add_child_data(struct_data)
+    .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()))
     .build()
     .unwrap();
-
-    Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
+    Ok(ColumnarValue::Array(Arc::new(MapArray::from(data))))
 }
 
 #[derive(Debug)]
@@ -246,12 +261,12 @@ impl ScalarUDFImpl for MapFunc {
         let mut builder = SchemaBuilder::new();
         builder.push(Field::new(
             "key",
-            get_element_type(&arg_types[0])?.clone(),
+            get_element_type(&arg_types[0], 0)?.clone(),
             false,
         ));
         builder.push(Field::new(
             "value",
-            get_element_type(&arg_types[1])?.clone(),
+            get_element_type(&arg_types[1], 0)?.clone(),
             true,
         ));
         let fields = builder.finish().fields;
@@ -266,14 +281,27 @@ impl ScalarUDFImpl for MapFunc {
     }
 }
 
-fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType> {
+fn get_element_type(
+    data_type: &DataType,
+    level: u8,
+) -> datafusion_common::Result<&DataType> {
     match data_type {
-        DataType::List(element) => Ok(element.data_type()),
-        DataType::LargeList(element) => Ok(element.data_type()),
-        DataType::FixedSizeList(element, _) => Ok(element.data_type()),
-        _ => exec_err!(
-            "Expected list, large_list or fixed_size_list, got {:?}",
-            data_type
-        ),
+        DataType::List(element) => Ok(get_element_type(element.data_type(), level + 1)?),
+        DataType::LargeList(element) => {
+            Ok(get_element_type(element.data_type(), level + 1)?)
+        }
+        DataType::FixedSizeList(element, _) => {
+            Ok(get_element_type(element.data_type(), level + 1)?)
+        }
+        t => {
+            if level <= 2 {
+                Ok(t)
+            } else {
+                exec_err!(
+                    "Expected list, large_list or fixed_size_list, got {:?}",
+                    data_type
+                )
+            }
+        }
     }
 }
