@@ -48,6 +48,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
+use itertools::Itertools;
 use log::trace;
 
 /// Unnest the given columns (either with type struct or list)
@@ -349,6 +350,11 @@ fn flatten_struct_cols(
     Ok(RecordBatch::try_new(Arc::clone(schema), columns_expanded)?)
 }
 
+struct ListUnnest {
+    index_in_input_schema: usize,
+    depth: usize,
+}
+
 /// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
 /// - For list columns: We will expand the values in each list into multiple rows,
 /// taking the longest length among these lists, and shorter lists are padded with NULLs.
@@ -357,7 +363,7 @@ fn flatten_struct_cols(
 fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
-    list_type_columns: &[(usize, usize)],
+    list_type_columns: &[ListUnnest],
     struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
 ) -> Result<RecordBatch> {
@@ -366,13 +372,20 @@ fn build_batch(
         _ => {
             let list_arrays: Vec<(ArrayRef, usize)> = list_type_columns
                 .iter()
-                .map(|(index, depth)| {
-                    Ok((
-                        ColumnarValue::Array(Arc::clone(batch.column(*index)))
+                .map(
+                    |ListUnnest {
+                         depth,
+                         index_in_input_schema,
+                     }| {
+                        Ok((
+                            ColumnarValue::Array(Arc::clone(
+                                batch.column(*index_in_input_schema),
+                            ))
                             .into_array(batch.num_rows())?,
-                        *depth,
-                    ))
-                })
+                            *depth,
+                        ))
+                    },
+                )
                 .collect::<Result<_>>()?;
 
             let longest_length = find_longest_length(&list_arrays, options)?;
@@ -391,11 +404,25 @@ fn build_batch(
             // Unnest all the list arrays
             let unnested_arrays =
                 unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
-            let unnested_array_map: HashMap<_, _> = unnested_arrays
+            let unnested_array_map: HashMap<usize, Vec<Arc<dyn Array>>> = unnested_arrays
                 .into_iter()
                 .zip(list_type_columns.iter())
-                .map(|(array, (column, depth))| (*column, (array, depth)))
-                .collect();
+                .fold(
+                    HashMap::new(),
+                    |mut acc,
+                     (
+                        flattened_array,
+                        ListUnnest {
+                            index_in_input_schema,
+                            depth,
+                        },
+                    )| {
+                        acc.entry(index_in_input_schema)
+                            .or_insert_with(vec![])
+                            .push(flattened_array);
+                        acc
+                    },
+                );
 
             // Create the take indices array for other columns
             let take_indicies = create_take_indicies(unnested_length, total_length);
@@ -403,7 +430,7 @@ fn build_batch(
             // vertical expansion because of list unnest
             let ret = flatten_list_cols_from_indices(
                 batch,
-                &unnested_array_map,
+                unnested_array_map,
                 &take_indicies,
             )?;
             flatten_struct_cols(&ret, schema, struct_column_indices)
@@ -692,18 +719,22 @@ fn create_take_indicies(
 ///
 fn flatten_list_cols_from_indices(
     batch: &RecordBatch,
-    unnested_list_arrays: &HashMap<usize, (ArrayRef, usize)>,
+    unnested_list_arrays: HashMap<usize, Vec<ArrayRef>>,
     indices: &PrimitiveArray<Int64Type>,
 ) -> Result<Vec<Arc<dyn Array>>> {
     let arrays = batch
         .columns()
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(col_idx, arr)| match unnested_list_arrays.get(&col_idx) {
-            Some((unnested_array, depth)) => Ok(Arc::clone(unnested_array)),
-            None => Ok(kernels::take::take(arr, indices, None)?),
-        })
-        .collect::<Result<Vec<_>>>()?;
+        .map(
+            |(col_idx, arr)| match unnested_list_arrays.remove(&col_idx) {
+                Some(unnested_arrays) => Ok(unnested_arrays),
+                None => Ok(vec![kernels::take::take(arr, indices, None)?]),
+            },
+        )
+        .collect::<Result<Vec<_>>>()?
+        .flatten()
+        .collect::<Vec<_>>();
     Ok(arrays)
 }
 
