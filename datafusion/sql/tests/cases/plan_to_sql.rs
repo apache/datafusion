@@ -448,6 +448,27 @@ fn test_table_references_in_plan_to_sql() {
 }
 
 #[test]
+fn test_table_scan_with_no_projection_in_plan_to_sql() {
+    fn test(table_name: &str, expected_sql: &str) {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]);
+
+        let plan = table_scan(Some(table_name), &schema, None)
+        .unwrap()
+        .build()
+        .unwrap();
+        let sql = plan_to_sql(&plan).unwrap();
+        assert_eq!(format!("{}", sql), expected_sql)
+    }
+
+    test("catalog.schema.table", "SELECT * FROM catalog.\"schema\".\"table\"");
+    test("schema.table", "SELECT * FROM \"schema\".\"table\"");
+    test("table","SELECT * FROM \"table\"");
+}
+
+#[test]
 fn test_pretty_roundtrip() -> Result<()> {
     let schema = Schema::new(vec![
         Field::new("id", DataType::Utf8, false),

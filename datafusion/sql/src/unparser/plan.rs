@@ -140,6 +140,12 @@ impl Unparser<'_> {
             return Ok(*body);
         }
 
+        // If no projection is set, add a wildcard projection to the select 
+        // which will be translated to `SELECT *` in the SQL statement 
+        if !select_builder.already_projected(){
+            select_builder.projection(vec![ast::SelectItem::Wildcard(ast::WildcardAdditionalOptions::default())]);
+        }
+
         let mut twj = select_builder.pop_from().unwrap();
         twj.relation(relation_builder);
         select_builder.push_from(twj);
