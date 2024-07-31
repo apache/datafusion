@@ -57,23 +57,24 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
+use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
-use datafusion::physical_plan::values::ValuesExec;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 
 use crate::common::{byte_to_string, str_to_byte};
 use crate::convert_required;
 use crate::physical_plan::from_proto::{
-    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_physical_window_expr, parse_protobuf_file_scan_config,
+    parse_physical_expr, parse_physical_exprs, parse_physical_sort_expr,
+    parse_physical_sort_exprs, parse_physical_window_expr,
+    parse_protobuf_file_scan_config,
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
-    serialize_physical_window_expr,
+    serialize_physical_exprs, serialize_physical_window_expr,
 };
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
@@ -1100,7 +1101,19 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             }
             PhysicalPlanType::Values(values) => {
                 let schema = Arc::new(convert_required!(values.schema)?);
-                todo!()
+                let exprs = values
+                    .exprs
+                    .iter()
+                    .map(|expr_list| {
+                        parse_physical_exprs(
+                            &expr_list.exprs,
+                            registry,
+                            &schema,
+                            extension_codec,
+                        )
+                    })
+                    .collect::<Result<Vec<Vec<Arc<dyn PhysicalExpr>>>>>()?;
+                Ok(Arc::new(ValuesExec::try_new(schema, exprs)?))
             }
         }
     }
@@ -1961,10 +1974,26 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         }
 
         if let Some(exec) = plan.downcast_ref::<ValuesExec>() {
-            todo!()
+            let schema = exec.schema().as_ref().try_into()?;
+            let exprs = exec
+                .exprs()
+                .iter()
+                .map(|exprs| {
+                    let exprs = serialize_physical_exprs(exprs.clone(), extension_codec)?;
+                    Ok(protobuf::PhysicalExprList { exprs })
+                })
+                .collect::<Result<Vec<protobuf::PhysicalExprList>>>()?;
+            return Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Values(
+                    protobuf::ValuesExecNode {
+                        schema: Some(schema),
+                        exprs,
+                    },
+                )),
+            });
         }
 
-            let mut buf: Vec<u8> = vec![];
+        let mut buf: Vec<u8> = vec![];
         match extension_codec.try_encode(Arc::clone(&plan_clone), &mut buf) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalPlanNode> = plan_clone
