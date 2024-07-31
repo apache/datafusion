@@ -10,6 +10,17 @@ create table t(a int, b varchar) as values
     (2, 'cd'),
     (4, 'a');
 
+<<<<<<< Updated upstream
+=======
+
+query error
+select concat(b, '1'+rand()) from t;
+----
+DataFusion error: Error during planning: Invalid function 'rand'.
+Did you mean 'tanh'?
+
+
+>>>>>>> Stashed changes
 query ITI
 select a, b, count(*) from t group by a, b order by count(*) desc limit 10;
 ----
@@ -22,6 +33,12 @@ select a, b, count(*) from t group by a, b order by count(*) desc limit 10;
 1 b 1
 
 
+<<<<<<< Updated upstream
+=======
+
+
+
+>>>>>>> Stashed changes
 statement ok
 CREATE EXTERNAL TABLE hits
 STORED AS PARQUET
