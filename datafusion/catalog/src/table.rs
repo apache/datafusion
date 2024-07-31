@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::session::Session;
@@ -152,6 +153,28 @@ pub trait TableProvider: Sync + Send {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Create an [`ExecutionPlan`] with an extra parameter
+    /// specifying the deep column projections
+    /// # Deep column projection
+    ///
+    /// If specified, a datasource such as Parquet can do deep projection pushdown.
+    /// In the case of deeply nested schemas (lists in structs etc), the
+    /// implementation can return a smaller schema that rewrites the entire file
+    /// schema to return only the necessary fields, no matter where they are (top-level
+    /// or deep)
+    ///
+    async fn scan_deep(
+           &self,
+            state: &dyn Session,
+            projection: Option<&Vec<usize>>,
+            _projection_deep: Option<&HashMap<usize, Vec<String>>>,
+            filters: &[Expr],
+            limit: Option<usize>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.scan(state, projection, filters, limit).await
+    }
+
 
     /// Specify if DataFusion should provide filter expressions to the
     /// TableProvider to apply *during* the scan.

@@ -46,6 +46,9 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-functions = { workspace = true }
+datafusion-functions-nested = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }

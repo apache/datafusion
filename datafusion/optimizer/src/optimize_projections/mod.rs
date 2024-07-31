@@ -18,8 +18,9 @@
 //! [`OptimizeProjections`] identifies and eliminates unused columns
 
 mod required_indices;
+mod required_indices_deep;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
@@ -42,6 +43,7 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
+use log::trace;
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
 /// inside the [`LogicalPlan`]. This rule:
@@ -249,21 +251,46 @@ fn optimize_projections(
                 table_name,
                 source,
                 projection,
+                projection_deep,
                 filters,
                 fetch,
-                projected_schema: _,
+                projected_schema,
             } = table_scan;
 
-            // Get indices referred to in the original (schema with all fields)
-            // given projected indices.
-            let projection = match &projection {
-                Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
-                None => indices.into_inner(),
+            trace!(target: "deep", "optimize_projections TableScan: {:?} {:?} = {:#?}", projection, projection_deep, projected_schema.clone());
+
+            if false {
+                // Get indices referred to in the original (schema with all fields)
+                // given projected indices.
+                let projection = match &projection {
+                    Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
+                    None => indices.into_inner(),
+                };
+                return TableScan::try_new(
+                        table_name,
+                        source,
+                        Some(projection),
+                        filters,
+                        fetch,
+                )
+                .map(LogicalPlan::TableScan)
+                .map(Transformed::yes);
+            }
+
+            let (new_projection, new_projection_deep) = if projection.is_some() {
+                let projection_clone = projection.unwrap().clone();
+                let projection_deep_clone = projection_deep.clone();
+                indices.into_mapped_indices_deep(|idx| projection_clone[idx])
+            } else {
+                indices.into_inner_deep()
             };
-            return TableScan::try_new(
+            trace!(target: "deep", "optimize_projections new projection: {:#?}, {:#?}", new_projection, new_projection_deep);
+
+            return TableScan::try_new_with_deep_projection(
                 table_name,
                 source,
-                Some(projection),
+                Some(new_projection),
+                Some(new_projection_deep),
                 filters,
                 fetch,
             )
@@ -605,6 +632,8 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
     })
 }
 
+
+
 /// Accumulates outer-referenced columns by the
 /// given expression, `expr`.
 ///
@@ -613,12 +642,12 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
 /// * `expr` - The expression to analyze for outer-referenced columns.
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
-fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashSet<&'a Column>) {
+fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashMap<Column, Vec<String>>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
     expr.apply(|expr| {
         match expr {
             Expr::OuterReferenceColumn(_, col) => {
-                columns.insert(col);
+                required_indices_deep::append_column(columns, &col, vec![]);
             }
             Expr::ScalarSubquery(subquery) => {
                 outer_columns_helper_multi(&subquery.outer_ref_columns, columns);
@@ -650,7 +679,7 @@ fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashSet<&'a Column>) {
 ///   columns are collected.
 fn outer_columns_helper_multi<'a, 'b>(
     exprs: impl IntoIterator<Item = &'a Expr>,
-    columns: &'b mut HashSet<&'a Column>,
+    columns: &'b mut HashMap<Column, Vec<String>>,
 ) {
     exprs.into_iter().for_each(|e| outer_columns(e, columns));
 }
@@ -762,11 +791,15 @@ fn rewrite_projection_given_requirements(
     let exprs_used = indices.get_at_indices(&expr);
 
     let required_indices =
-        RequiredIndicies::new().with_exprs(input.schema(), exprs_used.iter())?;
+        indices.with_exprs_and_old_indices(input.schema(), &expr)?;
+
+    trace!(target: "deep", "rewrite_projection_given_requirements: {:#?}", required_indices);
+    trace!(target: "deep", "rewrite_projection_given_requirements: {:#?}", input);
 
     // rewrite the children projection, and if they are changed rewrite the
     // projection down
-    optimize_projections(unwrap_arc(input), config, required_indices)?.transform_data(
+    let opt1 = optimize_projections(unwrap_arc(input), config, required_indices)?;
+    opt1.transform_data(
         |input| {
             if is_projection_unnecessary(&input, &exprs_used)? {
                 Ok(Transformed::yes(input))
@@ -803,6 +836,7 @@ mod tests {
     };
     use crate::{OptimizerContext, OptimizerRule};
     use arrow::datatypes::{DataType, Field, Schema};
+    use log::info;
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
     };
@@ -816,7 +850,9 @@ mod tests {
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
         not, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
         Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition,
+        Literal, 
     };
+    use crate::optimize_projections::required_indices_deep::expr_to_deep_columns;
 
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, max, min};
@@ -1954,4 +1990,102 @@ mod tests {
             optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
         Ok(optimized_plan)
     }
+
+    #[test]
+    fn test_adr() -> Result<()> {
+        let tmp = datafusion_functions::expr_fn::get_field(
+            datafusion_functions::expr_fn::get_field(
+                col("aa"),
+                "bb"
+            ),
+            "cc"
+        );
+        let kk = expr_to_deep_columns(&tmp);
+        info!("kk: {:#?}", kk);
+
+        let tmp =
+            datafusion_functions::expr_fn::get_field(
+                datafusion_functions_nested::expr_fn::array_element(
+                    col("list_struct"),
+                    0_i32.lit()
+                ),
+                "cc"
+            )
+            ;
+        let kk = expr_to_deep_columns(&tmp);
+        info!("kk: {:#?}", kk);
+
+        let tmp = datafusion_functions::expr_fn::nullif(
+            datafusion_functions::expr_fn::get_field(
+                datafusion_functions_nested::expr_fn::array_element(
+                    col("list_struct"),
+                    0_i32.lit()
+                ),
+                "cc"
+            ),
+            datafusion_functions::expr_fn::get_field(
+                datafusion_functions::expr_fn::get_field(
+                    col("othercol"),
+                    "bb"
+                ),
+                "cc"
+            )
+        );
+        let kk = expr_to_deep_columns(&tmp);
+        info!("kk: {:#?}", kk);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_deep_schema() -> Result<()> {
+        // shared join columns from using join should be pushed to both sides
+
+        let table_scan = test_table_scan()?;
+
+        let schema = Schema::new(vec![Field::new("a", DataType::UInt32, false)]);
+        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .join_using(table2_scan, JoinType::Left, vec!["a"])?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        // make sure projections are pushed down to table scan
+        let expected = "Projection: test.a, test.b\
+        \n  Left Join: Using test.a = test2.a\
+        \n    TableScan: test projection=[a, b]\
+        \n    TableScan: test2 projection=[a]";
+
+        let optimized_plan = optimize(plan)?;
+        let formatted_plan = format!("{optimized_plan:?}");
+        assert_eq!(formatted_plan, expected);
+
+        // make sure schema for join node include both join columns
+        let optimized_join = optimized_plan.inputs()[0];
+        assert_eq!(
+            **optimized_join.schema(),
+            DFSchema::new_with_metadata(
+                vec![
+                    (
+                        Some("test".into()),
+                        Arc::new(Field::new("a", DataType::UInt32, false))
+                    ),
+                    (
+                        Some("test".into()),
+                        Arc::new(Field::new("b", DataType::UInt32, false))
+                    ),
+                    (
+                        Some("test2".into()),
+                        Arc::new(Field::new("a", DataType::UInt32, true))
+                    ),
+                ],
+                HashMap::new()
+            )?,
+        );
+
+        Ok(())
+    }
+
+
 }

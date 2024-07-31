@@ -69,7 +69,7 @@ impl SchemaAdapter for NestedSchemaAdapter {
             if let Some((table_idx, table_field)) =
                 self.table_schema.fields().find(file_field.name())
             {
-                match can_rewrite_field(table_field.clone(), file_field.clone(), false) {
+                match can_rewrite_field(table_field.clone(), file_field.clone(), true) {
                     true => {
                         field_mappings[table_idx] = Some(projection.len());
                         projection.push(file_idx);
@@ -582,8 +582,8 @@ mod tests {
             .sql(
                 r#"
             select
-                get_field(struct1, 'tags') as tags,
-                get_field(array_element(list_struct, 0), 'int32') as f2
+                struct1['tags'] as tags,
+                list_struct[0]['int32'] as f2
             from
                 tbl;
         "#,
