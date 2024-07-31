@@ -264,34 +264,35 @@ impl BatchPartitioner {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
-                    // TODO: This could be removed
-                    let arrays = exprs
-                        .iter()
-                        .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
-                        .collect::<Result<Vec<_>>>()?;
-
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
-
-                    create_hashes(&arrays, random_state, hash_buffer)?;
-                    println!("arrays: {:?}", arrays);
-                    println!("hash_buffer: {:?}", hash_buffer);
-
-
                     let mut indices: Vec<_> = (0..*partitions)
                         .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
                         .collect();
 
-                    println!("batch.schema: {:?}", batch.schema());
-                    let hash_values = batch
-                        .column_by_name("hash_value")
-                        .unwrap()
-                        .as_primitive::<UInt64Type>();
-                    println!("hash_values: {:?}", hash_values);
-                    for (index, hash) in hash_values.iter().enumerate() {
-                        let hash = hash.unwrap();
-                        indices[(hash % *partitions as u64) as usize]
-                            .append_value(index as u64);
+                    if let Some(hash_values) = batch.column_by_name("hash_value") {
+                        let hash_array = hash_values.as_primitive::<UInt64Type>();
+                        for (index, hash) in hash_array.iter().enumerate() {
+                            let hash = hash.unwrap();
+                            indices[(hash % *partitions as u64) as usize]
+                                .append_value(index as u64);
+                        }
+                    } else {
+                        // Some queries do reparition first
+                        let arrays = exprs
+                            .iter()
+                            .map(|expr| {
+                                expr.evaluate(&batch)?.into_array(batch.num_rows())
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+
+                        hash_buffer.clear();
+                        hash_buffer.resize(batch.num_rows(), 0);
+
+                        create_hashes(&arrays, random_state, hash_buffer)?;
+
+                        for (index, &hash) in hash_buffer.iter().enumerate() {
+                            indices[(hash % *partitions as u64) as usize]
+                                .append_value(index as u64);
+                        }
                     }
 
                     // Finished building index-arrays for output partitions

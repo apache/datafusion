@@ -64,6 +64,7 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
     pub fn insert(&mut self, values: &ArrayRef) {
         fn make_payload_fn(_value: Option<&[u8]>, _hash: u64) {}
         fn observe_payload_fn(_payload: ()) {}
+        println!("wrong");
         self.0
             .insert_if_new(&[], values, make_payload_fn, observe_payload_fn);
     }

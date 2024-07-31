@@ -45,8 +45,14 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
     // define data.
     let batches = (0..array_len / batch_size)
         .map(|_i| {
-            let data1 = (0..batch_size).into_iter().map(|x| x as i64).collect::<Vec<_>>();
-            let data2 = (0..batch_size).into_iter().map(|j| format!("a{j}")).collect::<Vec<_>>();
+            let data1 = (0..batch_size)
+                .into_iter()
+                .map(|x| x as i64)
+                .collect::<Vec<_>>();
+            let data2 = (0..batch_size)
+                .into_iter()
+                .map(|j| format!("a{j}"))
+                .collect::<Vec<_>>();
 
             RecordBatch::try_new(
                 schema.clone(),
@@ -72,7 +78,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     let array_len = 2000000; // 2M rows
     let batch_size = array_len;
 
-    
     c.bench_function("benchmark", |b| {
         let mut ctx = create_context(array_len, batch_size).unwrap();
         b.iter(|| block_on(query(&mut ctx, "select a, b, count(*) from t group by a, b order by count(*) desc limit 10")))
@@ -80,7 +85,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 }
 
 // criterion_group!(benches, criterion_benchmark);
-criterion_group!{
+criterion_group! {
     name = benches;
     // This can be any expression that returns a `Criterion` object.
     config = Criterion::default().sample_size(10);

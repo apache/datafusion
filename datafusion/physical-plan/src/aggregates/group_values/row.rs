@@ -128,6 +128,9 @@ impl GroupValues for GroupValuesRows {
             None => vec![],
         };
 
+        println!("store_gp_hashes len: {:?}", store_gp_hashes);
+        println!("n_rows: {:?}", n_rows);
+
         // tracks to which group each of the input rows belongs
         groups.clear();
 
@@ -144,10 +147,7 @@ impl GroupValues for GroupValuesRows {
 
                 let group_idx = match entry {
                     // Existing group_index for this group value
-                    Some((_hash, group_idx)) => {
-                        // println!("existing group: {:?}", *group_idx);
-                        *group_idx
-                    }
+                    Some((_hash, group_idx)) => *group_idx,
                     //  1.2 Need to create new entry for the group
                     None => {
                         // Add new entry to aggr_state and save newly created index
@@ -234,27 +234,36 @@ impl GroupValues for GroupValuesRows {
         let mut group_values = self
             .group_values
             .take()
-            .expect("Can not emit from empty rows");
+            .expect("Can not emit from empty rows for values");
 
-        let group_hashes = self
+        let mut group_hashes = self
             .group_hashes
             .take()
-            .expect("Can not emit from empty rows");
+            .expect("Can not emit from empty rows for hashes");
 
-        println!("emit_to: {:?}", emit_to);
         let mut output = match emit_to {
             EmitTo::All => {
                 let mut output = self.row_converter.convert_rows(&group_values)?;
                 if mode == AggregateMode::Partial {
-                    let arr = Arc::new(UInt64Array::from(group_hashes)) as ArrayRef;
+                    let gh = std::mem::take(&mut group_hashes);
+                    let arr = Arc::new(UInt64Array::from(gh)) as ArrayRef;
                     output.push(arr);
                 }
                 group_values.clear();
+
                 output
             }
             EmitTo::First(n) => {
                 let groups_rows = group_values.iter().take(n);
-                let output = self.row_converter.convert_rows(groups_rows)?;
+                let mut output = self.row_converter.convert_rows(groups_rows)?;
+
+                if mode == AggregateMode::Partial {
+                    let remain_group_hashes = group_hashes.split_off(n);
+                    let arr = Arc::new(UInt64Array::from(group_hashes)) as ArrayRef;
+                    group_hashes = remain_group_hashes;
+                    output.push(arr);
+                }
+
                 // Clear out first n group keys by copying them to a new Rows.
                 // TODO file some ticket in arrow-rs to make this more efficient?
                 let mut new_group_values = self.row_converter.empty_rows(0, 0);
@@ -294,6 +303,7 @@ impl GroupValues for GroupValuesRows {
         }
 
         self.group_values = Some(group_values);
+        self.group_hashes = Some(group_hashes);
         Ok(output)
     }
 

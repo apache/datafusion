@@ -665,9 +665,6 @@ impl GroupedHashAggregateStream {
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
 
-        println!("mode: {:?}", self.mode);
-        println!("schema: {:?}", schema);
-        println!("output: {:?}", output);
         let batch = RecordBatch::try_new(schema, output)?;
         Ok(batch)
     }

@@ -254,6 +254,7 @@ pub struct AggregateExec {
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
     schema: SchemaRef,
+    plain_schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate, i.e., partial and final aggregates have same `input_schema`.
@@ -266,6 +267,7 @@ pub struct AggregateExec {
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
     cache: PlanProperties,
+    plain_cache: PlanProperties,
 }
 
 impl AggregateExec {
@@ -280,12 +282,14 @@ impl AggregateExec {
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
             cache: self.cache.clone(),
+            plain_cache: self.plain_cache.clone(),
             mode: self.mode,
             group_by: self.group_by.clone(),
             filter_expr: self.filter_expr.clone(),
             limit: self.limit,
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
+            plain_schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
         }
     }
@@ -309,9 +313,20 @@ impl AggregateExec {
             &aggr_expr,
             group_by.contains_null(),
             mode,
+            false,
+        )?;
+        // HACK for GroupStreamTopK
+        let plain_schema = create_schema(
+            &input.schema(),
+            &group_by.expr,
+            &aggr_expr,
+            group_by.contains_null(),
+            mode,
+            true,
         )?;
 
         let schema = Arc::new(schema);
+        let plain_schema = Arc::new(plain_schema);
         AggregateExec::try_new_with_schema(
             mode,
             group_by,
@@ -320,6 +335,7 @@ impl AggregateExec {
             input,
             input_schema,
             schema,
+            plain_schema,
         )
     }
 
@@ -340,6 +356,7 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         schema: SchemaRef,
+        plain_schema: SchemaRef,
     ) -> Result<Self> {
         // Make sure arguments are consistent in size
         if aggr_expr.len() != filter_expr.len() {
@@ -405,6 +422,13 @@ impl AggregateExec {
             &mode,
             &input_order_mode,
         );
+        let plain_cache = Self::compute_properties(
+            &input,
+            Arc::clone(&plain_schema),
+            &projection_mapping,
+            &mode,
+            &input_order_mode,
+        );
 
         Ok(AggregateExec {
             mode,
@@ -413,12 +437,14 @@ impl AggregateExec {
             filter_expr,
             input,
             schema,
+            plain_schema,
             input_schema,
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
             limit: None,
             input_order_mode,
             cache,
+            plain_cache,
         })
     }
 
@@ -430,6 +456,18 @@ impl AggregateExec {
     /// Set the `limit` of this AggExec
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
+
+        // HACK: remove hash_value in schema, since we can't identify whether is has limit while creating schema
+        std::mem::swap(&mut self.schema, &mut self.plain_schema);
+        std::mem::swap(&mut self.cache, &mut self.plain_cache);
+
+        // revert back
+        if self.is_unordered_unfiltered_group_by_distinct() {
+            std::mem::swap(&mut self.schema, &mut self.plain_schema);
+            std::mem::swap(&mut self.cache, &mut self.plain_cache);
+        }
+
+
         self
     }
     /// Grouping expressions
@@ -485,6 +523,8 @@ impl AggregateExec {
                 return Ok(StreamType::GroupedPriorityQueue(
                     GroupedTopKAggregateStream::new(self, context, partition, limit)?,
                 ));
+            } else {
+                println!("not pass");
             }
         }
 
@@ -710,6 +750,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&children[0]),
             Arc::clone(&self.input_schema),
             Arc::clone(&self.schema),
+            Arc::clone(&self.plain_schema),
         )?;
         me.limit = self.limit;
 
@@ -783,8 +824,9 @@ fn create_schema(
     aggr_expr: &[Arc<dyn AggregateExpr>],
     contains_null_expr: bool,
     mode: AggregateMode,
+    no_hash_value: bool,
 ) -> Result<Schema> {
-    let group_schema = group_schema(&input_schema, group_expr.len());
+    // let group_schema = group_schema(&input_schema, group_expr.len());
 
     let mut fields = Vec::with_capacity(group_expr.len() + aggr_expr.len());
     for (expr, name) in group_expr {
@@ -800,18 +842,8 @@ fn create_schema(
 
     match mode {
         AggregateMode::Partial => {
-            if !group_expr.is_empty() {
-                if group_schema.fields.len() == 1 {
-                    let dt = group_schema.field(0).data_type();
-                    fields.push(Field::new("hash_value", DataType::UInt64, true));
-                    // if matches!(dt, DataType::Utf8|DataType::LargeUtf8|DataType::Binary|DataType::LargeBinary) {
-                    // } else {
-                    //     // For GroupValuesRows
-                    //     // Hash values
-                    // }
-                } else {
-                    fields.push(Field::new("hash_value", DataType::UInt64, true));
-                }
+            if !group_expr.is_empty() && !no_hash_value {
+                fields.push(Field::new("hash_value", DataType::UInt64, true));
             }
 
             // in partial mode, the fields of the accumulator's state

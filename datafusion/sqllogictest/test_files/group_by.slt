@@ -2118,7 +2118,7 @@ physical_plan
 03)----StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
 
-query III
+query III rowsort
  SELECT a, b,
  SUM(c) as summation1
  FROM annotated_data_infinite2

@@ -23,7 +23,9 @@ use arrow::buffer::NullBuffer;
 use arrow::datatypes::i256;
 use arrow::record_batch::RecordBatch;
 use arrow_array::cast::AsArray;
-use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray, UInt64Array};
+use arrow_array::{
+    ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray, UInt64Array,
+};
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::DataType;
 use datafusion_common::Result;
@@ -124,7 +126,6 @@ where
         assert_eq!(cols.len(), 1);
         groups.clear();
 
-        println!("arrays: {:?}", cols);
         let mut store_gp_hashes = match self.group_hashes.take() {
             Some(group_hashes) => group_hashes,
             None => vec![],
@@ -135,6 +136,8 @@ where
                 None => *self.null_group.get_or_insert_with(|| {
                     let group_id = self.values.len();
                     self.values.push(Default::default());
+                    // hash value 0 for null
+                    store_gp_hashes.push(0);
                     group_id
                 }),
                 Some(key) => {
@@ -195,13 +198,21 @@ where
             PrimitiveArray::<T>::new(values.into(), nulls)
         }
 
+        let mut group_hashes = self
+            .group_hashes
+            .take()
+            .expect("Can not emit from empty rows");
+
+        let mut remaining_group_hashes = vec![];
+
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
-
                 self.map.clear();
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
             }
             EmitTo::First(n) => {
+                remaining_group_hashes = group_hashes.split_off(n);
+
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
                     for bucket in self.map.iter() {
@@ -228,18 +239,15 @@ where
             }
         };
 
-        let mut output = vec![Arc::new(array.with_data_type(self.data_type.clone())) as ArrayRef];
+        let mut output =
+            vec![Arc::new(array.with_data_type(self.data_type.clone())) as ArrayRef];
 
-        let group_hashes = self
-            .group_hashes
-            .take()
-            .expect("Can not emit from empty rows");
-    
         if mode == AggregateMode::Partial {
             let arr = Arc::new(UInt64Array::from(group_hashes)) as ArrayRef;
             output.push(arr);
-            println!("new output: {:?}", output);
         }
+
+        self.group_hashes = Some(remaining_group_hashes);
 
         Ok(output)
     }
