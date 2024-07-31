@@ -414,7 +414,8 @@ pub struct RepartitionExec {
 struct RepartitionMetrics {
     /// Time in nanos to execute child operator and fetch batches
     fetch_time: metrics::Time,
-    /// Time in nanos to perform repartitioning
+    /// Repartitioning elapsed time in nanos
+    
     repartition_time: metrics::Time,
     /// Time in nanos for sending resulting batches to channels.
     ///
