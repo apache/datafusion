@@ -2911,7 +2911,6 @@ mod tests {
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
 
     use crate::test::function_stub::count;
-    use crate::window_function::row_number;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
