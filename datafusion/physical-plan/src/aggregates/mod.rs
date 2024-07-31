@@ -1353,7 +1353,6 @@ mod tests {
 
         let aggregates = vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1i8)])
             .schema(Arc::clone(&input_schema))
-            .name("COUNT(1)")
             .logical_exprs(vec![datafusion_expr::lit(1i8)])
             .build()?];
 
@@ -1498,7 +1497,6 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
                     .schema(Arc::clone(&input_schema))
-                    .name("AVG(b)")
                     .build()?,
             ];
 
@@ -1794,7 +1792,6 @@ mod tests {
     fn test_median_agg_expr(schema: SchemaRef) -> Result<Arc<dyn AggregateExpr>> {
         AggregateExprBuilder::new(median_udaf(), vec![col("a", &schema)?])
             .schema(schema)
-            .name("MEDIAN(a)")
             .build()
     }
 
@@ -1825,7 +1822,6 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
                     .schema(Arc::clone(&input_schema))
-                    .name("AVG(b)")
                     .build()?,
             ];
 
@@ -1885,7 +1881,6 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("a", &schema)?])
                     .schema(Arc::clone(&schema))
-                    .name("AVG(a)")
                     .build()?,
             ];
 
@@ -1925,7 +1920,6 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
                     .schema(Arc::clone(&schema))
-                    .name("AVG(b)")
                     .build()?,
             ];
 
@@ -1993,7 +1987,6 @@ mod tests {
             &sort_exprs,
             &ordering_req,
             dfschema,
-            "FIRST_VALUE(b)",
             false,
             false,
             false,
@@ -2352,7 +2345,6 @@ mod tests {
         let aggregates: Vec<Arc<dyn AggregateExpr>> =
             vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
                 .schema(Arc::clone(&schema))
-                .name("1")
                 .build()?];
 
         let input_batches = (0..4)

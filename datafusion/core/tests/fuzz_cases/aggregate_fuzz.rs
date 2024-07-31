@@ -107,7 +107,6 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         vec![
             AggregateExprBuilder::new(sum_udaf(), vec![col("d", &schema).unwrap()])
                 .schema(Arc::clone(&schema))
-                .name("sum1")
                 .build()
                 .unwrap(),
         ];

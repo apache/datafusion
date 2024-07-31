@@ -275,12 +275,10 @@ mod tests {
     // Return appropriate expr depending if COUNT is for col or table (*)
     fn count_expr(
         expr: Arc<dyn PhysicalExpr>,
-        name: &str,
         schema: &Schema,
     ) -> Arc<dyn AggregateExpr> {
         AggregateExprBuilder::new(count_udaf(), vec![expr])
             .schema(Arc::new(schema.clone()))
-            .name(name)
             .build()
             .unwrap()
     }
@@ -289,7 +287,7 @@ mod tests {
     fn aggregations_not_combined() -> Result<()> {
         let schema = schema();
 
-        let aggr_expr = vec![count_expr(lit(1i8), "COUNT(1)", &schema)];
+        let aggr_expr = vec![count_expr(lit(1i8), &schema)];
 
         let plan = final_aggregate_exec(
             repartition_exec(partial_aggregate_exec(
@@ -309,8 +307,8 @@ mod tests {
         ];
         assert_optimized!(expected, plan);
 
-        let aggr_expr1 = vec![count_expr(lit(1i8), "COUNT(1)", &schema)];
-        let aggr_expr2 = vec![count_expr(lit(1i8), "COUNT(2)", &schema)];
+        let aggr_expr1 = vec![count_expr(lit(1i8), &schema)];
+        let aggr_expr2 = vec![count_expr(lit(1i8), &schema)];
 
         let plan = final_aggregate_exec(
             partial_aggregate_exec(
@@ -336,7 +334,7 @@ mod tests {
     #[test]
     fn aggregations_combined() -> Result<()> {
         let schema = schema();
-        let aggr_expr = vec![count_expr(lit(1i8), "COUNT(1)", &schema)];
+        let aggr_expr = vec![count_expr(lit(1i8), &schema)];
 
         let plan = final_aggregate_exec(
             partial_aggregate_exec(
@@ -364,7 +362,6 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
                     .schema(Arc::clone(&schema))
-                    .name("Sum(b)")
                     .build()
                     .unwrap(),
             ];
