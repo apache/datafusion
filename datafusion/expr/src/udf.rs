@@ -46,6 +46,8 @@ use crate::{
 /// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
 ///    access (examples in  [`advanced_udf.rs`]).
 ///
+/// See [`Self::call`] to invoke a `ScalarUDF` with arguments.
+///
 /// # API Note
 ///
 /// This is a separate struct from `ScalarUDFImpl` to maintain backwards
@@ -121,7 +123,16 @@ impl ScalarUDF {
     /// Returns a [`Expr`] logical expression to call this UDF with specified
     /// arguments.
     ///
-    /// This utility allows using the UDF without requiring access to the registry.
+    /// This utility allows easily calling UDFs
+    ///
+    /// # Example
+    /// ```no_run
+    /// use datafusion_expr::{col, lit, ScalarUDF};
+    /// # fn my_udf() -> ScalarUDF { unimplemented!() }
+    /// let my_func: ScalarUDF = my_udf();
+    /// // Create an expr for `my_func(a, 12.3)`
+    /// let expr = my_func.call(vec![col("a"), lit(12.3)]);
+    /// ```
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         Expr::ScalarFunction(crate::expr::ScalarFunction::new_udf(
             Arc::new(self.clone()),
