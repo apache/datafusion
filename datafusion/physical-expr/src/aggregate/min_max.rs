@@ -45,6 +45,7 @@ use arrow_array::types::{
     Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
     UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
+use arrow_array::{BinaryViewArray, StringViewArray};
 use datafusion_common::internal_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
@@ -453,6 +454,14 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::LargeUtf8 => {
             typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, min_string)
         }
+        DataType::Utf8View => {
+            typed_min_max_batch_string!(
+                values,
+                StringViewArray,
+                Utf8View,
+                min_string_view
+            )
+        }
         DataType::Boolean => {
             typed_min_max_batch!(values, BooleanArray, Boolean, min_boolean)
         }
@@ -465,6 +474,14 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 LargeBinaryArray,
                 LargeBinary,
                 min_binary
+            )
+        }
+        DataType::BinaryView => {
+            typed_min_max_batch_binary!(
+                &values,
+                BinaryViewArray,
+                BinaryView,
+                min_binary_view
             )
         }
         _ => min_max_batch!(values, min),
@@ -480,11 +497,27 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::LargeUtf8 => {
             typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, max_string)
         }
+        DataType::Utf8View => {
+            typed_min_max_batch_string!(
+                values,
+                StringViewArray,
+                Utf8View,
+                max_string_view
+            )
+        }
         DataType::Boolean => {
             typed_min_max_batch!(values, BooleanArray, Boolean, max_boolean)
         }
         DataType::Binary => {
             typed_min_max_batch_binary!(&values, BinaryArray, Binary, max_binary)
+        }
+        DataType::BinaryView => {
+            typed_min_max_batch_binary!(
+                &values,
+                BinaryViewArray,
+                BinaryView,
+                max_binary_view
+            )
         }
         DataType::LargeBinary => {
             typed_min_max_batch_binary!(
@@ -629,11 +662,17 @@ macro_rules! min_max {
             (ScalarValue::LargeUtf8(lhs), ScalarValue::LargeUtf8(rhs)) => {
                 typed_min_max_string!(lhs, rhs, LargeUtf8, $OP)
             }
+            (ScalarValue::Utf8View(lhs), ScalarValue::Utf8View(rhs)) => {
+                typed_min_max_string!(lhs, rhs, Utf8View, $OP)
+            }
             (ScalarValue::Binary(lhs), ScalarValue::Binary(rhs)) => {
                 typed_min_max_string!(lhs, rhs, Binary, $OP)
             }
             (ScalarValue::LargeBinary(lhs), ScalarValue::LargeBinary(rhs)) => {
                 typed_min_max_string!(lhs, rhs, LargeBinary, $OP)
+            }
+            (ScalarValue::BinaryView(lhs), ScalarValue::BinaryView(rhs)) => {
+                typed_min_max_string!(lhs, rhs, BinaryView, $OP)
             }
             (ScalarValue::TimestampSecond(lhs, l_tz), ScalarValue::TimestampSecond(rhs, _)) => {
                 typed_min_max!(lhs, rhs, TimestampSecond, $OP, l_tz)
