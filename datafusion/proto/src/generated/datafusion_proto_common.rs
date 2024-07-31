@@ -671,6 +671,11 @@ pub struct TableParquetOptions {
     pub global: ::core::option::Option<ParquetOptions>,
     #[prost(message, repeated, tag = "2")]
     pub column_specific_options: ::prost::alloc::vec::Vec<ParquetColumnSpecificOptions>,
+    #[prost(map = "string, string", tag = "3")]
+    pub key_value_metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

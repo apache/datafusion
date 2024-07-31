@@ -577,6 +577,74 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Assume create_parquet_scan creates a logical plan for scanning a Parquet file
+    let input = create_parquet_scan(&ctx).await?;
+
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut parquet_format = table_options.parquet;
+
+    // Set specific Parquet format options
+    let mut key_value_metadata = HashMap::new();
+    key_value_metadata.insert("test".to_string(), Some("test".to_string()));
+    parquet_format.key_value_metadata = key_value_metadata.clone();
+
+    parquet_format.global.allow_single_file_parallelism = false;
+    parquet_format.global.created_by = "test".to_string();
+
+    let file_type = format_as_file_type(Arc::new(
+        ParquetFormatFactory::new_with_options(parquet_format.clone()),
+    ));
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.parquet".to_string(),
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        file_type,
+        options: Default::default(),
+    });
+
+    // Assume ParquetLogicalExtensionCodec is implemented similarly to JsonLogicalExtensionCodec
+    let codec = ParquetLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.parquet", copy_to.output_url);
+            assert_eq!("parquet".to_string(), copy_to.file_type.get_ext());
+            assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
+
+            let file_type = copy_to
+                .file_type
+                .as_ref()
+                .as_any()
+                .downcast_ref::<DefaultFileType>()
+                .unwrap();
+
+            let format_factory = file_type.as_format_factory();
+            let parquet_factory = format_factory
+                .as_ref()
+                .as_any()
+                .downcast_ref::<ParquetFormatFactory>()
+                .unwrap();
+            let parquet_config = parquet_factory.options.as_ref().unwrap();
+            assert_eq!(parquet_config.key_value_metadata, key_value_metadata);
+            assert!(!parquet_config.global.allow_single_file_parallelism);
+            assert_eq!(parquet_config.global.created_by, "test".to_string());
+        }
+        _ => panic!(),
+    }
+
+    Ok(())
+}
+
 async fn create_csv_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
@@ -590,6 +658,20 @@ async fn create_json_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusio
         "t1",
         "../core/tests/data/1.json",
         NdJsonReadOptions::default(),
+    )
+    .await?;
+
+    let input = ctx.table("t1").await?.into_optimized_plan()?;
+    Ok(input)
+}
+
+async fn create_parquet_scan(
+    ctx: &SessionContext,
+) -> Result<LogicalPlan, DataFusionError> {
+    ctx.register_parquet(
+        "t1",
+        "../substrait/tests/testdata/empty.parquet",
+        ParquetReadOptions::default(),
     )
     .await?;
 
