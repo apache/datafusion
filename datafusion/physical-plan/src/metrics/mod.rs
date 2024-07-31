@@ -253,7 +253,9 @@ impl MetricsSet {
     pub fn sum_by_name(&self, metric_name: &str) -> Option<MetricValue> {
         self.sum(|m| match m.value() {
             MetricValue::Count { name, .. } => name == metric_name,
-            MetricValue::Time { name, .. } => name == metric_name,
+            MetricValue::Time { name, .. } | MetricValue::MaxTime { name, .. } => {
+                name == metric_name
+            }
             MetricValue::OutputRows(_) => false,
             MetricValue::ElapsedCompute(_) => false,
             MetricValue::SpillCount(_) => false,
