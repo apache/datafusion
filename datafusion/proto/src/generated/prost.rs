@@ -1049,7 +1049,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1116,6 +1116,8 @@ pub mod physical_plan_node {
         CsvSink(::prost::alloc::boxed::Box<super::CsvSinkExecNode>),
         #[prost(message, tag = "29")]
         ParquetSink(::prost::alloc::boxed::Box<super::ParquetSinkExecNode>),
+        #[prost(message, tag = "30")]
+        Values(super::ValuesExecNode),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1209,6 +1211,14 @@ pub struct ParquetSinkExecNode {
     pub sink_schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, optional, tag = "4")]
     pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValuesExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(message, repeated, tag = "2")]
+    pub exprs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
