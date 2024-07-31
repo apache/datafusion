@@ -69,7 +69,7 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let array_len = 2000000; // 2^19
+    let array_len = 2000000; // 2M rows
     let batch_size = array_len;
 
     

@@ -509,33 +509,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn create_hashes_for_array() -> Result<()> {
-        let arr1 = Arc::new(Int64Array::from(vec![1, 2, 3, 4]));
-        let arr2 = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
-
-        // let array = vec![1, 2, 3, 4]
-        //     .into_iter()
-        //     .map(Some)
-        //     .collect::<Decimal128Array>()
-        //     .with_precision_and_scale(20, 3)
-        //     .unwrap();
-        // let array_ref = Arc::new(array);
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        let hashes_buff = &mut vec![0; arr1.len()];
-        let hashes = create_hashes(&[arr1, arr2], &random_state, hashes_buff)?;
-        assert_eq!(hashes.len(), 4);
-        println!("hashes: {:?}", hashes);
-
-        let arr1 = Arc::new(Int64Array::from(vec![1, 2]));
-        let arr2 = Arc::new(StringArray::from(vec!["a", "b"]));
-        let hashes_buff = &mut vec![0; arr1.len()];
-        let hashes = create_hashes(&[arr1, arr2], &random_state, hashes_buff)?;
-        assert_eq!(hashes.len(), 2);
-        println!("hashes: {:?}", hashes);
-        Ok(())
-    }
-
-    #[test]
     fn create_hashes_for_decimal_array() -> Result<()> {
         let array = vec![1, 2, 3, 4]
             .into_iter()
