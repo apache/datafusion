@@ -434,6 +434,7 @@ message JsonOptions {
 message TableParquetOptions {
   ParquetOptions global = 1;
   repeated ParquetColumnSpecificOptions column_specific_options = 2;
+  map<string, string> key_value_metadata = 3;
 }
 
 message ParquetColumnSpecificOptions {
