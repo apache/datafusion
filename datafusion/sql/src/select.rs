@@ -23,7 +23,7 @@ use crate::planner::{
 };
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnest,
+    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnests,
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -318,20 +318,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
             // - unnest(array_col) will be transformed into unnest(array_col).element
             // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
-            let outer_projection_exprs: Vec<Expr> = intermediate_select_exprs
-                .iter()
-                .map(|expr| {
-                    transform_bottom_unnest(
-                        &intermediate_plan,
-                        &mut unnest_columns,
-                        &mut inner_projection_exprs,
-                        expr,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .collect();
+            let outer_projection_exprs = transform_bottom_unnests(
+                &intermediate_plan,
+                &mut unnest_columns,
+                &mut inner_projection_exprs,
+                &intermediate_select_exprs,
+            )?;
 
             // No more unnest is possible
             if unnest_columns.is_empty() {
@@ -417,20 +409,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let mut unnest_columns = vec![];
             let mut inner_projection_exprs = vec![];
 
-            let outer_projection_exprs: Vec<Expr> = intermediate_select_exprs
-                .iter()
-                .map(|expr| {
-                    transform_bottom_unnest(
-                        &intermediate_plan,
-                        &mut unnest_columns,
-                        &mut inner_projection_exprs,
-                        expr,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .collect();
+            let outer_projection_exprs = transform_bottom_unnests(
+                &intermediate_plan,
+                &mut unnest_columns,
+                &mut inner_projection_exprs,
+                &intermediate_select_exprs,
+            )?;
 
             if unnest_columns.is_empty() {
                 break;
