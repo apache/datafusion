@@ -23,7 +23,7 @@ use arrow::buffer::NullBuffer;
 use arrow::datatypes::i256;
 use arrow::record_batch::RecordBatch;
 use arrow_array::cast::AsArray;
-use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
+use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray, UInt64Array};
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::DataType;
 use datafusion_common::Result;
@@ -93,6 +93,8 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     values: Vec<T::Native>,
     /// The random state used to generate hashes
     random_state: RandomState,
+
+    group_hashes: Option<Vec<u64>>,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
@@ -103,7 +105,8 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             map: RawTable::with_capacity(128),
             values: Vec::with_capacity(128),
             null_group: None,
-            random_state: Default::default(),
+            random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
+            group_hashes: Default::default(),
         }
     }
 }
@@ -121,6 +124,12 @@ where
         assert_eq!(cols.len(), 1);
         groups.clear();
 
+        println!("arrays: {:?}", cols);
+        let mut store_gp_hashes = match self.group_hashes.take() {
+            Some(group_hashes) => group_hashes,
+            None => vec![],
+        };
+
         for v in cols[0].as_primitive::<T>() {
             let group_id = match v {
                 None => *self.null_group.get_or_insert_with(|| {
@@ -131,6 +140,7 @@ where
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
+                    store_gp_hashes.push(hash);
                     let insert = self.map.find_or_find_insert_slot(
                         hash,
                         |g| unsafe { self.values.get_unchecked(*g).is_eq(key) },
@@ -153,6 +163,9 @@ where
             };
             groups.push(group_id)
         }
+
+        self.group_hashes = Some(store_gp_hashes);
+
         Ok(())
     }
 
@@ -168,7 +181,7 @@ where
         self.values.len()
     }
 
-    fn emit(&mut self, emit_to: EmitTo, _mode: AggregateMode) -> Result<Vec<ArrayRef>> {
+    fn emit(&mut self, emit_to: EmitTo, mode: AggregateMode) -> Result<Vec<ArrayRef>> {
         fn build_primitive<T: ArrowPrimitiveType>(
             values: Vec<T::Native>,
             null_idx: Option<usize>,
@@ -184,6 +197,7 @@ where
 
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
+
                 self.map.clear();
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
             }
@@ -213,7 +227,20 @@ where
                 build_primitive(split, null_group)
             }
         };
-        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+
+        let mut output = vec![Arc::new(array.with_data_type(self.data_type.clone())) as ArrayRef];
+
+        let group_hashes = self
+            .group_hashes
+            .take()
+            .expect("Can not emit from empty rows");
+    
+        if mode == AggregateMode::Partial {
+            let arr = Arc::new(UInt64Array::from(group_hashes)) as ArrayRef;
+            output.push(arr);
+        }
+
+        Ok(output)
     }
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {

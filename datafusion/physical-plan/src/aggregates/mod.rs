@@ -799,8 +799,17 @@ fn create_schema(
     match mode {
         AggregateMode::Partial => {
             if !group_expr.is_empty() {
-                // Hash values
-                fields.push(Field::new("hash_value", DataType::UInt64, true));
+                if input_schema.fields.len() == 1 {
+                    let dt = input_schema.field(0).data_type();
+                    if matches!(dt, DataType::Utf8|DataType::LargeUtf8|DataType::Binary|DataType::LargeBinary) {
+                    } else {
+                        // For GroupValuesRows
+                        // Hash values
+                        fields.push(Field::new("hash_value", DataType::UInt64, true));
+                    }
+                } else {
+                    fields.push(Field::new("hash_value", DataType::UInt64, true));
+                }
             }
 
             // in partial mode, the fields of the accumulator's state

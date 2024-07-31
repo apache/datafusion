@@ -641,6 +641,7 @@ impl GroupedHashAggregateStream {
         }
 
         let mut output = self.group_values.emit(emit_to, self.mode)?;
+        println!("output: {:?}", output);
         // if matches!(self.mode, AggregateMode::Partial) {
         //     output.pop();
         // }
@@ -667,6 +668,9 @@ impl GroupedHashAggregateStream {
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
+
+        println!("mode: {:?}", self.mode);
+        println!("schema: {:?}", schema);
         let batch = RecordBatch::try_new(schema, output)?;
         Ok(batch)
     }
