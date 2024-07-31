@@ -186,6 +186,87 @@ pub fn sort_merge_join_exec(
     )
 }
 
+/// Builder for creating ExecutionPlans for testing
+pub struct TestPlanBuilder {
+    plan: Arc<dyn ExecutionPlan>,
+}
+
+impl TestPlanBuilder {
+    /// Start a new plan with a MemoryExec
+    pub fn new_memory_exec(schema: &SchemaRef) -> Self {
+        let plan = MemoryExec::try_new(&[vec![]], schema.clone(), None).unwrap();
+        Self {
+            plan: Arc::new(plan),
+        }
+    }
+
+    /// Adds a `SortExec to the current plan that sorts by the provided column names
+    /// with default options
+    pub fn sort<'a>(mut self, sort_exprs: impl IntoIterator<Item = &'a str>) -> Self {
+        let sort_exprs = sort_exprs
+            .into_iter()
+            .map(|name| sort_expr(name, &self.plan.schema()))
+            .collect::<Vec<_>>();
+        self.plan = sort_exec(sort_exprs, self.plan);
+        self
+    }
+
+    /// Adds a `SortExec to the current plan that sorts by the provided sort exprs
+    pub fn sort_by_exprs(
+        mut self,
+        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ) -> Self {
+        self.plan = sort_exec(sort_exprs, self.plan);
+        self
+    }
+
+    /// Add a CoalesceBatches exec with a target size of 128
+    pub fn coalesce_batches(mut self) -> Self {
+        self.plan = coalesce_batches_exec(self.plan);
+        self
+    }
+
+    /// Add a [FilterExec] with the provided predicate
+    pub fn filter(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
+        self.plan = filter_exec(predicate, self.plan);
+        self
+    }
+
+    /// Add a BoundWindowAggExec with a count aggregate with col_name as the argument
+    pub fn bounded_window(
+        mut self,
+        col_name: &str,
+        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ) -> Self {
+        self.plan = bounded_window_exec(col_name, sort_exprs, self.plan);
+        self
+    }
+
+    /// Add a SortPreservingMergeExec with the provided sort exprs
+    pub fn sort_preserving_merge(
+        mut self,
+        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ) -> Self {
+        self.plan = sort_preserving_merge_exec(sort_exprs, self.plan);
+        self
+    }
+
+    /// Add a [RepartitionExec]
+    pub fn repartition(mut self) -> Self {
+        self.plan = repartition_exec(self.plan);
+        self
+    }
+
+    /// Return the current schema of the plan
+    pub fn schema(&self) -> SchemaRef {
+        self.plan.schema()
+    }
+
+    pub fn build(self) -> Arc<dyn ExecutionPlan> {
+        self.plan
+    }
+}
+
 /// make PhysicalSortExpr with default options
 pub fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
     sort_expr_options(name, schema, SortOptions::default())
