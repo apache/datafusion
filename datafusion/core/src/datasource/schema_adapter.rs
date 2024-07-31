@@ -27,6 +27,7 @@ use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::plan_err;
 use std::fmt::Debug;
 use std::sync::Arc;
+use crate::datasource::schema_adapter_deep::NestedSchemaAdapter;
 
 /// Factory for creating [`SchemaAdapter`]
 ///
@@ -97,7 +98,9 @@ pub(crate) struct DefaultSchemaAdapterFactory {}
 
 impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
     fn create(&self, table_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
-        Box::new(DefaultSchemaAdapter { table_schema })
+        // FIX Deep schema mapping
+        Box::new(NestedSchemaAdapter { table_schema })
+        // Box::new(DefaultSchemaAdapter { table_schema })
     }
 }
 
