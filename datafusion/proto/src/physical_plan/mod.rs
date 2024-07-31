@@ -509,7 +509,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
                                             // TODO: approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
                                             // TODO: `order by` is not supported for UDAF yet
-                                            AggregateExprBuilder::new(agg_udf, input_phy_expr).schema(Arc::clone(&physical_schema)).name(name).with_ignore_nulls(agg_node.ignore_nulls).with_distinct(agg_node.distinct).build()
+                                            AggregateExprBuilder::new(agg_udf, input_phy_expr).schema(Arc::clone(&physical_schema)).with_ignore_nulls(agg_node.ignore_nulls).with_distinct(agg_node.distinct).build()
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {
@@ -1457,15 +1457,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            let agg_names = exec
-                .aggr_expr()
-                .iter()
-                .map(|expr| match expr.field() {
-                    Ok(field) => Ok(field.name().clone()),
-                    Err(e) => Err(e),
-                })
-                .collect::<Result<_>>()?;
-
             let agg_mode = match exec.mode() {
                 AggregateMode::Partial => protobuf::AggregateMode::Partial,
                 AggregateMode::Final => protobuf::AggregateMode::Final,
@@ -1508,7 +1499,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         group_expr_name: group_names,
                         aggr_expr: agg,
                         filter_expr: filter,
-                        aggr_expr_name: agg_names,
+                        aggr_expr_name: vec![],
                         mode: agg_mode as i32,
                         input: Some(Box::new(input)),
                         input_schema: Some(input_schema.as_ref().try_into()?),

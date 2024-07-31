@@ -22,6 +22,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion_common::exec_err;
 use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
+use datafusion_expr::expr::create_function_physical_name;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::utils::AggregateOrderSensitivity;
@@ -67,7 +68,6 @@ pub fn create_aggregate_expr(
     sort_exprs: &[Expr],
     ordering_req: &[PhysicalSortExpr],
     schema: &Schema,
-    name: impl Into<String>,
     ignore_nulls: bool,
     is_distinct: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
@@ -77,7 +77,6 @@ pub fn create_aggregate_expr(
     builder = builder.order_by(ordering_req.to_vec());
     builder = builder.logical_exprs(input_exprs.to_vec());
     builder = builder.schema(Arc::new(schema.clone()));
-    builder = builder.name(name);
 
     if ignore_nulls {
         builder = builder.ignore_nulls();
@@ -98,7 +97,6 @@ pub fn create_aggregate_expr_with_dfschema(
     sort_exprs: &[Expr],
     ordering_req: &[PhysicalSortExpr],
     dfschema: &DFSchema,
-    name: impl Into<String>,
     ignore_nulls: bool,
     is_distinct: bool,
     is_reversed: bool,
@@ -111,7 +109,6 @@ pub fn create_aggregate_expr_with_dfschema(
     builder = builder.dfschema(dfschema.clone());
     let schema: Schema = dfschema.into();
     builder = builder.schema(Arc::new(schema));
-    builder = builder.name(name);
 
     if ignore_nulls {
         builder = builder.ignore_nulls();
@@ -137,7 +134,6 @@ pub struct AggregateExprBuilder {
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Logical expressions of the aggregate function, it will be deprecated in <https://github.com/apache/datafusion/issues/11359>
     logical_args: Vec<Expr>,
-    name: String,
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// Datafusion Schema for the aggregate function
@@ -160,7 +156,6 @@ impl AggregateExprBuilder {
             fun,
             args,
             logical_args: vec![],
-            name: String::new(),
             schema: Arc::new(Schema::empty()),
             dfschema: DFSchema::empty(),
             sort_exprs: vec![],
@@ -176,7 +171,6 @@ impl AggregateExprBuilder {
             fun,
             args,
             logical_args,
-            name,
             schema,
             dfschema,
             sort_exprs,
@@ -213,6 +207,16 @@ impl AggregateExprBuilder {
         )?;
 
         let data_type = fun.return_type(&input_exprs_types)?;
+        let name = create_function_physical_name(
+            fun.name(),
+            is_distinct,
+            &logical_args,
+            if sort_exprs.is_empty() {
+                None
+            } else {
+                Some(&sort_exprs)
+            },
+        )?;
 
         Ok(Arc::new(AggregateFunctionExpr {
             fun: Arc::unwrap_or_clone(fun),
@@ -230,11 +234,6 @@ impl AggregateExprBuilder {
             input_types: input_exprs_types,
             is_reversed,
         }))
-    }
-
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
-        self
     }
 
     pub fn schema(mut self, schema: SchemaRef) -> Self {
@@ -680,7 +679,6 @@ impl AggregateExpr for AggregateFunctionExpr {
             &self.sort_exprs,
             &self.ordering_req,
             &self.dfschema,
-            self.name(),
             self.ignore_nulls,
             self.is_distinct,
             self.is_reversed,
@@ -706,14 +704,6 @@ impl AggregateExpr for AggregateFunctionExpr {
                         }
                     })
                     .collect::<Vec<_>>();
-                let mut name = self.name().to_string();
-                // If the function is changed, we need to reverse order_by clause as well
-                // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if self.fun().name() == reverse_udf.name() {
-                } else {
-                    replace_order_by_clause(&mut name);
-                }
-                replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
                 let reverse_aggr = create_aggregate_expr_with_dfschema(
                     &reverse_udf,
                     &self.args,
@@ -721,7 +711,6 @@ impl AggregateExpr for AggregateFunctionExpr {
                     &reverse_sort_exprs,
                     &reverse_ordering_req,
                     &self.dfschema,
-                    name,
                     self.ignore_nulls,
                     self.is_distinct,
                     !self.is_reversed,
@@ -757,33 +746,4 @@ impl PartialEq<dyn Any> for AggregateFunctionExpr {
             })
             .unwrap_or(false)
     }
-}
-
-fn replace_order_by_clause(order_by: &mut String) {
-    let suffixes = [
-        (" DESC NULLS FIRST]", " ASC NULLS LAST]"),
-        (" ASC NULLS FIRST]", " DESC NULLS LAST]"),
-        (" DESC NULLS LAST]", " ASC NULLS FIRST]"),
-        (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
-    ];
-
-    if let Some(start) = order_by.find("ORDER BY [") {
-        if let Some(end) = order_by[start..].find(']') {
-            let order_by_start = start + 9;
-            let order_by_end = start + end;
-
-            let column_order = &order_by[order_by_start..=order_by_end];
-            for (suffix, replacement) in suffixes {
-                if column_order.ends_with(suffix) {
-                    let new_order = column_order.replace(suffix, replacement);
-                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
-                    break;
-                }
-            }
-        }
-    }
-}
-
-fn replace_fn_name_clause(aggr_name: &mut String, fn_name_old: &str, fn_name_new: &str) {
-    *aggr_name = aggr_name.replace(fn_name_old, fn_name_new);
 }
