@@ -741,6 +741,7 @@ message PhysicalPlanNode {
     PlaceholderRowExecNode placeholder_row = 27;
     CsvSinkExecNode csv_sink = 28;
     ParquetSinkExecNode parquet_sink = 29;
+    ValuesExecNode values = 30;
   }
 }
 
@@ -796,6 +797,11 @@ message ParquetSinkExecNode {
   ParquetSink sink = 2;
   datafusion_common.Schema sink_schema = 3;
   PhysicalSortExprNodeCollection sort_order = 4;
+}
+
+message ValuesExecNode {
+  datafusion_common.Schema schema = 1;
+  repeated PhysicalExprNode exprs = 2;
 }
 
 message PhysicalExtensionNode {

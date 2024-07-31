@@ -40,8 +40,8 @@ use datafusion_physical_expr::EquivalenceProperties;
 pub struct ValuesExec {
     /// The schema
     schema: SchemaRef,
-    /// The data
-    data: Vec<RecordBatch>,
+    /// The exprs
+    exprs: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
 }
@@ -50,81 +50,22 @@ impl ValuesExec {
     /// create a new values exec from data as expr
     pub fn try_new(
         schema: SchemaRef,
-        data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+        exprs: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
-        if data.is_empty() {
+        if exprs.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
-        let n_row = data.len();
-        let n_col = schema.fields().len();
-        // we have this single row batch as a placeholder to satisfy evaluation argument
-        // and generate a single output row
-        let batch = RecordBatch::try_new_with_options(
-            Arc::new(Schema::empty()),
-            vec![],
-            &RecordBatchOptions::new().with_row_count(Some(1)),
-        )?;
-
-        let arr = (0..n_col)
-            .map(|j| {
-                (0..n_row)
-                    .map(|i| {
-                        let r = data[i][j].evaluate(&batch);
-
-                        match r {
-                            Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
-                            Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
-                                ScalarValue::try_from_array(&a, 0)
-                            }
-                            Ok(ColumnarValue::Array(a)) => {
-                                plan_err!(
-                                    "Cannot have array values {a:?} in a values list"
-                                )
-                            }
-                            Err(err) => Err(err),
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()
-                    .and_then(ScalarValue::iter_to_array)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let batch = RecordBatch::try_new(Arc::clone(&schema), arr)?;
-        let data: Vec<RecordBatch> = vec![batch];
-        Self::try_new_from_batches(schema, data)
-    }
-
-    /// Create a new plan using the provided schema and batches.
-    ///
-    /// Errors if any of the batches don't match the provided schema, or if no
-    /// batches are provided.
-    pub fn try_new_from_batches(
-        schema: SchemaRef,
-        batches: Vec<RecordBatch>,
-    ) -> Result<Self> {
-        if batches.is_empty() {
-            return plan_err!("Values list cannot be empty");
-        }
-
-        for batch in &batches {
-            let batch_schema = batch.schema();
-            if batch_schema != schema {
-                return plan_err!(
-                    "Batch has invalid schema. Expected: {schema}, got: {batch_schema}"
-                );
-            }
-        }
-
         let cache = Self::compute_properties(Arc::clone(&schema));
         Ok(ValuesExec {
             schema,
-            data: batches,
+            exprs,
             cache,
         })
     }
 
-    /// provides the data
-    pub fn data(&self) -> Vec<RecordBatch> {
-        self.data.clone()
+    /// provides the exprs
+    pub fn exprs(&self) -> &Vec<Vec<Arc<dyn PhysicalExpr>>> {
+        &self.exprs
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -175,7 +116,7 @@ impl ExecutionPlan for ValuesExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        ValuesExec::try_new_from_batches(Arc::clone(&self.schema), self.data.clone())
+        ValuesExec::try_new(Arc::clone(&self.schema), self.exprs.clone())
             .map(|e| Arc::new(e) as _)
     }
 
@@ -191,17 +132,86 @@ impl ExecutionPlan for ValuesExec {
             );
         }
 
+        let n_row = self.exprs.len();
+        let n_col = self.schema.fields().len();
+        // we have this single row batch as a placeholder to satisfy evaluation argument
+        // and generate a single output row
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+
+        let arr = (0..n_col)
+            .map(|j| {
+                (0..n_row)
+                    .map(|i| {
+                        let r = self.exprs[i][j].evaluate(&batch);
+
+                        match r {
+                            Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
+                            Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
+                                ScalarValue::try_from_array(&a, 0)
+                            }
+                            Ok(ColumnarValue::Array(a)) => {
+                                plan_err!(
+                                    "Cannot have array values {a:?} in a values list"
+                                )
+                            }
+                            Err(err) => Err(err),
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    .and_then(ScalarValue::iter_to_array)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let batch = RecordBatch::try_new(Arc::clone(&self.schema), arr)?;
+        let data: Vec<RecordBatch> = vec![batch];
+
         Ok(Box::pin(MemoryStream::try_new(
-            self.data(),
+            data,
             Arc::clone(&self.schema),
             None,
         )?))
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        let batch = self.data();
+        let n_row = self.exprs.len();
+        let n_col = self.schema.fields().len();
+        // we have this single row batch as a placeholder to satisfy evaluation argument
+        // and generate a single output row
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+
+        let arr = (0..n_col)
+            .map(|j| {
+                (0..n_row)
+                    .map(|i| {
+                        let r = self.exprs[i][j].evaluate(&batch);
+
+                        match r {
+                            Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
+                            Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
+                                ScalarValue::try_from_array(&a, 0)
+                            }
+                            Ok(ColumnarValue::Array(a)) => {
+                                plan_err!(
+                                    "Cannot have array values {a:?} in a values list"
+                                )
+                            }
+                            Err(err) => Err(err),
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    .and_then(ScalarValue::iter_to_array)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let batch = RecordBatch::try_new(Arc::clone(&self.schema), arr)?;
         Ok(common::compute_record_batch_statistics(
-            &[batch],
+            &[vec![batch]],
             &self.schema,
             None,
         ))
@@ -224,33 +234,33 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn new_exec_with_batches() {
-        let batch = make_partition(7);
-        let schema = batch.schema();
-        let batches = vec![batch.clone(), batch];
+    // #[test]
+    // fn new_exec_with_batches() {
+    //     let batch = make_partition(7);
+    //     let schema = batch.schema();
+    //     let batches = vec![batch.clone(), batch];
+    //
+    //     let _exec = ValuesExec::try_new_from_batches(schema, batches).unwrap();
+    // }
 
-        let _exec = ValuesExec::try_new_from_batches(schema, batches).unwrap();
-    }
+    // #[test]
+    // fn new_exec_with_batches_empty() {
+    //     let batch = make_partition(7);
+    //     let schema = batch.schema();
+    //     let _ = ValuesExec::try_new_from_batches(schema, Vec::new()).unwrap_err();
+    // }
 
-    #[test]
-    fn new_exec_with_batches_empty() {
-        let batch = make_partition(7);
-        let schema = batch.schema();
-        let _ = ValuesExec::try_new_from_batches(schema, Vec::new()).unwrap_err();
-    }
-
-    #[test]
-    fn new_exec_with_batches_invalid_schema() {
-        let batch = make_partition(7);
-        let batches = vec![batch.clone(), batch];
-
-        let invalid_schema = Arc::new(Schema::new(vec![
-            Field::new("col0", DataType::UInt32, false),
-            Field::new("col1", DataType::Utf8, false),
-        ]));
-        let _ = ValuesExec::try_new_from_batches(invalid_schema, batches).unwrap_err();
-    }
+    // #[test]
+    // fn new_exec_with_batches_invalid_schema() {
+    //     let batch = make_partition(7);
+    //     let batches = vec![batch.clone(), batch];
+    //
+    //     let invalid_schema = Arc::new(Schema::new(vec![
+    //         Field::new("col0", DataType::UInt32, false),
+    //         Field::new("col1", DataType::Utf8, false),
+    //     ]));
+    //     let _ = ValuesExec::try_new_from_batches(invalid_schema, batches).unwrap_err();
+    // }
 
     // Test issue: https://github.com/apache/datafusion/issues/8763
     #[test]
