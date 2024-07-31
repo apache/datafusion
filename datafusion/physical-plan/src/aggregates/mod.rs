@@ -35,6 +35,7 @@ use crate::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::DataType;
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_execution::TaskContext;
@@ -797,6 +798,11 @@ fn create_schema(
 
     match mode {
         AggregateMode::Partial => {
+            if !group_expr.is_empty() {
+                // Hash values
+                fields.push(Field::new("hash_value", DataType::UInt64, true));
+            }
+
             // in partial mode, the fields of the accumulator's state
             for expr in aggr_expr {
                 fields.extend(expr.state_fields()?.iter().cloned())

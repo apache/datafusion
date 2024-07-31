@@ -29,7 +29,6 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
@@ -38,8 +37,8 @@ use crate::sorts::streaming_merge;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{ArrayRef, AsArray, UInt64Builder};
+use arrow::datatypes::{SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::transpose;
 use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
@@ -204,8 +203,8 @@ impl BatchPartitioner {
                     next_idx: 0,
                 }
             }
-            Partitioning::Hash(exprs, num_partitions) => BatchPartitionerState::Hash {
-                exprs,
+            Partitioning::Hash(_exprs, num_partitions) => BatchPartitionerState::Hash {
+                exprs: vec![],
                 num_partitions,
                 // Use fixed random hash
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
@@ -256,30 +255,25 @@ impl BatchPartitioner {
                     Box::new(std::iter::once(Ok((idx, batch))))
                 }
                 BatchPartitionerState::Hash {
-                    random_state,
-                    exprs,
+                    random_state: _,
+                    exprs: _,
                     num_partitions: partitions,
-                    hash_buffer,
+                    hash_buffer: _,
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
-
-                    let arrays = exprs
-                        .iter()
-                        .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
-                        .collect::<Result<Vec<_>>>()?;
-
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
-
-                    create_hashes(&arrays, random_state, hash_buffer)?;
 
                     let mut indices: Vec<_> = (0..*partitions)
                         .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
                         .collect();
 
-                    for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize]
+                    let hash_values = batch
+                        .column_by_name("hash_value")
+                        .unwrap()
+                        .as_primitive::<UInt64Type>();
+                    for (index, hash) in hash_values.iter().enumerate() {
+                        let hash = hash.unwrap();
+                        indices[(hash % *partitions as u64) as usize]
                             .append_value(index as u64);
                     }
 

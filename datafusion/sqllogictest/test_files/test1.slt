@@ -1,0 +1,77 @@
+statement ok
+create table t(a int, b varchar) as values 
+    (1, 'a'),
+    (2, 'a'),
+    (3, 'a'),
+    (1, 'b'),
+    (2, 'c'),
+    (2, 'cd'),
+    (2, 'cd'),
+    (2, 'cd'),
+    (4, 'a');
+
+<<<<<<< Updated upstream
+=======
+
+query error
+select concat(b, '1'+rand()) from t;
+----
+DataFusion error: Error during planning: Invalid function 'rand'.
+Did you mean 'tanh'?
+
+
+>>>>>>> Stashed changes
+query ITI
+select a, b, count(*) from t group by a, b order by count(*) desc limit 10;
+----
+2 cd 3
+2 c 1
+1 a 1
+3 a 1
+4 a 1
+2 a 1
+1 b 1
+
+
+<<<<<<< Updated upstream
+=======
+
+
+
+>>>>>>> Stashed changes
+statement ok
+CREATE EXTERNAL TABLE hits
+STORED AS PARQUET
+LOCATION '../core/tests/data/clickbench_hits_10.parquet';
+
+query ITI rowsort
+SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
+----
+-2461439046089301801 (empty) 5
+376160620089546609 (empty) 1
+427738049800818189 (empty) 1
+519640690937130534 (empty) 2
+7418527520126366595 (empty) 1
+
+query TT
+explain SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
+----
+logical_plan
+01)Limit: skip=0, fetch=10
+02)--Sort: count(*) DESC NULLS FIRST, fetch=10
+03)----Aggregate: groupBy=[[hits.UserID, hits.SearchPhrase]], aggr=[[count(Int64(1)) AS count(*)]]
+04)------TableScan: hits projection=[UserID, SearchPhrase]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=10
+02)--SortPreservingMergeExec: [count(*)@2 DESC], fetch=10
+03)----SortExec: TopK(fetch=10), expr=[count(*)@2 DESC], preserve_partitioning=[true]
+04)------AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(*)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([UserID@0, SearchPhrase@1], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(*)]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID, SearchPhrase]
+
+
+# query ITI
+# SELECT "UserID", concat("SearchPhrase", repeat('hello', 100)) as s, COUNT(*) FROM hits GROUP BY "UserID", s ORDER BY COUNT(*) DESC;

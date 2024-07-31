@@ -302,13 +302,13 @@ impl GroupedHashAggregateStream {
         let aggregate_arguments = aggregates::aggregate_expressions(
             &agg.aggr_expr,
             &agg.mode,
-            agg_group_by.expr.len(),
+            agg_group_by.expr.len() + 1, // +1 for hash values
         )?;
         // arguments for aggregating spilled data is the same as the one for final aggregation
         let merging_aggregate_arguments = aggregates::aggregate_expressions(
             &agg.aggr_expr,
             &AggregateMode::Final,
-            agg_group_by.expr.len(),
+            agg_group_by.expr.len() + 1,
         )?;
 
         let filter_expressions = match agg.mode {
@@ -537,6 +537,8 @@ impl GroupedHashAggregateStream {
             evaluate_many(&self.aggregate_arguments, &batch)?
         };
 
+        let hash_values = batch.column_by_name("hash_value");
+
         // Evaluate the filter expressions, if any, against the inputs
         let filter_values = if self.spill_state.is_stream_merging {
             let filter_expressions = vec![None; self.accumulators.len()];
@@ -548,8 +550,12 @@ impl GroupedHashAggregateStream {
         for group_values in &group_by_values {
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
+
+            self.group_values.intern(
+                group_values,
+                &mut self.current_group_indices,
+                hash_values,
+            )?;
             let group_indices = &self.current_group_indices;
 
             // Update ordering information if necessary
@@ -634,7 +640,10 @@ impl GroupedHashAggregateStream {
             return Ok(RecordBatch::new_empty(schema));
         }
 
-        let mut output = self.group_values.emit(emit_to)?;
+        let mut output = self.group_values.emit(emit_to, self.mode)?;
+        // if matches!(self.mode, AggregateMode::Partial) {
+        //     output.pop();
+        // }
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
         }
