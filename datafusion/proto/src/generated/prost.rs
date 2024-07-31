@@ -1218,6 +1218,12 @@ pub struct ValuesExecNode {
     #[prost(message, optional, tag = "1")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "2")]
+    pub exprs: ::prost::alloc::vec::Vec<PhysicalExprList>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalExprList {
+    #[prost(message, repeated, tag = "1")]
     pub exprs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
