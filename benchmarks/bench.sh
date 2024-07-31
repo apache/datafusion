@@ -34,8 +34,7 @@ COMMAND=
 BENCHMARK=all
 DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
-#CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
-CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --profile release-nonlto"}  # for faster iterations
+CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
 VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
 

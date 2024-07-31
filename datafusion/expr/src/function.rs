@@ -94,8 +94,8 @@ pub struct AccumulatorArgs<'a> {
     /// ```
     pub is_distinct: bool,
 
-    /// The input type of the aggregate function.
-    pub input_type: &'a DataType,
+    /// The input types of the aggregate function.
+    pub input_types: &'a [DataType],
 
     /// The logical expression of arguments the aggregate function takes.
     pub input_exprs: &'a [Expr],
@@ -109,8 +109,8 @@ pub struct StateFieldsArgs<'a> {
     /// The name of the aggregate function.
     pub name: &'a str,
 
-    /// The input type of the aggregate function.
-    pub input_type: &'a DataType,
+    /// The input types of the aggregate function.
+    pub input_types: &'a [DataType],
 
     /// The return type of the aggregate function.
     pub return_type: &'a DataType,

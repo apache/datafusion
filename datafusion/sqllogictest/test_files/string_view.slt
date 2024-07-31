@@ -324,3 +324,24 @@ logical_plan
 
 statement ok
 drop table test;
+
+# coercion from stringview to integer, as input to make_date
+query D
+select make_date(arrow_cast('2024', 'Utf8View'), arrow_cast('01', 'Utf8View'), arrow_cast('23', 'Utf8View'))
+----
+2024-01-23
+
+# coercions between stringview and date types
+statement ok
+create table dates (dt date) as values
+    (date '2024-01-23'),
+    (date '2023-11-30');
+
+query D
+select t.dt from dates t where arrow_cast('2024-01-01', 'Utf8View') < t.dt;
+----
+2024-01-23
+
+
+statement ok
+drop table dates;

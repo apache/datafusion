@@ -19,7 +19,8 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
+use arrow::array::{Array, RecordBatch};
+use arrow::compute::{filter, is_not_null};
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -104,7 +105,7 @@ impl ApproxPercentileCont {
             None
         };
 
-        let accumulator: ApproxPercentileAccumulator = match args.input_type {
+        let accumulator: ApproxPercentileAccumulator = match &args.input_types[0] {
             t @ (DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
@@ -393,8 +394,12 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
-        let values = &values[0];
-        let sorted_values = &arrow::compute::sort(values, None)?;
+        // Remove any nulls before computing the percentile
+        let mut values = Arc::clone(&values[0]);
+        if values.nulls().is_some() {
+            values = filter(&values, &is_not_null(&values)?)?;
+        }
+        let sorted_values = &arrow::compute::sort(&values, None)?;
         let sorted_values = ApproxPercentileAccumulator::convert_to_float(sorted_values)?;
         self.digest = self.digest.merge_sorted_f64(&sorted_values);
         Ok(())

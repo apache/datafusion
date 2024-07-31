@@ -102,7 +102,7 @@ impl AggregateUDFImpl for Median {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         //Intermediate state is a list of the elements we have collected so far
-        let field = Field::new("item", args.input_type.clone(), true);
+        let field = Field::new("item", args.input_types[0].clone(), true);
         let state_name = if args.is_distinct {
             "distinct_median"
         } else {
@@ -133,7 +133,7 @@ impl AggregateUDFImpl for Median {
             };
         }
 
-        let dt = acc_args.input_type;
+        let dt = &acc_args.input_types[0];
         downcast_integer! {
             dt => (helper, dt),
             DataType::Float16 => helper!(Float16Type, dt),
