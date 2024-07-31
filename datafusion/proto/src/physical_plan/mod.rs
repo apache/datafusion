@@ -61,6 +61,7 @@ use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
+use datafusion::physical_plan::values::ValuesExec;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 
@@ -1097,6 +1098,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     sort_order,
                 )))
             }
+            PhysicalPlanType::Values(values) => {
+                let schema = Arc::new(convert_required!(values.schema)?);
+                todo!()
+            }
         }
     }
 
@@ -1955,7 +1960,11 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             // If unknown DataSink then let extension handle it
         }
 
-        let mut buf: Vec<u8> = vec![];
+        if let Some(exec) = plan.downcast_ref::<ValuesExec>() {
+            todo!()
+        }
+
+            let mut buf: Vec<u8> = vec![];
         match extension_codec.try_encode(Arc::clone(&plan_clone), &mut buf) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalPlanNode> = plan_clone

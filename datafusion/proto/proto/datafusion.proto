@@ -801,7 +801,11 @@ message ParquetSinkExecNode {
 
 message ValuesExecNode {
   datafusion_common.Schema schema = 1;
-  repeated PhysicalExprNode exprs = 2;
+  repeated PhysicalExprList exprs = 2;
+}
+
+message PhysicalExprList {
+  repeated PhysicalExprNode exprs = 1;
 }
 
 message PhysicalExtensionNode {
