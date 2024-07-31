@@ -641,10 +641,6 @@ impl GroupedHashAggregateStream {
         }
 
         let mut output = self.group_values.emit(emit_to, self.mode)?;
-        println!("output: {:?}", output);
-        // if matches!(self.mode, AggregateMode::Partial) {
-        //     output.pop();
-        // }
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
         }
@@ -671,6 +667,7 @@ impl GroupedHashAggregateStream {
 
         println!("mode: {:?}", self.mode);
         println!("schema: {:?}", schema);
+        println!("output: {:?}", output);
         let batch = RecordBatch::try_new(schema, output)?;
         Ok(batch)
     }

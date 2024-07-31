@@ -1,44 +1,26 @@
-
 statement ok
-CREATE TABLE tab0(col0 INTEGER, col1 INTEGER, col2 INTEGER)
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
-statement ok
-CREATE TABLE tab1(col0 INTEGER, col1 INTEGER, col2 INTEGER)
-
-statement ok
-CREATE TABLE tab2(col0 INTEGER, col1 INTEGER, col2 INTEGER)
-
-statement ok
-INSERT INTO tab0 VALUES(83,0,38)
-
-statement ok
-INSERT INTO tab0 VALUES(26,0,79)
-
-statement ok
-INSERT INTO tab0 VALUES(43,81,24)
-
-statement ok
-INSERT INTO tab1 VALUES(22,6,8)
-
-statement ok
-INSERT INTO tab1 VALUES(28,57,45)
-
-statement ok
-INSERT INTO tab1 VALUES(82,44,71)
-
-statement ok
-INSERT INTO tab2 VALUES(15,61,87)
-
-statement ok
-INSERT INTO tab2 VALUES(91,59,79)
-
-statement ok
-INSERT INTO tab2 VALUES(92,41,58)
-
-
-query I rowsort
-SELECT - tab1.col0 * 84 + + 38 AS col2 FROM tab1 GROUP BY tab1.col0
+# csv_query_group_by_and_having
+query TI rowsort
+SELECT c1, MIN(c3) AS m FROM aggregate_test_100 GROUP BY c1 HAVING m < -100 AND MAX(c3) > 70
 ----
--1810
--2314
--6850
+a -101
+c -117

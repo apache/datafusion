@@ -784,6 +784,8 @@ fn create_schema(
     contains_null_expr: bool,
     mode: AggregateMode,
 ) -> Result<Schema> {
+    let group_schema = group_schema(&input_schema, group_expr.len());
+
     let mut fields = Vec::with_capacity(group_expr.len() + aggr_expr.len());
     for (expr, name) in group_expr {
         fields.push(Field::new(
@@ -799,14 +801,14 @@ fn create_schema(
     match mode {
         AggregateMode::Partial => {
             if !group_expr.is_empty() {
-                if input_schema.fields.len() == 1 {
-                    let dt = input_schema.field(0).data_type();
-                    if matches!(dt, DataType::Utf8|DataType::LargeUtf8|DataType::Binary|DataType::LargeBinary) {
-                    } else {
-                        // For GroupValuesRows
-                        // Hash values
-                        fields.push(Field::new("hash_value", DataType::UInt64, true));
-                    }
+                if group_schema.fields.len() == 1 {
+                    let dt = group_schema.field(0).data_type();
+                    fields.push(Field::new("hash_value", DataType::UInt64, true));
+                    // if matches!(dt, DataType::Utf8|DataType::LargeUtf8|DataType::Binary|DataType::LargeBinary) {
+                    // } else {
+                    //     // For GroupValuesRows
+                    //     // Hash values
+                    // }
                 } else {
                     fields.push(Field::new("hash_value", DataType::UInt64, true));
                 }

@@ -140,7 +140,6 @@ where
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
-                    store_gp_hashes.push(hash);
                     let insert = self.map.find_or_find_insert_slot(
                         hash,
                         |g| unsafe { self.values.get_unchecked(*g).is_eq(key) },
@@ -155,6 +154,7 @@ where
                                 let g = self.values.len();
                                 self.map.insert_in_slot(hash, slot, g);
                                 self.values.push(key);
+                                store_gp_hashes.push(hash);
                                 g
                             }
                         }
@@ -238,6 +238,7 @@ where
         if mode == AggregateMode::Partial {
             let arr = Arc::new(UInt64Array::from(group_hashes)) as ArrayRef;
             output.push(arr);
+            println!("new output: {:?}", output);
         }
 
         Ok(output)

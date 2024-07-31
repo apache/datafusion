@@ -264,6 +264,7 @@ impl BatchPartitioner {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
+                    // TODO: This could be removed
                     let arrays = exprs
                         .iter()
                         .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
@@ -281,6 +282,7 @@ impl BatchPartitioner {
                         .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
                         .collect();
 
+                    println!("batch.schema: {:?}", batch.schema());
                     let hash_values = batch
                         .column_by_name("hash_value")
                         .unwrap()

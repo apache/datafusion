@@ -15,8 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::aggregates::{group_values::GroupValues, AggregateMode};
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
+use ahash::RandomState;
+use arrow_array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch, UInt64Array};
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
 
@@ -29,6 +33,11 @@ pub struct GroupValuesByes<O: OffsetSizeTrait> {
     map: ArrowBytesMap<O, usize>,
     /// The total number of groups so far (used to assign group_index)
     num_groups: usize,
+    /// random state used to generate hashes
+    random_state: RandomState,
+    /// buffer that stores hash values (reused across batches to save allocations)
+    hashes_buffer: Vec<u64>,
+    group_hashes: Option<Vec<u64>>,
 }
 
 impl<O: OffsetSizeTrait> GroupValuesByes<O> {
@@ -36,6 +45,9 @@ impl<O: OffsetSizeTrait> GroupValuesByes<O> {
         Self {
             map: ArrowBytesMap::new(output_type),
             num_groups: 0,
+            random_state: RandomState::new(),
+            hashes_buffer: vec![],
+            group_hashes: Default::default(),
         }
     }
 }
@@ -53,13 +65,30 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
         let arr = &cols[0];
 
         groups.clear();
+
+        let mut store_gp_hashes = match self.group_hashes.take() {
+            Some(group_hashes) => group_hashes,
+            None => vec![],
+        };
+
+        // step 1: compute hashes
+        let batch_hashes = &mut self.hashes_buffer;
+        batch_hashes.clear();
+        batch_hashes.resize(arr.len(), 0);
+        create_hashes(&[arr.clone()], &self.random_state, batch_hashes)
+            // hash is supported for all types and create_hashes only
+            // returns errors for unsupported types
+            .unwrap();
+
         self.map.insert_if_new(
+            batch_hashes,
             arr,
             // called for each new group
-            |_value| {
+            |_value, hash| {
                 // assign new group index on each insert
                 let group_idx = self.num_groups;
                 self.num_groups += 1;
+                store_gp_hashes.push(hash);
                 group_idx
             },
             // called for each group
@@ -67,6 +96,8 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
                 groups.push(group_idx);
             },
         );
+
+        self.group_hashes = Some(store_gp_hashes);
 
         // ensure we assigned a group to for each row
         assert_eq!(groups.len(), arr.len());
@@ -88,7 +119,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
     fn emit(
         &mut self,
         emit_to: EmitTo,
-        _mode: AggregateMode,
+        mode: AggregateMode,
     ) -> datafusion_common::Result<Vec<ArrayRef>> {
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
@@ -122,7 +153,20 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
             }
         };
 
-        Ok(vec![group_values])
+        let group_hashes = self
+            .group_hashes
+            .take()
+            .expect("Can not emit from empty rows");
+    
+        let mut output = vec![group_values];
+        if mode == AggregateMode::Partial {
+            let arr = Arc::new(UInt64Array::from(group_hashes)) as ArrayRef;
+            output.push(arr);
+            println!("new output: {:?}", output);
+        }
+
+        Ok(output)
+        // Ok(vec![group_values])
     }
 
     fn clear_shrink(&mut self, _batch: &RecordBatch) {
