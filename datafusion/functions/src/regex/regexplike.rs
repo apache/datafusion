@@ -75,13 +75,8 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         use DataType::*;
 
         Ok(match &arg_types[0] {
-            LargeUtf8 | Utf8 => Boolean,
             Null => Null,
-            other => {
-                return plan_err!(
-                    "The regexp_like function can only accept strings. Got {other}"
-                );
-            }
+            _ => Boolean,
         })
     }
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

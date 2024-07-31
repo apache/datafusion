@@ -503,16 +503,24 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REGEXP_LIKE
-query error DataFusion error: Error during planning: The regexp_like function can only accept strings\. Got Utf8View
+query TT
 EXPLAIN SELECT
   REGEXP_LIKE(column1_utf8view, '^https?://(?:www\.)?([^/]+)/.*$') AS k
 FROM test;
+----
+logical_plan
+01)Projection: regexp_like(CAST(test.column1_utf8view AS Utf8), Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
+02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REGEXP_MATCH
-query error DataFusion error: Error during planning: The regexp_match function can only accept strings\. Got Utf8View
+query TT
 EXPLAIN SELECT
   REGEXP_MATCH(column1_utf8view, '^https?://(?:www\.)?([^/]+)/.*$') AS k
 FROM test;
+----
+logical_plan
+01)Projection: regexp_match(CAST(test.column1_utf8view AS Utf8), Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
+02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REGEXP_REPLACE
 query TT
