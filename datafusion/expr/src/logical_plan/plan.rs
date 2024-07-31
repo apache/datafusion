@@ -2754,7 +2754,8 @@ fn calc_func_dependencies_for_project(
             let expr_name = match expr {
                 Expr::Alias(alias) => alias.expr.display_name(),
                 _ => expr.display_name(),
-            }.ok()?;
+            }
+            .ok()?;
             input_fields.iter().position(|item| *item == expr_name)
         })
         .collect::<Vec<_>>();
