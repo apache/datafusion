@@ -222,7 +222,7 @@ impl ExecutionPlan for ValuesExec {
 mod tests {
     use super::*;
     use crate::expressions::lit;
-    use crate::test::{self, make_partition};
+    use crate::test::{self};
 
     use arrow_schema::{DataType, Field};
 
@@ -234,21 +234,12 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // fn new_exec_with_batches() {
-    //     let batch = make_partition(7);
-    //     let schema = batch.schema();
-    //     let batches = vec![batch.clone(), batch];
-    //
-    //     let _exec = ValuesExec::try_new_from_batches(schema, batches).unwrap();
-    // }
-
-    // #[test]
-    // fn new_exec_with_batches_empty() {
-    //     let batch = make_partition(7);
-    //     let schema = batch.schema();
-    //     let _ = ValuesExec::try_new_from_batches(schema, Vec::new()).unwrap_err();
-    // }
+    #[test]
+    fn new_exec_with_exprs() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let exprs = vec![vec![lit(1i32)], vec![lit(2i32)]];
+        let _exec = ValuesExec::try_new(schema, exprs).unwrap();
+    }
 
     // #[test]
     // fn new_exec_with_batches_invalid_schema() {
