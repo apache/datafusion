@@ -19,7 +19,7 @@
 
 use crate::ColumnarValue;
 use crate::{Accumulator, Expr, PartitionEvaluator};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, Result};
 use std::sync::Arc;
 
@@ -53,9 +53,6 @@ pub type ReturnTypeFunction =
 pub struct AccumulatorArgs<'a> {
     /// The return type of the aggregate function.
     pub data_type: &'a DataType,
-
-    /// The schema of the input arguments
-    pub schema: &'a Schema,
 
     /// The schema of the input arguments
     pub dfschema: &'a DFSchema,

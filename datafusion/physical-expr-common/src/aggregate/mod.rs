@@ -220,7 +220,6 @@ impl AggregateExprBuilder {
             logical_args,
             data_type,
             name,
-            schema: Arc::unwrap_or_clone(schema),
             dfschema,
             sort_exprs,
             ordering_req,
@@ -456,7 +455,6 @@ pub struct AggregateFunctionExpr {
     /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
-    schema: Schema,
     dfschema: DFSchema,
     // The logical order by expressions
     sort_exprs: Vec<Expr>,
@@ -522,7 +520,6 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let acc_args = AccumulatorArgs {
             data_type: &self.data_type,
-            schema: &self.schema,
             dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
@@ -539,7 +536,6 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
-            schema: &self.schema,
             dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
@@ -611,7 +607,6 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn groups_accumulator_supported(&self) -> bool {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
-            schema: &self.schema,
             dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
@@ -627,7 +622,6 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
-            schema: &self.schema,
             dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
