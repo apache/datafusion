@@ -72,7 +72,7 @@ async fn to_physical_plan_in_one_api_demo(
     input: &LogicalPlan,
     ctx: &SessionContext,
 ) -> Result<()> {
-    let physical_plan = ctx.state().create_physical_plan(&input).await?;
+    let physical_plan = ctx.state().create_physical_plan(input).await?;
 
     println!(
         "Physical plan direct from logical plan:\n\n{}\n\n",
