@@ -351,12 +351,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Return the fields used to store the intermediate state of this accumulator.
     ///
-    /// # Arguments:
-    /// 1. `name`: the name of the expression (e.g. AVG, SUM, etc)
-    /// 2. `value_type`: Aggregate function output returned by [`Self::return_type`] if defined, otherwise
-    ///    it is equivalent to the data type of the first arguments
-    /// 3. `ordering_fields`: the fields used to order the input arguments, if any.
-    ///    Empty if no ordering expression is provided.
+    /// args:  [`StateFieldsArgs`] contains information about the fields that an
+    /// aggregate function's accumulator should have.
     ///
     /// # Notes:
     ///
