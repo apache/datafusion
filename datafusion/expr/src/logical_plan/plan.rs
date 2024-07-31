@@ -2752,11 +2752,9 @@ fn calc_func_dependencies_for_project(
         .iter()
         .filter_map(|expr| {
             let expr_name = match expr {
-                Expr::Alias(alias) => {
-                    format!("{}", alias.expr)
-                }
-                _ => format!("{}", expr),
-            };
+                Expr::Alias(alias) => alias.expr.display_name(),
+                _ => expr.display_name(),
+            }.ok()?;
             input_fields.iter().position(|item| *item == expr_name)
         })
         .collect::<Vec<_>>();
@@ -2912,6 +2910,7 @@ mod tests {
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
 
     use crate::test::function_stub::count;
+    use crate::window_function::row_number;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
