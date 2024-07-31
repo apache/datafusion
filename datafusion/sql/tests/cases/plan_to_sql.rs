@@ -456,16 +456,19 @@ fn test_table_scan_with_no_projection_in_plan_to_sql() {
         ]);
 
         let plan = table_scan(Some(table_name), &schema, None)
-        .unwrap()
-        .build()
-        .unwrap();
+            .unwrap()
+            .build()
+            .unwrap();
         let sql = plan_to_sql(&plan).unwrap();
         assert_eq!(format!("{}", sql), expected_sql)
     }
 
-    test("catalog.schema.table", "SELECT * FROM catalog.\"schema\".\"table\"");
+    test(
+        "catalog.schema.table",
+        "SELECT * FROM catalog.\"schema\".\"table\"",
+    );
     test("schema.table", "SELECT * FROM \"schema\".\"table\"");
-    test("table","SELECT * FROM \"table\"");
+    test("table", "SELECT * FROM \"table\"");
 }
 
 #[test]
