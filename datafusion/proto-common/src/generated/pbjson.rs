@@ -880,255 +880,6 @@ impl<'de> serde::Deserialize<'de> for Column {
         deserializer.deserialize_struct("datafusion_common.Column", FIELDS, GeneratedVisitor)
     }
 }
-impl serde::Serialize for ColumnOptions {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.bloom_filter_enabled_opt.is_some() {
-            len += 1;
-        }
-        if self.encoding_opt.is_some() {
-            len += 1;
-        }
-        if self.dictionary_enabled_opt.is_some() {
-            len += 1;
-        }
-        if self.compression_opt.is_some() {
-            len += 1;
-        }
-        if self.statistics_enabled_opt.is_some() {
-            len += 1;
-        }
-        if self.bloom_filter_fpp_opt.is_some() {
-            len += 1;
-        }
-        if self.bloom_filter_ndv_opt.is_some() {
-            len += 1;
-        }
-        if self.max_statistics_size_opt.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion_common.ColumnOptions", len)?;
-        if let Some(v) = self.bloom_filter_enabled_opt.as_ref() {
-            match v {
-                column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => {
-                    struct_ser.serialize_field("bloomFilterEnabled", v)?;
-                }
-            }
-        }
-        if let Some(v) = self.encoding_opt.as_ref() {
-            match v {
-                column_options::EncodingOpt::Encoding(v) => {
-                    struct_ser.serialize_field("encoding", v)?;
-                }
-            }
-        }
-        if let Some(v) = self.dictionary_enabled_opt.as_ref() {
-            match v {
-                column_options::DictionaryEnabledOpt::DictionaryEnabled(v) => {
-                    struct_ser.serialize_field("dictionaryEnabled", v)?;
-                }
-            }
-        }
-        if let Some(v) = self.compression_opt.as_ref() {
-            match v {
-                column_options::CompressionOpt::Compression(v) => {
-                    struct_ser.serialize_field("compression", v)?;
-                }
-            }
-        }
-        if let Some(v) = self.statistics_enabled_opt.as_ref() {
-            match v {
-                column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => {
-                    struct_ser.serialize_field("statisticsEnabled", v)?;
-                }
-            }
-        }
-        if let Some(v) = self.bloom_filter_fpp_opt.as_ref() {
-            match v {
-                column_options::BloomFilterFppOpt::BloomFilterFpp(v) => {
-                    struct_ser.serialize_field("bloomFilterFpp", v)?;
-                }
-            }
-        }
-        if let Some(v) = self.bloom_filter_ndv_opt.as_ref() {
-            match v {
-                column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => {
-                    #[allow(clippy::needless_borrow)]
-                    struct_ser.serialize_field("bloomFilterNdv", ToString::to_string(&v).as_str())?;
-                }
-            }
-        }
-        if let Some(v) = self.max_statistics_size_opt.as_ref() {
-            match v {
-                column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => {
-                    struct_ser.serialize_field("maxStatisticsSize", v)?;
-                }
-            }
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for ColumnOptions {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "bloom_filter_enabled",
-            "bloomFilterEnabled",
-            "encoding",
-            "dictionary_enabled",
-            "dictionaryEnabled",
-            "compression",
-            "statistics_enabled",
-            "statisticsEnabled",
-            "bloom_filter_fpp",
-            "bloomFilterFpp",
-            "bloom_filter_ndv",
-            "bloomFilterNdv",
-            "max_statistics_size",
-            "maxStatisticsSize",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            BloomFilterEnabled,
-            Encoding,
-            DictionaryEnabled,
-            Compression,
-            StatisticsEnabled,
-            BloomFilterFpp,
-            BloomFilterNdv,
-            MaxStatisticsSize,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "bloomFilterEnabled" | "bloom_filter_enabled" => Ok(GeneratedField::BloomFilterEnabled),
-                            "encoding" => Ok(GeneratedField::Encoding),
-                            "dictionaryEnabled" | "dictionary_enabled" => Ok(GeneratedField::DictionaryEnabled),
-                            "compression" => Ok(GeneratedField::Compression),
-                            "statisticsEnabled" | "statistics_enabled" => Ok(GeneratedField::StatisticsEnabled),
-                            "bloomFilterFpp" | "bloom_filter_fpp" => Ok(GeneratedField::BloomFilterFpp),
-                            "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
-                            "maxStatisticsSize" | "max_statistics_size" => Ok(GeneratedField::MaxStatisticsSize),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = ColumnOptions;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion_common.ColumnOptions")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ColumnOptions, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut bloom_filter_enabled_opt__ = None;
-                let mut encoding_opt__ = None;
-                let mut dictionary_enabled_opt__ = None;
-                let mut compression_opt__ = None;
-                let mut statistics_enabled_opt__ = None;
-                let mut bloom_filter_fpp_opt__ = None;
-                let mut bloom_filter_ndv_opt__ = None;
-                let mut max_statistics_size_opt__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::BloomFilterEnabled => {
-                            if bloom_filter_enabled_opt__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("bloomFilterEnabled"));
-                            }
-                            bloom_filter_enabled_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(column_options::BloomFilterEnabledOpt::BloomFilterEnabled);
-                        }
-                        GeneratedField::Encoding => {
-                            if encoding_opt__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("encoding"));
-                            }
-                            encoding_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(column_options::EncodingOpt::Encoding);
-                        }
-                        GeneratedField::DictionaryEnabled => {
-                            if dictionary_enabled_opt__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("dictionaryEnabled"));
-                            }
-                            dictionary_enabled_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(column_options::DictionaryEnabledOpt::DictionaryEnabled);
-                        }
-                        GeneratedField::Compression => {
-                            if compression_opt__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("compression"));
-                            }
-                            compression_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(column_options::CompressionOpt::Compression);
-                        }
-                        GeneratedField::StatisticsEnabled => {
-                            if statistics_enabled_opt__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("statisticsEnabled"));
-                            }
-                            statistics_enabled_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(column_options::StatisticsEnabledOpt::StatisticsEnabled);
-                        }
-                        GeneratedField::BloomFilterFpp => {
-                            if bloom_filter_fpp_opt__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("bloomFilterFpp"));
-                            }
-                            bloom_filter_fpp_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| column_options::BloomFilterFppOpt::BloomFilterFpp(x.0));
-                        }
-                        GeneratedField::BloomFilterNdv => {
-                            if bloom_filter_ndv_opt__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("bloomFilterNdv"));
-                            }
-                            bloom_filter_ndv_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| column_options::BloomFilterNdvOpt::BloomFilterNdv(x.0));
-                        }
-                        GeneratedField::MaxStatisticsSize => {
-                            if max_statistics_size_opt__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("maxStatisticsSize"));
-                            }
-                            max_statistics_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(x.0));
-                        }
-                    }
-                }
-                Ok(ColumnOptions {
-                    bloom_filter_enabled_opt: bloom_filter_enabled_opt__,
-                    encoding_opt: encoding_opt__,
-                    dictionary_enabled_opt: dictionary_enabled_opt__,
-                    compression_opt: compression_opt__,
-                    statistics_enabled_opt: statistics_enabled_opt__,
-                    bloom_filter_fpp_opt: bloom_filter_fpp_opt__,
-                    bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
-                    max_statistics_size_opt: max_statistics_size_opt__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion_common.ColumnOptions", FIELDS, GeneratedVisitor)
-    }
-}
 impl serde::Serialize for ColumnRelation {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -1218,115 +969,6 @@ impl<'de> serde::Deserialize<'de> for ColumnRelation {
             }
         }
         deserializer.deserialize_struct("datafusion_common.ColumnRelation", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for ColumnSpecificOptions {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if !self.column_name.is_empty() {
-            len += 1;
-        }
-        if self.options.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion_common.ColumnSpecificOptions", len)?;
-        if !self.column_name.is_empty() {
-            struct_ser.serialize_field("columnName", &self.column_name)?;
-        }
-        if let Some(v) = self.options.as_ref() {
-            struct_ser.serialize_field("options", v)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for ColumnSpecificOptions {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "column_name",
-            "columnName",
-            "options",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            ColumnName,
-            Options,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "columnName" | "column_name" => Ok(GeneratedField::ColumnName),
-                            "options" => Ok(GeneratedField::Options),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = ColumnSpecificOptions;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion_common.ColumnSpecificOptions")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ColumnSpecificOptions, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut column_name__ = None;
-                let mut options__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::ColumnName => {
-                            if column_name__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("columnName"));
-                            }
-                            column_name__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::Options => {
-                            if options__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("options"));
-                            }
-                            options__ = map_.next_value()?;
-                        }
-                    }
-                }
-                Ok(ColumnSpecificOptions {
-                    column_name: column_name__.unwrap_or_default(),
-                    options: options__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion_common.ColumnSpecificOptions", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ColumnStats {
@@ -4733,6 +4375,364 @@ impl<'de> serde::Deserialize<'de> for NdJsonFormat {
         deserializer.deserialize_struct("datafusion_common.NdJsonFormat", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ParquetColumnOptions {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.bloom_filter_enabled_opt.is_some() {
+            len += 1;
+        }
+        if self.encoding_opt.is_some() {
+            len += 1;
+        }
+        if self.dictionary_enabled_opt.is_some() {
+            len += 1;
+        }
+        if self.compression_opt.is_some() {
+            len += 1;
+        }
+        if self.statistics_enabled_opt.is_some() {
+            len += 1;
+        }
+        if self.bloom_filter_fpp_opt.is_some() {
+            len += 1;
+        }
+        if self.bloom_filter_ndv_opt.is_some() {
+            len += 1;
+        }
+        if self.max_statistics_size_opt.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetColumnOptions", len)?;
+        if let Some(v) = self.bloom_filter_enabled_opt.as_ref() {
+            match v {
+                parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => {
+                    struct_ser.serialize_field("bloomFilterEnabled", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.encoding_opt.as_ref() {
+            match v {
+                parquet_column_options::EncodingOpt::Encoding(v) => {
+                    struct_ser.serialize_field("encoding", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.dictionary_enabled_opt.as_ref() {
+            match v {
+                parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(v) => {
+                    struct_ser.serialize_field("dictionaryEnabled", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.compression_opt.as_ref() {
+            match v {
+                parquet_column_options::CompressionOpt::Compression(v) => {
+                    struct_ser.serialize_field("compression", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.statistics_enabled_opt.as_ref() {
+            match v {
+                parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => {
+                    struct_ser.serialize_field("statisticsEnabled", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.bloom_filter_fpp_opt.as_ref() {
+            match v {
+                parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(v) => {
+                    struct_ser.serialize_field("bloomFilterFpp", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.bloom_filter_ndv_opt.as_ref() {
+            match v {
+                parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    struct_ser.serialize_field("bloomFilterNdv", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        if let Some(v) = self.max_statistics_size_opt.as_ref() {
+            match v {
+                parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => {
+                    struct_ser.serialize_field("maxStatisticsSize", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ParquetColumnOptions {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "bloom_filter_enabled",
+            "bloomFilterEnabled",
+            "encoding",
+            "dictionary_enabled",
+            "dictionaryEnabled",
+            "compression",
+            "statistics_enabled",
+            "statisticsEnabled",
+            "bloom_filter_fpp",
+            "bloomFilterFpp",
+            "bloom_filter_ndv",
+            "bloomFilterNdv",
+            "max_statistics_size",
+            "maxStatisticsSize",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            BloomFilterEnabled,
+            Encoding,
+            DictionaryEnabled,
+            Compression,
+            StatisticsEnabled,
+            BloomFilterFpp,
+            BloomFilterNdv,
+            MaxStatisticsSize,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "bloomFilterEnabled" | "bloom_filter_enabled" => Ok(GeneratedField::BloomFilterEnabled),
+                            "encoding" => Ok(GeneratedField::Encoding),
+                            "dictionaryEnabled" | "dictionary_enabled" => Ok(GeneratedField::DictionaryEnabled),
+                            "compression" => Ok(GeneratedField::Compression),
+                            "statisticsEnabled" | "statistics_enabled" => Ok(GeneratedField::StatisticsEnabled),
+                            "bloomFilterFpp" | "bloom_filter_fpp" => Ok(GeneratedField::BloomFilterFpp),
+                            "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
+                            "maxStatisticsSize" | "max_statistics_size" => Ok(GeneratedField::MaxStatisticsSize),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ParquetColumnOptions;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion_common.ParquetColumnOptions")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ParquetColumnOptions, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut bloom_filter_enabled_opt__ = None;
+                let mut encoding_opt__ = None;
+                let mut dictionary_enabled_opt__ = None;
+                let mut compression_opt__ = None;
+                let mut statistics_enabled_opt__ = None;
+                let mut bloom_filter_fpp_opt__ = None;
+                let mut bloom_filter_ndv_opt__ = None;
+                let mut max_statistics_size_opt__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::BloomFilterEnabled => {
+                            if bloom_filter_enabled_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bloomFilterEnabled"));
+                            }
+                            bloom_filter_enabled_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled);
+                        }
+                        GeneratedField::Encoding => {
+                            if encoding_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("encoding"));
+                            }
+                            encoding_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_column_options::EncodingOpt::Encoding);
+                        }
+                        GeneratedField::DictionaryEnabled => {
+                            if dictionary_enabled_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dictionaryEnabled"));
+                            }
+                            dictionary_enabled_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled);
+                        }
+                        GeneratedField::Compression => {
+                            if compression_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compression"));
+                            }
+                            compression_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_column_options::CompressionOpt::Compression);
+                        }
+                        GeneratedField::StatisticsEnabled => {
+                            if statistics_enabled_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("statisticsEnabled"));
+                            }
+                            statistics_enabled_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled);
+                        }
+                        GeneratedField::BloomFilterFpp => {
+                            if bloom_filter_fpp_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bloomFilterFpp"));
+                            }
+                            bloom_filter_fpp_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(x.0));
+                        }
+                        GeneratedField::BloomFilterNdv => {
+                            if bloom_filter_ndv_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bloomFilterNdv"));
+                            }
+                            bloom_filter_ndv_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(x.0));
+                        }
+                        GeneratedField::MaxStatisticsSize => {
+                            if max_statistics_size_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxStatisticsSize"));
+                            }
+                            max_statistics_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(x.0));
+                        }
+                    }
+                }
+                Ok(ParquetColumnOptions {
+                    bloom_filter_enabled_opt: bloom_filter_enabled_opt__,
+                    encoding_opt: encoding_opt__,
+                    dictionary_enabled_opt: dictionary_enabled_opt__,
+                    compression_opt: compression_opt__,
+                    statistics_enabled_opt: statistics_enabled_opt__,
+                    bloom_filter_fpp_opt: bloom_filter_fpp_opt__,
+                    bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
+                    max_statistics_size_opt: max_statistics_size_opt__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion_common.ParquetColumnOptions", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ParquetColumnSpecificOptions {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.column_name.is_empty() {
+            len += 1;
+        }
+        if self.options.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetColumnSpecificOptions", len)?;
+        if !self.column_name.is_empty() {
+            struct_ser.serialize_field("columnName", &self.column_name)?;
+        }
+        if let Some(v) = self.options.as_ref() {
+            struct_ser.serialize_field("options", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ParquetColumnSpecificOptions {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "column_name",
+            "columnName",
+            "options",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ColumnName,
+            Options,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "columnName" | "column_name" => Ok(GeneratedField::ColumnName),
+                            "options" => Ok(GeneratedField::Options),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ParquetColumnSpecificOptions;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion_common.ParquetColumnSpecificOptions")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ParquetColumnSpecificOptions, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut column_name__ = None;
+                let mut options__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ColumnName => {
+                            if column_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("columnName"));
+                            }
+                            column_name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Options => {
+                            if options__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("options"));
+                            }
+                            options__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(ParquetColumnSpecificOptions {
+                    column_name: column_name__.unwrap_or_default(),
+                    options: options__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion_common.ParquetColumnSpecificOptions", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ParquetFormat {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -7558,12 +7558,18 @@ impl serde::Serialize for TableParquetOptions {
         if !self.column_specific_options.is_empty() {
             len += 1;
         }
+        if !self.key_value_metadata.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.TableParquetOptions", len)?;
         if let Some(v) = self.global.as_ref() {
             struct_ser.serialize_field("global", v)?;
         }
         if !self.column_specific_options.is_empty() {
             struct_ser.serialize_field("columnSpecificOptions", &self.column_specific_options)?;
+        }
+        if !self.key_value_metadata.is_empty() {
+            struct_ser.serialize_field("keyValueMetadata", &self.key_value_metadata)?;
         }
         struct_ser.end()
     }
@@ -7578,12 +7584,15 @@ impl<'de> serde::Deserialize<'de> for TableParquetOptions {
             "global",
             "column_specific_options",
             "columnSpecificOptions",
+            "key_value_metadata",
+            "keyValueMetadata",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Global,
             ColumnSpecificOptions,
+            KeyValueMetadata,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -7607,6 +7616,7 @@ impl<'de> serde::Deserialize<'de> for TableParquetOptions {
                         match value {
                             "global" => Ok(GeneratedField::Global),
                             "columnSpecificOptions" | "column_specific_options" => Ok(GeneratedField::ColumnSpecificOptions),
+                            "keyValueMetadata" | "key_value_metadata" => Ok(GeneratedField::KeyValueMetadata),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7628,6 +7638,7 @@ impl<'de> serde::Deserialize<'de> for TableParquetOptions {
             {
                 let mut global__ = None;
                 let mut column_specific_options__ = None;
+                let mut key_value_metadata__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Global => {
@@ -7642,11 +7653,20 @@ impl<'de> serde::Deserialize<'de> for TableParquetOptions {
                             }
                             column_specific_options__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::KeyValueMetadata => {
+                            if key_value_metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("keyValueMetadata"));
+                            }
+                            key_value_metadata__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(TableParquetOptions {
                     global: global__,
                     column_specific_options: column_specific_options__.unwrap_or_default(),
+                    key_value_metadata: key_value_metadata__.unwrap_or_default(),
                 })
             }
         }
