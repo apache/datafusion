@@ -128,9 +128,6 @@ impl GroupValues for GroupValuesRows {
             None => vec![],
         };
 
-        println!("store_gp_hashes len: {:?}", store_gp_hashes);
-        println!("n_rows: {:?}", n_rows);
-
         // tracks to which group each of the input rows belongs
         groups.clear();
 

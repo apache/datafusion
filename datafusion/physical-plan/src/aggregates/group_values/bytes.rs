@@ -182,7 +182,6 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
         }
 
         Ok(output)
-        // Ok(vec![group_values])
     }
 
     fn clear_shrink(&mut self, _batch: &RecordBatch) {

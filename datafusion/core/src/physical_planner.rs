@@ -1050,7 +1050,7 @@ impl DefaultPhysicalPlanner {
                                 )
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        Partitioning::Hash(vec![], *n)
+                        Partitioning::Hash(runtime_expr, *n)
                     }
                     LogicalPartitioning::DistributeBy(_) => {
                         return not_impl_err!(

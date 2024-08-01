@@ -467,7 +467,6 @@ impl AggregateExec {
             std::mem::swap(&mut self.cache, &mut self.plain_cache);
         }
 
-
         self
     }
     /// Grouping expressions
@@ -523,8 +522,6 @@ impl AggregateExec {
                 return Ok(StreamType::GroupedPriorityQueue(
                     GroupedTopKAggregateStream::new(self, context, partition, limit)?,
                 ));
-            } else {
-                println!("not pass");
             }
         }
 

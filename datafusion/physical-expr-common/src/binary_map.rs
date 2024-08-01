@@ -27,6 +27,7 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
+use datafusion_common::hash_utils::create_hashes;
 // use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
 use std::any::type_name;
@@ -64,7 +65,7 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
     pub fn insert(&mut self, values: &ArrayRef) {
         fn make_payload_fn(_value: Option<&[u8]>, _hash: u64) {}
         fn observe_payload_fn(_payload: ()) {}
-        println!("wrong");
+
         self.0
             .insert_if_new(&[], values, make_payload_fn, observe_payload_fn);
     }
@@ -345,13 +346,18 @@ where
         B: ByteArrayType,
     {
         // step 1: compute hashes
-        // let batch_hashes = &mut self.hashes_buffer;
-        // batch_hashes.clear();
-        // batch_hashes.resize(values.len(), 0);
-        // create_hashes(&[values.clone()], &self.random_state, batch_hashes)
-        //     // hash is supported for all types and create_hashes only
-        //     // returns errors for unsupported types
-        //     .unwrap();
+        let batch_hashes = if batch_hashes.is_empty() {
+            let batch_hashes = &mut self.hashes_buffer;
+            batch_hashes.clear();
+            batch_hashes.resize(values.len(), 0);
+            create_hashes(&[values.clone()], &self.random_state, batch_hashes)
+                // hash is supported for all types and create_hashes only
+                // returns errors for unsupported types
+                .unwrap();
+            batch_hashes
+        } else {
+            batch_hashes
+        };
 
         // step 2: insert each value into the set, if not already present
         let values = values.as_bytes::<B>();
