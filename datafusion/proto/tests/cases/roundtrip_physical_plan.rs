@@ -909,11 +909,13 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         )),
         input,
     )?);
-    let aggr_expr = AggregateExprBuilder::new(max_udaf(), 
-    vec![udf_expr.clone() as Arc<dyn PhysicalExpr>])
-        .schema(schema.clone())
-        .name("max")
-        .build()?;
+    let aggr_expr = AggregateExprBuilder::new(
+        max_udaf(),
+        vec![udf_expr.clone() as Arc<dyn PhysicalExpr>],
+    )
+    .schema(schema.clone())
+    .name("max")
+    .build()?;
 
     let window = Arc::new(WindowAggExec::try_new(
         vec![Arc::new(PlainAggregateWindowExpr::new(
