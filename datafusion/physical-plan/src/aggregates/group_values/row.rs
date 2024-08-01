@@ -120,12 +120,13 @@ impl GroupValues for GroupValuesRows {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
-        for (row, &hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.get_mut(hash, |(_hash, group_idx)| {
+        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
-                group_rows.row(row) == group_values.row(*group_idx)
+                target_hash == *exist_hash
+                    && group_rows.row(row) == group_values.row(*group_idx)
             });
 
             let group_idx = match entry {
@@ -139,7 +140,7 @@ impl GroupValues for GroupValuesRows {
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
-                        (hash, group_idx),
+                        (target_hash, group_idx),
                         |(hash, _group_index)| *hash,
                         &mut self.map_size,
                     );

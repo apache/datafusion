@@ -153,7 +153,11 @@ impl AggregateUDFImpl for Regr {
             return plan_err!("Covariance requires numeric input types");
         }
 
-        Ok(DataType::Float64)
+        if matches!(self.regr_type, RegrType::Count) {
+            Ok(DataType::UInt64)
+        } else {
+            Ok(DataType::Float64)
+        }
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -480,7 +484,7 @@ impl Accumulator for RegrAccumulator {
                 let nullif_cond = self.count <= 1 || var_pop_x == 0.0;
                 nullif_or_stat(nullif_cond, self.mean_y - slope * self.mean_x)
             }
-            RegrType::Count => Ok(ScalarValue::Float64(Some(self.count as f64))),
+            RegrType::Count => Ok(ScalarValue::UInt64(Some(self.count))),
             RegrType::R2 => {
                 // Only 0/1 point or all x(or y) is the same
                 let nullif_cond = self.count <= 1 || var_pop_x == 0.0 || var_pop_y == 0.0;

@@ -287,6 +287,28 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
     }
 }
 
+pub(crate) fn transform_bottom_unnests(
+    input: &LogicalPlan,
+    unnest_placeholder_columns: &mut Vec<String>,
+    inner_projection_exprs: &mut Vec<Expr>,
+    original_exprs: &[Expr],
+) -> Result<Vec<Expr>> {
+    Ok(original_exprs
+        .iter()
+        .map(|expr| {
+            transform_bottom_unnest(
+                input,
+                unnest_placeholder_columns,
+                inner_projection_exprs,
+                expr,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>())
+}
+
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
 /// Given an expression which contains unnest expr as one of its children,
 /// Try transform depends on unnest type

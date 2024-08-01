@@ -433,15 +433,16 @@ message JsonOptions {
 
 message TableParquetOptions {
   ParquetOptions global = 1;
-  repeated ColumnSpecificOptions column_specific_options = 2;
+  repeated ParquetColumnSpecificOptions column_specific_options = 2;
+  map<string, string> key_value_metadata = 3;
 }
 
-message ColumnSpecificOptions {
+message ParquetColumnSpecificOptions {
   string column_name = 1;
-  ColumnOptions options = 2;
+  ParquetColumnOptions options = 2;
 }
 
-message ColumnOptions {
+message ParquetColumnOptions {
   oneof bloom_filter_enabled_opt {
     bool bloom_filter_enabled = 1;
   }
@@ -491,6 +492,7 @@ message ParquetOptions {
   uint64 maximum_buffered_record_batches_per_stream = 25; // default = 2
   bool bloom_filter_on_read = 26; // default = true
   bool bloom_filter_on_write = 27; // default = false
+  bool schema_force_string_view = 28; // default = false
 
   oneof metadata_size_hint_opt {
     uint64 metadata_size_hint = 4;

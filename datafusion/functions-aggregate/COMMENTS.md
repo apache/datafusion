@@ -54,7 +54,7 @@ first argument and the definition looks like this:
 // `input_type` :  data type of the first argument
 let mut fields = vec![Field::new_list(
     format_state_name(self.name(), "nth_value"),
-    Field::new("item", args.input_type.clone(), true /* nullable of list item */ ),
+    Field::new("item", args.input_types[0].clone(), true /* nullable of list item */ ),
     false, // nullable of list itself
 )];
 ```
