@@ -351,8 +351,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Return the fields used to store the intermediate state of this accumulator.
     ///
-    /// args:  [`StateFieldsArgs`] contains information about the fields that an
-    /// aggregate function's accumulator should have.
+    /// args:  [`StateFieldsArgs`] contains arguments passed to the
+    /// aggregate function's accumulator.
     ///
     /// # Notes:
     ///
