@@ -269,7 +269,9 @@ impl BatchPartitioner {
                         .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
                         .collect();
 
-                    if let Some(hash_values) = batch.column_by_name(GROUP_HASH_VALUE_COLUMN_NAME) {
+                    if let Some(hash_values) =
+                        batch.column_by_name(GROUP_HASH_VALUE_COLUMN_NAME)
+                    {
                         let hash_array = hash_values.as_primitive::<UInt64Type>();
                         for (index, hash) in hash_array.iter().enumerate() {
                             let hash = hash.unwrap();

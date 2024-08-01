@@ -841,7 +841,11 @@ fn create_schema(
     match mode {
         AggregateMode::Partial => {
             if !group_expr.is_empty() && !no_hash_value {
-                fields.push(Field::new(GROUP_HASH_VALUE_COLUMN_NAME, DataType::UInt64, true));
+                fields.push(Field::new(
+                    GROUP_HASH_VALUE_COLUMN_NAME,
+                    DataType::UInt64,
+                    true,
+                ));
             }
 
             // in partial mode, the fields of the accumulator's state

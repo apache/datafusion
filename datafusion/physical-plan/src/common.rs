@@ -40,7 +40,6 @@ use parking_lot::Mutex;
 /// [`MemoryReservation`] used across query execution streams
 pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 
-
 pub(crate) const GROUP_HASH_VALUE_COLUMN_NAME: &str = "group_hash_value";
 
 /// Create a vector of record batches from a stream

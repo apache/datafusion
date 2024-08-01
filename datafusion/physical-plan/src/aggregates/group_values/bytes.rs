@@ -74,13 +74,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
 
         let batch_hashes = if let Some(hash_values) = hash_values {
             let hash_array = hash_values.as_primitive::<UInt64Type>();
-            let hash_values = hash_array
-                .values()
-                .clone()
-                .into_iter()
-                .map(|x| *x)
-                .collect::<Vec<_>>();
-            hash_values
+            hash_array.values().as_ref()
         } else {
             // step 1: compute hashes
             let batch_hashes = &mut self.hashes_buffer;
@@ -90,11 +84,11 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
                 // hash is supported for all types and create_hashes only
                 // returns errors for unsupported types
                 .unwrap();
-            batch_hashes.to_vec()
+            batch_hashes
         };
 
         self.map.insert_if_new(
-            &batch_hashes,
+            batch_hashes,
             arr,
             // called for each new group
             |_value, hash| {
