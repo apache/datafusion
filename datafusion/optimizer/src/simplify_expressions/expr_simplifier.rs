@@ -289,7 +289,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         self
     }
 
-    /// Should [`Canonicalizer`] be applied before simplification?
+    /// Should `Canonicalizer` be applied before simplification?
     ///
     /// If true (the default), the expression will be rewritten to canonical
     /// form before simplification. This is useful to ensure that the simplifier
