@@ -130,10 +130,10 @@ impl Centroid {
     }
 
     pub fn add(&mut self, sum: f64, weight: f64) -> f64 {
-        let new_sum = sum + self.weight as f64 * self.mean;
+        let new_sum = sum + self.weight * self.mean;
         let new_weight = self.weight + weight;
         self.weight = new_weight;
-        self.mean = new_sum / new_weight as f64;
+        self.mean = new_sum / new_weight;
         new_sum
     }
 }
@@ -142,7 +142,7 @@ impl Default for Centroid {
     fn default() -> Self {
         Centroid {
             mean: 0_f64,
-            weight: 1.0_f64,
+            weight: 1_f64,
         }
     }
 }
@@ -174,7 +174,7 @@ impl TDigest {
         TDigest {
             centroids: vec![centroid.clone()],
             max_size,
-            sum: centroid.mean * centroid.weight as f64,
+            sum: centroid.mean * centroid.weight,
             count: 1,
             max: centroid.mean,
             min: centroid.mean,
@@ -448,7 +448,7 @@ impl TDigest {
             weight_so_far += centroid.weight();
 
             if weight_so_far as f64 <= q_limit_times_count {
-                sums_to_merge += centroid.mean() * centroid.weight() as f64;
+                sums_to_merge += centroid.mean() * centroid.weight();
                 weights_to_merge += centroid.weight();
             } else {
                 result.sum += curr.add(sums_to_merge, weights_to_merge);
@@ -537,7 +537,7 @@ impl TDigest {
         }
 
         let value = self.centroids[pos].mean()
-            + ((rank - t as f64) / self.centroids[pos].weight() as f64 - 0.5) * delta;
+            + ((rank - t as f64) / self.centroids[pos].weight() - 0.5) * delta;
 
         Self::clamp(value, min, max)
     }
@@ -582,7 +582,7 @@ impl TDigest {
         let centroids: Vec<ScalarValue> = self
             .centroids
             .iter()
-            .flat_map(|c| [c.mean(), c.weight() as f64])
+            .flat_map(|c| [c.mean(), c.weight()])
             .map(|v| ScalarValue::Float64(Some(v)))
             .collect();
 
@@ -623,7 +623,7 @@ impl TDigest {
                 f64arr
                     .values()
                     .chunks(2)
-                    .map(|v| Centroid::new(v[0], v[1] as f64))
+                    .map(|v| Centroid::new(v[0], v[1]))
                     .collect()
             }
             v => panic!("invalid centroids type {v:?}"),
