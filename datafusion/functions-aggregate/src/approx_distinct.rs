@@ -277,28 +277,29 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let accumulator: Box<dyn Accumulator> = match &acc_args.input_types[0] {
-            // TODO u8, i8, u16, i16 shall really be done using bitmap, not HLL
-            // TODO support for boolean (trivial case)
-            // https://github.com/apache/datafusion/issues/1109
-            DataType::UInt8 => Box::new(NumericHLLAccumulator::<UInt8Type>::new()),
-            DataType::UInt16 => Box::new(NumericHLLAccumulator::<UInt16Type>::new()),
-            DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
-            DataType::UInt64 => Box::new(NumericHLLAccumulator::<UInt64Type>::new()),
-            DataType::Int8 => Box::new(NumericHLLAccumulator::<Int8Type>::new()),
-            DataType::Int16 => Box::new(NumericHLLAccumulator::<Int16Type>::new()),
-            DataType::Int32 => Box::new(NumericHLLAccumulator::<Int32Type>::new()),
-            DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::new()),
-            DataType::Utf8 => Box::new(StringHLLAccumulator::<i32>::new()),
-            DataType::LargeUtf8 => Box::new(StringHLLAccumulator::<i64>::new()),
-            DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
-            DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
-            other => {
-                return not_impl_err!(
+        let accumulator: Box<dyn Accumulator> =
+            match &acc_args.input_exprs[0].data_type(acc_args.dfschema.as_arrow())? {
+                // TODO u8, i8, u16, i16 shall really be done using bitmap, not HLL
+                // TODO support for boolean (trivial case)
+                // https://github.com/apache/datafusion/issues/1109
+                DataType::UInt8 => Box::new(NumericHLLAccumulator::<UInt8Type>::new()),
+                DataType::UInt16 => Box::new(NumericHLLAccumulator::<UInt16Type>::new()),
+                DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
+                DataType::UInt64 => Box::new(NumericHLLAccumulator::<UInt64Type>::new()),
+                DataType::Int8 => Box::new(NumericHLLAccumulator::<Int8Type>::new()),
+                DataType::Int16 => Box::new(NumericHLLAccumulator::<Int16Type>::new()),
+                DataType::Int32 => Box::new(NumericHLLAccumulator::<Int32Type>::new()),
+                DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::new()),
+                DataType::Utf8 => Box::new(StringHLLAccumulator::<i32>::new()),
+                DataType::LargeUtf8 => Box::new(StringHLLAccumulator::<i64>::new()),
+                DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
+                DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
+                other => {
+                    return not_impl_err!(
                 "Support for 'approx_distinct' for data type {other} is not implemented"
             )
-            }
-        };
+                }
+            };
         Ok(accumulator)
     }
 }

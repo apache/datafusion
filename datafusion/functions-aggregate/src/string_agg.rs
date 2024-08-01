@@ -24,8 +24,9 @@ use datafusion_common::Result;
 use datafusion_common::{not_impl_err, ScalarValue};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Expr, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
 };
+use datafusion_physical_expr_common::expressions::Literal;
 use std::any::Any;
 
 make_udaf_expr_and_func!(
@@ -82,21 +83,25 @@ impl AggregateUDFImpl for StringAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        match &acc_args.input_exprs[1] {
-            Expr::Literal(ScalarValue::Utf8(Some(delimiter)))
-            | Expr::Literal(ScalarValue::LargeUtf8(Some(delimiter))) => {
-                Ok(Box::new(StringAggAccumulator::new(delimiter)))
-            }
-            Expr::Literal(ScalarValue::Utf8(None))
-            | Expr::Literal(ScalarValue::LargeUtf8(None))
-            | Expr::Literal(ScalarValue::Null) => {
-                Ok(Box::new(StringAggAccumulator::new("")))
-            }
-            _ => not_impl_err!(
+        let Some(delimiter) = acc_args.input_exprs[1]
+            .as_any()
+            .downcast_ref::<Literal>()
+            .and_then(|lit| match lit.value() {
+                ScalarValue::Utf8(Some(s)) => Some(s.as_str()),
+                ScalarValue::LargeUtf8(Some(s)) => Some(s.as_str()),
+                ScalarValue::Utf8(None)
+                | ScalarValue::LargeUtf8(None)
+                | ScalarValue::Null => Some(""),
+                _ => None,
+            })
+        else {
+            return not_impl_err!(
                 "StringAgg not supported for delimiter {}",
                 &acc_args.input_exprs[1]
-            ),
-        }
+            );
+        };
+
+        Ok(Box::new(StringAggAccumulator::new(delimiter)))
     }
 }
 

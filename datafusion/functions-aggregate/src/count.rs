@@ -148,7 +148,8 @@ impl AggregateUDFImpl for Count {
             return not_impl_err!("COUNT DISTINCT with multiple arguments");
         }
 
-        let data_type = &acc_args.input_types[0];
+        let data_type =
+            &acc_args.input_exprs[0].data_type(acc_args.dfschema.as_arrow())?;
         Ok(match data_type {
             // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
             DataType::Int8 => Box::new(

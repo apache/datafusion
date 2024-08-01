@@ -21,11 +21,11 @@ use arrow_array::builder::{Int32Builder, StringBuilder};
 use arrow_schema::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
+use datafusion_expr::expressions::column::Column;
+use datafusion_expr::physical_expr::PhysicalExpr;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, CaseExpr};
-use datafusion_physical_expr_common::expressions::column::Column;
 use datafusion_physical_expr_common::expressions::Literal;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
 fn make_col(name: &str, index: usize) -> Arc<dyn PhysicalExpr> {

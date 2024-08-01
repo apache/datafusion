@@ -93,7 +93,10 @@ impl AggregateUDFImpl for Avg {
         }
         use DataType::*;
         // instantiate specialized accumulator based for the type
-        match (&acc_args.input_types[0], acc_args.data_type) {
+        let input_type =
+            acc_args.input_exprs[0].data_type(acc_args.dfschema.as_arrow())?;
+
+        match (&input_type, acc_args.data_type) {
             (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
             (
                 Decimal128(sum_precision, sum_scale),
@@ -120,7 +123,7 @@ impl AggregateUDFImpl for Avg {
             })),
             _ => exec_err!(
                 "AvgAccumulator for ({} --> {})",
-                &acc_args.input_types[0],
+                &input_type,
                 acc_args.data_type
             ),
         }
@@ -154,10 +157,12 @@ impl AggregateUDFImpl for Avg {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         // instantiate specialized accumulator based for the type
-        match (&args.input_types[0], args.data_type) {
+        let sum_data_type = &args.input_exprs[0].data_type(args.dfschema.as_arrow())?;
+
+        match (sum_data_type, args.data_type) {
             (Float64, Float64) => {
                 Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
-                    &args.input_types[0],
+                    sum_data_type,
                     args.data_type,
                     |sum: f64, count: u64| Ok(sum / count as f64),
                 )))
@@ -176,7 +181,7 @@ impl AggregateUDFImpl for Avg {
                     move |sum: i128, count: u64| decimal_averager.avg(sum, count as i128);
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal128Type, _>::new(
-                    &args.input_types[0],
+                    sum_data_type,
                     args.data_type,
                     avg_fn,
                 )))
@@ -197,7 +202,7 @@ impl AggregateUDFImpl for Avg {
                 };
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal256Type, _>::new(
-                    &args.input_types[0],
+                    sum_data_type,
                     args.data_type,
                     avg_fn,
                 )))
@@ -205,7 +210,7 @@ impl AggregateUDFImpl for Avg {
 
             _ => not_impl_err!(
                 "AvgGroupsAccumulator for ({} --> {})",
-                &args.input_types[0],
+                sum_data_type,
                 args.data_type
             ),
         }

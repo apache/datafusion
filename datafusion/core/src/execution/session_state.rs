@@ -48,6 +48,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
+use datafusion_expr::physical_expr::PhysicalExpr;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
@@ -61,7 +62,6 @@ use datafusion_optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerRule,
 };
 use datafusion_physical_expr::create_physical_expr;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};

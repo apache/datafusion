@@ -30,7 +30,7 @@ use crate::datasource::schema_adapter::SchemaAdapterFactory;
 use crate::physical_optimizer::pruning::PruningPredicate;
 use arrow_schema::{ArrowError, SchemaRef};
 use datafusion_common::{exec_err, Result};
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_expr::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;

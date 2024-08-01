@@ -55,7 +55,7 @@ pub use physical_expr::{
     PhysicalExprRef,
 };
 
-pub use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+pub use datafusion_expr::physical_expr::PhysicalExpr;
 pub use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexOrderingRef, LexRequirement, LexRequirementRef, PhysicalSortExpr,
     PhysicalSortRequirement,
@@ -69,5 +69,5 @@ pub use utils::split_conjunction;
 
 // For backwards compatibility
 pub mod tree_node {
-    pub use datafusion_physical_expr_common::tree_node::ExprContext;
+    pub use datafusion_expr::tree_node::ExprContext;
 }

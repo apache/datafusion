@@ -32,7 +32,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-use datafusion_physical_expr_common::expressions::column::Column;
+use datafusion_expr::expressions::column::Column;
 use datafusion_physical_expr_common::expressions::Literal;
 use itertools::Itertools;
 

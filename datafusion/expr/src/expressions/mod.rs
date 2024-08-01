@@ -15,10 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod aggregate;
-pub mod binary_map;
-pub mod binary_view_map;
-pub mod datum;
-pub mod expressions;
-pub mod sort_expr;
-pub mod utils;
+pub mod column;

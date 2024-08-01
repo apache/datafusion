@@ -17,6 +17,7 @@
 
 //! Function module contains typing and signature for built-in and user defined functions.
 
+use crate::physical_expr::PhysicalExpr;
 use crate::ColumnarValue;
 use crate::{Accumulator, Expr, PartitionEvaluator};
 use arrow::datatypes::{DataType, Field};
@@ -91,11 +92,8 @@ pub struct AccumulatorArgs<'a> {
     /// ```
     pub is_distinct: bool,
 
-    /// The input types of the aggregate function.
-    pub input_types: &'a [DataType],
-
     /// The logical expression of arguments the aggregate function takes.
-    pub input_exprs: &'a [Expr],
+    pub input_exprs: &'a [Arc<dyn PhysicalExpr>],
 }
 
 /// [`StateFieldsArgs`] contains information about the fields that an

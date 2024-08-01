@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 use arrow::{
     array::ArrayRef,
@@ -131,8 +132,8 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
 
         let sub_args = AccumulatorArgs {
             input_exprs: &[
-                acc_args.input_exprs[0].clone(),
-                acc_args.input_exprs[2].clone(),
+                Arc::clone(&acc_args.input_exprs[0]),
+                Arc::clone(&acc_args.input_exprs[2]),
             ],
             ..acc_args
         };

@@ -20,7 +20,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
+use datafusion_expr::physical_expr::{down_cast_any_ref, PhysicalExpr};
 
 use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, DataType::*, Schema};
@@ -235,7 +235,7 @@ pub fn cast(
 mod tests {
     use super::*;
 
-    use crate::expressions::column::col;
+    use datafusion_expr::expressions::column::col;
 
     use arrow::{
         array::{

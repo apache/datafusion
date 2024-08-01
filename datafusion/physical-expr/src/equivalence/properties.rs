@@ -34,12 +34,12 @@ use crate::{
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_err, JoinSide, JoinType, Result};
+use datafusion_expr::expressions::column::Column;
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::physical_expr::with_new_schema;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_physical_expr_common::expressions::column::Column;
+use datafusion_expr::utils::ExprPropertiesNode;
 use datafusion_physical_expr_common::expressions::CastExpr;
-use datafusion_physical_expr_common::physical_expr::with_new_schema;
-use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;

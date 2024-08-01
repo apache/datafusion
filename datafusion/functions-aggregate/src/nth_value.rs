@@ -30,10 +30,11 @@ use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValu
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Expr, ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, ReversedUDAF, Signature, Volatility,
 };
 use datafusion_physical_expr_common::aggregate::merge_arrays::merge_ordered_arrays;
 use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
+use datafusion_physical_expr_common::expressions::Literal;
 use datafusion_physical_expr_common::sort_expr::{
     limited_convert_logical_sort_exprs_to_physical_with_dfschema, LexOrdering,
     PhysicalSortExpr,
@@ -87,20 +88,26 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let n = match acc_args.input_exprs[1] {
-            Expr::Literal(ScalarValue::Int64(Some(value))) => {
-                if acc_args.is_reversed {
-                    Ok(-value)
-                } else {
-                    Ok(value)
+        let Some(n) = acc_args.input_exprs[1]
+            .as_any()
+            .downcast_ref::<Literal>()
+            .and_then(|lit| match lit.value() {
+                ScalarValue::Int64(Some(n)) => {
+                    if acc_args.is_reversed {
+                        Some(-n)
+                    } else {
+                        Some(*n)
+                    }
                 }
-            }
-            _ => not_impl_err!(
+                _ => None,
+            })
+        else {
+            return not_impl_err!(
                 "{} not supported for n: {}",
                 self.name(),
                 &acc_args.input_exprs[1]
-            ),
-        }?;
+            );
+        };
 
         let ordering_req = limited_convert_logical_sort_exprs_to_physical_with_dfschema(
             acc_args.sort_exprs,
@@ -114,7 +121,7 @@ impl AggregateUDFImpl for NthValueAgg {
 
         NthValueAccumulator::try_new(
             n,
-            &acc_args.input_types[0],
+            &acc_args.input_exprs[0].data_type(acc_args.dfschema.as_arrow())?,
             &ordering_dtypes,
             ordering_req,
         )

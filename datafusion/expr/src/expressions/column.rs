@@ -21,12 +21,12 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::ColumnarValue;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::ColumnarValue;
 
 use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 
@@ -89,7 +89,7 @@ impl PhysicalExpr for Column {
     /// Evaluate the expression
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         self.bounds_check(batch.schema().as_ref())?;
-        Ok(ColumnarValue::Array(batch.column(self.index).clone()))
+        Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

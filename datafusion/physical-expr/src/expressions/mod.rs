@@ -47,8 +47,8 @@ pub use crate::PhysicalSortExpr;
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
+pub use datafusion_expr::expressions::column::{col, Column};
 pub use datafusion_expr::utils::format_state_name;
-pub use datafusion_physical_expr_common::expressions::column::{col, Column};
 pub use datafusion_physical_expr_common::expressions::literal::{lit, Literal};
 pub use datafusion_physical_expr_common::expressions::{cast, CastExpr};
 pub use in_list::{in_list, InListExpr};

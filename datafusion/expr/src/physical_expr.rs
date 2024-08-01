@@ -23,15 +23,15 @@ use std::sync::Arc;
 use crate::expressions::column::Column;
 use crate::utils::scatter;
 
+use crate::interval_arithmetic::Interval;
+use crate::sort_properties::ExprProperties;
+use crate::ColumnarValue;
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, not_impl_err, plan_err, Result};
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::ColumnarValue;
 
 /// See [create_physical_expr](https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html)
 /// for examples of creating `PhysicalExpr` from `Expr`

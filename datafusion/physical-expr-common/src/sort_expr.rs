@@ -21,13 +21,12 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::PhysicalExpr;
 use crate::utils::limited_convert_logical_expr_to_physical_expr_with_dfschema;
-
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{exec_err, DFSchema, Result};
+use datafusion_expr::physical_expr::PhysicalExpr;
 use datafusion_expr::{ColumnarValue, Expr};
 
 /// Represents Sort operation for a column in a RecordBatch

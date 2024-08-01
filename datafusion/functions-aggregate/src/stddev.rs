@@ -274,9 +274,9 @@ mod tests {
     use arrow::{array::*, datatypes::*};
 
     use datafusion_common::DFSchema;
+    use datafusion_expr::expressions::column::{col, Column};
     use datafusion_expr::AggregateUDF;
     use datafusion_physical_expr_common::aggregate::utils::get_accum_scalar_values_as_arrays;
-    use datafusion_physical_expr_common::expressions::column::col;
 
     use super::*;
 
@@ -334,8 +334,7 @@ mod tests {
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            input_types: &[DataType::Float64],
-            input_exprs: &[datafusion_expr::col("a")],
+            input_exprs: &[Arc::new(Column::new("a", 0))],
         };
 
         let args2 = AccumulatorArgs {
@@ -346,8 +345,7 @@ mod tests {
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            input_types: &[DataType::Float64],
-            input_exprs: &[datafusion_expr::col("a")],
+            input_exprs: &[Arc::new(Column::new("a", 0))],
         };
 
         let mut accum1 = agg1.accumulator(args1)?;

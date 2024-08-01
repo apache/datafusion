@@ -21,14 +21,13 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
-
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::physical_expr::{down_cast_any_ref, PhysicalExpr};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{ColumnarValue, Expr};
 

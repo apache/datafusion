@@ -1195,7 +1195,7 @@ mod tests {
     use arrow_array::{Float32Array, Int32Array};
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, internal_err, DFSchema, DFSchemaRef,
-        DataFusionError, ScalarValue,
+        DataFusionError, ScalarValue, ToDFSchema,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
@@ -1352,7 +1352,7 @@ mod tests {
         };
 
         let aggregates = vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1i8)])
-            .schema(Arc::clone(&input_schema))
+            .dfschema(Arc::clone(&input_schema).to_dfschema()?)
             .name("COUNT(1)")
             .logical_exprs(vec![datafusion_expr::lit(1i8)])
             .build()?];
@@ -1497,7 +1497,7 @@ mod tests {
         let aggregates: Vec<Arc<dyn AggregateExpr>> =
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
-                    .schema(Arc::clone(&input_schema))
+                    .dfschema(Arc::clone(&input_schema).to_dfschema()?)
                     .name("AVG(b)")
                     .build()?,
             ];
@@ -1793,7 +1793,7 @@ mod tests {
     // Median(a)
     fn test_median_agg_expr(schema: SchemaRef) -> Result<Arc<dyn AggregateExpr>> {
         AggregateExprBuilder::new(median_udaf(), vec![col("a", &schema)?])
-            .schema(schema)
+            .dfschema(schema.to_dfschema()?)
             .name("MEDIAN(a)")
             .build()
     }
@@ -1824,7 +1824,7 @@ mod tests {
         let aggregates_v2: Vec<Arc<dyn AggregateExpr>> =
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
-                    .schema(Arc::clone(&input_schema))
+                    .dfschema(Arc::clone(&input_schema).to_dfschema()?)
                     .name("AVG(b)")
                     .build()?,
             ];
@@ -1884,7 +1884,7 @@ mod tests {
         let aggregates: Vec<Arc<dyn AggregateExpr>> =
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("a", &schema)?])
-                    .schema(Arc::clone(&schema))
+                    .dfschema(Arc::clone(&schema).to_dfschema()?)
                     .name("AVG(a)")
                     .build()?,
             ];
@@ -1924,7 +1924,7 @@ mod tests {
         let aggregates: Vec<Arc<dyn AggregateExpr>> =
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
-                    .schema(Arc::clone(&schema))
+                    .dfschema(Arc::clone(&schema).to_dfschema()?)
                     .name("AVG(b)")
                     .build()?,
             ];
@@ -2353,7 +2353,7 @@ mod tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> =
             vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
-                .schema(Arc::clone(&schema))
+                .dfschema(Arc::clone(&schema).to_dfschema()?)
                 .name("1")
                 .build()?];
 

@@ -61,7 +61,9 @@ use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_err, not_impl_err, DataFusionError, Result, ToDFSchema,
+};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 
 use crate::common::{byte_to_string, str_to_byte};
@@ -509,7 +511,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
                                             // TODO: approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
                                             // TODO: `order by` is not supported for UDAF yet
-                                            AggregateExprBuilder::new(agg_udf, input_phy_expr).schema(Arc::clone(&physical_schema)).name(name).with_ignore_nulls(agg_node.ignore_nulls).with_distinct(agg_node.distinct).build()
+                                            AggregateExprBuilder::new(agg_udf, input_phy_expr).dfschema(Arc::clone(&physical_schema).to_dfschema()?).name(name).with_ignore_nulls(agg_node.ignore_nulls).with_distinct(agg_node.distinct).build()
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {

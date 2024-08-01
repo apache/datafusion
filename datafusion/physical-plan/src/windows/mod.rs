@@ -31,7 +31,7 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::{col, Expr, SortExpr};
 use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
@@ -145,7 +145,7 @@ pub fn create_window_expr(
                 .collect::<Vec<_>>();
 
             let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
-                .schema(Arc::new(input_schema.clone()))
+                .dfschema(Arc::new(input_schema.clone()).to_dfschema()?)
                 .name(name)
                 .order_by(order_by.to_vec())
                 .sort_exprs(sort_exprs)
@@ -413,6 +413,7 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 }
 
+#[allow(clippy::needless_borrow)]
 pub(crate) fn calc_requirements<
     T: Borrow<Arc<dyn PhysicalExpr>>,
     S: Borrow<PhysicalSortExpr>,
@@ -430,7 +431,7 @@ pub(crate) fn calc_requirements<
         let PhysicalSortExpr { expr, options } = element.borrow();
         if !sort_reqs.iter().any(|e| e.expr.eq(expr)) {
             sort_reqs.push(PhysicalSortRequirement::new(
-                Arc::clone(expr),
+                Arc::clone(&expr),
                 Some(*options),
             ));
         }
