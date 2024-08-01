@@ -427,7 +427,7 @@ impl AggregateUDFImpl for Max {
     }
 
     fn name(&self) -> &str {
-        "MIN"
+        "MAX"
     }
 
     fn signature(&self) -> &Signature {
