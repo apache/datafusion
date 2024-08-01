@@ -50,6 +50,30 @@ pub trait GroupValues: Send {
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
+    /// Emits all group values based on batch_size
+    fn emit_all_with_batch_size(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Vec<Vec<ArrayRef>>> {
+        let ceil = (self.len() + batch_size - 1) / batch_size;
+        let mut outputs = Vec::with_capacity(ceil);
+        let mut remaining = self.len();
+
+        while remaining > 0 {
+            if remaining > batch_size {
+                let emit_to = EmitTo::First(batch_size);
+                outputs.push(self.emit(emit_to)?);
+                remaining -= batch_size;
+            } else {
+                let emit_to = EmitTo::All;
+                outputs.push(self.emit(emit_to)?);
+                remaining = 0;
+            }
+        }
+
+        Ok(outputs)
+    }
+
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, batch: &RecordBatch);
 }

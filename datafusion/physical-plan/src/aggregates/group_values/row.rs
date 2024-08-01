@@ -27,6 +27,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use hashbrown::raw::RawTable;
+use itertools::Itertools;
 
 /// A [`GroupValues`] making use of [`Rows`]
 pub struct GroupValuesRows {
@@ -234,6 +235,42 @@ impl GroupValues for GroupValuesRows {
 
         self.group_values = Some(group_values);
         Ok(output)
+    }
+
+    fn emit_all_with_batch_size(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Vec<Vec<ArrayRef>>> {
+        let mut group_values = self
+            .group_values
+            .take()
+            .expect("Can not emit from empty rows");
+
+        let ceil = (group_values.num_rows() + batch_size - 1) / batch_size;
+        let mut outputs = Vec::with_capacity(ceil);
+
+        for chunk in group_values.iter().chunks(batch_size).into_iter() {
+            let groups_rows = chunk;
+            let mut output = self.row_converter.convert_rows(groups_rows)?;
+            for (field, array) in self.schema.fields.iter().zip(&mut output) {
+                let expected = field.data_type();
+                if let DataType::Dictionary(_, v) = expected {
+                    let actual = array.data_type();
+                    if v.as_ref() != actual {
+                        return Err(DataFusionError::Internal(format!(
+                            "Converted group rows expected dictionary of {v} got {actual}"
+                        )));
+                    }
+                    *array = cast(array.as_ref(), expected)?;
+                }
+            }
+            outputs.push(output);
+        }
+
+        group_values.clear();
+        self.group_values = Some(group_values);
+
+        Ok(outputs)
     }
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
