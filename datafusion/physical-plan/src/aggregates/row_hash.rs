@@ -27,7 +27,7 @@ use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     PhysicalGroupBy,
 };
-use crate::common::IPCWriter;
+use crate::common::{IPCWriter, GROUP_HASH_VALUE_COLUMN_NAME};
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge;
@@ -537,7 +537,7 @@ impl GroupedHashAggregateStream {
             evaluate_many(&self.aggregate_arguments, &batch)?
         };
 
-        let hash_values = batch.column_by_name("hash_value");
+        let hash_values = batch.column_by_name(GROUP_HASH_VALUE_COLUMN_NAME);
 
         // Evaluate the filter expressions, if any, against the inputs
         let filter_values = if self.spill_state.is_stream_merging {

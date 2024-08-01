@@ -29,6 +29,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
+use crate::common::GROUP_HASH_VALUE_COLUMN_NAME;
 use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
@@ -268,7 +269,7 @@ impl BatchPartitioner {
                         .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
                         .collect();
 
-                    if let Some(hash_values) = batch.column_by_name("hash_value") {
+                    if let Some(hash_values) = batch.column_by_name(GROUP_HASH_VALUE_COLUMN_NAME) {
                         let hash_array = hash_values.as_primitive::<UInt64Type>();
                         for (index, hash) in hash_array.iter().enumerate() {
                             let hash = hash.unwrap();

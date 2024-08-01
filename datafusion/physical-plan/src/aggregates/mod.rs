@@ -25,6 +25,7 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
+use crate::common::GROUP_HASH_VALUE_COLUMN_NAME;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::get_ordered_partition_by_indices;
 use crate::{
@@ -840,7 +841,7 @@ fn create_schema(
     match mode {
         AggregateMode::Partial => {
             if !group_expr.is_empty() && !no_hash_value {
-                fields.push(Field::new("hash_value", DataType::UInt64, true));
+                fields.push(Field::new(GROUP_HASH_VALUE_COLUMN_NAME, DataType::UInt64, true));
             }
 
             // in partial mode, the fields of the accumulator's state
