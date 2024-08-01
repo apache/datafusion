@@ -961,48 +961,48 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     }
 }
 
-impl TryFrom<&protobuf::ColumnOptions> for ParquetColumnOptions {
+impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
     type Error = DataFusionError;
     fn try_from(
-        value: &protobuf::ColumnOptions,
+        value: &protobuf::ParquetColumnOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
         Ok(ParquetColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
-                protobuf::column_options::CompressionOpt::Compression(v) => Some(v),
+                protobuf::parquet_column_options::CompressionOpt::Compression(v) => Some(v),
             }).unwrap_or(None),
-            dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
+            dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             statistics_enabled: value
                 .statistics_enabled_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
+                    protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
                 })
                 .unwrap_or(None),
             max_statistics_size: value
                 .max_statistics_size_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
+                    protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
                 })
                 .unwrap_or(None),
             encoding: value
                 .encoding_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::column_options::EncodingOpt::Encoding(v) => Some(v),
+                    protobuf::parquet_column_options::EncodingOpt::Encoding(v) => Some(v),
                 })
                 .unwrap_or(None),
             bloom_filter_enabled: value.bloom_filter_enabled_opt.clone().map(|opt| match opt {
-                protobuf::column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => Some(v),
+                protobuf::parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => Some(v),
             })
                 .unwrap_or(None),
             bloom_filter_fpp: value
                 .bloom_filter_fpp_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::column_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
+                    protobuf::parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
                 })
                 .unwrap_or(None),
             bloom_filter_ndv: value
                 .bloom_filter_ndv_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
+                    protobuf::parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
                 })
                 .unwrap_or(None),
         })
@@ -1016,7 +1016,7 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
     ) -> datafusion_common::Result<Self, Self::Error> {
         let mut column_specific_options: HashMap<String, ParquetColumnOptions> =
             HashMap::new();
-        for protobuf::ColumnSpecificOptions {
+        for protobuf::ParquetColumnSpecificOptions {
             column_name,
             options: maybe_options,
         } in &value.column_specific_options

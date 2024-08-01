@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::protobuf_common as protobuf;
@@ -832,42 +833,42 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
     }
 }
 
-impl TryFrom<&ParquetColumnOptions> for protobuf::ColumnOptions {
+impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
     type Error = DataFusionError;
 
     fn try_from(
         value: &ParquetColumnOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        Ok(protobuf::ColumnOptions {
+        Ok(protobuf::ParquetColumnOptions {
             compression_opt: value
                 .compression
                 .clone()
-                .map(protobuf::column_options::CompressionOpt::Compression),
+                .map(protobuf::parquet_column_options::CompressionOpt::Compression),
             dictionary_enabled_opt: value
                 .dictionary_enabled
-                .map(protobuf::column_options::DictionaryEnabledOpt::DictionaryEnabled),
+                .map(protobuf::parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled),
             statistics_enabled_opt: value
                 .statistics_enabled
                 .clone()
-                .map(protobuf::column_options::StatisticsEnabledOpt::StatisticsEnabled),
+                .map(protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled),
             max_statistics_size_opt: value.max_statistics_size.map(|v| {
-                protobuf::column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
+                protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
                     v as u32,
                 )
             }),
             encoding_opt: value
                 .encoding
                 .clone()
-                .map(protobuf::column_options::EncodingOpt::Encoding),
+                .map(protobuf::parquet_column_options::EncodingOpt::Encoding),
             bloom_filter_enabled_opt: value
                 .bloom_filter_enabled
-                .map(protobuf::column_options::BloomFilterEnabledOpt::BloomFilterEnabled),
+                .map(protobuf::parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled),
             bloom_filter_fpp_opt: value
                 .bloom_filter_fpp
-                .map(protobuf::column_options::BloomFilterFppOpt::BloomFilterFpp),
+                .map(protobuf::parquet_column_options::BloomFilterFppOpt::BloomFilterFpp),
             bloom_filter_ndv_opt: value
                 .bloom_filter_ndv
-                .map(protobuf::column_options::BloomFilterNdvOpt::BloomFilterNdv),
+                .map(protobuf::parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv),
         })
     }
 }
@@ -881,15 +882,21 @@ impl TryFrom<&TableParquetOptions> for protobuf::TableParquetOptions {
             .column_specific_options
             .iter()
             .map(|(k, v)| {
-                Ok(protobuf::ColumnSpecificOptions {
+                Ok(protobuf::ParquetColumnSpecificOptions {
                     column_name: k.into(),
                     options: Some(v.try_into()?),
                 })
             })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
+        let key_value_metadata = value
+            .key_value_metadata
+            .iter()
+            .filter_map(|(k, v)| v.as_ref().map(|v| (k.clone(), v.clone())))
+            .collect::<HashMap<String, String>>();
         Ok(protobuf::TableParquetOptions {
             global: Some((&value.global).try_into()?),
             column_specific_options,
+            key_value_metadata,
         })
     }
 }
