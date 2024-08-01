@@ -297,7 +297,7 @@ impl AggregateUDFImpl for ApproxDistinct {
                 other => {
                     return not_impl_err!(
                 "Support for 'approx_distinct' for data type {other} is not implemented"
-            )
+                )
                 }
             };
         Ok(accumulator)

@@ -517,7 +517,6 @@ macro_rules! make_data_page_stats_iterator {
             }
         }
 
-        #[allow(clippy::redundant_closure_call)]
         impl<'a, I> Iterator for $iterator_type<'a, I>
         where
             I: Iterator<Item = (usize, &'a Index)>,
