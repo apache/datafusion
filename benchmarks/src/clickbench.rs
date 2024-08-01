@@ -116,14 +116,7 @@ impl RunOpt {
             None => queries.min_query_id()..=queries.max_query_id(),
         };
 
-        let mut config = self.common.config();
-        config
-            .options_mut()
-            .execution
-            .parquet
-            .schema_force_string_view = self.common.string_view;
-
-        let ctx = SessionContext::new_with_config(config);
+        let ctx = SessionContext::new();
         self.register_hits(&ctx).await?;
 
         let iterations = self.common.iterations;
