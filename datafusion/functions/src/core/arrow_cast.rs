@@ -42,7 +42,7 @@ use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility}
 /// select cast(column_x as int) ...
 /// ```
 ///
-/// You can use the `arrow_cast` function to cast to a specific arrow type
+/// Use the `arrow_cast` function to cast to a specific arrow type
 ///
 /// For example
 /// ```sql
@@ -139,7 +139,7 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     };
 
     val.parse().map_err(|e| match e {
-        arrow::error::ArrowError::ParseError(e) => DataFusionError::Plan(e),
-        e => DataFusionError::ArrowError(e, None),
+        arrow::error::ArrowError::ParseError(e) => plan_datafusion_error!(e),
+        e => arrow_datafusion_error!(e),
     })
 }
