@@ -508,7 +508,7 @@ impl TDigest {
             t = 0_f64;
 
             for (k, centroid) in self.centroids.iter().enumerate() {
-                if rank < t as f64 + centroid.weight() {
+                if rank < t + centroid.weight() {
                     pos = k;
                     break;
                 }
