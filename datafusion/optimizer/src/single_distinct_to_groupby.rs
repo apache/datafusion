@@ -38,7 +38,7 @@ use hashbrown::HashSet;
 /// single distinct to group by optimizer rule
 ///  ```text
 ///    Before:
-///    SELECT a, COUNT(DINSTINCT b), SUM(c)
+///    SELECT a, COUNT(DISTINCT b), SUM(c)
 ///    FROM t
 ///    GROUP BY a
 ///
