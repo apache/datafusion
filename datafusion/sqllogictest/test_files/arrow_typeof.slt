@@ -424,7 +424,7 @@ select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');
 [1, 2, 3]
 
 # Tests for Utf8View
-query ?T
+query TT
 select arrow_cast('MyAwesomeString', 'Utf8View'), arrow_typeof(arrow_cast('MyAwesomeString', 'Utf8View'))
 ----
 MyAwesomeString Utf8View

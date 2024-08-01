@@ -21,6 +21,7 @@
 
 use arrow::array::{
     BooleanBuilder, FixedSizeBinaryBuilder, LargeStringBuilder, StringBuilder,
+    StringViewBuilder,
 };
 use arrow::datatypes::i256;
 use arrow::{array::ArrayRef, datatypes::DataType};
@@ -438,6 +439,25 @@ macro_rules! get_statistics {
                 }
                 Ok(Arc::new(builder.finish()))
             },
+            DataType::Utf8View => {
+                let iterator = [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator);
+                let mut builder = StringViewBuilder::new();
+                for x in iterator {
+                    let Some(x) = x else {
+                        builder.append_null(); // no statistics value
+                        continue;
+                    };
+
+                    let Ok(x) = std::str::from_utf8(x) else {
+                        log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                        builder.append_null();
+                        continue;
+                    };
+
+                    builder.append_value(x);
+                }
+                Ok(Arc::new(builder.finish()))
+            },
             DataType::FixedSizeBinary(size) => {
                 let iterator = [<$stat_type_prefix FixedLenByteArrayStatsIterator>]::new($iterator);
                 let mut builder = FixedSizeBinaryBuilder::new(*size);
@@ -482,8 +502,8 @@ macro_rules! get_statistics {
             DataType::Duration(_) |
             DataType::Interval(_) |
             DataType::Null |
+            // TODO binary view
             DataType::BinaryView |
-            DataType::Utf8View |
             DataType::List(_) |
             DataType::ListView(_) |
             DataType::FixedSizeList(_, _) |
@@ -901,6 +921,29 @@ macro_rules! get_data_page_statistics {
                     }
                     Ok(Arc::new(builder.finish()))
                 },
+                // TODO file upstream in Arrowrs --
+                // support Utf8View and BinaryView in statistics
+                Some(DataType::Utf8View) => {
+                    let mut builder = StringViewBuilder::new();
+                    let iterator = [<$stat_type_prefix ByteArrayDataPageStatsIterator>]::new($iterator);
+                    for x in iterator {
+                        for x in x.into_iter() {
+                            let Some(x) = x else {
+                                builder.append_null(); // no statistics value
+                                continue;
+                            };
+
+                            let Ok(x) = std::str::from_utf8(x.data()) else {
+                                log::debug!("Utf8 statistics is a non-UTF8 value, ignoring it.");
+                                builder.append_null();
+                                continue;
+                            };
+
+                            builder.append_value(x);
+                        }
+                    }
+                    Ok(Arc::new(builder.finish()))
+                },
                 Some(DataType::Dictionary(_, value_type)) => {
                     [<$stat_type_prefix:lower _ page_statistics>](Some(value_type), $iterator)
                 },
@@ -983,6 +1026,7 @@ macro_rules! get_data_page_statistics {
                     }
                     Ok(Arc::new(builder.finish()))
                 },
+                // TODO file upstream in arrow-rs -- return not implemented for unsupported types rather than panic
                 _ => unimplemented!()
             }
         }
@@ -1104,6 +1148,7 @@ where
             .iter()
             .map(|x| x.null_count.map(|x| x as u64))
             .collect::<Vec<_>>(),
+        // TODO file upstream in Arrow-rs -- return not implemented
         _ => unimplemented!(),
     });
 

@@ -470,9 +470,10 @@ config_namespace! {
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
 
-        /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
-        /// and `Binary/BinaryLarge` with `BinaryView`.
-        pub schema_force_string_view: bool, default = false
+        /// (reading) If true, parquet reader will read columns of
+        /// `Utf8/Utf8Large` with `Utf8View`, and `Binary/BinaryLarge` with
+        /// `BinaryView`.
+        pub schema_force_string_view: bool, default = true
     }
 }
 
