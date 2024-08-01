@@ -214,7 +214,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             ),
             Field::new(
                 format_state_name(args.name, "count"),
-                DataType::Float64,
+                DataType::UInt64,
                 false,
             ),
             Field::new(
@@ -406,7 +406,7 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
-        if self.digest.count() == 0.0 {
+        if self.digest.count() == 0 {
             return ScalarValue::try_from(self.return_type.clone());
         }
         let q = self.digest.estimate_quantile(self.percentile);
