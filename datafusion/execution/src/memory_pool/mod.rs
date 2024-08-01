@@ -117,7 +117,7 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 /// For help with allocation accounting, see the [proxy] module.
 ///
 /// [proxy]: crate::memory_pool::proxy
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct MemoryConsumer {
     name: String,
     can_spill: bool,
