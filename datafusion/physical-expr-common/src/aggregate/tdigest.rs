@@ -447,7 +447,7 @@ impl TDigest {
         for centroid in iter_centroids {
             weight_so_far += centroid.weight();
 
-            if weight_so_far as f64 <= q_limit_times_count {
+            if weight_so_far <= q_limit_times_count {
                 sums_to_merge += centroid.mean() * centroid.weight();
                 weights_to_merge += centroid.weight();
             } else {
@@ -494,7 +494,7 @@ impl TDigest {
             for (k, centroid) in self.centroids.iter().enumerate().rev() {
                 t -= centroid.weight();
 
-                if rank >= t as f64 {
+                if rank >= t {
                     pos = k;
                     break;
                 }
@@ -537,7 +537,7 @@ impl TDigest {
         }
 
         let value = self.centroids[pos].mean()
-            + ((rank - t as f64) / self.centroids[pos].weight() - 0.5) * delta;
+            + ((rank - t) / self.centroids[pos].weight() - 0.5) * delta;
 
         Self::clamp(value, min, max)
     }
