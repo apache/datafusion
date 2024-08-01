@@ -74,15 +74,15 @@ digraph G {
         datafusion -> datafusion_execution
         datafusion -> datafusion_expr
         datafusion -> datafusion_functions
-        datafusion -> datafusion_functions_array
+        datafusion -> datafusion_functions_nested
         datafusion -> datafusion_optimizer
         datafusion -> datafusion_physical_expr
         datafusion -> datafusion_physical_plan
         datafusion -> datafusion_sql
-        datafusion_functions_array
-        datafusion_functions_array -> datafusion_common
-        datafusion_functions_array -> datafusion_execution
-        datafusion_functions_array -> datafusion_expr
+        datafusion_functions_nested
+        datafusion_functions_nested -> datafusion_common
+        datafusion_functions_nested -> datafusion_execution
+        datafusion_functions_nested -> datafusion_expr
         datafusion_execution
         datafusion_execution -> datafusion_common
         datafusion_execution -> datafusion_expr

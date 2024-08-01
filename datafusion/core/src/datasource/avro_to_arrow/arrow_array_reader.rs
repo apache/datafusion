@@ -203,13 +203,9 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         Arc::new(builder.finish())
     }
 
-    fn build_primitive_array<T: ArrowPrimitiveType + Resolver>(
-        &self,
-        rows: RecordSlice,
-        col_name: &str,
-    ) -> ArrayRef
+    fn build_primitive_array<T>(&self, rows: RecordSlice, col_name: &str) -> ArrayRef
     where
-        T: ArrowNumericType,
+        T: ArrowNumericType + Resolver,
         T::Native: num_traits::cast::NumCast,
     {
         Arc::new(

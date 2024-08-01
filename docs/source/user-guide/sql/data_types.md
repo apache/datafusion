@@ -30,11 +30,11 @@ the `arrow_typeof` function. For example:
 
 ```sql
 select arrow_typeof(interval '1 month');
-+-------------------------------------+
-| arrowtypeof(IntervalYearMonth("1")) |
-+-------------------------------------+
-| Interval(YearMonth)                 |
-+-------------------------------------+
++---------------------------------------------------------------------+
+| arrow_typeof(IntervalMonthDayNano("79228162514264337593543950336")) |
++---------------------------------------------------------------------+
+| Interval(MonthDayNano)                                              |
++---------------------------------------------------------------------+
 ```
 
 You can cast a SQL expression to a specific Arrow type using the `arrow_cast` function
@@ -60,20 +60,20 @@ select arrow_cast(now(), 'Timestamp(Second, None)');
 
 ## Numeric Types
 
-| SQL DataType                         | Arrow DataType                 | Notes                                                                                                       |
-| ------------------------------------ | :----------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `TINYINT`                            | `Int8`                         |                                                                                                             |
-| `SMALLINT`                           | `Int16`                        |                                                                                                             |
-| `INT` or `INTEGER`                   | `Int32`                        |                                                                                                             |
-| `BIGINT`                             | `Int64`                        |                                                                                                             |
-| `TINYINT UNSIGNED`                   | `UInt8`                        |                                                                                                             |
-| `SMALLINT UNSIGNED`                  | `UInt16`                       |                                                                                                             |
-| `INT UNSIGNED` or `INTEGER UNSIGNED` | `UInt32`                       |                                                                                                             |
-| `BIGINT UNSIGNED`                    | `UInt64`                       |                                                                                                             |
-| `FLOAT`                              | `Float32`                      |                                                                                                             |
-| `REAL`                               | `Float32`                      |                                                                                                             |
-| `DOUBLE`                             | `Float64`                      |                                                                                                             |
-| `DECIMAL(precision, scale)`          | `Decimal128(precision, scale)` | Decimal support is currently experimental ([#3523](https://github.com/apache/arrow-datafusion/issues/3523)) |
+| SQL DataType                         | Arrow DataType                 | Notes                                                                                                 |
+| ------------------------------------ | :----------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `TINYINT`                            | `Int8`                         |                                                                                                       |
+| `SMALLINT`                           | `Int16`                        |                                                                                                       |
+| `INT` or `INTEGER`                   | `Int32`                        |                                                                                                       |
+| `BIGINT`                             | `Int64`                        |                                                                                                       |
+| `TINYINT UNSIGNED`                   | `UInt8`                        |                                                                                                       |
+| `SMALLINT UNSIGNED`                  | `UInt16`                       |                                                                                                       |
+| `INT UNSIGNED` or `INTEGER UNSIGNED` | `UInt32`                       |                                                                                                       |
+| `BIGINT UNSIGNED`                    | `UInt64`                       |                                                                                                       |
+| `FLOAT`                              | `Float32`                      |                                                                                                       |
+| `REAL`                               | `Float32`                      |                                                                                                       |
+| `DOUBLE`                             | `Float64`                      |                                                                                                       |
+| `DECIMAL(precision, scale)`          | `Decimal128(precision, scale)` | Decimal support is currently experimental ([#3523](https://github.com/apache/datafusion/issues/3523)) |
 
 ## Date/Time Types
 

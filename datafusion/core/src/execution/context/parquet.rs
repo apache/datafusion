@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
-use crate::datasource::physical_plan::parquet::plan_to_parquet;
-use parquet::file::properties::WriterProperties;
-
 use super::super::options::{ParquetReadOptions, ReadOptions};
 use super::{DataFilePaths, DataFrame, ExecutionPlan, Result, SessionContext};
+use crate::datasource::physical_plan::parquet::plan_to_parquet;
+
+use parquet::file::properties::WriterProperties;
 
 impl SessionContext {
     /// Creates a [`DataFrame`] for reading a Parquet data source.
@@ -46,7 +46,8 @@ impl SessionContext {
         table_path: &str,
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.state.read().config);
+        let listing_options = options
+            .to_listing_options(&self.copied_config(), self.copied_table_options());
 
         self.register_listing_table(
             name,
@@ -72,18 +73,18 @@ impl SessionContext {
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-
+    use super::*;
     use crate::arrow::array::{Float32Array, Int32Array};
     use crate::arrow::datatypes::{DataType, Field, Schema};
     use crate::arrow::record_batch::RecordBatch;
     use crate::dataframe::DataFrameWriteOptions;
     use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
-    use datafusion_execution::config::SessionConfig;
-    use tempfile::tempdir;
 
-    use super::*;
+    use datafusion_common::config::TableParquetOptions;
+    use datafusion_execution::config::SessionConfig;
+
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn read_with_glob_path() -> Result<()> {
@@ -199,17 +200,16 @@ mod tests {
             .to_string();
         std::fs::create_dir(dir).expect("create dir failed");
 
+        let mut options = TableParquetOptions::default();
+        options.global.compression = Some(Compression::SNAPPY.to_string());
+
         // Write the dataframe to a parquet file named 'output1.parquet'
         write_df
             .clone()
             .write_parquet(
                 &path1,
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(Compression::SNAPPY)
-                        .build(),
-                ),
+                Some(options.clone()),
             )
             .await?;
 
@@ -219,11 +219,7 @@ mod tests {
             .write_parquet(
                 &path2,
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(Compression::SNAPPY)
-                        .build(),
-                ),
+                Some(options.clone()),
             )
             .await?;
 
@@ -233,11 +229,7 @@ mod tests {
             .write_parquet(
                 &path3,
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(Compression::SNAPPY)
-                        .build(),
-                ),
+                Some(options.clone()),
             )
             .await?;
 
@@ -246,11 +238,7 @@ mod tests {
             .write_parquet(
                 &path5,
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(Compression::SNAPPY)
-                        .build(),
-                ),
+                Some(options),
             )
             .await?;
 
@@ -341,24 +329,5 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         assert_eq!(total_rows, 5);
         Ok(())
-    }
-
-    // Test for compilation error when calling read_* functions from an #[async_trait] function.
-    // See https://github.com/apache/arrow-datafusion/issues/1154
-    #[async_trait]
-    trait CallReadTrait {
-        async fn call_read_parquet(&self) -> DataFrame;
-    }
-
-    struct CallRead {}
-
-    #[async_trait]
-    impl CallReadTrait for CallRead {
-        async fn call_read_parquet(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_parquet("dummy", ParquetReadOptions::default())
-                .await
-                .unwrap()
-        }
     }
 }

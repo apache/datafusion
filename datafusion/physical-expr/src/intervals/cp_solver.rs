@@ -176,11 +176,11 @@ impl ExprIntervalGraphNode {
         &self.interval
     }
 
-    /// This function creates a DAEG node from Datafusion's [`ExprTreeNode`]
+    /// This function creates a DAEG node from DataFusion's [`ExprTreeNode`]
     /// object. Literals are created with definite, singleton intervals while
     /// any other expression starts with an indefinite interval ([-∞, ∞]).
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
-        let expr = node.expr.clone();
+        let expr = Arc::clone(&node.expr);
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
             Interval::try_new(value.clone(), value.clone())
@@ -422,7 +422,7 @@ impl ExprIntervalGraph {
         let mut removals = vec![];
         let mut expr_node_indices = exprs
             .iter()
-            .map(|e| (e.clone(), usize::MAX))
+            .map(|e| (Arc::clone(e), usize::MAX))
             .collect::<Vec<_>>();
         while let Some(node) = bfs.next(graph) {
             // Get the plan corresponding to this node:
@@ -723,7 +723,8 @@ mod tests {
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
 
     use arrow::datatypes::TimeUnit;
-    use arrow_schema::{DataType, Field};
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
+    use arrow_schema::Field;
     use datafusion_common::ScalarValue;
 
     use itertools::Itertools;
@@ -743,16 +744,17 @@ mod tests {
         schema: &Schema,
     ) -> Result<()> {
         let col_stats = vec![
-            (exprs_with_interval.0.clone(), left_interval),
-            (exprs_with_interval.1.clone(), right_interval),
+            (Arc::clone(&exprs_with_interval.0), left_interval),
+            (Arc::clone(&exprs_with_interval.1), right_interval),
         ];
         let expected = vec![
-            (exprs_with_interval.0.clone(), left_expected),
-            (exprs_with_interval.1.clone(), right_expected),
+            (Arc::clone(&exprs_with_interval.0), left_expected),
+            (Arc::clone(&exprs_with_interval.1), right_expected),
         ];
         let mut graph = ExprIntervalGraph::try_new(expr, schema)?;
-        let expr_indexes = graph
-            .gather_node_indices(&col_stats.iter().map(|(e, _)| e.clone()).collect_vec());
+        let expr_indexes = graph.gather_node_indices(
+            &col_stats.iter().map(|(e, _)| Arc::clone(e)).collect_vec(),
+        );
 
         let mut col_stat_nodes = col_stats
             .iter()
@@ -869,14 +871,21 @@ mod tests {
 
         // left_watermark > right_watermark + 5
         let left_and_1 = Arc::new(BinaryExpr::new(
-            left_col.clone(),
+            Arc::clone(&left_col) as Arc<dyn PhysicalExpr>,
             Operator::Plus,
             Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
         ));
-        let expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, right_col.clone()));
+        let expr = Arc::new(BinaryExpr::new(
+            left_and_1,
+            Operator::Gt,
+            Arc::clone(&right_col) as Arc<dyn PhysicalExpr>,
+        ));
         experiment(
             expr,
-            (left_col.clone(), right_col.clone()),
+            (
+                Arc::clone(&left_col) as Arc<dyn PhysicalExpr>,
+                Arc::clone(&right_col) as Arc<dyn PhysicalExpr>,
+            ),
             Interval::make(Some(10_i32), Some(20_i32))?,
             Interval::make(Some(100), None)?,
             Interval::make(Some(10), Some(20))?,
@@ -1390,9 +1399,17 @@ mod tests {
         )?;
         let right_child = Interval::try_new(
             // 1 day 321 ns
-            ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                months: 0,
+                days: 1,
+                nanoseconds: 321,
+            })),
             // 1 day 321 ns
-            ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                months: 0,
+                days: 1,
+                nanoseconds: 321,
+            })),
         )?;
         let children = vec![&left_child, &right_child];
         let result = expression
@@ -1415,9 +1432,17 @@ mod tests {
                 )?,
                 Interval::try_new(
                     // 1 day 321 ns in Duration type
-                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+                    ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                        months: 0,
+                        days: 1,
+                        nanoseconds: 321,
+                    })),
                     // 1 day 321 ns in Duration type
-                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+                    ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                        months: 0,
+                        days: 1,
+                        nanoseconds: 321,
+                    })),
                 )?
             ],
             result
@@ -1446,10 +1471,16 @@ mod tests {
             ScalarValue::TimestampMillisecond(Some(1_603_188_672_000), None),
         )?;
         let left_child = Interval::try_new(
-            // 2 days
-            ScalarValue::IntervalDayTime(Some(172_800_000)),
-            // 10 days
-            ScalarValue::IntervalDayTime(Some(864_000_000)),
+            // 2 days in millisecond
+            ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 172_800_000,
+            })),
+            // 10 days in millisecond
+            ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 864_000_000,
+            })),
         )?;
         let children = vec![&left_child, &right_child];
         let result = expression
@@ -1459,10 +1490,16 @@ mod tests {
         assert_eq!(
             vec![
                 Interval::try_new(
-                    // 2 days
-                    ScalarValue::IntervalDayTime(Some(172_800_000)),
+                    // 2 days in millisecond
+                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                        days: 0,
+                        milliseconds: 172_800_000,
+                    })),
                     // 6 days
-                    ScalarValue::IntervalDayTime(Some(518_400_000)),
+                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                        days: 0,
+                        milliseconds: 518_400_000,
+                    })),
                 )?,
                 Interval::try_new(
                     // 10.10.2020 - 10:11:12 AM

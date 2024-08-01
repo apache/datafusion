@@ -20,7 +20,7 @@ name = "gen"
 description = "Code generation for proto"
 version = "0.1.0"
 edition = { workspace = true }
-rust-version = "1.72"
+rust-version = "1.76"
 authors = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
@@ -29,7 +29,10 @@ publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lints]
+workspace = true
+
 [dependencies]
 # Pin these dependencies so that the generated output is deterministic
 pbjson-build = "=0.6.2"
-prost-build = "=0.12.3"
+prost-build = "=0.12.6"

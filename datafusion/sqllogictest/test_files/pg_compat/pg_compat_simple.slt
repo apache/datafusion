@@ -67,8 +67,8 @@ CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 
 

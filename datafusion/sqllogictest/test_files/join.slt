@@ -19,7 +19,7 @@
 ## Join Tests
 ##########
 
-# Regression test: https://github.com/apache/arrow-datafusion/issues/4844
+# Regression test: https://github.com/apache/datafusion/issues/4844
 statement ok
 CREATE TABLE IF NOT EXISTS students(name TEXT, mark INT) AS VALUES
 ('Stuart', 28),
@@ -49,7 +49,7 @@ drop table IF EXISTS students;
 statement ok
 drop table IF EXISTS grades;
 
-# issue: https://github.com/apache/arrow-datafusion/issues/5382
+# issue: https://github.com/apache/datafusion/issues/5382
 statement ok
 CREATE TABLE IF NOT EXISTS test1(a int, b int) as select 1 as a, 2 as b;
 
@@ -67,7 +67,7 @@ drop table IF EXISTS test1;
 statement ok
 drop table IF EXISTS test2;
 
-# two tables for join
+# tables for join
 statement ok
 CREATE TABLE IF NOT EXISTS t1(t1_id INT, t1_name TEXT, t1_int INT) AS VALUES
 (11, 'a', 1),
@@ -81,6 +81,13 @@ CREATE TABLE IF NOT EXISTS t2(t2_id INT, t2_name TEXT, t2_int INT) AS VALUES
 (22, 'y', 1),
 (44, 'x', 3),
 (55, 'w', 3);
+
+statement ok
+CREATE TABLE IF NOT EXISTS t3(t3_id INT, t3_name TEXT, t3_int INT) AS VALUES
+(11, 'z', 3),
+(22, ' ', 6),
+(33, 'x', 7),
+(55, 'w', 4);
 
 # batch size
 statement ok
@@ -551,6 +558,82 @@ FROM t1
 ----
 11 a 55
 
+# inner join multiple tables to one
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id
+----
+11 11 11
+22 22 22
+
+# inner join multiple tables to one with WHERE filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id
+WHERE t3.t3_int = 6
+----
+22 22 22
+
+# inner join multiple tables to one with JOIN filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t3.t3_int < 6
+----
+11 11 11
+
+# subsequent inner join
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_int = t3.t3_int
+----
+11 11 11
+44 44 11
+
+# subsequent inner join with filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_id = t3.t3_id
+WHERE t3.t3_int = 6
+----
+22 22 22
+
+# subsequent inner join with join filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_id = t3.t3_id AND t3.t3_int < 6
+----
+11 11 11
+
+# multiple inner joins with mixed ON clause
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t2.t2_int = t3.t3_int
+----
+11 11 11
+
+# multiple inner joins with mixed ON clause and filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t2.t2_int = t3.t3_int
+WHERE t3.t3_name = 'no such name'
+----
+
 # test create table from query with LEFT join
 statement ok
 create table left_join_test as 
@@ -588,20 +671,23 @@ query TT
 explain select * from t1 inner join t2 on true;
 ----
 logical_plan
-CrossJoin:
---TableScan: t1 projection=[t1_id, t1_name, t1_int]
---TableScan: t2 projection=[t2_id, t2_name, t2_int]
+01)CrossJoin:
+02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
+03)--TableScan: t2 projection=[t2_id, t2_name, t2_int]
 physical_plan
-CrossJoinExec
---MemoryExec: partitions=1, partition_sizes=[1]
---RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----MemoryExec: partitions=1, partition_sizes=[1]
+01)CrossJoinExec
+02)--MemoryExec: partitions=1, partition_sizes=[1]
+03)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)----MemoryExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table IF EXISTS t1;
 
 statement ok
 drop table IF EXISTS t2;
+
+statement ok
+drop table IF EXISTS t3;
 
 statement ok
 drop table IF EXISTS left_join_test;
@@ -616,7 +702,7 @@ drop table IF EXISTS full_join_test;
 statement ok
 set datafusion.execution.batch_size = 8192;
 
-# related to: https://github.com/apache/arrow-datafusion/issues/8374
+# related to: https://github.com/apache/datafusion/issues/8374
 statement ok
 CREATE TABLE t1(a text, b int) AS VALUES ('Alice', 50), ('Alice', 100);
 
@@ -663,15 +749,15 @@ t1 as t2
 WHERE t1.a=t2.a;
 ----
 logical_plan
-Inner Join: t1.a = t2.a
---TableScan: t1 projection=[a, b]
---SubqueryAlias: t2
-----TableScan: t1 projection=[a, b]
+01)Inner Join: t1.a = t2.a
+02)--TableScan: t1 projection=[a, b]
+03)--SubqueryAlias: t2
+04)----TableScan: t1 projection=[a, b]
 physical_plan
-CoalesceBatchesExec: target_batch_size=8192
---HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
-----MemoryExec: partitions=1, partition_sizes=[1]
-----MemoryExec: partitions=1, partition_sizes=[1]
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+04)----MemoryExec: partitions=1, partition_sizes=[1]
 
 # Reset the configs to old values
 statement ok
@@ -707,3 +793,306 @@ DROP TABLE companies
 
 statement ok
 DROP TABLE leads
+
+####
+## Test ON clause predicates are not pushed past join for OUTER JOINs
+####
+
+
+# create tables
+statement ok
+CREATE TABLE employees(emp_id INT, name VARCHAR);
+
+statement ok
+CREATE TABLE department(emp_id INT, dept_name VARCHAR);
+
+statement ok
+INSERT INTO employees (emp_id, name) VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol');
+
+statement ok
+INSERT INTO department (emp_id, dept_name) VALUES (1, 'HR'), (3, 'Engineering'), (4, 'Sales');
+
+# Can not push the ON filter below an OUTER JOIN
+query TT
+EXPLAIN SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+logical_plan
+01)Left Join:  Filter: e.name = Utf8("Alice") OR e.name = Utf8("Bob")
+02)--SubqueryAlias: e
+03)----TableScan: employees projection=[emp_id, name]
+04)--SubqueryAlias: d
+05)----TableScan: department projection=[dept_name]
+physical_plan
+01)ProjectionExec: expr=[emp_id@1 as emp_id, name@2 as name, dept_name@0 as dept_name]
+02)--NestedLoopJoinExec: join_type=Right, filter=name@0 = Alice OR name@0 = Bob
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+04)----MemoryExec: partitions=1, partition_sizes=[1]
+
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+1 Alice HR
+2 Bob HR
+1 Alice Engineering
+2 Bob Engineering
+1 Alice Sales
+2 Bob Sales
+3 Carol NULL
+
+# neither RIGHT OUTER JOIN
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM department AS d
+RIGHT JOIN employees AS e
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+1 Alice HR
+2 Bob HR
+1 Alice Engineering
+2 Bob Engineering
+1 Alice Sales
+2 Bob Sales
+3 Carol NULL
+
+# neither FULL OUTER JOIN
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM department AS d
+FULL JOIN employees AS e
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+1 Alice HR
+2 Bob HR
+1 Alice Engineering
+2 Bob Engineering
+1 Alice Sales
+2 Bob Sales
+3 Carol NULL
+
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees e
+LEFT JOIN department d
+ON (e.name = 'NotExist1' OR e.name = 'NotExist2');
+----
+1 Alice NULL
+2 Bob NULL
+3 Carol NULL
+
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees e
+LEFT JOIN department d
+ON (e.name = 'Alice' OR e.name = 'NotExist');
+----
+1 Alice HR
+1 Alice Engineering
+1 Alice Sales
+2 Bob NULL
+3 Carol NULL
+
+# Can push the ON filter below the JOIN for INNER JOIN (expect to see a filter below the join)
+query TT
+EXPLAIN SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+JOIN department AS d
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+logical_plan
+01)CrossJoin:
+02)--SubqueryAlias: e
+03)----Filter: employees.name = Utf8("Alice") OR employees.name = Utf8("Bob")
+04)------TableScan: employees projection=[emp_id, name]
+05)--SubqueryAlias: d
+06)----TableScan: department projection=[dept_name]
+physical_plan
+01)CrossJoinExec
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: name@1 = Alice OR name@1 = Bob
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)--MemoryExec: partitions=1, partition_sizes=[1]
+
+# expect no row for Carol
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+JOIN department AS d
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+1 Alice HR
+1 Alice Engineering
+1 Alice Sales
+2 Bob HR
+2 Bob Engineering
+2 Bob Sales
+
+# OR conditions on Filter (not join filter)
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON e.emp_id = d.emp_id
+WHERE (e.name = 'Alice' OR e.name = 'Carol');
+----
+1 Alice HR
+3 Carol Engineering
+
+# Push down OR conditions on Filter through LEFT JOIN if possible
+query TT
+EXPLAIN SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON e.emp_id = d.emp_id
+WHERE ((dept_name != 'Engineering' AND e.name = 'Alice') OR (name != 'Alice' AND e.name = 'Carol'));
+----
+logical_plan
+01)Filter: d.dept_name != Utf8("Engineering") AND e.name = Utf8("Alice") OR e.name != Utf8("Alice") AND e.name = Utf8("Carol")
+02)--Projection: e.emp_id, e.name, d.dept_name
+03)----Left Join: e.emp_id = d.emp_id
+04)------SubqueryAlias: e
+05)--------Filter: employees.name = Utf8("Alice") OR employees.name != Utf8("Alice") AND employees.name = Utf8("Carol")
+06)----------TableScan: employees projection=[emp_id, name]
+07)------SubqueryAlias: d
+08)--------TableScan: department projection=[emp_id, dept_name]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: dept_name@2 != Engineering AND name@1 = Alice OR name@1 != Alice AND name@1 = Carol
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(emp_id@0, emp_id@0)], projection=[emp_id@0, name@1, dept_name@3]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------FilterExec: name@1 = Alice OR name@1 != Alice AND name@1 = Carol
+08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+09)----------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON e.emp_id = d.emp_id
+WHERE ((dept_name != 'Engineering' AND e.name = 'Alice') OR (name != 'Alice' AND e.name = 'Carol'));
+----
+1 Alice HR
+3 Carol Engineering
+
+statement ok
+DROP TABLE employees
+
+statement ok
+DROP TABLE department
+
+
+statement ok
+CREATE TABLE t1 (v0 BIGINT) AS VALUES (-503661263);
+
+statement ok
+CREATE TABLE t2 (v0 DOUBLE) AS VALUES (-1.663563947387);
+
+statement ok
+CREATE TABLE t3 (v0 DOUBLE) AS VALUES (0.05112015193508901);
+
+# Test issue: https://github.com/apache/datafusion/issues/11269
+query RR
+SELECT t3.v0, t2.v0 FROM t1,t2,t3 WHERE t3.v0 >= t1.v0;
+----
+0.051120151935 -1.663563947387
+
+# Test issue: https://github.com/apache/datafusion/issues/11414
+query IRR
+SELECT * FROM t1 INNER JOIN t2 ON NULL RIGHT JOIN t3 ON TRUE;
+----
+NULL NULL 0.051120151935
+
+# ON expression must be boolean type
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Join condition must be boolean type, but got Utf8
+SELECT * FROM t1 INNER JOIN t2 ON 'TRUE'
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;
+
+
+# Test issue: https://github.com/apache/datafusion/issues/11275
+statement ok
+CREATE TABLE t0 (v1 BOOLEAN) AS VALUES (false), (null);
+
+statement ok
+CREATE TABLE t1 (v1 BOOLEAN) AS VALUES (false), (null), (false);
+
+statement ok
+CREATE TABLE t2 (v1 BOOLEAN) AS VALUES (false), (true);
+
+query BB
+SELECT t2.v1, t1.v1 FROM t0, t1, t2 WHERE t2.v1 IS DISTINCT FROM t0.v1 ORDER BY 1,2;
+----
+false false
+false false
+false NULL
+true false
+true false
+true false
+true false
+true NULL
+true NULL
+
+statement ok
+DROP TABLE t0;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+# Join Using Issue with Cast Expr
+# Found issue: https://github.com/apache/datafusion/issues/11412
+
+statement ok
+/*DML*/CREATE TABLE t60(v0 BIGINT, v1 BIGINT, v2 BOOLEAN, v3 BOOLEAN);
+
+statement ok
+/*DML*/CREATE TABLE t0(v0 DOUBLE, v1 BIGINT);
+
+statement ok
+/*DML*/CREATE TABLE t1(v0 DOUBLE);
+
+query I
+SELECT COUNT(*)
+FROM t1
+NATURAL JOIN t60
+INNER JOIN t0
+ON t60.v1 = t0.v0
+AND t0.v1 > t60.v1;
+----
+0
+
+query I
+SELECT COUNT(*)
+FROM t1
+JOIN t60
+USING (v0)
+INNER JOIN t0
+ON t60.v1 = t0.v0
+AND t0.v1 > t60.v1;
+----
+0
+
+statement ok
+DROP TABLE t60;
+
+statement ok
+DROP TABLE t0;
+
+statement ok
+DROP TABLE t1;

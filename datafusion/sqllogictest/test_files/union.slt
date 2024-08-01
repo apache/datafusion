@@ -22,7 +22,7 @@
 statement ok
 CREATE TABLE t1(
   id INT,  
-  name TEXT,
+  name TEXT
 ) as VALUES
   (1, 'Alex'), 
   (2, 'Bob'), 
@@ -32,7 +32,7 @@ CREATE TABLE t1(
 statement ok
 CREATE TABLE t2(
   id TINYINT,
-  name TEXT,
+  name TEXT
 ) as VALUES
   (1, 'Alex'), 
   (2, 'Bob'), 
@@ -105,8 +105,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query I
 select COUNT(*) from (
@@ -134,6 +134,21 @@ SELECT SUM(d) FROM (
 ) as a
 ----
 5
+
+# three way union with aggregate and type coercion
+query II rowsort
+SELECT c1, SUM(c2) FROM (
+    SELECT 1 as c1, 1::int as c2
+    UNION
+    SELECT 2 as c1, 2::int as c2
+    UNION
+    SELECT 3 as c1, COALESCE(3::int, 0) as c2
+) as a
+GROUP BY c1
+----
+1 1
+2 2
+3 3
 
 # union_all_with_count
 statement ok
@@ -196,23 +211,23 @@ query TT
 EXPLAIN SELECT name FROM t1 UNION (SELECT name from t2 UNION SELECT name || '_new' from t2)
 ----
 logical_plan
-Aggregate: groupBy=[[t1.name]], aggr=[[]]
---Union
-----TableScan: t1 projection=[name]
-----TableScan: t2 projection=[name]
-----Projection: t2.name || Utf8("_new") AS name
-------TableScan: t2 projection=[name]
+01)Aggregate: groupBy=[[t1.name]], aggr=[[]]
+02)--Union
+03)----TableScan: t1 projection=[name]
+04)----TableScan: t2 projection=[name]
+05)----Projection: t2.name || Utf8("_new") AS name
+06)------TableScan: t2 projection=[name]
 physical_plan
-AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
---CoalesceBatchesExec: target_batch_size=8192
-----RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
---------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-----------UnionExec
-------------MemoryExec: partitions=1, partition_sizes=[1]
-------------MemoryExec: partitions=1, partition_sizes=[1]
-------------ProjectionExec: expr=[name@0 || _new as name]
---------------MemoryExec: partitions=1, partition_sizes=[1]
+01)AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+05)--------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+06)----------UnionExec
+07)------------MemoryExec: partitions=1, partition_sizes=[1]
+08)------------MemoryExec: partitions=1, partition_sizes=[1]
+09)------------ProjectionExec: expr=[name@0 || _new as name]
+10)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # nested_union_all
 query T rowsort
@@ -233,17 +248,17 @@ query TT
 EXPLAIN SELECT name FROM t1 UNION ALL (SELECT name from t2 UNION ALL SELECT name || '_new' from t2)
 ----
 logical_plan
-Union
---TableScan: t1 projection=[name]
---TableScan: t2 projection=[name]
---Projection: t2.name || Utf8("_new") AS name
-----TableScan: t2 projection=[name]
+01)Union
+02)--TableScan: t1 projection=[name]
+03)--TableScan: t2 projection=[name]
+04)--Projection: t2.name || Utf8("_new") AS name
+05)----TableScan: t2 projection=[name]
 physical_plan
-UnionExec
---MemoryExec: partitions=1, partition_sizes=[1]
---MemoryExec: partitions=1, partition_sizes=[1]
---ProjectionExec: expr=[name@0 || _new as name]
-----MemoryExec: partitions=1, partition_sizes=[1]
+01)UnionExec
+02)--MemoryExec: partitions=1, partition_sizes=[1]
+03)--MemoryExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[name@0 || _new as name]
+05)----MemoryExec: partitions=1, partition_sizes=[1]
 
 # Make sure to choose a small batch size to introduce parallelism to the plan.
 statement ok
@@ -265,47 +280,47 @@ UNION ALL
 )
 ----
 logical_plan
-Union
---LeftAnti Join: t1.id = CAST(t2.id AS Int32), t1.name = t2.name
-----Aggregate: groupBy=[[t1.id, t1.name]], aggr=[[]]
-------TableScan: t1 projection=[id, name]
-----TableScan: t2 projection=[id, name]
---Projection: CAST(t2.id AS Int32) AS id, t2.name
-----LeftAnti Join: CAST(t2.id AS Int32) = t1.id, t2.name = t1.name
-------Aggregate: groupBy=[[t2.id, t2.name]], aggr=[[]]
---------TableScan: t2 projection=[id, name]
-------TableScan: t1 projection=[id, name]
+01)Union
+02)--LeftAnti Join: t1.id = CAST(t2.id AS Int32), t1.name = t2.name
+03)----Aggregate: groupBy=[[t1.id, t1.name]], aggr=[[]]
+04)------TableScan: t1 projection=[id, name]
+05)----TableScan: t2 projection=[id, name]
+06)--Projection: CAST(t2.id AS Int32) AS id, t2.name
+07)----LeftAnti Join: CAST(t2.id AS Int32) = t1.id, t2.name = t1.name
+08)------Aggregate: groupBy=[[t2.id, t2.name]], aggr=[[]]
+09)--------TableScan: t2 projection=[id, name]
+10)------TableScan: t1 projection=[id, name]
 physical_plan
-UnionExec
---CoalesceBatchesExec: target_batch_size=2
-----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(id@0, CAST(t2.id AS Int32)@2), (name@1, name@1)]
-------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
---------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
---------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------MemoryExec: partitions=1, partition_sizes=[1]
-------CoalesceBatchesExec: target_batch_size=2
---------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
-----------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
-------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------MemoryExec: partitions=1, partition_sizes=[1]
---ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
-----CoalesceBatchesExec: target_batch_size=2
-------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)]
---------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
-------------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
---------------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
-----------------CoalesceBatchesExec: target_batch_size=2
-------------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
---------------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------------MemoryExec: partitions=1, partition_sizes=[1]
---------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------MemoryExec: partitions=1, partition_sizes=[1]
+01)UnionExec
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(id@0, CAST(t2.id AS Int32)@2), (name@1, name@1)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
+05)--------CoalesceBatchesExec: target_batch_size=2
+06)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+10)------CoalesceBatchesExec: target_batch_size=2
+11)--------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
+12)----------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
+13)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)--------------MemoryExec: partitions=1, partition_sizes=[1]
+15)--ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
+16)----CoalesceBatchesExec: target_batch_size=2
+17)------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], projection=[id@0, name@1]
+18)--------CoalesceBatchesExec: target_batch_size=2
+19)----------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
+20)------------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
+21)--------------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
+22)----------------CoalesceBatchesExec: target_batch_size=2
+23)------------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+24)--------------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
+25)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+26)------------------------MemoryExec: partitions=1, partition_sizes=[1]
+27)--------CoalesceBatchesExec: target_batch_size=2
+28)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+29)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+30)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 query IT rowsort
@@ -340,66 +355,67 @@ UNION ALL
 )
 ----
 logical_plan
-Union
---LeftAnti Join: t1.name = t2.name
-----Aggregate: groupBy=[[t1.name]], aggr=[[]]
-------TableScan: t1 projection=[name]
-----TableScan: t2 projection=[name]
---LeftAnti Join: t2.name = t1.name
-----Aggregate: groupBy=[[t2.name]], aggr=[[]]
-------TableScan: t2 projection=[name]
-----TableScan: t1 projection=[name]
+01)Union
+02)--LeftAnti Join: t1.name = t2.name
+03)----Aggregate: groupBy=[[t1.name]], aggr=[[]]
+04)------TableScan: t1 projection=[name]
+05)----TableScan: t2 projection=[name]
+06)--LeftAnti Join: t2.name = t1.name
+07)----Aggregate: groupBy=[[t2.name]], aggr=[[]]
+08)------TableScan: t2 projection=[name]
+09)----TableScan: t1 projection=[name]
 physical_plan
-InterleaveExec
---CoalesceBatchesExec: target_batch_size=2
-----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]
-------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
---------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
---------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------MemoryExec: partitions=1, partition_sizes=[1]
-------CoalesceBatchesExec: target_batch_size=2
---------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
---CoalesceBatchesExec: target_batch_size=2
-----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]
-------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
---------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
---------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------MemoryExec: partitions=1, partition_sizes=[1]
-------CoalesceBatchesExec: target_batch_size=2
---------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
+01)InterleaveExec
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+05)--------CoalesceBatchesExec: target_batch_size=2
+06)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+10)------CoalesceBatchesExec: target_batch_size=2
+11)--------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
+12)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)------------MemoryExec: partitions=1, partition_sizes=[1]
+14)--CoalesceBatchesExec: target_batch_size=2
+15)----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]
+16)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+17)--------CoalesceBatchesExec: target_batch_size=2
+18)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
+19)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+20)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+21)----------------MemoryExec: partitions=1, partition_sizes=[1]
+22)------CoalesceBatchesExec: target_batch_size=2
+23)--------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
+24)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+25)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # union_upcast_types
 query TT
 explain SELECT c1, c9 FROM aggregate_test_100 UNION ALL SELECT c1, c3 FROM aggregate_test_100 ORDER BY c9 DESC LIMIT 5
 ----
 logical_plan
-Limit: skip=0, fetch=5
---Sort: aggregate_test_100.c9 DESC NULLS FIRST, fetch=5
-----Union
-------Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c9 AS Int64) AS c9
---------TableScan: aggregate_test_100 projection=[c1, c9]
-------Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c3 AS Int64) AS c9
---------TableScan: aggregate_test_100 projection=[c1, c3]
+01)Limit: skip=0, fetch=5
+02)--Sort: aggregate_test_100.c9 DESC NULLS FIRST, fetch=5
+03)----Union
+04)------Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c9 AS Int64) AS c9
+05)--------TableScan: aggregate_test_100 projection=[c1, c9]
+06)------Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c3 AS Int64) AS c9
+07)--------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
-GlobalLimitExec: skip=0, fetch=5
---SortPreservingMergeExec: [c9@1 DESC], fetch=5
-----UnionExec
-------SortExec: expr=[c9@1 DESC]
---------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
-----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
-------SortExec: expr=[c9@1 DESC]
---------ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]
-----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
+01)GlobalLimitExec: skip=0, fetch=5
+02)--SortPreservingMergeExec: [c9@1 DESC], fetch=5
+03)----LocalLimitExec: fetch=5
+04)------UnionExec
+05)--------SortExec: expr=[c9@1 DESC], preserve_partitioning=[true]
+06)----------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
+09)--------SortExec: expr=[c9@1 DESC], preserve_partitioning=[true]
+10)----------ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]
+11)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
 
 query TI
 SELECT c1, c9 FROM aggregate_test_100 UNION ALL SELECT c1, c3 FROM aggregate_test_100 ORDER BY c9 DESC LIMIT 5
@@ -420,29 +436,29 @@ SELECT count(*) FROM (
 ) GROUP BY name
 ----
 logical_plan
-Projection: COUNT(*)
---Aggregate: groupBy=[[t1.name]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-----Union
-------Aggregate: groupBy=[[t1.name]], aggr=[[]]
---------TableScan: t1 projection=[name]
-------Aggregate: groupBy=[[t2.name]], aggr=[[]]
---------TableScan: t2 projection=[name]
+01)Projection: count(*)
+02)--Aggregate: groupBy=[[t1.name]], aggr=[[count(Int64(1)) AS count(*)]]
+03)----Union
+04)------Aggregate: groupBy=[[t1.name]], aggr=[[]]
+05)--------TableScan: t1 projection=[name]
+06)------Aggregate: groupBy=[[t2.name]], aggr=[[]]
+07)--------TableScan: t2 projection=[name]
 physical_plan
-ProjectionExec: expr=[COUNT(*)@1 as COUNT(*)]
---AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[COUNT(*)]
-----InterleaveExec
-------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
---------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
---------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------MemoryExec: partitions=1, partition_sizes=[1]
-------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
---------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
---------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[count(*)@1 as count(*)]
+02)--AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[count(*)]
+03)----InterleaveExec
+04)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+05)--------CoalesceBatchesExec: target_batch_size=2
+06)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+10)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+11)--------CoalesceBatchesExec: target_batch_size=2
+12)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
+13)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+14)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+15)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 ########
@@ -475,9 +491,9 @@ CREATE EXTERNAL TABLE t1 (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (c1 ASC)
-LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE t2 (
@@ -496,9 +512,9 @@ CREATE EXTERNAL TABLE t2 (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (c1a ASC)
-LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 explain
@@ -513,17 +529,17 @@ UNION ALL
 ORDER BY c1
 ----
 logical_plan
-Sort: t1.c1 ASC NULLS LAST
---Union
-----TableScan: t1 projection=[c1]
-----Projection: t2.c1a AS c1
-------TableScan: t2 projection=[c1a]
+01)Sort: t1.c1 ASC NULLS LAST
+02)--Union
+03)----TableScan: t1 projection=[c1]
+04)----Projection: t2.c1a AS c1
+05)------TableScan: t2 projection=[c1a]
 physical_plan
-SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
---UnionExec
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
-----ProjectionExec: expr=[c1a@0 as c1]
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1a], output_ordering=[c1a@0 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
+02)--UnionExec
+03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
+04)----ProjectionExec: expr=[c1a@0 as c1]
+05)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1a], output_ordering=[c1a@0 ASC NULLS LAST], has_header=true
 
 statement ok
 drop table t1
@@ -536,26 +552,26 @@ query TT
 explain select 1 a group by a union all select 2 b union all select 3 c
 ----
 logical_plan
-Union
---Projection: Int64(1) AS a
-----Aggregate: groupBy=[[Int64(1)]], aggr=[[]]
-------EmptyRelation
---Projection: Int64(2) AS a
-----EmptyRelation
---Projection: Int64(3) AS a
-----EmptyRelation
+01)Union
+02)--Projection: Int64(1) AS a
+03)----Aggregate: groupBy=[[Int64(1)]], aggr=[[]]
+04)------EmptyRelation
+05)--Projection: Int64(2) AS a
+06)----EmptyRelation
+07)--Projection: Int64(3) AS a
+08)----EmptyRelation
 physical_plan
-UnionExec
---ProjectionExec: expr=[Int64(1)@0 as a]
-----AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1)], aggr=[], ordering_mode=Sorted
-------CoalesceBatchesExec: target_batch_size=2
---------RepartitionExec: partitioning=Hash([Int64(1)@0], 4), input_partitions=1
-----------AggregateExec: mode=Partial, gby=[1 as Int64(1)], aggr=[], ordering_mode=Sorted
-------------PlaceholderRowExec
---ProjectionExec: expr=[2 as a]
-----PlaceholderRowExec
---ProjectionExec: expr=[3 as a]
-----PlaceholderRowExec
+01)UnionExec
+02)--ProjectionExec: expr=[Int64(1)@0 as a]
+03)----AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1)], aggr=[], ordering_mode=Sorted
+04)------CoalesceBatchesExec: target_batch_size=2
+05)--------RepartitionExec: partitioning=Hash([Int64(1)@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[1 as Int64(1)], aggr=[], ordering_mode=Sorted
+07)------------PlaceholderRowExec
+08)--ProjectionExec: expr=[2 as a]
+09)----PlaceholderRowExec
+10)--ProjectionExec: expr=[3 as a]
+11)----PlaceholderRowExec
 
 # test UNION ALL aliases correctly with aliased subquery
 query TT
@@ -564,26 +580,71 @@ union all
 select x, y from (select 1 as x , max(10) as y) b
 ----
 logical_plan
-Union
---Projection: COUNT(*) AS count, a.n
-----Aggregate: groupBy=[[a.n]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-------SubqueryAlias: a
---------Projection: Int64(5) AS n
-----------EmptyRelation
---Projection: b.x AS count, b.y AS n
-----SubqueryAlias: b
-------Projection: Int64(1) AS x, MAX(Int64(10)) AS y
---------Aggregate: groupBy=[[]], aggr=[[MAX(Int64(10))]]
-----------EmptyRelation
+01)Union
+02)--Projection: count(*) AS count, a.n
+03)----Aggregate: groupBy=[[a.n]], aggr=[[count(Int64(1)) AS count(*)]]
+04)------SubqueryAlias: a
+05)--------Projection: Int64(5) AS n
+06)----------EmptyRelation
+07)--Projection: b.x AS count, b.y AS n
+08)----SubqueryAlias: b
+09)------Projection: Int64(1) AS x, MAX(Int64(10)) AS y
+10)--------Aggregate: groupBy=[[]], aggr=[[MAX(Int64(10))]]
+11)----------EmptyRelation
 physical_plan
-UnionExec
---ProjectionExec: expr=[COUNT(*)@1 as count, n@0 as n]
-----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[COUNT(*)], ordering_mode=Sorted
-------CoalesceBatchesExec: target_batch_size=2
---------RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=1
-----------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[COUNT(*)], ordering_mode=Sorted
-------------ProjectionExec: expr=[5 as n]
---------------PlaceholderRowExec
---ProjectionExec: expr=[1 as count, MAX(Int64(10))@0 as n]
-----AggregateExec: mode=Single, gby=[], aggr=[MAX(Int64(10))]
-------PlaceholderRowExec
+01)UnionExec
+02)--ProjectionExec: expr=[count(*)@1 as count, n@0 as n]
+03)----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[count(*)], ordering_mode=Sorted
+04)------CoalesceBatchesExec: target_batch_size=2
+05)--------RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[count(*)], ordering_mode=Sorted
+07)------------ProjectionExec: expr=[5 as n]
+08)--------------PlaceholderRowExec
+09)--ProjectionExec: expr=[1 as count, MAX(Int64(10))@0 as n]
+10)----AggregateExec: mode=Single, gby=[], aggr=[MAX(Int64(10))]
+11)------PlaceholderRowExec
+
+
+# Test issue: https://github.com/apache/datafusion/issues/11409
+statement ok
+CREATE TABLE t1(v0 BIGINT, v1 BIGINT, v2 BIGINT, v3 BOOLEAN);
+
+statement ok
+CREATE TABLE t2(v0 DOUBLE);
+
+query I
+INSERT INTO t1(v0, v2, v1) VALUES (-1229445667, -342312412, -1507138076);
+----
+1
+
+query I
+INSERT INTO t1(v0, v1) VALUES (1541512604, -1229445667);
+----
+1
+
+query I
+INSERT INTO t1(v1, v3, v0, v2) VALUES (-1020641465, false, -1493773377, 1751276473);
+----
+1
+
+query I
+INSERT INTO t1(v3) VALUES (true), (true), (false);
+----
+3
+
+query I
+INSERT INTO t2(v0) VALUES (0.28014577292925047);
+----
+1
+
+query II
+SELECT t1.v2, t1.v0 FROM t2 NATURAL JOIN t1
+    UNION ALL
+SELECT t1.v2, t1.v0 FROM t2 NATURAL JOIN t1 WHERE (t1.v2 IS NULL);
+----
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;

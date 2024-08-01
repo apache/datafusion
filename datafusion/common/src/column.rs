@@ -17,9 +17,11 @@
 
 //! Column
 
+use arrow_schema::{Field, FieldRef};
+
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError};
+use crate::{DFSchema, DataFusionError, Result, SchemaError, TableReference};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
@@ -30,7 +32,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     /// relation/table reference.
-    pub relation: Option<OwnedTableReference>,
+    pub relation: Option<TableReference>,
     /// field/column name.
     pub name: String,
 }
@@ -43,7 +45,7 @@ impl Column {
     ///
     /// [`TableReference::parse_str`]: crate::TableReference::parse_str
     pub fn new(
-        relation: Option<impl Into<OwnedTableReference>>,
+        relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Self {
         Self {
@@ -61,6 +63,8 @@ impl Column {
     }
 
     /// Create Column from unqualified name.
+    ///
+    /// Alias for `Column::new_unqualified`
     pub fn from_name(name: impl Into<String>) -> Self {
         Self {
             relation: None,
@@ -72,20 +76,20 @@ impl Column {
         let (relation, name) = match idents.len() {
             1 => (None, idents.remove(0)),
             2 => (
-                Some(OwnedTableReference::Bare {
+                Some(TableReference::Bare {
                     table: idents.remove(0).into(),
                 }),
                 idents.remove(0),
             ),
             3 => (
-                Some(OwnedTableReference::Partial {
+                Some(TableReference::Partial {
                     schema: idents.remove(0).into(),
                     table: idents.remove(0).into(),
                 }),
                 idents.remove(0),
             ),
             4 => (
-                Some(OwnedTableReference::Full {
+                Some(TableReference::Full {
                     catalog: idents.remove(0).into(),
                     schema: idents.remove(0).into(),
                     table: idents.remove(0).into(),
@@ -105,22 +109,29 @@ impl Column {
     /// `foo.BAR` would be parsed to a reference to relation `foo`, column name `bar` (lower case)
     /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
-        let flat_name: &str = &flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(flat_name, false))
+        let flat_name = flat_name.into();
+        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, false))
             .unwrap_or_else(|| Self {
                 relation: None,
-                name: flat_name.to_owned(),
+                name: flat_name,
             })
     }
 
     /// Deserialize a fully qualified name string into a column preserving column text case
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
-        let flat_name: &str = &flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(flat_name, true))
+        let flat_name = flat_name.into();
+        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, true))
             .unwrap_or_else(|| Self {
                 relation: None,
-                name: flat_name.to_owned(),
+                name: flat_name,
             })
+    }
+
+    /// return the column's name.
+    ///
+    /// Note: This ignores the relation and returns the column name only.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Serialize column into a flat name string
@@ -178,11 +189,12 @@ impl Column {
         }
 
         for schema in schemas {
-            let fields = schema.fields_with_unqualified_name(&self.name);
-            match fields.len() {
+            let qualified_fields =
+                schema.qualified_fields_with_unqualified_name(&self.name);
+            match qualified_fields.len() {
                 0 => continue,
                 1 => {
-                    return Ok(fields[0].qualified_column());
+                    return Ok(Column::from(qualified_fields[0]));
                 }
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
@@ -198,14 +210,13 @@ impl Column {
                     // We will use the relation from the first matched field to normalize self.
 
                     // Compare matched fields with one USING JOIN clause at a time
+                    let columns = schema.columns_with_unqualified_name(&self.name);
                     for using_col in using_columns {
-                        let all_matched = fields
-                            .iter()
-                            .all(|f| using_col.contains(&f.qualified_column()));
+                        let all_matched = columns.iter().all(|f| using_col.contains(f));
                         // All matched fields belong to the same using column set, in orther words
-                        // the same join clause. We simply pick the qualifer from the first match.
+                        // the same join clause. We simply pick the qualifier from the first match.
                         if all_matched {
-                            return Ok(fields[0].qualified_column());
+                            return Ok(columns[0].clone());
                         }
                     }
                 }
@@ -214,10 +225,7 @@ impl Column {
 
         _schema_err!(SchemaError::FieldNotFound {
             field: Box::new(Column::new(self.relation.clone(), self.name)),
-            valid_fields: schemas
-                .iter()
-                .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
-                .collect(),
+            valid_fields: schemas.iter().flat_map(|s| s.columns()).collect(),
         })
     }
 
@@ -267,13 +275,13 @@ impl Column {
         }
 
         for schema_level in schemas {
-            let fields = schema_level
+            let qualified_fields = schema_level
                 .iter()
-                .flat_map(|s| s.fields_with_unqualified_name(&self.name))
+                .flat_map(|s| s.qualified_fields_with_unqualified_name(&self.name))
                 .collect::<Vec<_>>();
-            match fields.len() {
+            match qualified_fields.len() {
                 0 => continue,
-                1 => return Ok(fields[0].qualified_column()),
+                1 => return Ok(Column::from(qualified_fields[0])),
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
                     //
@@ -288,14 +296,16 @@ impl Column {
                     // We will use the relation from the first matched field to normalize self.
 
                     // Compare matched fields with one USING JOIN clause at a time
+                    let columns = schema_level
+                        .iter()
+                        .flat_map(|s| s.columns_with_unqualified_name(&self.name))
+                        .collect::<Vec<_>>();
                     for using_col in using_columns {
-                        let all_matched = fields
-                            .iter()
-                            .all(|f| using_col.contains(&f.qualified_column()));
+                        let all_matched = columns.iter().all(|c| using_col.contains(c));
                         // All matched fields belong to the same using column set, in orther words
-                        // the same join clause. We simply pick the qualifer from the first match.
+                        // the same join clause. We simply pick the qualifier from the first match.
                         if all_matched {
-                            return Ok(fields[0].qualified_column());
+                            return Ok(columns[0].clone());
                         }
                     }
 
@@ -312,7 +322,7 @@ impl Column {
             valid_fields: schemas
                 .iter()
                 .flat_map(|s| s.iter())
-                .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
+                .flat_map(|s| s.columns())
                 .collect(),
         })
     }
@@ -338,6 +348,20 @@ impl From<String> for Column {
     }
 }
 
+/// Create a column, use qualifier and field name
+impl From<(Option<&TableReference>, &Field)> for Column {
+    fn from((relation, field): (Option<&TableReference>, &Field)) -> Self {
+        Self::new(relation.cloned(), field.name())
+    }
+}
+
+/// Create a column, use qualifier and field name
+impl From<(Option<&TableReference>, &FieldRef)> for Column {
+    fn from((relation, field): (Option<&TableReference>, &FieldRef)) -> Self {
+        Self::new(relation.cloned(), field.name())
+    }
+}
+
 impl FromStr for Column {
     type Err = Infallible;
 
@@ -355,36 +379,25 @@ impl fmt::Display for Column {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DFField;
     use arrow::datatypes::DataType;
-    use std::collections::HashMap;
+    use arrow_schema::SchemaBuilder;
 
-    fn create_schema(names: &[(Option<&str>, &str)]) -> Result<DFSchema> {
-        let fields = names
-            .iter()
-            .map(|(qualifier, name)| {
-                DFField::new(
-                    qualifier.to_owned().map(|s| s.to_string()),
-                    name,
-                    DataType::Boolean,
-                    true,
-                )
-            })
-            .collect::<Vec<_>>();
-        DFSchema::new_with_metadata(fields, HashMap::new())
+    fn create_qualified_schema(qualifier: &str, names: Vec<&str>) -> Result<DFSchema> {
+        let mut schema_builder = SchemaBuilder::new();
+        schema_builder.extend(
+            names
+                .iter()
+                .map(|f| Field::new(*f, DataType::Boolean, true)),
+        );
+        let schema = Arc::new(schema_builder.finish());
+        DFSchema::try_from_qualified_schema(qualifier, &schema)
     }
 
     #[test]
     fn test_normalize_with_schemas_and_ambiguity_check() -> Result<()> {
-        let schema1 = create_schema(&[(Some("t1"), "a"), (Some("t1"), "b")])?;
-        let schema2 = create_schema(&[(Some("t2"), "c"), (Some("t2"), "d")])?;
-        let schema3 = create_schema(&[
-            (Some("t3"), "a"),
-            (Some("t3"), "b"),
-            (Some("t3"), "c"),
-            (Some("t3"), "d"),
-            (Some("t3"), "e"),
-        ])?;
+        let schema1 = create_qualified_schema("t1", vec!["a", "b"])?;
+        let schema2 = create_qualified_schema("t2", vec!["c", "d"])?;
+        let schema3 = create_qualified_schema("t3", vec!["a", "b", "c", "d", "e"])?;
 
         // already normalized
         let col = Column::new(Some("t1"), "a");

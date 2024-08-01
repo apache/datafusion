@@ -53,7 +53,7 @@ def main():
         "Accept": "application/vnd.github.v3+json",
         "Authorization": f"token {ghp_token}",
     }
-    url = f"https://api.github.com/repos/apache/arrow-datafusion/actions/runs?branch={tag}"
+    url = f"https://api.github.com/repos/apache/datafusion/actions/runs?branch={tag}"
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
 

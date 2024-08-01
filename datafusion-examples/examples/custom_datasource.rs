@@ -24,20 +24,20 @@ use std::time::Duration;
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::dataframe::DataFrame;
 use datafusion::datasource::{provider_as_source, TableProvider, TableType};
 use datafusion::error::Result;
-use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
     project_schema, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
     Partitioning, PlanProperties, SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
-use datafusion_expr::{Expr, LogicalPlanBuilder};
+use datafusion_expr::LogicalPlanBuilder;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use tokio::time::timeout;
 
 /// This example demonstrates executing a simple query against a custom datasource
@@ -176,7 +176,7 @@ impl TableProvider for CustomDataSource {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         // filters and limit can be used here to inject some push-down operations if needed
         _filters: &[Expr],
@@ -226,6 +226,10 @@ impl DisplayAs for CustomExec {
 }
 
 impl ExecutionPlan for CustomExec {
+    fn name(&self) -> &'static str {
+        "CustomExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -234,7 +238,7 @@ impl ExecutionPlan for CustomExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 

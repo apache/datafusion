@@ -33,6 +33,11 @@ use std::sync::Arc;
 /// quickly eliminate entire files / partitions / row groups of data from
 /// consideration using statistical information from a catalog or other
 /// metadata.
+///
+/// This example uses a user defined catalog to supply pruning information, as
+/// one might do as part of a higher level storage engine. See
+/// `parquet_index.rs` for an example that uses pruning in the context of an
+/// individual query.
 #[tokio::main]
 async fn main() {
     // In this example, we'll use the PruningPredicate to determine if
@@ -160,6 +165,11 @@ impl PruningStatistics for MyCatalog {
 
     fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
         // In this example, we know nothing about the number of nulls
+        None
+    }
+
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        // In this example, we know nothing about the number of rows in each file
         None
     }
 

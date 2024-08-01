@@ -38,12 +38,37 @@ pub fn add_sort_above<T: Clone + Default>(
     sort_requirements: LexRequirement,
     fetch: Option<usize>,
 ) -> PlanContext<T> {
-    let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirements);
+    let mut sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirements);
+    sort_expr.retain(|sort_expr| {
+        !node
+            .plan
+            .equivalence_properties()
+            .is_expr_constant(&sort_expr.expr)
+    });
     let mut new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
     if node.plan.output_partitioning().partition_count() > 1 {
         new_sort = new_sort.with_preserve_partitioning(true);
     }
     PlanContext::new(Arc::new(new_sort), T::default(), vec![node])
+}
+
+/// This utility function adds a `SortExec` above an operator according to the
+/// given ordering requirements while preserving the original partitioning. If
+/// requirement is already satisfied no `SortExec` is added.
+pub fn add_sort_above_with_check<T: Clone + Default>(
+    node: PlanContext<T>,
+    sort_requirements: LexRequirement,
+    fetch: Option<usize>,
+) -> PlanContext<T> {
+    if !node
+        .plan
+        .equivalence_properties()
+        .ordering_satisfy_requirement(&sort_requirements)
+    {
+        add_sort_above(node, sort_requirements, fetch)
+    } else {
+        node
+    }
 }
 
 /// Checks whether the given operator is a limit;

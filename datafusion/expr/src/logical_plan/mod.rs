@@ -22,14 +22,16 @@ pub mod dml;
 mod extension;
 mod plan;
 mod statement;
+pub mod tree_node;
 
 pub use builder::{
     build_join_schema, table_scan, union, wrap_projection_for_join_if_necessary,
     LogicalPlanBuilder, UNNAMED_TABLE,
 };
 pub use ddl::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DdlStatement, DropCatalogSchema, DropTable, DropView,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
+    CreateFunctionBody, CreateMemoryTable, CreateView, DdlStatement, DropCatalogSchema,
+    DropFunction, DropTable, DropView, OperateFunctionArg,
 };
 pub use dml::{DmlStatement, WriteOp};
 pub use plan::{

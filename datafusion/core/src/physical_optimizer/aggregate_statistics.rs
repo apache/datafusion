@@ -18,7 +18,6 @@
 //! Utilizing exact statistics from sources to avoid scanning data
 use std::sync::Arc;
 
-use super::optimizer::PhysicalOptimizerRule;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_plan::aggregates::AggregateExec;
@@ -29,14 +28,13 @@ use crate::scalar::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default)]
 pub struct AggregateStatistics {}
-
-/// The name of the column corresponding to [`COUNT_STAR_EXPANSION`]
-const COUNT_STAR_NAME: &str = "COUNT(*)";
 
 impl AggregateStatistics {
     #[allow(missing_docs)]
@@ -60,13 +58,9 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 if let Some((non_null_rows, name)) =
-                    take_optimizable_column_count(&**expr, &stats)
+                    take_optimizable_column_and_table_count(&**expr, &stats)
                 {
                     projections.push((expressions::lit(non_null_rows), name.to_owned()));
-                } else if let Some((num_rows, name)) =
-                    take_optimizable_table_count(&**expr, &stats)
-                {
-                    projections.push((expressions::lit(num_rows), name.to_owned()));
                 } else if let Some((min, name)) = take_optimizable_min(&**expr, &stats) {
                     projections.push((expressions::lit(min), name.to_owned()));
                 } else if let Some((max, name)) = take_optimizable_max(&**expr, &stats) {
@@ -109,6 +103,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// assert if the node passed as argument is a final `AggregateExec` node that can be optimized:
 /// - its child (with possible intermediate layers) is a partial `AggregateExec` node
 /// - they both have no grouping expression
+///
 /// If this is the case, return a ref to the partial `AggregateExec`, else `None`.
 /// We would have preferred to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
@@ -129,7 +124,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
                         return Some(child);
                     }
                 }
-                if let [ref childrens_child] = child.children().as_slice() {
+                if let [childrens_child] = child.children().as_slice() {
                     child = Arc::clone(childrens_child);
                 } else {
                     break;
@@ -140,55 +135,36 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
     None
 }
 
-/// If this agg_expr is a count that is exactly defined in the statistics, return it.
-fn take_optimizable_table_count(
-    agg_expr: &dyn AggregateExpr,
-    stats: &Statistics,
-) -> Option<(ScalarValue, &'static str)> {
-    if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
-        &stats.num_rows,
-        agg_expr.as_any().downcast_ref::<expressions::Count>(),
-    ) {
-        // TODO implementing Eq on PhysicalExpr would help a lot here
-        if casted_expr.expressions().len() == 1 {
-            if let Some(lit_expr) = casted_expr.expressions()[0]
-                .as_any()
-                .downcast_ref::<expressions::Literal>()
-            {
-                if lit_expr.value() == &COUNT_STAR_EXPANSION {
-                    return Some((
-                        ScalarValue::Int64(Some(num_rows as i64)),
-                        COUNT_STAR_NAME,
-                    ));
-                }
-            }
-        }
-    }
-    None
-}
-
 /// If this agg_expr is a count that can be exactly derived from the statistics, return it.
-fn take_optimizable_column_count(
+fn take_optimizable_column_and_table_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
-    if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
-        &stats.num_rows,
-        agg_expr.as_any().downcast_ref::<expressions::Count>(),
-    ) {
-        if casted_expr.expressions().len() == 1 {
-            // TODO optimize with exprs other than Column
-            if let Some(col_expr) = casted_expr.expressions()[0]
-                .as_any()
-                .downcast_ref::<expressions::Column>()
-            {
-                let current_val = &col_stats[col_expr.index()].null_count;
-                if let &Precision::Exact(val) = current_val {
-                    return Some((
-                        ScalarValue::Int64(Some((num_rows - val) as i64)),
-                        casted_expr.name().to_string(),
-                    ));
+    if is_non_distinct_count(agg_expr) {
+        if let Precision::Exact(num_rows) = stats.num_rows {
+            let exprs = agg_expr.expressions();
+            if exprs.len() == 1 {
+                // TODO optimize with exprs other than Column
+                if let Some(col_expr) =
+                    exprs[0].as_any().downcast_ref::<expressions::Column>()
+                {
+                    let current_val = &col_stats[col_expr.index()].null_count;
+                    if let &Precision::Exact(val) = current_val {
+                        return Some((
+                            ScalarValue::Int64(Some((num_rows - val) as i64)),
+                            agg_expr.name().to_string(),
+                        ));
+                    }
+                } else if let Some(lit_expr) =
+                    exprs[0].as_any().downcast_ref::<expressions::Literal>()
+                {
+                    if lit_expr.value() == &COUNT_STAR_EXPANSION {
+                        return Some((
+                            ScalarValue::Int64(Some(num_rows as i64)),
+                            agg_expr.name().to_string(),
+                        ));
+                    }
                 }
             }
         }
@@ -205,26 +181,22 @@ fn take_optimizable_min(
         match *num_rows {
             0 => {
                 // MIN/MAX with 0 rows is always null
-                if let Some(casted_expr) =
-                    agg_expr.as_any().downcast_ref::<expressions::Min>()
-                {
+                if is_min(agg_expr) {
                     if let Ok(min_data_type) =
-                        ScalarValue::try_from(casted_expr.field().unwrap().data_type())
+                        ScalarValue::try_from(agg_expr.field().unwrap().data_type())
                     {
-                        return Some((min_data_type, casted_expr.name().to_string()));
+                        return Some((min_data_type, agg_expr.name().to_string()));
                     }
                 }
             }
             value if value > 0 => {
                 let col_stats = &stats.column_statistics;
-                if let Some(casted_expr) =
-                    agg_expr.as_any().downcast_ref::<expressions::Min>()
-                {
-                    if casted_expr.expressions().len() == 1 {
+                if is_min(agg_expr) {
+                    let exprs = agg_expr.expressions();
+                    if exprs.len() == 1 {
                         // TODO optimize with exprs other than Column
-                        if let Some(col_expr) = casted_expr.expressions()[0]
-                            .as_any()
-                            .downcast_ref::<expressions::Column>()
+                        if let Some(col_expr) =
+                            exprs[0].as_any().downcast_ref::<expressions::Column>()
                         {
                             if let Precision::Exact(val) =
                                 &col_stats[col_expr.index()].min_value
@@ -232,7 +204,7 @@ fn take_optimizable_min(
                                 if !val.is_null() {
                                     return Some((
                                         val.clone(),
-                                        casted_expr.name().to_string(),
+                                        agg_expr.name().to_string(),
                                     ));
                                 }
                             }
@@ -255,26 +227,22 @@ fn take_optimizable_max(
         match *num_rows {
             0 => {
                 // MIN/MAX with 0 rows is always null
-                if let Some(casted_expr) =
-                    agg_expr.as_any().downcast_ref::<expressions::Max>()
-                {
+                if is_max(agg_expr) {
                     if let Ok(max_data_type) =
-                        ScalarValue::try_from(casted_expr.field().unwrap().data_type())
+                        ScalarValue::try_from(agg_expr.field().unwrap().data_type())
                     {
-                        return Some((max_data_type, casted_expr.name().to_string()));
+                        return Some((max_data_type, agg_expr.name().to_string()));
                     }
                 }
             }
             value if value > 0 => {
                 let col_stats = &stats.column_statistics;
-                if let Some(casted_expr) =
-                    agg_expr.as_any().downcast_ref::<expressions::Max>()
-                {
-                    if casted_expr.expressions().len() == 1 {
+                if is_max(agg_expr) {
+                    let exprs = agg_expr.expressions();
+                    if exprs.len() == 1 {
                         // TODO optimize with exprs other than Column
-                        if let Some(col_expr) = casted_expr.expressions()[0]
-                            .as_any()
-                            .downcast_ref::<expressions::Column>()
+                        if let Some(col_expr) =
+                            exprs[0].as_any().downcast_ref::<expressions::Column>()
                         {
                             if let Precision::Exact(val) =
                                 &col_stats[col_expr.index()].max_value
@@ -282,7 +250,7 @@ fn take_optimizable_max(
                                 if !val.is_null() {
                                     return Some((
                                         val.clone(),
-                                        casted_expr.name().to_string(),
+                                        agg_expr.name().to_string(),
                                     ));
                                 }
                             }
@@ -296,17 +264,58 @@ fn take_optimizable_max(
     None
 }
 
+// TODO: Move this check into AggregateUDFImpl
+// https://github.com/apache/datafusion/issues/11153
+fn is_non_distinct_count(agg_expr: &dyn AggregateExpr) -> bool {
+    if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+        if agg_expr.fun().name() == "count" && !agg_expr.is_distinct() {
+            return true;
+        }
+    }
+
+    false
+}
+
+// TODO: Move this check into AggregateUDFImpl
+// https://github.com/apache/datafusion/issues/11153
+fn is_min(agg_expr: &dyn AggregateExpr) -> bool {
+    if agg_expr.as_any().is::<expressions::Min>() {
+        return true;
+    }
+
+    if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+        if agg_expr.fun().name() == "min" {
+            return true;
+        }
+    }
+
+    false
+}
+
+// TODO: Move this check into AggregateUDFImpl
+// https://github.com/apache/datafusion/issues/11153
+fn is_max(agg_expr: &dyn AggregateExpr) -> bool {
+    if agg_expr.as_any().is::<expressions::Max>() {
+        return true;
+    }
+
+    if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
+        if agg_expr.fun().name() == "max" {
+            return true;
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::Arc;
-
     use super::*;
-    use crate::error::Result;
+
     use crate::logical_expr::Operator;
-    use crate::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
+    use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
-    use crate::physical_plan::expressions::Count;
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::memory::MemoryExec;
     use crate::prelude::SessionContext;
@@ -315,8 +324,10 @@ pub(crate) mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_int64_array;
+    use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::cast;
     use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
     use datafusion_physical_plan::aggregates::AggregateMode;
 
     /// Mock data using a MemoryExec which has an exact count statistic
@@ -407,13 +418,13 @@ pub(crate) mod tests {
             Self::ColumnA(schema.clone())
         }
 
-        /// Return appropriate expr depending if COUNT is for col or table (*)
-        pub(crate) fn count_expr(&self) -> Arc<dyn AggregateExpr> {
-            Arc::new(Count::new(
-                self.column(),
-                self.column_name(),
-                DataType::Int64,
-            ))
+        // Return appropriate expr depending if COUNT is for col or table (*)
+        pub(crate) fn count_expr(&self, schema: &Schema) -> Arc<dyn AggregateExpr> {
+            AggregateExprBuilder::new(count_udaf(), vec![self.column()])
+                .schema(Arc::new(schema.clone()))
+                .name(self.column_name())
+                .build()
+                .unwrap()
         }
 
         /// what argument would this aggregate need in the plan?
@@ -427,7 +438,7 @@ pub(crate) mod tests {
         /// What name would this aggregate produce in a plan?
         fn column_name(&self) -> &'static str {
             match self {
-                Self::CountStar => COUNT_STAR_NAME,
+                Self::CountStar => "COUNT(*)",
                 Self::ColumnA(_) => "COUNT(a)",
             }
         }
@@ -451,7 +462,7 @@ pub(crate) mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             source,
             Arc::clone(&schema),
@@ -460,7 +471,7 @@ pub(crate) mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -481,7 +492,7 @@ pub(crate) mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             source,
             Arc::clone(&schema),
@@ -490,7 +501,7 @@ pub(crate) mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -510,7 +521,7 @@ pub(crate) mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             source,
             Arc::clone(&schema),
@@ -522,7 +533,7 @@ pub(crate) mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             Arc::new(coalesce),
             Arc::clone(&schema),
@@ -542,7 +553,7 @@ pub(crate) mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             source,
             Arc::clone(&schema),
@@ -554,7 +565,7 @@ pub(crate) mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             Arc::new(coalesce),
             Arc::clone(&schema),
@@ -585,7 +596,7 @@ pub(crate) mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             filter,
             Arc::clone(&schema),
@@ -594,7 +605,7 @@ pub(crate) mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -630,7 +641,7 @@ pub(crate) mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             filter,
             Arc::clone(&schema),
@@ -639,7 +650,7 @@ pub(crate) mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr()],
+            vec![agg.count_expr(&schema)],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),

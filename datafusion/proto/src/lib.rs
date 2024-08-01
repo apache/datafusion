@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 //! Serialize / Deserialize DataFusion Plans to bytes
 //!
@@ -117,7 +119,15 @@ pub mod generated;
 pub mod logical_plan;
 pub mod physical_plan;
 
-pub use generated::datafusion as protobuf;
+pub mod protobuf {
+    pub use crate::generated::datafusion::*;
+    pub use datafusion_proto_common::common::proto_error;
+    pub use datafusion_proto_common::protobuf_common::{
+        ArrowOptions, ArrowType, AvroFormat, AvroOptions, CsvFormat, DfSchema,
+        EmptyMessage, Field, JoinSide, NdJsonFormat, ParquetFormat, ScalarValue, Schema,
+    };
+    pub use datafusion_proto_common::{FromProtoError, ToProtoError};
+}
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);

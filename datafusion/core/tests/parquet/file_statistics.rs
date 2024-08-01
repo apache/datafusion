@@ -35,6 +35,7 @@ use datafusion_execution::cache::cache_unit::{
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
+use datafusion::execution::session_state::SessionStateBuilder;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -167,10 +168,7 @@ async fn get_listing_table(
 ) -> ListingTable {
     let schema = opt
         .infer_schema(
-            &SessionState::new_with_config_rt(
-                SessionConfig::default(),
-                Arc::new(RuntimeEnv::default()),
-            ),
+            &SessionStateBuilder::new().with_default_features().build(),
             table_path,
         )
         .await

@@ -49,6 +49,11 @@ impl TableFunction {
         &self.name
     }
 
+    /// Get the implementation of the table function
+    pub fn function(&self) -> &Arc<dyn TableFunctionImpl> {
+        &self.fun
+    }
+
     /// Get the function implementation and generate a table
     pub fn create_table_provider(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         self.fun.call(args)

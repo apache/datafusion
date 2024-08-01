@@ -31,7 +31,7 @@ COPY  (
   SELECT column1 as a, column2 as b
   FROM ( VALUES ('foo', 1), ('foo', 2), ('foo', 3) )
  )  TO 'test_files/scratch/schema_evolution/parquet_table/1.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 
 
 # File2 has only b
@@ -40,7 +40,7 @@ COPY  (
   SELECT column1 as b
   FROM ( VALUES (10) )
  )  TO 'test_files/scratch/schema_evolution/parquet_table/2.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 
 # File3 has a column from 'z' which does not appear in the table
 # but also values from a which do appear in the table
@@ -49,7 +49,7 @@ COPY  (
   SELECT column1 as z, column2 as a
     FROM ( VALUES ('bar', 'foo'), ('blarg', 'foo') )
  )  TO 'test_files/scratch/schema_evolution/parquet_table/3.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 
 # File4 has data for b and a (reversed) and d
 statement ok
@@ -57,7 +57,7 @@ COPY  (
   SELECT column1 as b, column2 as a, column3 as c
     FROM ( VALUES (100, 'foo', 10.5), (200, 'foo', 12.6), (300, 'bzz', 13.7) )
  )  TO 'test_files/scratch/schema_evolution/parquet_table/4.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 
 # The logical distribution of `a`, `b` and `c` in the files is like this:
 #

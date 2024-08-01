@@ -15,10 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod accumulate;
 mod adapter;
-pub use accumulate::NullState;
 pub use adapter::GroupsAccumulatorAdapter;
 
-pub(crate) mod bool_op;
-pub(crate) mod prim_op;
+// Backward compatibility
+#[allow(unused_imports)]
+pub(crate) mod accumulate {
+    pub use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::NullState;
+}
+
+pub use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::NullState;
+
+pub(crate) mod prim_op {
+    pub use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+}

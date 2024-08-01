@@ -21,13 +21,13 @@
 # https://cwiki.apache.org/confluence/display/INFRA/Git+-+.asf.yaml+features
 
 notifications:
-  commits: commits@arrow.apache.org
-  issues: github@arrow.apache.org
-  pullrequests: github@arrow.apache.org
+  commits: commits@datafusion.apache.org
+  issues: github@datafusion.apache.org
+  pullrequests: github@datafusion.apache.org
   jira_options: link label worklog
 github:
-  description: "Apache Arrow DataFusion SQL Query Engine"
-  homepage: https://arrow.apache.org/datafusion
+  description: "Apache DataFusion SQL Query Engine"
+  homepage: https://datafusion.apache.org/
   labels:
     - arrow
     - big-data
@@ -50,7 +50,6 @@ github:
         required_approving_review_count: 1
 
 # publishes the content of the `asf-site` branch to
-# https://arrow.apache.org/datafusion/
+# https://datafusion.apache.org/
 publish:
   whoami: asf-site
-  subdir: datafusion

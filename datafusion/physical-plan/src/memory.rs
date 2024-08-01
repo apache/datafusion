@@ -31,6 +31,7 @@ use super::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, project_schema, Result};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
@@ -49,6 +50,8 @@ pub struct MemoryExec {
     // Sort information: one or more equivalent orderings
     sort_information: Vec<LexOrdering>,
     cache: PlanProperties,
+    /// if partition sizes should be displayed
+    show_sizes: bool,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -85,17 +88,25 @@ impl DisplayAs for MemoryExec {
                     })
                     .unwrap_or_default();
 
-                write!(
-                    f,
-                    "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}",
-                    partition_sizes.len(),
-                )
+                if self.show_sizes {
+                    write!(
+                        f,
+                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}",
+                        partition_sizes.len(),
+                    )
+                } else {
+                    write!(f, "MemoryExec: partitions={}", partition_sizes.len(),)
+                }
             }
         }
     }
 }
 
 impl ExecutionPlan for MemoryExec {
+    fn name(&self) -> &'static str {
+        "MemoryExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -105,7 +116,7 @@ impl ExecutionPlan for MemoryExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
     }
@@ -129,7 +140,7 @@ impl ExecutionPlan for MemoryExec {
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(MemoryStream::try_new(
             self.partitions[partition].clone(),
-            self.projected_schema.clone(),
+            Arc::clone(&self.projected_schema),
             self.projection.clone(),
         )?))
     }
@@ -153,7 +164,8 @@ impl MemoryExec {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
-        let cache = Self::compute_properties(projected_schema.clone(), &[], partitions);
+        let cache =
+            Self::compute_properties(Arc::clone(&projected_schema), &[], partitions);
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
@@ -161,7 +173,14 @@ impl MemoryExec {
             projection,
             sort_information: vec![],
             cache,
+            show_sizes: true,
         })
+    }
+
+    /// set `show_sizes` to determine whether to display partition sizes
+    pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
+        self.show_sizes = show_sizes;
+        self
     }
 
     pub fn partitions(&self) -> &[Vec<RecordBatch>] {
@@ -201,7 +220,7 @@ impl MemoryExec {
     }
 
     pub fn original_schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -223,6 +242,8 @@ impl MemoryExec {
 pub struct MemoryStream {
     /// Vector of record batches
     data: Vec<RecordBatch>,
+    /// Optional memory reservation bound to the data, freed on drop
+    reservation: Option<MemoryReservation>,
     /// Schema representing the data
     schema: SchemaRef,
     /// Optional projection for which columns to load
@@ -240,10 +261,17 @@ impl MemoryStream {
     ) -> Result<Self> {
         Ok(Self {
             data,
+            reservation: None,
             schema,
             projection,
             index: 0,
         })
+    }
+
+    /// Set the memory reservation for the data
+    pub(super) fn with_reservation(mut self, reservation: MemoryReservation) -> Self {
+        self.reservation = Some(reservation);
+        self
     }
 }
 
@@ -278,7 +306,7 @@ impl Stream for MemoryStream {
 impl RecordBatchStream for MemoryStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 

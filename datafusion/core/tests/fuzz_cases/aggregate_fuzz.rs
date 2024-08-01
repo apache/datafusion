@@ -32,8 +32,10 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_physical_expr::expressions::{col, Sum};
-use datafusion_physical_expr::{AggregateExpr, PhysicalSortExpr};
+use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
@@ -46,7 +48,7 @@ use tokio::task::JoinSet;
 /// same results
 #[tokio::test(flavor = "multi_thread")]
 async fn streaming_aggregate_test() {
-    let test_cases = vec![
+    let test_cases = [
         vec!["a"],
         vec!["b", "a"],
         vec!["c", "a"],
@@ -101,11 +103,14 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             .with_sort_information(vec![sort_keys]),
     );
 
-    let aggregate_expr = vec![Arc::new(Sum::new(
-        col("d", &schema).unwrap(),
-        "sum1",
-        DataType::Int64,
-    )) as Arc<dyn AggregateExpr>];
+    let aggregate_expr =
+        vec![
+            AggregateExprBuilder::new(sum_udaf(), vec![col("d", &schema).unwrap()])
+                .schema(Arc::clone(&schema))
+                .name("sum1")
+                .build()
+                .unwrap(),
+        ];
     let expr = group_by_columns
         .iter()
         .map(|elem| (col(elem, &schema).unwrap(), elem.to_string()))
@@ -312,10 +317,10 @@ async fn verify_ordered_aggregate(frame: &DataFrame, expected_sort: bool) {
     }
     let mut visitor = Visitor { expected_sort };
 
-    impl TreeNodeVisitor for Visitor {
+    impl<'n> TreeNodeVisitor<'n> for Visitor {
         type Node = Arc<dyn ExecutionPlan>;
 
-        fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
             if let Some(exec) = node.as_any().downcast_ref::<AggregateExec>() {
                 if self.expected_sort {
                     assert!(matches!(

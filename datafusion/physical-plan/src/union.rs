@@ -41,7 +41,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{calculate_union, EquivalenceProperties};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -99,7 +99,12 @@ impl UnionExec {
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
         let schema = union_schema(&inputs);
-        let cache = Self::compute_properties(&inputs, schema);
+        // The schema of the inputs and the union schema is consistent when:
+        // - They have the same number of fields, and
+        // - Their fields have same types at the same indices.
+        // Here, we know that schemas are consistent and the call below can
+        // not return an error.
+        let cache = Self::compute_properties(&inputs, schema).unwrap();
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -116,43 +121,13 @@ impl UnionExec {
     fn compute_properties(
         inputs: &[Arc<dyn ExecutionPlan>],
         schema: SchemaRef,
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        // TODO: In some cases, we should be able to preserve some equivalence
-        //       classes and constants. Add support for such cases.
-        let children_eqs = inputs
+        let children_eqps = inputs
             .iter()
-            .map(|child| child.equivalence_properties())
+            .map(|child| child.equivalence_properties().clone())
             .collect::<Vec<_>>();
-        let mut eq_properties = EquivalenceProperties::new(schema);
-        // Use the ordering equivalence class of the first child as the seed:
-        let mut meets = children_eqs[0]
-            .oeq_class()
-            .iter()
-            .map(|item| item.to_vec())
-            .collect::<Vec<_>>();
-        // Iterate over all the children:
-        for child_eqs in &children_eqs[1..] {
-            // Compute meet orderings of the current meets and the new ordering
-            // equivalence class.
-            let mut idx = 0;
-            while idx < meets.len() {
-                // Find all the meets of `current_meet` with this child's orderings:
-                let valid_meets = child_eqs.oeq_class().iter().filter_map(|ordering| {
-                    child_eqs.get_meet_ordering(ordering, &meets[idx])
-                });
-                // Use the longest of these meets as others are redundant:
-                if let Some(next_meet) = valid_meets.max_by_key(|m| m.len()) {
-                    meets[idx] = next_meet;
-                    idx += 1;
-                } else {
-                    meets.swap_remove(idx);
-                }
-            }
-        }
-        // We know have all the valid orderings after union, remove redundant
-        // entries (implicitly) and return:
-        eq_properties.add_new_orderings(meets);
+        let eq_properties = calculate_union(children_eqps, schema)?;
 
         // Calculate output partitioning; i.e. sum output partitions of the inputs.
         let num_partitions = inputs
@@ -164,7 +139,11 @@ impl UnionExec {
         // Determine execution mode:
         let mode = execution_mode_from_children(inputs.iter());
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            mode,
+        ))
     }
 }
 
@@ -183,6 +162,10 @@ impl DisplayAs for UnionExec {
 }
 
 impl ExecutionPlan for UnionExec {
+    fn name(&self) -> &'static str {
+        "UnionExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -192,8 +175,8 @@ impl ExecutionPlan for UnionExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        self.inputs.clone()
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inputs.iter().collect()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -370,6 +353,10 @@ impl DisplayAs for InterleaveExec {
 }
 
 impl ExecutionPlan for InterleaveExec {
+    fn name(&self) -> &'static str {
+        "InterleaveExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -379,8 +366,8 @@ impl ExecutionPlan for InterleaveExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        self.inputs.clone()
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inputs.iter().collect()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -391,6 +378,12 @@ impl ExecutionPlan for InterleaveExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // New children are no longer interleavable, which might be a bug of optimization rewrite.
+        if !can_interleave(children.iter()) {
+            return internal_err!(
+                "Can not create InterleaveExec: new children can not be interleaved"
+            );
+        }
         Ok(Arc::new(InterleaveExec::try_new(children)?))
     }
 
@@ -409,7 +402,7 @@ impl ExecutionPlan for InterleaveExec {
         let mut input_stream_vec = vec![];
         for input in self.inputs.iter() {
             if partition < input.output_partitioning().partition_count() {
-                input_stream_vec.push(input.execute(partition, context.clone())?);
+                input_stream_vec.push(input.execute(partition, Arc::clone(&context))?);
             } else {
                 // Do not find a partition to execute
                 break;
@@ -510,7 +503,7 @@ impl CombinedRecordBatchStream {
 
 impl RecordBatchStream for CombinedRecordBatchStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -591,11 +584,10 @@ mod tests {
     use crate::memory::MemoryExec;
     use crate::test;
 
-    use arrow::record_batch::RecordBatch;
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;
-    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+    use datafusion_physical_expr_common::expressions::column::col;
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -618,7 +610,7 @@ mod tests {
         in_data
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
-                expr: (*expr).clone(),
+                expr: Arc::clone(*expr),
                 options: *options,
             })
             .collect::<Vec<_>>()
@@ -740,7 +732,7 @@ mod tests {
         let col_e = &col("e", &schema)?;
         let col_f = &col("f", &schema)?;
         let options = SortOptions::default();
-        let test_cases = vec![
+        let test_cases = [
             //-----------TEST CASE 1----------//
             (
                 // First child orderings
@@ -803,31 +795,39 @@ mod tests {
                 .map(|ordering| convert_to_sort_exprs(ordering))
                 .collect::<Vec<_>>();
             let child1 = Arc::new(
-                MemoryExec::try_new(&[], schema.clone(), None)?
+                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .with_sort_information(first_orderings),
             );
             let child2 = Arc::new(
-                MemoryExec::try_new(&[], schema.clone(), None)?
+                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .with_sort_information(second_orderings),
             );
 
+            let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
+            union_expected_eq.add_new_orderings(union_expected_orderings);
+
             let union = UnionExec::new(vec![child1, child2]);
             let union_eq_properties = union.properties().equivalence_properties();
-            let union_actual_orderings = union_eq_properties.oeq_class();
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
                 test_idx, test_cases[test_idx]
             );
-            assert_eq!(
-                union_actual_orderings.len(),
-                union_expected_orderings.len(),
-                "{}",
-                err_msg
-            );
-            for expected in &union_expected_orderings {
-                assert!(union_actual_orderings.contains(expected), "{}", err_msg);
-            }
+            assert_eq_properties_same(union_eq_properties, &union_expected_eq, err_msg);
         }
         Ok(())
+    }
+
+    fn assert_eq_properties_same(
+        lhs: &EquivalenceProperties,
+        rhs: &EquivalenceProperties,
+        err_msg: String,
+    ) {
+        // Check whether orderings are same.
+        let lhs_orderings = lhs.oeq_class();
+        let rhs_orderings = &rhs.oeq_class.orderings;
+        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
+        for rhs_ordering in rhs_orderings {
+            assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
+        }
     }
 }

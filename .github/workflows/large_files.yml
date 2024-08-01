@@ -1,0 +1,55 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Large files PR check
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+
+jobs:
+  check-files:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check size of new Git objects
+        env:
+          # 1 MB ought to be enough for anybody.
+          # TODO in case we may want to consciously commit a bigger file to the repo without using Git LFS we may disable the check e.g. with a label
+          MAX_FILE_SIZE_BYTES: 1048576
+        shell: bash
+        run: |
+          git rev-list --objects ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} \
+            > pull-request-objects.txt
+          exit_code=0
+          while read -r id path; do
+            # Skip objects which are not files (commits, trees)
+            if [ ! -z "${path}" ]; then
+              size="$(git cat-file -s "${id}")"
+              if [ "${size}" -gt "${MAX_FILE_SIZE_BYTES}" ]; then
+                exit_code=1
+                echo "Object ${id} [${path}] has size ${size}, exceeding ${MAX_FILE_SIZE_BYTES} limit." >&2
+                echo "::error file=${path}::File ${path} has size ${size}, exceeding ${MAX_FILE_SIZE_BYTES} limit."
+              fi
+            fi
+          done < pull-request-objects.txt
+          exit "${exit_code}"

@@ -28,8 +28,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub(super) struct IsNanFunc {
+pub struct IsNanFunc {
     signature: Signature,
+}
+
+impl Default for IsNanFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl IsNanFunc {

@@ -29,12 +29,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::catalog::{TableProvider, TableProviderFactory};
 use crate::dataframe::DataFrame;
-use crate::datasource::provider::TableProviderFactory;
-use crate::datasource::stream::{StreamConfig, StreamTable};
-use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
+use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
+use crate::datasource::{empty::EmptyTable, provider_as_source};
 use crate::error::Result;
-use crate::execution::context::{SessionState, TaskContext};
+use crate::execution::context::TaskContext;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
@@ -49,9 +49,9 @@ use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 use futures::Stream;
 use tempfile::TempDir;
-
 // backwards compatibility
 #[cfg(feature = "parquet")]
 pub use datafusion_common::test_util::parquet_test_data;
@@ -65,7 +65,7 @@ pub fn scan_empty(
 ) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema));
-    let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE).to_string());
+    let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE));
     LogicalPlanBuilder::scan(name, provider_as_source(provider), projection)
 }
 
@@ -78,7 +78,7 @@ pub fn scan_empty_with_partitions(
 ) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema).with_partitions(partitions));
-    let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE).to_string());
+    let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE));
     LogicalPlanBuilder::scan(name, provider_as_source(provider), projection)
 }
 
@@ -177,7 +177,7 @@ pub struct TestTableFactory {}
 impl TableProviderFactory for TestTableFactory {
     async fn create(
         &self,
-        _: &SessionState,
+        _: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
@@ -213,7 +213,7 @@ impl TableProvider for TestTableProvider {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
@@ -285,6 +285,10 @@ impl DisplayAs for UnboundedExec {
 }
 
 impl ExecutionPlan for UnboundedExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -293,7 +297,7 @@ impl ExecutionPlan for UnboundedExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 
@@ -355,10 +359,46 @@ pub fn register_unbounded_file_with_ordering(
     table_name: &str,
     file_sort_order: Vec<Vec<Expr>>,
 ) -> Result<()> {
-    let config =
-        StreamConfig::new_file(schema, file_path.into()).with_order(file_sort_order);
+    let source = FileStreamProvider::new_file(schema, file_path.into());
+    let config = StreamConfig::new(Arc::new(source)).with_order(file_sort_order);
 
     // Register table:
     ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
     Ok(())
+}
+
+struct BoundedStream {
+    limit: usize,
+    count: usize,
+    batch: RecordBatch,
+}
+
+impl Stream for BoundedStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if self.count >= self.limit {
+            return Poll::Ready(None);
+        }
+        self.count += 1;
+        Poll::Ready(Some(Ok(self.batch.clone())))
+    }
+}
+
+impl RecordBatchStream for BoundedStream {
+    fn schema(&self) -> SchemaRef {
+        self.batch.schema()
+    }
+}
+
+/// Creates an bounded stream for testing purposes.
+pub fn bounded_stream(batch: RecordBatch, limit: usize) -> SendableRecordBatchStream {
+    Box::pin(BoundedStream {
+        count: 0,
+        limit,
+        batch,
+    })
 }

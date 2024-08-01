@@ -23,7 +23,7 @@ use std::task::{Context, Poll};
 
 use super::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    work_table::{WorkTable, WorkTableExec},
+    work_table::{ReservedBatches, WorkTable, WorkTableExec},
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
@@ -32,6 +32,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
@@ -81,7 +82,7 @@ impl RecursiveQueryExec {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new());
         // Use the same work table for both the WorkTableExec and the recursive term
-        let recursive_term = assign_work_table(recursive_term, work_table.clone())?;
+        let recursive_term = assign_work_table(recursive_term, Arc::clone(&work_table))?;
         let cache = Self::compute_properties(static_term.schema());
         Ok(RecursiveQueryExec {
             name,
@@ -107,6 +108,10 @@ impl RecursiveQueryExec {
 }
 
 impl ExecutionPlan for RecursiveQueryExec {
+    fn name(&self) -> &'static str {
+        "RecursiveQueryExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -115,8 +120,8 @@ impl ExecutionPlan for RecursiveQueryExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.static_term.clone(), self.recursive_term.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.static_term, &self.recursive_term]
     }
 
     // TODO: control these hints and see whether we can
@@ -142,8 +147,8 @@ impl ExecutionPlan for RecursiveQueryExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         RecursiveQueryExec::try_new(
             self.name.clone(),
-            children[0].clone(),
-            children[1].clone(),
+            Arc::clone(&children[0]),
+            Arc::clone(&children[1]),
             self.is_distinct,
         )
         .map(|e| Arc::new(e) as _)
@@ -162,12 +167,12 @@ impl ExecutionPlan for RecursiveQueryExec {
             )));
         }
 
-        let static_stream = self.static_term.execute(partition, context.clone())?;
+        let static_stream = self.static_term.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(RecursiveQueryStream::new(
             context,
-            self.work_table.clone(),
-            self.recursive_term.clone(),
+            Arc::clone(&self.work_table),
+            Arc::clone(&self.recursive_term),
             static_stream,
             baseline_metrics,
         )))
@@ -236,6 +241,8 @@ struct RecursiveQueryStream {
     /// In-memory buffer for storing a copy of the current results. Will be
     /// cleared after each iteration.
     buffer: Vec<RecordBatch>,
+    /// Tracks the memory used by the buffer
+    reservation: MemoryReservation,
     // /// Metrics.
     _baseline_metrics: BaselineMetrics,
 }
@@ -250,6 +257,8 @@ impl RecursiveQueryStream {
         baseline_metrics: BaselineMetrics,
     ) -> Self {
         let schema = static_stream.schema();
+        let reservation =
+            MemoryConsumer::new("RecursiveQuery").register(task_context.memory_pool());
         Self {
             task_context,
             work_table,
@@ -258,6 +267,7 @@ impl RecursiveQueryStream {
             recursive_stream: None,
             schema,
             buffer: vec![],
+            reservation,
             _baseline_metrics: baseline_metrics,
         }
     }
@@ -268,6 +278,10 @@ impl RecursiveQueryStream {
         mut self: std::pin::Pin<&mut Self>,
         batch: RecordBatch,
     ) -> Poll<Option<Result<RecordBatch>>> {
+        if let Err(e) = self.reservation.try_grow(batch.get_array_memory_size()) {
+            return Poll::Ready(Some(Err(e)));
+        }
+
         self.buffer.push(batch.clone());
         Poll::Ready(Some(Ok(batch)))
     }
@@ -289,17 +303,19 @@ impl RecursiveQueryStream {
         }
 
         // Update the work table with the current buffer
-        let batches = self.buffer.drain(..).collect();
-        self.work_table.write(batches);
+        let reserved_batches = ReservedBatches::new(
+            std::mem::take(&mut self.buffer),
+            self.reservation.take(),
+        );
+        self.work_table.update(reserved_batches);
 
         // We always execute (and re-execute iteratively) the first partition.
         // Downstream plans should not expect any partitioning.
         let partition = 0;
 
-        self.recursive_stream = Some(
-            self.recursive_term
-                .execute(partition, self.task_context.clone())?,
-        );
+        let recursive_plan = reset_plan_states(Arc::clone(&self.recursive_term))?;
+        self.recursive_stream =
+            Some(recursive_plan.execute(partition, Arc::clone(&self.task_context))?);
         self.poll_next(cx)
     }
 }
@@ -309,7 +325,7 @@ fn assign_work_table(
     work_table: Arc<WorkTable>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut work_table_refs = 0;
-    plan.transform_down_mut(&mut |plan| {
+    plan.transform_down(|plan| {
         if let Some(exec) = plan.as_any().downcast_ref::<WorkTableExec>() {
             if work_table_refs > 0 {
                 not_impl_err!(
@@ -318,13 +334,33 @@ fn assign_work_table(
             } else {
                 work_table_refs += 1;
                 Ok(Transformed::yes(Arc::new(
-                    exec.with_work_table(work_table.clone()),
+                    exec.with_work_table(Arc::clone(&work_table)),
                 )))
             }
         } else if plan.as_any().is::<RecursiveQueryExec>() {
             not_impl_err!("Recursive queries cannot be nested")
         } else {
             Ok(Transformed::no(plan))
+        }
+    })
+    .data()
+}
+
+/// Some plans will change their internal states after execution, making them unable to be executed again.
+/// This function uses `ExecutionPlan::with_new_children` to fork a new plan with initial states.
+///
+/// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
+/// However, if the data of the left table is derived from the work table, it will become outdated
+/// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
+fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(|plan| {
+        // WorkTableExec's states have already been updated correctly.
+        if plan.as_any().is::<WorkTableExec>() {
+            Ok(Transformed::no(plan))
+        } else {
+            let new_plan = Arc::clone(&plan)
+                .with_new_children(plan.children().into_iter().cloned().collect())?;
+            Ok(Transformed::yes(new_plan))
         }
     })
     .data()
@@ -370,7 +406,7 @@ impl Stream for RecursiveQueryStream {
 impl RecordBatchStream for RecursiveQueryStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 

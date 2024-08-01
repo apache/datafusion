@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
 use log::debug;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -231,12 +231,13 @@ impl MemoryPool for FairSpillPool {
     }
 }
 
+#[inline(always)]
 fn insufficient_capacity_err(
     reservation: &MemoryReservation,
     additional: usize,
     available: usize,
 ) -> DataFusionError {
-    DataFusionError::ResourcesExhausted(format!("Failed to allocate additional {} bytes for {} with {} bytes already allocated - maximum available is {}", additional, reservation.registration.consumer.name, reservation.size, available))
+    resources_datafusion_err!("Failed to allocate additional {} bytes for {} with {} bytes already allocated - maximum available is {}", additional, reservation.registration.consumer.name, reservation.size, available)
 }
 
 #[cfg(test)]

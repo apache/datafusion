@@ -117,8 +117,7 @@ mod tests {
     use arrow_array::{Int64Array, RecordBatch, StringArray};
     use arrow_schema::Field;
     use arrow_schema::Schema;
-    use arrow_schema::{DataType, SchemaRef};
-    use datafusion_common::Result;
+    use arrow_schema::SchemaRef;
     use std::sync::Arc;
 
     #[test]

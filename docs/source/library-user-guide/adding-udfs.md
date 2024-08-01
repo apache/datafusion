@@ -174,7 +174,7 @@ let udf = create_udf(
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
 [`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
-[`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 
 A few things to note:
 
@@ -204,7 +204,7 @@ let df = ctx.sql(&sql).await.unwrap();
 
 ## Adding a Window UDF
 
-Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have access to the rows around them. Access to the the proximal rows is helpful, but adds some complexity to the implementation.
+Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have access to the rows around them. Access to the proximal rows is helpful, but adds some complexity to the implementation.
 
 For example, we will declare a user defined window function that computes a moving average.
 
@@ -268,7 +268,7 @@ impl PartitionEvaluator for MyPartitionEvaluator {
     }
 }
 
-/// Create a `PartitionEvalutor` to evaluate this function on a new
+/// Create a `PartitionEvaluator` to evaluate this function on a new
 /// partition.
 fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
     Ok(Box::new(MyPartitionEvaluator::new()))
@@ -297,7 +297,7 @@ let smooth_it = create_udwf(
 
 [`windowudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html
 [`create_udwf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html
-[`advanced_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
 
 The `create_udwf` has five arguments to check:
 
@@ -319,7 +319,7 @@ ctx.register_udwf(smooth_it);
 
 At this point, you can use the `smooth_it` function in your query:
 
-For example, if we have a [`cars.csv`](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/data/cars.csv) whose contents like
+For example, if we have a [`cars.csv`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/data/cars.csv) whose contents like
 
 ```
 car,speed,time
@@ -474,7 +474,7 @@ impl Accumulator for GeometricMean {
 
 ### registering an Aggregate UDF
 
-To register a Aggreate UDF, you need to wrap the function implementation in a [`AggregateUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
+To register a Aggregate UDF, you need to wrap the function implementation in a [`AggregateUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udaf.rs`].
 
 ```rust
@@ -500,7 +500,7 @@ let geometric_mean = create_udaf(
 
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
-[`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 
 The `create_udaf` has six arguments to check:
 
@@ -536,7 +536,7 @@ Because we're returning a `TableProvider`, in this example we'll use the `MemTab
 While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be particularly useful for reading data from external sources and interactive analysis. For example, see the [example][4] for a working example that reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata` in the CLI to read the metadata from a Parquet file.
 
 ```console
-❯ select filename, row_group_id, row_group_num_rows, row_group_bytes, stats_min, stats_max from parquet_metadata('./benchmarks/data/hits.parquet') where  column_id = 17 limit 10;
+> select filename, row_group_id, row_group_num_rows, row_group_bytes, stats_min, stats_max from parquet_metadata('./benchmarks/data/hits.parquet') where  column_id = 17 limit 10;
 +--------------------------------+--------------+--------------------+-----------------+-----------+-----------+
 | filename                       | row_group_id | row_group_num_rows | row_group_bytes | stats_min | stats_max |
 +--------------------------------+--------------+--------------------+-----------------+-----------+-----------+
@@ -619,7 +619,7 @@ pretty::print_batches(&results)?;
 // +---+
 ```
 
-[1]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-[2]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-[3]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-[4]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs
+[1]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
+[2]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
+[3]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
+[4]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs

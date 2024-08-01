@@ -17,23 +17,23 @@
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
-//! uses [Apache Arrow] as its in-memory format. DataFusion's many [use
-//! cases] help developers build very fast and feature rich database
-//! and analytic systems, customized to particular workloads.
+//! uses [Apache Arrow] as its in-memory format. DataFusion help developers
+//! build fast and feature rich database and analytic systems, customized to
+//! particular workloads. See [use cases] for examples
 //!
 //! "Out of the box," DataFusion quickly runs complex [SQL] and
-//! [`DataFrame`] queries using a sophisticated query planner, a columnar,
-//! multi-threaded, vectorized execution engine, and partitioned data
+//! [`DataFrame`] queries using a full-featured query planner, a columnar,
+//! streaming, multi-threaded, vectorized execution engine, and partitioned data
 //! sources (Parquet, CSV, JSON, and Avro).
 //!
-//! DataFusion is designed for easy customization such as supporting
+//! DataFusion is designed for easy customization such as
 //! additional data sources, query languages, functions, custom
 //! operators and more. See the [Architecture] section for more details.
 //!
-//! [DataFusion]: https://arrow.apache.org/datafusion/
+//! [DataFusion]: https://datafusion.apache.org/
 //! [Apache Arrow]: https://arrow.apache.org
-//! [use cases]: https://arrow.apache.org/datafusion/user-guide/introduction.html#use-cases
-//! [SQL]: https://arrow.apache.org/datafusion/user-guide/sql/index.html
+//! [use cases]: https://datafusion.apache.org/user-guide/introduction.html#use-cases
+//! [SQL]: https://datafusion.apache.org/user-guide/sql/index.html
 //! [`DataFrame`]: dataframe::DataFrame
 //! [Architecture]: #architecture
 //!
@@ -128,13 +128,53 @@
 //!
 //! There are many additional annotated examples of using DataFusion in the [datafusion-examples] directory.
 //!
-//! [datafusion-examples]: https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples
+//! [datafusion-examples]: https://github.com/apache/datafusion/tree/main/datafusion-examples
+//!
+//! # Architecture
+//!
+//! <!-- NOTE: The goal of this section is to provide a high level
+//! overview of how DataFusion is organized and then link to other
+//! sections of the docs with more details -->
+//!
+//! You can find a formal description of DataFusion's architecture in our
+//! [SIGMOD 2024 Paper].
+//!
+//! [SIGMOD 2024 Paper]: https://dl.acm.org/doi/10.1145/3626246.3653368
+//!
+//! ## Design Goals
+//! DataFusion's Architecture Goals are:
+//!
+//! 1. Work “out of the box”: Provide a very fast, world class query engine with
+//!    minimal setup or required configuration.
+//!
+//! 2. Customizable everything: All behavior should be customizable by
+//!    implementing traits.
+//!
+//! 3. Architecturally boring 🥱: Follow industrial best practice rather than
+//!    trying cutting edge, but unproven, techniques.
+//!
+//! With these principles, users start with a basic, high-performance engine
+//! and specialize it over time to suit their needs and available engineering
+//! capacity.
+//!
+//! ## Overview  Presentations
+//!
+//! The following presentations offer high level overviews of the
+//! different components and how they interact together.
+//!
+//! - [Apr 2023]: The Apache DataFusion Architecture talks
+//!   - _Query Engine_: [recording](https://youtu.be/NVKujPxwSBA) and [slides](https://docs.google.com/presentation/d/1D3GDVas-8y0sA4c8EOgdCvEjVND4s2E7I6zfs67Y4j8/edit#slide=id.p)
+//!   - _Logical Plan and Expressions_: [recording](https://youtu.be/EzZTLiSJnhY) and [slides](https://docs.google.com/presentation/d/1ypylM3-w60kVDW7Q6S99AHzvlBgciTdjsAfqNP85K30)
+//!   - _Physical Plan and Execution_: [recording](https://youtu.be/2jkWU3_w6z0) and [slides](https://docs.google.com/presentation/d/1cA2WQJ2qg6tx6y4Wf8FH2WVSm9JQ5UgmBWATHdik0hg)
+//! - [July 2022]: DataFusion and Arrow: Supercharge Your Data Analytical Tool with a Rusty Query Engine: [recording](https://www.youtube.com/watch?v=Rii1VTn3seQ) and [slides](https://docs.google.com/presentation/d/1q1bPibvu64k2b7LPi7Yyb0k3gA1BiUYiUbEklqW1Ckc/view#slide=id.g11054eeab4c_0_1165)
+//! - [March 2021]: The DataFusion architecture is described in _Query Engine Design and the Rust-Based DataFusion in Apache Arrow_: [recording](https://www.youtube.com/watch?v=K6eCAVEk4kU) (DataFusion content starts [~ 15 minutes in](https://www.youtube.com/watch?v=K6eCAVEk4kU&t=875s)) and [slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
+//! - [February 2021]: How DataFusion is used within the Ballista Project is described in _Ballista: Distributed Compute with Rust and Apache Arrow_: [recording](https://www.youtube.com/watch?v=ZZHQaOap9pQ)
 //!
 //! ## Customization and Extension
 //!
-//! DataFusion is a "disaggregated" query engine.  This
-//! means developers can start with a working, full featured engine, and then
-//! extend the parts of DataFusion they need to specialize for their usecase. For example,
+//! DataFusion is designed to be highly extensible, so you can
+//! start with a working, full featured engine, and then
+//! specialize any behavior for your usecase. For example,
 //! some projects may add custom [`ExecutionPlan`] operators, or create their own
 //! query language that directly creates [`LogicalPlan`] rather than using the
 //! built in SQL planner, [`SqlToRel`].
@@ -142,10 +182,10 @@
 //! In order to achieve this, DataFusion supports extension at many points:
 //!
 //! * read from any datasource ([`TableProvider`])
-//! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
+//! * define your own catalogs, schemas, and table lists ([`catalog`] and [`CatalogProvider`])
 //! * build your own query language or plans ([`LogicalPlanBuilder`])
 //! * declare and use user-defined functions ([`ScalarUDF`], and [`AggregateUDF`], [`WindowUDF`])
-//! * add custom optimizer rewrite passes ([`OptimizerRule`] and [`PhysicalOptimizerRule`])
+//! * add custom plan rewrite passes ([`AnalyzerRule`], [`OptimizerRule`]  and [`PhysicalOptimizerRule`])
 //! * extend the planner to use user-defined logical and physical nodes ([`QueryPlanner`])
 //!
 //! You can find examples of each of them in the [datafusion-examples] directory.
@@ -158,26 +198,8 @@
 //! [`WindowUDF`]: crate::logical_expr::WindowUDF
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
-//! [`PhysicalOptimizerRule`]: crate::physical_optimizer::optimizer::PhysicalOptimizerRule
-//!
-//! # Architecture
-//!
-//! <!-- NOTE: The goal of this section is to provide a high level
-//! overview of how DataFusion is organized and then link to other
-//! sections of the docs with more details -->
-//!
-//! ## Overview  Presentations
-//!
-//! The following presentations offer high level overviews of the
-//! different components and how they interact together.
-//!
-//! - [Apr 2023]: The Apache Arrow DataFusion Architecture talks
-//!   - _Query Engine_: [recording](https://youtu.be/NVKujPxwSBA) and [slides](https://docs.google.com/presentation/d/1D3GDVas-8y0sA4c8EOgdCvEjVND4s2E7I6zfs67Y4j8/edit#slide=id.p)
-//!   - _Logical Plan and Expressions_: [recording](https://youtu.be/EzZTLiSJnhY) and [slides](https://docs.google.com/presentation/d/1ypylM3-w60kVDW7Q6S99AHzvlBgciTdjsAfqNP85K30)
-//!   - _Physical Plan and Execution_: [recording](https://youtu.be/2jkWU3_w6z0) and [slides](https://docs.google.com/presentation/d/1cA2WQJ2qg6tx6y4Wf8FH2WVSm9JQ5UgmBWATHdik0hg)
-//! - [July 2022]: DataFusion and Arrow: Supercharge Your Data Analytical Tool with a Rusty Query Engine: [recording](https://www.youtube.com/watch?v=Rii1VTn3seQ) and [slides](https://docs.google.com/presentation/d/1q1bPibvu64k2b7LPi7Yyb0k3gA1BiUYiUbEklqW1Ckc/view#slide=id.g11054eeab4c_0_1165)
-//! - [March 2021]: The DataFusion architecture is described in _Query Engine Design and the Rust-Based DataFusion in Apache Arrow_: [recording](https://www.youtube.com/watch?v=K6eCAVEk4kU) (DataFusion content starts [~ 15 minutes in](https://www.youtube.com/watch?v=K6eCAVEk4kU&t=875s)) and [slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
-//! - [February 2021]: How DataFusion is used within the Ballista Project is described in _Ballista: Distributed Compute with Rust and Apache Arrow_: [recording](https://www.youtube.com/watch?v=ZZHQaOap9pQ)
+//! [`AnalyzerRule`]:  datafusion_optimizer::analyzer::AnalyzerRule
+//! [`PhysicalOptimizerRule`]: crate::physical_optimizer::PhysicalOptimizerRule
 //!
 //! ## Query Planning and Execution Overview
 //!
@@ -197,11 +219,11 @@
 //! ```
 //!
 //! 1. The query string is parsed to an Abstract Syntax Tree (AST)
-//! [`Statement`] using [sqlparser].
+//!    [`Statement`] using [sqlparser].
 //!
 //! 2. The AST is converted to a [`LogicalPlan`] and logical
-//! expressions [`Expr`]s to compute the desired result by the
-//! [`SqlToRel`] planner.
+//!    expressions [`Expr`]s to compute the desired result by the
+//!    [`SqlToRel`] planner.
 //!
 //! [`Statement`]: https://docs.rs/sqlparser/latest/sqlparser/ast/enum.Statement.html
 //!
@@ -233,17 +255,17 @@
 //! optimizing, in the following manner:
 //!
 //! 1. The [`LogicalPlan`] is checked and rewritten to enforce
-//! semantic rules, such as type coercion, by [`AnalyzerRule`]s
+//!    semantic rules, such as type coercion, by [`AnalyzerRule`]s
 //!
 //! 2. The [`LogicalPlan`] is rewritten by [`OptimizerRule`]s, such as
-//! projection and filter pushdown, to improve its efficiency.
+//!    projection and filter pushdown, to improve its efficiency.
 //!
 //! 3. The [`LogicalPlan`] is converted to an [`ExecutionPlan`] by a
-//! [`PhysicalPlanner`]
+//!    [`PhysicalPlanner`]
 //!
 //! 4. The [`ExecutionPlan`] is rewritten by
-//! [`PhysicalOptimizerRule`]s, such as sort and join selection, to
-//! improve its efficiency.
+//!    [`PhysicalOptimizerRule`]s, such as sort and join selection, to
+//!    improve its efficiency.
 //!
 //! ## Data Sources
 //!
@@ -269,9 +291,9 @@
 //! an [`ExecutionPlan`]s for execution.
 //!
 //! 1. [`ListingTable`]: Reads data from Parquet, JSON, CSV, or AVRO
-//! files.  Supports single files or multiple files with HIVE style
-//! partitioning, optional compression, directly reading from remote
-//! object store and more.
+//!    files.  Supports single files or multiple files with HIVE style
+//!    partitioning, optional compression, directly reading from remote
+//!    object store and more.
 //!
 //! 2. [`MemTable`]: Reads data from in memory [`RecordBatch`]es.
 //!
@@ -290,13 +312,17 @@
 //! A [`LogicalPlan`] is a Directed Acyclic Graph (DAG) of other
 //! [`LogicalPlan`]s, each potentially containing embedded [`Expr`]s.
 //!
-//! [`Expr`]s can be rewritten using the  [`TreeNode`] API and simplified using
-//! [`ExprSimplifier`]. Examples of working with and executing `Expr`s can be found in the
-//! [`expr_api`.rs] example
+//! `LogicalPlan`s can be rewritten with [`TreeNode`] API, see the
+//! [`tree_node module`] for more details.
+//!
+//! [`Expr`]s can also be rewritten with [`TreeNode`] API and simplified using
+//! [`ExprSimplifier`]. Examples of working with and executing `Expr`s can be
+//! found in the [`expr_api`.rs] example
 //!
 //! [`TreeNode`]: datafusion_common::tree_node::TreeNode
+//! [`tree_node module`]: datafusion_expr::logical_plan::tree_node
 //! [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
-//! [`expr_api`.rs]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+//! [`expr_api`.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
 //!
 //! ### Physical Plans
 //!
@@ -369,7 +395,7 @@
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
 //! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
 //! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
-//! [DataFusion paper submitted SIGMOD]: https://github.com/apache/arrow-datafusion/files/13874720/DataFusion_Query_Engine___SIGMOD_2024.pdf
+//! [DataFusion paper submitted SIGMOD]: https://github.com/apache/datafusion/files/13874720/DataFusion_Query_Engine___SIGMOD_2024.pdf
 //! [implementors of `ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#implementors
 //!
 //! ## Thread Scheduling
@@ -399,13 +425,13 @@
 //! structures:
 //!
 //! 1. [`SessionContext`]: State needed for create [`LogicalPlan`]s such
-//! as the table definitions, and the function registries.
+//!    as the table definitions, and the function registries.
 //!
 //! 2. [`TaskContext`]: State needed for execution such as the
-//! [`MemoryPool`], [`DiskManager`], and [`ObjectStoreRegistry`].
+//!    [`MemoryPool`], [`DiskManager`], and [`ObjectStoreRegistry`].
 //!
 //! 3. [`ExecutionProps`]: Per-execution properties and data (such as
-//! starting timestamps, etc).
+//!    starting timestamps, etc).
 //!
 //! [`SessionContext`]: crate::execution::context::SessionContext
 //! [`TaskContext`]: crate::execution::context::TaskContext
@@ -429,11 +455,28 @@
 //! and improve compilation times. The crates are:
 //!
 //! * [datafusion_common]: Common traits and types
-//! * [datafusion_expr]: [`LogicalPlan`],  [`Expr`] and related logical planning structure
 //! * [datafusion_execution]: State and structures needed for execution
+//! * [datafusion_expr]: [`LogicalPlan`],  [`Expr`] and related logical planning structure
+//! * [datafusion_functions]: Scalar function packages
+//! * [datafusion_functions_nested]: Scalar function packages for `ARRAY`s, `MAP`s and `STRUCT`s
 //! * [datafusion_optimizer]: [`OptimizerRule`]s and [`AnalyzerRule`]s
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
+//! * [datafusion_physical_plan]: [`ExecutionPlan`] and related expressions
 //! * [datafusion_sql]: SQL planner ([`SqlToRel`])
+//!
+//! ## Citing DataFusion in Academic Papers
+//!
+//! You can use the following citation to reference DataFusion in academic papers:
+//!
+//! ```text
+//! @inproceedings{lamb2024apache
+//!   title={Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine},
+//!   author={Lamb, Andrew and Shen, Yijie and Heres, Dani{\"e}l and Chakraborty, Jayjeet and Kabak, Mehmet Ozan and Hsieh, Liang-Chi and Sun, Chao},
+//!   booktitle={Companion of the 2024 International Conference on Management of Data},
+//!   pages={5--17},
+//!   year={2024}
+//! }
+//! ```
 //!
 //! [sqlparser]: https://docs.rs/sqlparser/latest/sqlparser
 //! [`SqlToRel`]: sql::planner::SqlToRel
@@ -457,7 +500,7 @@ pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 extern crate core;
 extern crate sqlparser;
 
-pub mod catalog;
+pub mod catalog_common;
 pub mod dataframe;
 pub mod datasource;
 pub mod error;
@@ -475,7 +518,7 @@ pub use parquet;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
-// for details, see https://github.com/apache/arrow-datafusion/issues/6648
+// for details, see https://github.com/apache/datafusion/issues/6648
 
 /// re-export of [`datafusion_common`] crate
 pub mod common {
@@ -492,6 +535,11 @@ pub use common::config;
 
 // NB datafusion execution is re-exported in the `execution` module
 
+/// re-export of [`datafusion_catalog`] crate
+pub mod catalog {
+    pub use datafusion_catalog::*;
+}
+
 /// re-export of [`datafusion_expr`] crate
 pub mod logical_expr {
     pub use datafusion_expr::*;
@@ -500,6 +548,11 @@ pub mod logical_expr {
 /// re-export of [`datafusion_optimizer`] crate
 pub mod optimizer {
     pub use datafusion_optimizer::*;
+}
+
+/// re-export of [`datafusion_physical_expr`] crate
+pub mod physical_expr_common {
+    pub use datafusion_physical_expr_common::*;
 }
 
 /// re-export of [`datafusion_physical_expr`] crate
@@ -526,10 +579,22 @@ pub mod functions {
     pub use datafusion_functions::*;
 }
 
-/// re-export of [`datafusion_functions_array`] crate, if "array_expressions" feature is enabled
+/// re-export of [`datafusion_functions_nested`] crate, if "nested_expressions" feature is enabled
+pub mod functions_nested {
+    #[cfg(feature = "nested_expressions")]
+    pub use datafusion_functions_nested::*;
+}
+
+/// re-export of [`datafusion_functions_nested`] crate as [`functions_array`] for backward compatibility, if "nested_expressions" feature is enabled
+#[deprecated(since = "41.0.0", note = "use datafusion-functions-nested instead")]
 pub mod functions_array {
-    #[cfg(feature = "array_expressions")]
-    pub use datafusion_functions_array::*;
+    #[cfg(feature = "nested_expressions")]
+    pub use datafusion_functions_nested::*;
+}
+
+/// re-export of [`datafusion_functions_aggregate`] crate
+pub mod functions_aggregate {
+    pub use datafusion_functions_aggregate::*;
 }
 
 #[cfg(test)]
@@ -539,8 +604,71 @@ pub mod test_util;
 #[cfg(doctest)]
 doc_comment::doctest!("../../../README.md", readme_example_test);
 
+// Instructions for Documentation Examples
+//
+// The following commands test the examples from the user guide as part of
+// `cargo test --doc`
+//
+// # Adding new tests:
+//
+// Simply add code like this to your .md file and ensure your md file is
+// included in the lists below.
+//
+// ```rust
+// <code here will be tested>
+// ```
+//
+// Note that sometimes it helps to author the doctest as a standalone program
+// first, and then copy it into the user guide.
+//
+// # Debugging Test Failures
+//
+// Unfortunately, the line numbers reported by doctest do not correspond to the
+// line numbers of in the .md files. Thus, if a doctest fails, use the name of
+// the test to find the relevant file in the list below, and then find the
+// example in that file to fix.
+//
+// For example, if `user_guide_expressions(line 123)` fails,
+// go to `docs/source/user-guide/expressions.md` to find the relevant problem.
+
 #[cfg(doctest)]
 doc_comment::doctest!(
     "../../../docs/source/user-guide/example-usage.md",
-    user_guid_example_tests
+    user_guide_example_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/crate-configuration.md",
+    user_guide_crate_configuration
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/configs.md",
+    user_guide_configs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/dataframe.md",
+    user_guide_dataframe
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/expressions.md",
+    user_guide_expressions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/using-the-sql-api.md",
+    library_user_guide_sql_api
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
+    library_user_guide_dataframe_api
 );

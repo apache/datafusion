@@ -19,6 +19,7 @@
 #[cfg(feature = "backtrace")]
 use std::backtrace::{Backtrace, BacktraceStatus};
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
@@ -26,7 +27,7 @@ use std::result;
 use std::sync::Arc;
 
 use crate::utils::quote_identifier;
-use crate::{Column, DFSchema, OwnedTableReference};
+use crate::{Column, DFSchema, TableReference};
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
@@ -63,7 +64,7 @@ pub enum DataFusionError {
     IoError(io::Error),
     /// Error when SQL is syntactically incorrect.
     ///
-    /// 2nd argument is for optional backtrace    
+    /// 2nd argument is for optional backtrace
     SQL(ParserError, Option<String>),
     /// Error when a feature is not yet implemented.
     ///
@@ -101,7 +102,7 @@ pub enum DataFusionError {
     /// This error can be returned in cases such as when schema inference is not
     /// possible and when column names are not unique.
     ///
-    /// 2nd argument is for optional backtrace    
+    /// 2nd argument is for optional backtrace
     /// Boxing the optional backtrace to prevent <https://rust-lang.github.io/rust-clippy/master/index.html#/result_large_err>
     SchemaError(SchemaError, Box<Option<String>>),
     /// Error during execution of the query.
@@ -141,7 +142,7 @@ pub enum SchemaError {
     AmbiguousReference { field: Column },
     /// Schema contains duplicate qualified field name
     DuplicateQualifiedField {
-        qualifier: Box<OwnedTableReference>,
+        qualifier: Box<TableReference>,
         name: String,
     },
     /// Schema contains duplicate unqualified field name
@@ -281,64 +282,9 @@ impl From<GenericError> for DataFusionError {
 
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match *self {
-            DataFusionError::ArrowError(ref desc, ref backtrace) => {
-                let backtrace = backtrace.clone().unwrap_or("".to_owned());
-                write!(f, "Arrow error: {desc}{backtrace}")
-            }
-            #[cfg(feature = "parquet")]
-            DataFusionError::ParquetError(ref desc) => {
-                write!(f, "Parquet error: {desc}")
-            }
-            #[cfg(feature = "avro")]
-            DataFusionError::AvroError(ref desc) => {
-                write!(f, "Avro error: {desc}")
-            }
-            DataFusionError::IoError(ref desc) => {
-                write!(f, "IO error: {desc}")
-            }
-            DataFusionError::SQL(ref desc, ref backtrace) => {
-                let backtrace: String = backtrace.clone().unwrap_or("".to_owned());
-                write!(f, "SQL error: {desc:?}{backtrace}")
-            }
-            DataFusionError::Configuration(ref desc) => {
-                write!(f, "Invalid or Unsupported Configuration: {desc}")
-            }
-            DataFusionError::NotImplemented(ref desc) => {
-                write!(f, "This feature is not implemented: {desc}")
-            }
-            DataFusionError::Internal(ref desc) => {
-                write!(f, "Internal error: {desc}.\nThis was likely caused by a bug in DataFusion's \
-                    code and we would welcome that you file an bug report in our issue tracker")
-            }
-            DataFusionError::Plan(ref desc) => {
-                write!(f, "Error during planning: {desc}")
-            }
-            DataFusionError::SchemaError(ref desc, ref backtrace) => {
-                let backtrace: &str =
-                    &backtrace.as_ref().clone().unwrap_or("".to_owned());
-                write!(f, "Schema error: {desc}{backtrace}")
-            }
-            DataFusionError::Execution(ref desc) => {
-                write!(f, "Execution error: {desc}")
-            }
-            DataFusionError::ResourcesExhausted(ref desc) => {
-                write!(f, "Resources exhausted: {desc}")
-            }
-            DataFusionError::External(ref desc) => {
-                write!(f, "External error: {desc}")
-            }
-            #[cfg(feature = "object_store")]
-            DataFusionError::ObjectStore(ref desc) => {
-                write!(f, "Object Store error: {desc}")
-            }
-            DataFusionError::Context(ref desc, ref err) => {
-                write!(f, "{}\ncaused by\n{}", desc, *err)
-            }
-            DataFusionError::Substrait(ref desc) => {
-                write!(f, "Substrait error: {desc}")
-            }
-        }
+        let error_prefix = self.error_prefix();
+        let message = self.message();
+        write!(f, "{error_prefix}{message}")
     }
 }
 
@@ -419,6 +365,9 @@ impl DataFusionError {
         Self::Context(description.into(), Box::new(self))
     }
 
+    /// Strips backtrace out of the error message
+    /// If backtrace enabled then error has a format "message" [`Self::BACK_TRACE_SEP`] "backtrace"
+    /// The method strips the backtrace and outputs "message"
     pub fn strip_backtrace(&self) -> String {
         self.to_string()
             .split(Self::BACK_TRACE_SEP)
@@ -449,6 +398,69 @@ impl DataFusionError {
 
         #[cfg(not(feature = "backtrace"))]
         "".to_owned()
+    }
+
+    fn error_prefix(&self) -> &'static str {
+        match self {
+            DataFusionError::ArrowError(_, _) => "Arrow error: ",
+            #[cfg(feature = "parquet")]
+            DataFusionError::ParquetError(_) => "Parquet error: ",
+            #[cfg(feature = "avro")]
+            DataFusionError::AvroError(_) => "Avro error: ",
+            #[cfg(feature = "object_store")]
+            DataFusionError::ObjectStore(_) => "Object Store error: ",
+            DataFusionError::IoError(_) => "IO error: ",
+            DataFusionError::SQL(_, _) => "SQL error: ",
+            DataFusionError::NotImplemented(_) => "This feature is not implemented: ",
+            DataFusionError::Internal(_) => "Internal error: ",
+            DataFusionError::Plan(_) => "Error during planning: ",
+            DataFusionError::Configuration(_) => "Invalid or Unsupported Configuration: ",
+            DataFusionError::SchemaError(_, _) => "Schema error: ",
+            DataFusionError::Execution(_) => "Execution error: ",
+            DataFusionError::ResourcesExhausted(_) => "Resources exhausted: ",
+            DataFusionError::External(_) => "External error: ",
+            DataFusionError::Context(_, _) => "",
+            DataFusionError::Substrait(_) => "Substrait error: ",
+        }
+    }
+
+    pub fn message(&self) -> Cow<str> {
+        match *self {
+            DataFusionError::ArrowError(ref desc, ref backtrace) => {
+                let backtrace = backtrace.clone().unwrap_or("".to_owned());
+                Cow::Owned(format!("{desc}{backtrace}"))
+            }
+            #[cfg(feature = "parquet")]
+            DataFusionError::ParquetError(ref desc) => Cow::Owned(desc.to_string()),
+            #[cfg(feature = "avro")]
+            DataFusionError::AvroError(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::IoError(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::SQL(ref desc, ref backtrace) => {
+                let backtrace: String = backtrace.clone().unwrap_or("".to_owned());
+                Cow::Owned(format!("{desc:?}{backtrace}"))
+            }
+            DataFusionError::Configuration(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::NotImplemented(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::Internal(ref desc) => Cow::Owned(format!(
+                "{desc}.\nThis was likely caused by a bug in DataFusion's \
+            code and we would welcome that you file an bug report in our issue tracker"
+            )),
+            DataFusionError::Plan(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::SchemaError(ref desc, ref backtrace) => {
+                let backtrace: &str =
+                    &backtrace.as_ref().clone().unwrap_or("".to_owned());
+                Cow::Owned(format!("{desc}{backtrace}"))
+            }
+            DataFusionError::Execution(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::ResourcesExhausted(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::External(ref desc) => Cow::Owned(desc.to_string()),
+            #[cfg(feature = "object_store")]
+            DataFusionError::ObjectStore(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::Context(ref desc, ref err) => {
+                Cow::Owned(format!("{desc}\ncaused by\n{}", *err))
+            }
+            DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
+        }
     }
 }
 
@@ -535,8 +547,14 @@ make_error!(not_impl_err, not_impl_datafusion_err, NotImplemented);
 // Exposes a macro to create `DataFusionError::Execution` with optional backtrace
 make_error!(exec_err, exec_datafusion_err, Execution);
 
+// Exposes a macro to create `DataFusionError::Configuration` with optional backtrace
+make_error!(config_err, config_datafusion_err, Configuration);
+
 // Exposes a macro to create `DataFusionError::Substrait` with optional backtrace
 make_error!(substrait_err, substrait_datafusion_err, Substrait);
+
+// Exposes a macro to create `DataFusionError::ResourcesExhausted` with optional backtrace
+make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
 
 // Exposes a macro to create `DataFusionError::SQL` with optional backtrace
 #[macro_export]
@@ -594,25 +612,23 @@ macro_rules! schema_err {
 
 // To avoid compiler error when using macro in the same crate:
 // macros from the current crate cannot be referred to by absolute paths
+pub use config_err as _config_err;
 pub use internal_datafusion_err as _internal_datafusion_err;
 pub use internal_err as _internal_err;
 pub use not_impl_err as _not_impl_err;
+pub use plan_datafusion_err as _plan_datafusion_err;
 pub use plan_err as _plan_err;
 pub use schema_err as _schema_err;
 
 /// Create a "field not found" DataFusion::SchemaError
-pub fn field_not_found<R: Into<OwnedTableReference>>(
+pub fn field_not_found<R: Into<TableReference>>(
     qualifier: Option<R>,
     name: &str,
     schema: &DFSchema,
 ) -> DataFusionError {
     schema_datafusion_err!(SchemaError::FieldNotFound {
         field: Box::new(Column::new(qualifier, name)),
-        valid_fields: schema
-            .fields()
-            .iter()
-            .map(|f| f.qualified_column())
-            .collect(),
+        valid_fields: schema.columns().to_vec(),
     })
 }
 
@@ -620,11 +636,7 @@ pub fn field_not_found<R: Into<OwnedTableReference>>(
 pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionError {
     schema_datafusion_err!(SchemaError::FieldNotFound {
         field: Box::new(Column::new_unqualified(name)),
-        valid_fields: schema
-            .fields()
-            .iter()
-            .map(|f| f.qualified_column())
-            .collect(),
+        valid_fields: schema.columns().to_vec(),
     })
 }
 
@@ -649,11 +661,16 @@ mod test {
         assert_eq!(res.strip_backtrace(), "Arrow error: Schema error: bar");
     }
 
-    // RUST_BACKTRACE=1 cargo test --features backtrace --package datafusion-common --lib -- error::test::test_backtrace
+    // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
     #[cfg(feature = "backtrace")]
     #[test]
     #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_enabled_backtrace() {
+        match std::env::var("RUST_BACKTRACE") {
+            Ok(val) if val == "1" => {}
+            _ => panic!("Environment variable RUST_BACKTRACE must be set to 1"),
+        };
+
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let err = res.unwrap_err().to_string();
         assert!(err.contains(DataFusionError::BACK_TRACE_SEP));

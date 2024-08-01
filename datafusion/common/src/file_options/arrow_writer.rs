@@ -17,13 +17,6 @@
 
 //! Options related to how Arrow files should be written
 
-use crate::{
-    config::ConfigOptions,
-    error::{DataFusionError, Result},
-};
-
-use super::StatementOptions;
-
 #[derive(Clone, Debug)]
 pub struct ArrowWriterOptions {}
 
@@ -36,13 +29,5 @@ impl ArrowWriterOptions {
 impl Default for ArrowWriterOptions {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl TryFrom<(&ConfigOptions, &StatementOptions)> for ArrowWriterOptions {
-    type Error = DataFusionError;
-
-    fn try_from(_value: (&ConfigOptions, &StatementOptions)) -> Result<Self> {
-        Ok(ArrowWriterOptions {})
     }
 }

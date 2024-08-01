@@ -22,8 +22,8 @@ use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use arrow_array::Array;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::PyErr;
-use pyo3::types::PyList;
-use pyo3::{FromPyObject, IntoPy, PyAny, PyObject, PyResult, Python};
+use pyo3::types::{PyAnyMethods, PyList};
+use pyo3::{Bound, FromPyObject, IntoPy, PyAny, PyObject, PyResult, Python};
 
 use crate::{DataFusionError, ScalarValue};
 
@@ -34,18 +34,18 @@ impl From<DataFusionError> for PyErr {
 }
 
 impl FromPyArrow for ScalarValue {
-    fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+    fn from_pyarrow_bound(value: &pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<Self> {
         let py = value.py();
         let typ = value.getattr("type")?;
         let val = value.call_method0("as_py")?;
 
         // construct pyarrow array from the python value and pyarrow type
-        let factory = py.import("pyarrow")?.getattr("array")?;
-        let args = PyList::new(py, [val]);
+        let factory = py.import_bound("pyarrow")?.getattr("array")?;
+        let args = PyList::new_bound(py, [val]);
         let array = factory.call1((args, typ))?;
 
         // convert the pyarrow array to rust array using C data interface
-        let array = arrow::array::make_array(ArrayData::from_pyarrow(array)?);
+        let array = arrow::array::make_array(ArrayData::from_pyarrow_bound(&array)?);
         let scalar = ScalarValue::try_from_array(&array, 0)?;
 
         Ok(scalar)
@@ -64,8 +64,8 @@ impl ToPyArrow for ScalarValue {
 }
 
 impl<'source> FromPyObject<'source> for ScalarValue {
-    fn extract(value: &'source PyAny) -> PyResult<Self> {
-        Self::from_pyarrow(value)
+    fn extract_bound(value: &Bound<'source, PyAny>) -> PyResult<Self> {
+        Self::from_pyarrow_bound(value)
     }
 }
 
@@ -86,19 +86,19 @@ mod tests {
     fn init_python() {
         prepare_freethreaded_python();
         Python::with_gil(|py| {
-            if py.run("import pyarrow", None, None).is_err() {
-                let locals = PyDict::new(py);
-                py.run(
+            if py.run_bound("import pyarrow", None, None).is_err() {
+                let locals = PyDict::new_bound(py);
+                py.run_bound(
                     "import sys; executable = sys.executable; python_path = sys.path",
                     None,
-                    Some(locals),
+                    Some(&locals),
                 )
                 .expect("Couldn't get python info");
-                let executable = locals.get_item("executable").unwrap().unwrap();
+                let executable = locals.get_item("executable").unwrap();
                 let executable: String = executable.extract().unwrap();
 
-                let python_path = locals.get_item("python_path").unwrap().unwrap();
-                let python_path: Vec<&str> = python_path.extract().unwrap();
+                let python_path = locals.get_item("python_path").unwrap();
+                let python_path: Vec<String> = python_path.extract().unwrap();
 
                 panic!("pyarrow not found\nExecutable: {executable}\nPython path: {python_path:?}\n\
                          HINT: try `pip install pyarrow`\n\
@@ -125,9 +125,10 @@ mod tests {
 
         Python::with_gil(|py| {
             for scalar in example_scalars.iter() {
-                let result =
-                    ScalarValue::from_pyarrow(scalar.to_pyarrow(py).unwrap().as_ref(py))
-                        .unwrap();
+                let result = ScalarValue::from_pyarrow_bound(
+                    scalar.to_pyarrow(py).unwrap().bind(py),
+                )
+                .unwrap();
                 assert_eq!(scalar, &result);
             }
         });

@@ -59,7 +59,8 @@ impl SessionContext {
         table_path: &str,
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
+        let listing_options = options
+            .to_listing_options(&self.copied_config(), self.copied_table_options());
 
         self.register_listing_table(
             name,
@@ -88,7 +89,7 @@ mod tests {
     use super::*;
     use crate::assert_batches_eq;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
-    use async_trait::async_trait;
+
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -109,12 +110,12 @@ mod tests {
         )
         .await?;
         let results =
-            plan_and_collect(&ctx, "SELECT SUM(c1), SUM(c2), COUNT(*) FROM test").await?;
+            plan_and_collect(&ctx, "SELECT sum(c1), sum(c2), count(*) FROM test").await?;
 
         assert_eq!(results.len(), 1);
         let expected = [
             "+--------------+--------------+----------+",
-            "| SUM(test.c1) | SUM(test.c2) | COUNT(*) |",
+            "| sum(test.c1) | sum(test.c2) | count(*) |",
             "+--------------+--------------+----------+",
             "| 10           | 110          | 20       |",
             "+--------------+--------------+----------+",
@@ -122,22 +123,5 @@ mod tests {
         assert_batches_eq!(expected, &results);
 
         Ok(())
-    }
-
-    // Test for compilation error when calling read_* functions from an #[async_trait] function.
-    // See https://github.com/apache/arrow-datafusion/issues/1154
-    #[async_trait]
-    trait CallReadTrait {
-        async fn call_read_csv(&self) -> DataFrame;
-    }
-
-    struct CallRead {}
-
-    #[async_trait]
-    impl CallReadTrait for CallRead {
-        async fn call_read_csv(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_csv("dummy", CsvReadOptions::new()).await.unwrap()
-        }
     }
 }

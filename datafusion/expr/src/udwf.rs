@@ -17,16 +17,21 @@
 
 //! [`WindowUDF`]: User Defined Window Functions
 
-use crate::{
-    Expr, PartitionEvaluator, PartitionEvaluatorFactory, ReturnTypeFunction, Signature,
-    WindowFrame,
-};
-use arrow::datatypes::DataType;
-use datafusion_common::Result;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
     any::Any,
     fmt::{self, Debug, Display, Formatter},
     sync::Arc,
+};
+
+use arrow::datatypes::DataType;
+
+use datafusion_common::Result;
+
+use crate::expr::WindowFunction;
+use crate::{
+    function::WindowFunctionSimplification, Expr, PartitionEvaluator,
+    PartitionEvaluatorFactory, ReturnTypeFunction, Signature,
 };
 
 /// Logical representation of a user-defined window function (UDWF)
@@ -35,10 +40,10 @@ use std::{
 /// See the documentation on [`PartitionEvaluator`] for more details
 ///
 /// 1. For simple use cases, use [`create_udwf`] (examples in
-/// [`simple_udwf.rs`]).
+///    [`simple_udwf.rs`]).
 ///
 /// 2. For advanced use cases, use [`WindowUDFImpl`] which provides full API
-/// access (examples in [`advanced_udwf.rs`]).
+///    access (examples in [`advanced_udwf.rs`]).
 ///
 /// # API Note
 /// This is a separate struct from `WindowUDFImpl` to maintain backwards
@@ -46,8 +51,8 @@ use std::{
 ///
 /// [`PartitionEvaluator`]: crate::PartitionEvaluator
 /// [`create_udwf`]: crate::expr_fn::create_udwf
-/// [`simple_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-/// [`advanced_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// [`simple_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
+/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
 #[derive(Debug, Clone)]
 pub struct WindowUDF {
     inner: Arc<dyn WindowUDFImpl>,
@@ -62,16 +67,15 @@ impl Display for WindowUDF {
 
 impl PartialEq for WindowUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        self.inner.equals(other.inner.as_ref())
     }
 }
 
 impl Eq for WindowUDF {}
 
-impl std::hash::Hash for WindowUDF {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name().hash(state);
-        self.signature().hash(state);
+impl Hash for WindowUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.hash_value().hash(state)
     }
 }
 
@@ -80,7 +84,7 @@ impl WindowUDF {
     ///
     /// See [`WindowUDFImpl`] for a more convenient way to create a
     /// `WindowUDF` using trait objects
-    #[deprecated(since = "34.0.0", note = "please implement ScalarUDFImpl instead")]
+    #[deprecated(since = "34.0.0", note = "please implement WindowUDFImpl instead")]
     pub fn new(
         name: &str,
         signature: &Signature,
@@ -90,8 +94,8 @@ impl WindowUDF {
         Self::new_from_impl(WindowUDFLegacyWrapper {
             name: name.to_owned(),
             signature: signature.clone(),
-            return_type: return_type.clone(),
-            partition_evaluator_factory: partition_evaluator_factory.clone(),
+            return_type: Arc::clone(return_type),
+            partition_evaluator_factory: Arc::clone(partition_evaluator_factory),
         })
     }
 
@@ -108,32 +112,31 @@ impl WindowUDF {
     }
 
     /// Return the underlying [`WindowUDFImpl`] trait object for this function
-    pub fn inner(&self) -> Arc<dyn WindowUDFImpl> {
-        self.inner.clone()
+    pub fn inner(&self) -> &Arc<dyn WindowUDFImpl> {
+        &self.inner
     }
 
-    /// creates a [`Expr`] that calls the window function given
-    /// the `partition_by`, `order_by`, and `window_frame` definition
+    /// Adds additional names that can be used to invoke this function, in
+    /// addition to `name`
     ///
-    /// This utility allows using the UDWF without requiring access to
-    /// the registry, such as with the DataFrame API.
-    pub fn call(
-        &self,
-        args: Vec<Expr>,
-        partition_by: Vec<Expr>,
-        order_by: Vec<Expr>,
-        window_frame: WindowFrame,
-    ) -> Expr {
+    /// If you implement [`WindowUDFImpl`] directly you should return aliases directly.
+    pub fn with_aliases(self, aliases: impl IntoIterator<Item = &'static str>) -> Self {
+        Self::new_from_impl(AliasedWindowUDFImpl::new(Arc::clone(&self.inner), aliases))
+    }
+
+    /// creates a [`Expr`] that calls the window function with default
+    /// values for `order_by`, `partition_by`, `window_frame`.
+    ///
+    /// See [`ExprFunctionExt`] for details on setting these values.
+    ///
+    /// This utility allows using a user defined window function without
+    /// requiring access to the registry, such as with the DataFrame API.
+    ///
+    /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
+    pub fn call(&self, args: Vec<Expr>) -> Expr {
         let fun = crate::WindowFunctionDefinition::WindowUDF(Arc::new(self.clone()));
 
-        Expr::WindowFunction(crate::expr::WindowFunction {
-            fun,
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment: None,
-        })
+        Expr::WindowFunction(WindowFunction::new(fun, args))
     }
 
     /// Returns this function's name
@@ -141,6 +144,11 @@ impl WindowUDF {
     /// See [`WindowUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    /// Returns the aliases for this function.
+    pub fn aliases(&self) -> &[String] {
+        self.inner.aliases()
     }
 
     /// Returns this function's signature (what input types are accepted)
@@ -155,6 +163,13 @@ impl WindowUDF {
     /// See [`WindowUDFImpl::return_type`] for more details.
     pub fn return_type(&self, args: &[DataType]) -> Result<DataType> {
         self.inner.return_type(args)
+    }
+
+    /// Do the function rewrite
+    ///
+    /// See [`WindowUDFImpl::simplify`] for more details.
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        self.inner.simplify()
     }
 
     /// Return a `PartitionEvaluator` for evaluating this window function
@@ -181,18 +196,18 @@ where
 /// [`WindowUDF`] for other available options.
 ///
 ///
-/// [`advanced_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame};
+/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
 ///   signature: Signature
-/// };
+/// }
 ///
 /// impl SmoothIt {
 ///   fn new() -> Self {
@@ -217,16 +232,17 @@ where
 ///    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
 /// }
 ///
-/// // Create a new ScalarUDF from the implementation
+/// // Create a new WindowUDF from the implementation
 /// let smooth_it = WindowUDF::from(SmoothIt::new());
 ///
 /// // Call the function `add_one(col)`
-/// let expr = smooth_it.call(
-///     vec![col("speed")],                 // smooth_it(speed)
-///     vec![col("car")],                   // PARTITION BY car
-///     vec![col("time").sort(true, true)], // ORDER BY time ASC
-///     WindowFrame::new(None),
-/// );
+/// // smooth_it(speed) OVER (PARTITION BY car ORDER BY time ASC)
+/// let expr = smooth_it.call(vec![col("speed")])
+///     .partition_by(vec![col("car")])
+///     .order_by(vec![col("time").sort(true, true)])
+///     .window_frame(WindowFrame::new(None))
+///     .build()
+///     .unwrap();
 /// ```
 pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Returns this object as an [`Any`] trait object
@@ -245,10 +261,129 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
 
     /// Invoke the function, returning the [`PartitionEvaluator`] instance
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    /// Optionally apply per-UDWF simplification / rewrite rules.
+    ///
+    /// This can be used to apply function specific simplification rules during
+    /// optimization. The default implementation does nothing.
+    ///
+    /// Note that DataFusion handles simplifying arguments and  "constant
+    /// folding" (replacing a function call with constant arguments such as
+    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
+    /// optimizations manually for specific UDFs.
+    ///
+    /// Example:
+    /// [`simplify_udwf_expression.rs`]: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simplify_udwf_expression.rs>
+    ///
+    /// # Returns
+    /// [None] if simplify is not defined or,
+    ///
+    /// Or, a closure with two arguments:
+    /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
+    /// * 'info': [crate::simplify::SimplifyInfo]
+    fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        None
+    }
+
+    /// Return true if this window UDF is equal to the other.
+    ///
+    /// Allows customizing the equality of window UDFs.
+    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
+    ///
+    /// - reflexive: `a.equals(a)`;
+    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
+    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
+    ///
+    /// By default, compares [`Self::name`] and [`Self::signature`].
+    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+        self.name() == other.name() && self.signature() == other.signature()
+    }
+
+    /// Returns a hash value for this window UDF.
+    ///
+    /// Allows customizing the hash code of window UDFs. Similarly to [`Hash`] and [`Eq`],
+    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
+    ///
+    /// By default, hashes [`Self::name`] and [`Self::signature`].
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.name().hash(hasher);
+        self.signature().hash(hasher);
+        hasher.finish()
+    }
+}
+
+/// WindowUDF that adds an alias to the underlying function. It is better to
+/// implement [`WindowUDFImpl`], which supports aliases, directly if possible.
+#[derive(Debug)]
+struct AliasedWindowUDFImpl {
+    inner: Arc<dyn WindowUDFImpl>,
+    aliases: Vec<String>,
+}
+
+impl AliasedWindowUDFImpl {
+    pub fn new(
+        inner: Arc<dyn WindowUDFImpl>,
+        new_aliases: impl IntoIterator<Item = &'static str>,
+    ) -> Self {
+        let mut aliases = inner.aliases().to_vec();
+        aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
+
+        Self { inner, aliases }
+    }
+}
+
+impl WindowUDFImpl for AliasedWindowUDFImpl {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.inner.signature()
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        self.inner.return_type(arg_types)
+    }
+
+    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        self.inner.partition_evaluator()
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<AliasedWindowUDFImpl>() {
+            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
+        } else {
+            false
+        }
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.inner.hash_value().hash(hasher);
+        self.aliases.hash(hasher);
+        hasher.finish()
+    }
 }
 
 /// Implementation of [`WindowUDFImpl`] that wraps the function style pointers
-/// of the older API (see <https://github.com/apache/arrow-datafusion/pull/8719>
+/// of the older API (see <https://github.com/apache/datafusion/pull/8719>
 /// for more details)
 pub struct WindowUDFLegacyWrapper {
     /// name

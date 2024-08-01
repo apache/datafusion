@@ -15,58 +15,77 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{
+    ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
+};
+use arrow::datatypes::{
+    DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
+    DECIMAL256_MAX_PRECISION,
+};
+use datafusion::datasource::file_format::json::JsonFormatFactory;
+use datafusion_common::parsers::CompressionTypeVariant;
+use prost::Message;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
+use std::vec;
 
-use arrow::array::{ArrayRef, FixedSizeListArray};
-use arrow::csv::WriterBuilder;
-use arrow::datatypes::{
-    DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-    IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
+use datafusion::catalog::{TableProvider, TableProviderFactory};
+use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
+use datafusion::datasource::file_format::csv::CsvFormatFactory;
+use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+use datafusion::datasource::file_format::{format_as_file_type, DefaultFileType};
+use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::execution::FunctionRegistry;
+use datafusion::functions_aggregate::count::count_udaf;
+use datafusion::functions_aggregate::expr_fn::{
+    approx_median, approx_percentile_cont, approx_percentile_cont_with_weight, count,
+    count_distinct, covar_pop, covar_samp, first_value, grouping, median, stddev,
+    stddev_pop, sum, var_pop, var_sample,
 };
-
-use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
-use datafusion_expr::{ScalarUDF, ScalarUDFImpl};
-use datafusion_proto::logical_plan::to_proto::serialize_expr;
-use prost::Message;
-
-use datafusion::datasource::provider::TableProviderFactory;
-use datafusion::datasource::TableProvider;
-use datafusion::execution::context::SessionState;
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
+use datafusion::functions_nested::map::map;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
-use datafusion_common::file_options::StatementOptions;
-use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::config::TableOptions;
 use datafusion_common::scalar::ScalarStructBuilder;
-use datafusion_common::{internal_err, not_impl_err, plan_err, FileTypeWriterOptions};
-use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
-use datafusion_common::{FileType, Result};
-use datafusion_expr::dml::{CopyOptions, CopyTo};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue, TableReference,
+};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
     Sort, Unnest,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    col, create_udaf, lit, Accumulator, AggregateFunction,
-    BuiltinScalarFunction::{Sqrt, Substr},
-    ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator,
+    Accumulator, AggregateFunction, AggregateUDF, ColumnarValue, ExprFunctionExt,
+    ExprSchemable, Literal, LogicalPlan, Operator, PartitionEvaluator, ScalarUDF,
     Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
+use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::expr_fn::{
+    approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
+};
+use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
-use datafusion_proto::logical_plan::LogicalExtensionCodec;
-use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
+use datafusion_proto::logical_plan::file_formats::{
+    ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, JsonLogicalExtensionCodec,
+    ParquetLogicalExtensionCodec,
+};
+use datafusion_proto::logical_plan::to_proto::serialize_expr;
+use datafusion_proto::logical_plan::{
+    from_proto, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
+};
 use datafusion_proto::protobuf;
+
+use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -121,6 +140,9 @@ pub struct TestTableProto {
     /// URL of the table root
     #[prost(string, tag = "1")]
     pub url: String,
+    /// Qualified table name
+    #[prost(string, tag = "2")]
+    pub table_name: String,
 }
 
 #[derive(Debug)]
@@ -143,12 +165,14 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
     fn try_decode_table_provider(
         &self,
         buf: &[u8],
+        table_ref: &TableReference,
         schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
         let msg = TestTableProto::decode(buf).map_err(|_| {
             DataFusionError::Internal("Error decoding test table".to_string())
         })?;
+        assert_eq!(msg.table_name, table_ref.to_string());
         let provider = TestTableProvider {
             url: msg.url,
             schema,
@@ -158,6 +182,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
 
     fn try_encode_table_provider(
         &self,
+        table_ref: &TableReference,
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -168,6 +193,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             .expect("Can't encode non-test tables");
         let msg = TestTableProto {
             url: table.url.clone(),
+            table_name: table_ref.to_string(),
         };
         msg.encode(buf).map_err(|_| {
             DataFusionError::Internal("Error encoding test table".to_string())
@@ -180,10 +206,7 @@ async fn roundtrip_custom_tables() -> Result<()> {
     let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
         HashMap::new();
     table_factories.insert("TESTTABLE".to_string(), Arc::new(TestTableFactory {}));
-    let cfg = RuntimeConfig::new();
-    let env = RuntimeEnv::new(cfg).unwrap();
-    let ses = SessionConfig::new();
-    let mut state = SessionState::new_with_config_rt(ses, Arc::new(env));
+    let mut state = SessionStateBuilder::new().with_default_features().build();
     // replace factories
     *state.table_factories_mut() = table_factories;
     let ctx = SessionContext::new_with_state(state);
@@ -240,10 +263,10 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
               primary key(c)
             )
             STORED AS CSV
-            WITH HEADER ROW
             WITH ORDER (a ASC, b ASC)
             WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv';";
+            LOCATION '../core/tests/data/window_2.csv'
+            OPTIONS ('format.has_header' 'true')";
 
     let plan = ctx.state().create_logical_plan(query).await?;
 
@@ -270,10 +293,10 @@ async fn roundtrip_logical_plan_aggregation_with_pk() -> Result<()> {
               primary key(c)
             )
             STORED AS CSV
-            WITH HEADER ROW
             WITH ORDER (a ASC, b ASC)
             WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv';",
+            LOCATION '../core/tests/data/window_2.csv'
+            OPTIONS ('format.has_header' 'true')",
     )
     .await?;
 
@@ -320,20 +343,20 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let ctx = SessionContext::new();
 
     let input = create_csv_scan(&ctx).await?;
-
-    let mut options = HashMap::new();
-    options.insert("foo".to_string(), "bar".to_string());
+    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
-        file_format: FileType::CSV,
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        copy_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
+        file_type,
+        options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = CsvLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     Ok(())
@@ -345,54 +368,41 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
 
     let input = create_csv_scan(&ctx).await?;
 
-    let writer_properties = WriterProperties::builder()
-        .set_bloom_filter_enabled(true)
-        .set_created_by("DataFusion Test".to_string())
-        .set_writer_version(WriterVersion::PARQUET_2_0)
-        .set_write_batch_size(111)
-        .set_data_page_size_limit(222)
-        .set_data_page_row_count_limit(333)
-        .set_dictionary_page_size_limit(444)
-        .set_max_row_group_size(555)
-        .build();
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut parquet_format = table_options.parquet;
+
+    parquet_format.global.bloom_filter_on_read = true;
+    parquet_format.global.created_by = "DataFusion Test".to_string();
+    parquet_format.global.writer_version = "PARQUET_2_0".to_string();
+    parquet_format.global.write_batch_size = 111;
+    parquet_format.global.data_pagesize_limit = 222;
+    parquet_format.global.data_page_row_count_limit = 333;
+    parquet_format.global.dictionary_page_size_limit = 444;
+    parquet_format.global.max_row_group_size = 555;
+
+    let file_type = format_as_file_type(Arc::new(
+        ParquetFormatFactory::new_with_options(parquet_format),
+    ));
+
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
-        file_format: FileType::PARQUET,
+        file_type,
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        copy_options: CopyOptions::WriterOptions(Box::new(
-            FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
-        )),
+        options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = ParquetLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
-
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.parquet", copy_to.output_url);
-            assert_eq!(FileType::PARQUET, copy_to.file_format);
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
-            match &copy_to.copy_options {
-                CopyOptions::WriterOptions(y) => match y.as_ref() {
-                    FileTypeWriterOptions::Parquet(p) => {
-                        let props = &p.writer_options;
-                        assert_eq!("DataFusion Test", props.created_by());
-                        assert_eq!(
-                            "PARQUET_2_0",
-                            format!("{:?}", props.writer_version())
-                        );
-                        assert_eq!(111, props.write_batch_size());
-                        assert_eq!(222, props.data_page_size_limit());
-                        assert_eq!(333, props.data_page_row_count_limit());
-                        assert_eq!(444, props.dictionary_page_size_limit());
-                        assert_eq!(555, props.max_row_group_size());
-                    }
-                    _ => panic!(),
-                },
-                _ => panic!(),
-            }
+            assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());
         }
         _ => panic!(),
     }
@@ -405,32 +415,27 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
 
     let input = create_csv_scan(&ctx).await?;
 
+    let file_type = format_as_file_type(Arc::new(ArrowFormatFactory::new()));
+
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.arrow".to_string(),
-        file_format: FileType::ARROW,
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::Arrow(
-            ArrowWriterOptions::new(),
-        ))),
+        file_type,
+        options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = ArrowLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.arrow", copy_to.output_url);
-            assert_eq!(FileType::ARROW, copy_to.file_format);
+            assert_eq!("arrow".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
-            match &copy_to.copy_options {
-                CopyOptions::WriterOptions(y) => match y.as_ref() {
-                    FileTypeWriterOptions::Arrow(_) => {}
-                    _ => panic!(),
-                },
-                _ => panic!(),
-            }
         }
         _ => panic!(),
     }
@@ -444,63 +449,149 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
 
     let input = create_csv_scan(&ctx).await?;
 
-    let writer_properties = WriterBuilder::new()
-        .with_delimiter(b'*')
-        .with_date_format("dd/MM/yyyy".to_string())
-        .with_datetime_format("dd/MM/yyyy HH:mm:ss".to_string())
-        .with_timestamp_format("HH:mm:ss.SSSSSS".to_string())
-        .with_time_format("HH:mm:ss".to_string())
-        .with_null("NIL".to_string());
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut csv_format = table_options.csv;
+
+    csv_format.delimiter = b'*';
+    csv_format.date_format = Some("dd/MM/yyyy".to_string());
+    csv_format.datetime_format = Some("dd/MM/yyyy HH:mm:ss".to_string());
+    csv_format.timestamp_format = Some("HH:mm:ss.SSSSSS".to_string());
+    csv_format.time_format = Some("HH:mm:ss".to_string());
+    csv_format.null_value = Some("NIL".to_string());
+
+    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new_with_options(
+        csv_format.clone(),
+    )));
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
-        file_format: FileType::CSV,
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
-            CsvWriterOptions::new(
-                writer_properties,
-                CompressionTypeVariant::UNCOMPRESSED,
-            ),
-        ))),
+        file_type,
+        options: Default::default(),
     });
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let codec = CsvLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.csv", copy_to.output_url);
-            assert_eq!(FileType::CSV, copy_to.file_format);
+            assert_eq!("csv".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
-            match &copy_to.copy_options {
-                CopyOptions::WriterOptions(y) => match y.as_ref() {
-                    FileTypeWriterOptions::CSV(p) => {
-                        let props = &p.writer_options;
-                        assert_eq!(b'*', props.delimiter());
-                        assert_eq!("dd/MM/yyyy", props.date_format().unwrap());
-                        assert_eq!(
-                            "dd/MM/yyyy HH:mm:ss",
-                            props.datetime_format().unwrap()
-                        );
-                        assert_eq!("HH:mm:ss.SSSSSS", props.timestamp_format().unwrap());
-                        assert_eq!("HH:mm:ss", props.time_format().unwrap());
-                        assert_eq!("NIL", props.null());
-                    }
-                    _ => panic!(),
-                },
-                _ => panic!(),
-            }
+
+            let file_type = copy_to
+                .file_type
+                .as_ref()
+                .as_any()
+                .downcast_ref::<DefaultFileType>()
+                .unwrap();
+
+            let format_factory = file_type.as_format_factory();
+            let csv_factory = format_factory
+                .as_ref()
+                .as_any()
+                .downcast_ref::<CsvFormatFactory>()
+                .unwrap();
+            let csv_config = csv_factory.options.as_ref().unwrap();
+            assert_eq!(csv_format.delimiter, csv_config.delimiter);
+            assert_eq!(csv_format.date_format, csv_config.date_format);
+            assert_eq!(csv_format.datetime_format, csv_config.datetime_format);
+            assert_eq!(csv_format.timestamp_format, csv_config.timestamp_format);
+            assert_eq!(csv_format.time_format, csv_config.time_format);
+            assert_eq!(csv_format.null_value, csv_config.null_value)
         }
         _ => panic!(),
     }
 
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Assume create_json_scan creates a logical plan for scanning a JSON file
+    let input = create_json_scan(&ctx).await?;
+
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut json_format = table_options.json;
+
+    // Set specific JSON format options
+    json_format.compression = CompressionTypeVariant::GZIP;
+    json_format.schema_infer_max_rec = 1000;
+
+    let file_type = format_as_file_type(Arc::new(JsonFormatFactory::new_with_options(
+        json_format.clone(),
+    )));
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.json".to_string(),
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        file_type,
+        options: Default::default(),
+    });
+
+    // Assume JsonLogicalExtensionCodec is implemented similarly to CsvLogicalExtensionCodec
+    let codec = JsonLogicalExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let logical_round_trip =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.json", copy_to.output_url);
+            assert_eq!("json".to_string(), copy_to.file_type.get_ext());
+            assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
+
+            let file_type = copy_to
+                .file_type
+                .as_ref()
+                .as_any()
+                .downcast_ref::<DefaultFileType>()
+                .unwrap();
+
+            let format_factory = file_type.as_format_factory();
+            let json_factory = format_factory
+                .as_ref()
+                .as_any()
+                .downcast_ref::<JsonFormatFactory>()
+                .unwrap();
+            let json_config = json_factory.options.as_ref().unwrap();
+            assert_eq!(json_format.compression, json_config.compression);
+            assert_eq!(
+                json_format.schema_infer_max_rec,
+                json_config.schema_infer_max_rec
+            );
+        }
+        _ => panic!(),
+    }
+
+    Ok(())
+}
+
 async fn create_csv_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
+
+    let input = ctx.table("t1").await?.into_optimized_plan()?;
+    Ok(input)
+}
+
+async fn create_json_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
+    ctx.register_json(
+        "t1",
+        "../core/tests/data/1.json",
+        NdJsonReadOptions::default(),
+    )
+    .await?;
 
     let input = ctx.table("t1").await?.into_optimized_plan()?;
     Ok(input)
@@ -571,6 +662,31 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_logical_plan_unnest() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new(
+            "b",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            true,
+        ),
+    ]);
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+    let query = "SELECT unnest(b) FROM t1";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_expr_api() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
@@ -582,12 +698,123 @@ async fn roundtrip_expr_api() -> Result<()> {
     let expr_list = vec![
         encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
         decode(lit("1234"), lit("hex")),
-        array_to_string(array(vec![lit(1), lit(2), lit(3)]), lit(",")),
-        array_dims(array(vec![lit(1), lit(2), lit(3)])),
-        array_ndims(array(vec![lit(1), lit(2), lit(3)])),
-        cardinality(array(vec![lit(1), lit(2), lit(3)])),
+        array_to_string(make_array(vec![lit(1), lit(2), lit(3)]), lit(",")),
+        array_dims(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_ndims(make_array(vec![lit(1), lit(2), lit(3)])),
+        cardinality(make_array(vec![lit(1), lit(2), lit(3)])),
+        string_to_array(lit("abc#def#ghl"), lit("#"), lit(",")),
         range(lit(1), lit(10), lit(2)),
         gen_series(lit(1), lit(10), lit(2)),
+        array_append(make_array(vec![lit(1), lit(2), lit(3)]), lit(4)),
+        array_prepend(lit(1), make_array(vec![lit(2), lit(3), lit(4)])),
+        array_concat(vec![
+            make_array(vec![lit(1), lit(2)]),
+            make_array(vec![lit(3), lit(4)]),
+        ]),
+        make_array(vec![lit(1), lit(2), lit(3)]),
+        array_has(make_array(vec![lit(1), lit(2), lit(3)]), lit(1)),
+        array_has_all(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            make_array(vec![lit(1), lit(2)]),
+        ),
+        array_has_any(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            make_array(vec![lit(1), lit(4)]),
+        ),
+        array_empty(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_length(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_repeat(lit(1), lit(3)),
+        flatten(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_sort(
+            make_array(vec![lit(3), lit(4), lit(1), lit(2)]),
+            lit("desc"),
+            lit("NULLS LAST"),
+        ),
+        array_distinct(make_array(vec![lit(1), lit(3), lit(3), lit(2), lit(2)])),
+        array_intersect(
+            make_array(vec![lit(1), lit(3)]),
+            make_array(vec![lit(1), lit(4)]),
+        ),
+        array_union(
+            make_array(vec![lit(1), lit(3)]),
+            make_array(vec![lit(1), lit(4)]),
+        ),
+        array_resize(make_array(vec![lit(1), lit(2), lit(3)]), lit(5), lit(0)),
+        array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(2)),
+        array_slice(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            lit(1),
+            lit(2),
+            Some(lit(1)),
+        ),
+        array_slice(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            lit(1),
+            lit(2),
+            None,
+        ),
+        array_pop_front(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_pop_back(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_reverse(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_position(
+            make_array(vec![lit(1), lit(2), lit(3), lit(4)]),
+            lit(3),
+            lit(2),
+        ),
+        array_positions(make_array(vec![lit(4), lit(3), lit(3), lit(1)]), lit(3)),
+        array_except(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            make_array(vec![lit(1), lit(2)]),
+        ),
+        array_remove(make_array(vec![lit(4), lit(3), lit(2), lit(1)]), lit(3)),
+        array_remove_n(
+            make_array(vec![lit(1), lit(3), lit(3), lit(3)]),
+            lit(3),
+            lit(2),
+        ),
+        array_remove_all(
+            make_array(vec![lit(3), lit(3), lit(2), lit(3), lit(1)]),
+            lit(3),
+        ),
+        array_replace(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
+        array_replace_n(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            lit(2),
+            lit(4),
+            lit(1),
+        ),
+        array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
+        count(lit(1)),
+        count_distinct(lit(1)),
+        first_value(lit(1), None),
+        first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
+        avg(lit(1.5)),
+        covar_samp(lit(1.5), lit(2.2)),
+        covar_pop(lit(1.5), lit(2.2)),
+        corr(lit(1.5), lit(2.2)),
+        sum(lit(1)),
+        median(lit(2)),
+        var_sample(lit(2.2)),
+        var_pop(lit(2.2)),
+        stddev(lit(2.2)),
+        stddev_pop(lit(2.2)),
+        approx_distinct(lit(2)),
+        approx_median(lit(2)),
+        approx_percentile_cont(lit(2), lit(0.5)),
+        approx_percentile_cont_with_weight(lit(2), lit(1), lit(0.5)),
+        grouping(lit(1)),
+        bit_and(lit(2)),
+        bit_or(lit(2)),
+        bit_xor(lit(2)),
+        string_agg(col("a").cast_to(&DataType::Utf8, &schema)?, lit("|")),
+        bool_and(lit(true)),
+        bool_or(lit(true)),
+        array_agg(lit(1)),
+        array_agg(lit(1)).distinct().build().unwrap(),
+        map(
+            vec![lit(1), lit(2), lit(3)],
+            vec![lit(10), lit(20), lit(30)],
+        ),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -632,19 +859,13 @@ pub mod proto {
         pub k: u64,
 
         #[prost(message, optional, tag = "2")]
-        pub expr: ::core::option::Option<datafusion_proto::protobuf::LogicalExprNode>,
+        pub expr: Option<datafusion_proto::protobuf::LogicalExprNode>,
     }
 
     #[derive(Clone, PartialEq, Eq, ::prost::Message)]
     pub struct TopKExecProto {
         #[prost(uint64, tag = "1")]
         pub k: u64,
-    }
-
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct MyRegexUdfNode {
-        #[prost(string, tag = "1")]
-        pub pattern: String,
     }
 }
 
@@ -692,14 +913,18 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         write!(f, "TopK: k={}", self.k)
     }
 
-    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+    fn with_exprs_and_inputs(
+        &self,
+        mut exprs: Vec<Expr>,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
         assert_eq!(inputs.len(), 1, "input size inconsistent");
         assert_eq!(exprs.len(), 1, "expression size inconsistent");
-        Self {
+        Ok(Self {
             k: self.k,
-            input: inputs[0].clone(),
-            expr: exprs[0].clone(),
-        }
+            input: inputs.swap_remove(0),
+            expr: exprs.swap_remove(0),
+        })
     }
 }
 
@@ -756,6 +981,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -764,6 +990,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -772,51 +999,9 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
 }
 
 #[derive(Debug)]
-struct MyRegexUdf {
-    signature: Signature,
-    // regex as original string
-    pattern: String,
-}
+pub struct UDFExtensionCodec;
 
-impl MyRegexUdf {
-    fn new(pattern: String) -> Self {
-        Self {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Int32],
-                Volatility::Immutable,
-            ),
-            pattern,
-        }
-    }
-}
-
-/// Implement the ScalarUDFImpl trait for MyRegexUdf
-impl ScalarUDFImpl for MyRegexUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn name(&self) -> &str {
-        "regex_udf"
-    }
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        if !matches!(args.first(), Some(&DataType::Utf8)) {
-            return plan_err!("regex_udf only accepts Utf8 arguments");
-        }
-        Ok(DataType::Int32)
-    }
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        unimplemented!()
-    }
-}
-
-#[derive(Debug)]
-pub struct ScalarUDFExtensionCodec {}
-
-impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
+impl LogicalExtensionCodec for UDFExtensionCodec {
     fn try_decode(
         &self,
         _buf: &[u8],
@@ -833,6 +1018,7 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
     fn try_decode_table_provider(
         &self,
         _buf: &[u8],
+        _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -841,6 +1027,7 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
 
     fn try_encode_table_provider(
         &self,
+        _table_ref: &TableReference,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
@@ -849,13 +1036,11 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         if name == "regex_udf" {
-            let proto = proto::MyRegexUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to decode regex_udf: {}", err))
+            let proto = MyRegexUdfNode::decode(buf).map_err(|err| {
+                DataFusionError::Internal(format!("failed to decode regex_udf: {err}"))
             })?;
 
-            Ok(Arc::new(ScalarUDF::new_from_impl(MyRegexUdf::new(
-                proto.pattern,
-            ))))
+            Ok(Arc::new(ScalarUDF::from(MyRegexUdf::new(proto.pattern))))
         } else {
             not_impl_err!("unrecognized scalar UDF implementation, cannot decode")
         }
@@ -864,11 +1049,39 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         let binding = node.inner();
         let udf = binding.as_any().downcast_ref::<MyRegexUdf>().unwrap();
-        let proto = proto::MyRegexUdfNode {
+        let proto = MyRegexUdfNode {
             pattern: udf.pattern.clone(),
         };
-        proto.encode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to encode udf: {e:?}"))
+        proto.encode(buf).map_err(|err| {
+            DataFusionError::Internal(format!("failed to encode udf: {err}"))
+        })?;
+        Ok(())
+    }
+
+    fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        if name == "aggregate_udf" {
+            let proto = MyAggregateUdfNode::decode(buf).map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "failed to decode aggregate_udf: {err}"
+                ))
+            })?;
+
+            Ok(Arc::new(AggregateUDF::from(MyAggregateUDF::new(
+                proto.result,
+            ))))
+        } else {
+            not_impl_err!("unrecognized aggregate UDF implementation, cannot decode")
+        }
+    }
+
+    fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
+        let binding = node.inner();
+        let udf = binding.as_any().downcast_ref::<MyAggregateUDF>().unwrap();
+        let proto = MyAggregateUdfNode {
+            result: udf.result.clone(),
+        };
+        proto.encode(buf).map_err(|err| {
+            DataFusionError::Internal(format!("failed to encode udf: {err}"))
         })?;
         Ok(())
     }
@@ -890,7 +1103,7 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt64(None),
         ScalarValue::Utf8(None),
         ScalarValue::LargeUtf8(None),
-        ScalarValue::List(ScalarValue::new_list(&[], &DataType::Boolean)),
+        ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Boolean)),
         ScalarValue::LargeList(ScalarValue::new_large_list(&[], &DataType::Boolean)),
         ScalarValue::Date32(None),
         ScalarValue::Boolean(Some(true)),
@@ -982,7 +1195,7 @@ fn round_trip_scalar_values() {
             i64::MAX,
         ))),
         ScalarValue::IntervalMonthDayNano(None),
-        ScalarValue::List(ScalarValue::new_list(
+        ScalarValue::List(ScalarValue::new_list_nullable(
             &[
                 ScalarValue::Float32(Some(-213.1)),
                 ScalarValue::Float32(None),
@@ -1002,10 +1215,13 @@ fn round_trip_scalar_values() {
             ],
             &DataType::Float32,
         )),
-        ScalarValue::List(ScalarValue::new_list(
+        ScalarValue::List(ScalarValue::new_list_nullable(
             &[
-                ScalarValue::List(ScalarValue::new_list(&[], &DataType::Float32)),
-                ScalarValue::List(ScalarValue::new_list(
+                ScalarValue::List(ScalarValue::new_list_nullable(
+                    &[],
+                    &DataType::Float32,
+                )),
+                ScalarValue::List(ScalarValue::new_list_nullable(
                     &[
                         ScalarValue::Float32(Some(-213.1)),
                         ScalarValue::Float32(None),
@@ -1068,11 +1284,85 @@ fn round_trip_scalar_values() {
             )
             .build()
             .unwrap(),
+        ScalarStructBuilder::new()
+            .with_scalar(
+                Field::new("a", DataType::Int32, true),
+                ScalarValue::from(23i32),
+            )
+            .with_scalar(
+                Field::new("b", DataType::Boolean, false),
+                ScalarValue::from(false),
+            )
+            .with_scalar(
+                Field::new(
+                    "c",
+                    DataType::Dictionary(
+                        Box::new(DataType::UInt16),
+                        Box::new(DataType::Utf8),
+                    ),
+                    false,
+                ),
+                ScalarValue::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new("value".into()),
+                ),
+            )
+            .build()
+            .unwrap(),
         ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Boolean, false),
         ])))
         .unwrap(),
+        ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Boolean, false),
+            Field::new(
+                "c",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Binary),
+                ),
+                false,
+            ),
+            Field::new(
+                "d",
+                DataType::new_list(
+                    DataType::Dictionary(
+                        Box::new(DataType::UInt16),
+                        Box::new(DataType::Binary),
+                    ),
+                    false,
+                ),
+                false,
+            ),
+        ])))
+        .unwrap(),
+        ScalarValue::try_from(&DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int32, true),
+                    Field::new("value", DataType::Utf8, false),
+                ])),
+                false,
+            )),
+            false,
+        ))
+        .unwrap(),
+        ScalarValue::try_from(&DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int32, true),
+                    Field::new("value", DataType::Utf8, true),
+                ])),
+                false,
+            )),
+            true,
+        ))
+        .unwrap(),
+        ScalarValue::Map(Arc::new(create_map_array_test_case())),
         ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
         ScalarValue::FixedSizeBinary(0, None),
         ScalarValue::FixedSizeBinary(5, None),
@@ -1093,6 +1383,25 @@ fn round_trip_scalar_values() {
                         Input: {test_case:?}\n\nRoundtrip: {roundtrip:?}"
         );
     }
+}
+
+// create a map array [{joe:1}, {blogs:2, foo:4}, {}, null] for testing
+fn create_map_array_test_case() -> MapArray {
+    let string_builder = StringBuilder::new();
+    let int_builder = Int32Builder::with_capacity(4);
+    let mut builder = MapBuilder::new(None, string_builder, int_builder);
+    builder.keys().append_value("joe");
+    builder.values().append_value(1);
+    builder.append(true).unwrap();
+
+    builder.keys().append_value("blogs");
+    builder.values().append_value(2);
+    builder.keys().append_value("foo");
+    builder.values().append_value(4);
+    builder.append(true).unwrap();
+    builder.append(true).unwrap();
+    builder.append(false).unwrap();
+    builder.finish()
 }
 
 #[test]
@@ -1176,6 +1485,7 @@ fn round_trip_datatype() {
         DataType::Utf8,
         DataType::LargeUtf8,
         DataType::Decimal128(7, 12),
+        DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
         // Recursive list tests
         DataType::List(new_arc_field("Level1", DataType::Binary, true)),
         DataType::List(new_arc_field(
@@ -1305,13 +1615,11 @@ fn roundtrip_dict_id() -> Result<()> {
 
     // encode
     let mut buf: Vec<u8> = vec![];
-    let schema_proto: datafusion_proto::generated::datafusion::Schema =
-        schema.try_into().unwrap();
+    let schema_proto: protobuf::Schema = schema.try_into().unwrap();
     schema_proto.encode(&mut buf).unwrap();
 
     // decode
-    let schema_proto =
-        datafusion_proto::generated::datafusion::Schema::decode(buf.as_slice()).unwrap();
+    let schema_proto = protobuf::Schema::decode(buf.as_slice()).unwrap();
     let decoded: Schema = (&schema_proto).try_into()?;
 
     // assert
@@ -1349,8 +1657,7 @@ fn roundtrip_null_scalar_values() {
 
     for test_case in test_types.into_iter() {
         let proto_scalar: protobuf::ScalarValue = (&test_case).try_into().unwrap();
-        let returned_scalar: datafusion::scalar::ScalarValue =
-            (&proto_scalar).try_into().unwrap();
+        let returned_scalar: ScalarValue = (&proto_scalar).try_into().unwrap();
         assert_eq!(format!("{:?}", &test_case), format!("{returned_scalar:?}"));
     }
 }
@@ -1388,9 +1695,15 @@ fn roundtrip_schema() {
 fn roundtrip_dfschema() {
     let dfschema = DFSchema::new_with_metadata(
         vec![
-            DFField::new_unqualified("a", DataType::Int64, false),
-            DFField::new(Some("t"), "b", DataType::Decimal128(15, 2), true)
-                .with_metadata(HashMap::from([(String::from("k1"), String::from("v1"))])),
+            (None, Arc::new(Field::new("a", DataType::Int64, false))),
+            (
+                Some("t".into()),
+                Arc::new(
+                    Field::new("b", DataType::Decimal128(15, 2), true).with_metadata(
+                        HashMap::from([(String::from("k1"), String::from("v1"))]),
+                    ),
+                ),
+            ),
         ],
         HashMap::from([
             (String::from("k2"), String::from("v2")),
@@ -1567,7 +1880,7 @@ fn roundtrip_inlist() {
 #[test]
 fn roundtrip_unnest() {
     let test_expr = Expr::Unnest(Unnest {
-        exprs: vec![lit(1), lit(2), lit(3)],
+        expr: Box::new(col("col")),
     });
 
     let ctx = SessionContext::new();
@@ -1588,13 +1901,6 @@ fn roundtrip_qualified_wildcard() {
         qualifier: Some("foo".into()),
     };
 
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_sqrt() {
-    let test_expr = Expr::ScalarFunction(ScalarFunction::new(Sqrt, vec![col("col")]));
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
 }
@@ -1658,40 +1964,18 @@ fn roundtrip_similar_to() {
 
 #[test]
 fn roundtrip_count() {
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-        AggregateFunction::Count,
-        vec![col("bananas")],
-        false,
-        None,
-        None,
-    ));
+    let test_expr = count(col("bananas"));
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
 }
 
 #[test]
 fn roundtrip_count_distinct() {
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-        AggregateFunction::Count,
-        vec![col("bananas")],
-        true,
-        None,
-        None,
-    ));
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_approx_percentile_cont() {
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-        AggregateFunction::ApproxPercentileCont,
-        vec![col("bananas"), lit(0.42_f32)],
-        false,
-        None,
-        None,
-    ));
-
+    let test_expr = count_udaf()
+        .call(vec![col("bananas")])
+        .distinct()
+        .build()
+        .unwrap();
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
 }
@@ -1702,22 +1986,19 @@ fn roundtrip_aggregate_udf() {
     struct Dummy {}
 
     impl Accumulator for Dummy {
-        fn state(&mut self) -> datafusion::error::Result<Vec<ScalarValue>> {
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
             Ok(vec![])
         }
 
-        fn update_batch(
-            &mut self,
-            _values: &[ArrayRef],
-        ) -> datafusion::error::Result<()> {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
 
-        fn merge_batch(&mut self, _states: &[ArrayRef]) -> datafusion::error::Result<()> {
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
 
-        fn evaluate(&mut self) -> datafusion::error::Result<ScalarValue> {
+        fn evaluate(&mut self) -> Result<ScalarValue> {
             Ok(ScalarValue::Float64(None))
         }
 
@@ -1745,6 +2026,7 @@ fn roundtrip_aggregate_udf() {
         vec![lit(1.0_f64)],
         false,
         Some(Box::new(lit(true))),
+        None,
         None,
     ));
 
@@ -1784,25 +2066,27 @@ fn roundtrip_scalar_udf() {
 
 #[test]
 fn roundtrip_scalar_udf_extension_codec() {
-    let pattern = ".*";
-    let udf = ScalarUDF::from(MyRegexUdf::new(pattern.to_string()));
-    let test_expr =
-        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf.clone()), vec![]));
-
+    let udf = ScalarUDF::from(MyRegexUdf::new(".*".to_owned()));
+    let test_expr = udf.call(vec!["foo".lit()]);
     let ctx = SessionContext::new();
-    ctx.register_udf(udf);
-
-    let extension_codec = ScalarUDFExtensionCodec {};
-    let proto: protobuf::LogicalExprNode =
-        match serialize_expr(&test_expr, &extension_codec) {
-            Ok(p) => p,
-            Err(e) => panic!("Error serializing expression: {:?}", e),
-        };
-    let round_trip: Expr =
-        from_proto::parse_expr(&proto, &ctx, &extension_codec).unwrap();
+    let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
+    let round_trip =
+        from_proto::parse_expr(&proto, &ctx, &UDFExtensionCodec).expect("parse expr");
 
     assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
+    roundtrip_json_test(&proto);
+}
 
+#[test]
+fn roundtrip_aggregate_udf_extension_codec() {
+    let udf = AggregateUDF::from(MyAggregateUDF::new("DataFusion".to_owned()));
+    let test_expr = udf.call(vec![42.lit()]);
+    let ctx = SessionContext::new();
+    let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
+    let round_trip =
+        from_proto::parse_expr(&proto, &ctx, &UDFExtensionCodec).expect("parse expr");
+
+    assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
@@ -1836,17 +2120,28 @@ fn roundtrip_cube() {
 
 #[test]
 fn roundtrip_substr() {
+    let ctx = SessionContext::new();
+
+    let fun = ctx
+        .state()
+        .udf("substr")
+        .map_err(|e| {
+            internal_datafusion_err!("Unable to find expected 'substr' function: {e:?}")
+        })
+        .unwrap();
+
     // substr(string, position)
-    let test_expr =
-        Expr::ScalarFunction(ScalarFunction::new(Substr, vec![col("col"), lit(1_i64)]));
+    let test_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+        fun.clone(),
+        vec![col("col"), lit(1_i64)],
+    ));
 
     // substr(string, position, count)
-    let test_expr_with_count = Expr::ScalarFunction(ScalarFunction::new(
-        Substr,
+    let test_expr_with_count = Expr::ScalarFunction(ScalarFunction::new_udf(
+        fun,
         vec![col("col"), lit(1_i64), lit(1_i64)],
     ));
 
-    let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx.clone());
     roundtrip_expr_test(test_expr_with_count, ctx);
 }
@@ -1860,11 +2155,12 @@ fn roundtrip_window() {
             datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
-        vec![col("col1")],
-        vec![col("col2")],
-        WindowFrame::new(Some(false)),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .build()
+    .unwrap();
 
     // 2. with default window_frame
     let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
@@ -1872,11 +2168,12 @@ fn roundtrip_window() {
             datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
-        vec![col("col1")],
-        vec![col("col2")],
-        WindowFrame::new(Some(false)),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(false, true)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .build()
+    .unwrap();
 
     // 3. with window_frame with row numbers
     let range_number_frame = WindowFrame::new_bounds(
@@ -1890,11 +2187,12 @@ fn roundtrip_window() {
             datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
-        vec![col("col1")],
-        vec![col("col2")],
-        range_number_frame,
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(false, false)])
+    .window_frame(range_number_frame)
+    .build()
+    .unwrap();
 
     // 4. test with AggregateFunction
     let row_number_frame = WindowFrame::new_bounds(
@@ -1906,33 +2204,31 @@ fn roundtrip_window() {
     let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
         vec![col("col1")],
-        vec![col("col1")],
-        vec![col("col2")],
-        row_number_frame.clone(),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, true)])
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
 
     // 5. test with AggregateUDF
     #[derive(Debug)]
     struct DummyAggr {}
 
     impl Accumulator for DummyAggr {
-        fn state(&mut self) -> datafusion::error::Result<Vec<ScalarValue>> {
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
             Ok(vec![])
         }
 
-        fn update_batch(
-            &mut self,
-            _values: &[ArrayRef],
-        ) -> datafusion::error::Result<()> {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
 
-        fn merge_batch(&mut self, _states: &[ArrayRef]) -> datafusion::error::Result<()> {
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
             Ok(())
         }
 
-        fn evaluate(&mut self) -> datafusion::error::Result<ScalarValue> {
+        fn evaluate(&mut self) -> Result<ScalarValue> {
             Ok(ScalarValue::Float64(None))
         }
 
@@ -1958,11 +2254,12 @@ fn roundtrip_window() {
     let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(Arc::new(dummy_agg.clone())),
         vec![col("col1")],
-        vec![col("col1")],
-        vec![col("col2")],
-        row_number_frame.clone(),
-        None,
-    ));
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, true)])
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
     ctx.register_udaf(dummy_agg);
 
     // 6. test with WindowUDF
@@ -2034,11 +2331,20 @@ fn roundtrip_window() {
     let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(Arc::new(dummy_window_udf.clone())),
         vec![col("col1")],
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, true)])
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
+
+    let text_expr7 = Expr::WindowFunction(expr::WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
-        vec![col("col2")],
-        row_number_frame,
-        None,
-    ));
+    ))
+    .window_frame(row_number_frame.clone())
+    .build()
+    .unwrap();
 
     ctx.register_udwf(dummy_window_udf);
 
@@ -2047,5 +2353,6 @@ fn roundtrip_window() {
     roundtrip_expr_test(test_expr3, ctx.clone());
     roundtrip_expr_test(test_expr4, ctx.clone());
     roundtrip_expr_test(test_expr5, ctx.clone());
-    roundtrip_expr_test(test_expr6, ctx);
+    roundtrip_expr_test(test_expr6, ctx.clone());
+    roundtrip_expr_test(text_expr7, ctx);
 }

@@ -15,15 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Collection of utility functions that are leveraged by the query optimizer rules
+//! Utility functions leveraged by the query optimizer rules
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result};
-use datafusion_expr::expr::is_volatile;
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::utils as expr_utils;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr, Operator};
@@ -37,6 +35,10 @@ use log::{debug, trace};
 /// This also handles the case when the `plan` is a [`LogicalPlan::Explain`].
 ///
 /// Returning `Ok(None)` indicates that the plan can't be optimized by the `optimizer`.
+#[deprecated(
+    since = "40.0.0",
+    note = "please use OptimizerRule::apply_order with ApplyOrder::BottomUp instead"
+)]
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
@@ -45,9 +47,16 @@ pub fn optimize_children(
     let mut new_inputs = Vec::with_capacity(plan.inputs().len());
     let mut plan_is_changed = false;
     for input in plan.inputs() {
-        let new_input = optimizer.try_optimize(input, config)?;
-        plan_is_changed = plan_is_changed || new_input.is_some();
-        new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
+        if optimizer.supports_rewrite() {
+            let new_input = optimizer.rewrite(input.clone(), config)?;
+            plan_is_changed = plan_is_changed || new_input.transformed;
+            new_inputs.push(new_input.data);
+        } else {
+            #[allow(deprecated)]
+            let new_input = optimizer.try_optimize(input, config)?;
+            plan_is_changed = plan_is_changed || new_input.is_some();
+            new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
+        }
     }
     if plan_is_changed {
         let exprs = plan.expressions();
@@ -57,15 +66,26 @@ pub fn optimize_children(
     }
 }
 
+/// Returns true if `expr` contains all columns in `schema_cols`
+pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {
+    let column_refs = expr.column_refs();
+    // note can't use HashSet::intersect because of different types (owned vs References)
+    schema_cols
+        .iter()
+        .filter(|c| column_refs.contains(c))
+        .count()
+        == column_refs.len()
+}
+
 pub(crate) fn collect_subquery_cols(
     exprs: &[Expr],
     subquery_schema: DFSchemaRef,
 ) -> Result<BTreeSet<Column>> {
     exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
         let mut using_cols: Vec<Column> = vec![];
-        for col in expr.to_columns()?.into_iter() {
-            if subquery_schema.has_column(&col) {
-                using_cols.push(col);
+        for col in expr.column_refs().into_iter() {
+            if subquery_schema.has_column(col) {
+                using_cols.push(col.clone());
             }
         }
 
@@ -95,20 +115,6 @@ pub(crate) fn replace_qualified_name(
 pub fn log_plan(description: &str, plan: &LogicalPlan) {
     debug!("{description}:\n{}\n", plan.display_indent());
     trace!("{description}::\n{}\n", plan.display_indent_schema());
-}
-
-/// check whether the expression is volatile predicates
-pub(crate) fn is_volatile_expression(e: &Expr) -> Result<bool> {
-    let mut is_volatile_expr = false;
-    e.apply(&mut |expr| {
-        Ok(if is_volatile(expr)? {
-            is_volatile_expr = true;
-            TreeNodeRecursion::Stop
-        } else {
-            TreeNodeRecursion::Continue
-        })
-    })?;
-    Ok(is_volatile_expr)
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
@@ -287,4 +293,55 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 )]
 pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     expr_utils::merge_schema(inputs)
+}
+
+/// Handles ensuring the name of rewritten expressions is not changed.
+///
+/// For example, if an expression `1 + 2` is rewritten to `3`, the name of the
+/// expression should be preserved: `3 as "1 + 2"`
+///
+/// See <https://github.com/apache/datafusion/issues/3555> for details
+pub struct NamePreserver {
+    use_alias: bool,
+}
+
+/// If the name of an expression is remembered, it will be preserved when
+/// rewriting the expression
+pub struct SavedName(Option<String>);
+
+impl NamePreserver {
+    /// Create a new NamePreserver for rewriting the `expr` that is part of the specified plan
+    pub fn new(plan: &LogicalPlan) -> Self {
+        Self {
+            use_alias: !matches!(plan, LogicalPlan::Filter(_) | LogicalPlan::Join(_)),
+        }
+    }
+
+    /// Create a new NamePreserver for rewriting the `expr`s in `Projection`
+    ///
+    /// This will use aliases
+    pub fn new_for_projection() -> Self {
+        Self { use_alias: true }
+    }
+
+    pub fn save(&self, expr: &Expr) -> Result<SavedName> {
+        let original_name = if self.use_alias {
+            Some(expr.name_for_alias()?)
+        } else {
+            None
+        };
+
+        Ok(SavedName(original_name))
+    }
+}
+
+impl SavedName {
+    /// Ensures the name of the rewritten expression is preserved
+    pub fn restore(self, expr: Expr) -> Result<Expr> {
+        let Self(original_name) = self;
+        match original_name {
+            Some(name) => expr.alias_if_changed(name),
+            None => Ok(expr),
+        }
+    }
 }

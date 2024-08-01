@@ -24,20 +24,29 @@ use datafusion_common::{Constraints, Result};
 
 use std::any::Any;
 
-/// Indicates whether and how a filter expression can be handled by a
-/// TableProvider for table scans.
+/// Indicates how a filter expression is handled by
+/// [`TableProvider::scan`].
+///
+/// Filter expressions are boolean expressions used to reduce the number of
+/// rows that are read from a table. Only rows that evaluate to `true` ("pass
+/// the filter") are returned. Rows that evaluate to `false` or `NULL` are
+/// omitted.
+///
+/// [`TableProvider::scan`]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html#tymethod.scan
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableProviderFilterPushDown {
-    /// The expression cannot be used by the provider.
+    /// The filter cannot be used by the provider and will not be pushed down.
     Unsupported,
-    /// The expression can be used to reduce the data retrieved,
-    /// but the provider cannot guarantee it will omit all tuples that
-    /// may be filtered. In this case, DataFusion will apply an additional
-    /// `Filter` operation after the scan to ensure all rows are filtered correctly.
+    /// The filter can be used, but the provider might still return some tuples
+    /// that do not pass the filter.
+    ///
+    /// In this case, DataFusion applies an additional `Filter` operation
+    /// after the scan to ensure all rows are filtered correctly.
     Inexact,
-    /// The provider **guarantees** that it will omit **all** tuples that are
-    /// filtered by the filter expression. This is the fastest option, if available
-    /// as DataFusion will not apply additional filtering.
+    /// The provider **guarantees** that it will omit **only** tuples which
+    /// pass the filter.
+    ///
+    /// In this case, DataFusion will not apply additional filtering.
     Exact,
 }
 
@@ -52,14 +61,27 @@ pub enum TableType {
     Temporary,
 }
 
-/// The TableSource trait is used during logical query planning and optimizations and
-/// provides access to schema information and filter push-down capabilities. This trait
-/// provides a subset of the functionality of the TableProvider trait in the core
-/// datafusion crate. The TableProvider trait provides additional capabilities needed for
-/// physical query execution (such as the ability to perform a scan). The reason for
-/// having two separate traits is to avoid having the logical plan code be dependent
-/// on the DataFusion execution engine. Other projects may want to use DataFusion's
-/// logical plans and have their own execution engine.
+impl std::fmt::Display for TableType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TableType::Base => write!(f, "Base"),
+            TableType::View => write!(f, "View"),
+            TableType::Temporary => write!(f, "Temporary"),
+        }
+    }
+}
+
+/// Access schema information and filter push-down capabilities.
+///
+/// The TableSource trait is used during logical query planning and
+/// optimizations and provides a subset of the functionality of the
+/// `TableProvider` trait in the (core) `datafusion` crate. The `TableProvider`
+/// trait provides additional capabilities needed for physical query execution
+/// (such as the ability to perform a scan).
+///
+/// The reason for having two separate traits is to avoid having the logical
+/// plan code be dependent on the DataFusion execution engine. Some projects use
+/// DataFusion's logical plans and have their own execution engine.
 pub trait TableSource: Sync + Send {
     fn as_any(&self) -> &dyn Any;
 

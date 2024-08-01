@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints]
+workspace = true
+
 [lib]
 name = "datafusion_common"
 path = "src/lib.rs"
@@ -36,11 +39,10 @@ path = "src/lib.rs"
 avro = ["apache-avro"]
 backtrace = []
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
+force_hash_collisions = []
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = [
-    "runtime-rng",
-] }
+ahash = { workspace = true }
 apache-avro = { version = "0.16", default-features = false, features = [
     "bzip",
     "snappy",
@@ -53,11 +55,12 @@ arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 half = { workspace = true }
+hashbrown = { workspace = true }
 libc = "0.2.140"
 num_cpus = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
-pyo3 = { version = "0.20.0", optional = true }
+pyo3 = { version = "0.21.0", optional = true }
 sqlparser = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]

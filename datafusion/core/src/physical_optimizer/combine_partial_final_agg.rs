@@ -21,14 +21,13 @@
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
+use datafusion_physical_expr::{physical_exprs_equal, AggregateExpr, PhysicalExpr};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
@@ -51,7 +50,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(&|plan| {
+        plan.transform_down(|plan| {
             let transformed =
                 plan.as_any()
                     .downcast_ref::<AggregateExec>()
@@ -70,12 +69,12 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                         AggregateMode::Partial
                                     ) && can_combine(
                                         (
-                                            agg_exec.group_by(),
+                                            agg_exec.group_expr(),
                                             agg_exec.aggr_expr(),
                                             agg_exec.filter_expr(),
                                         ),
                                         (
-                                            input_agg_exec.group_by(),
+                                            input_agg_exec.group_expr(),
                                             input_agg_exec.aggr_expr(),
                                             input_agg_exec.filter_expr(),
                                         ),
@@ -88,7 +87,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                             };
                                         AggregateExec::try_new(
                                             mode,
-                                            input_agg_exec.group_by().clone(),
+                                            input_agg_exec.group_expr().clone(),
                                             input_agg_exec.aggr_expr().to_vec(),
                                             input_agg_exec.filter_expr().to_vec(),
                                             input_agg_exec.input().clone(),
@@ -132,19 +131,23 @@ type GroupExprsRef<'a> = (
     &'a [Option<Arc<dyn PhysicalExpr>>],
 );
 
-type GroupExprs = (
-    PhysicalGroupBy,
-    Vec<Arc<dyn AggregateExpr>>,
-    Vec<Option<Arc<dyn PhysicalExpr>>>,
-);
-
 fn can_combine(final_agg: GroupExprsRef, partial_agg: GroupExprsRef) -> bool {
-    let (final_group_by, final_aggr_expr, final_filter_expr) =
-        normalize_group_exprs(final_agg);
-    let (input_group_by, input_aggr_expr, input_filter_expr) =
-        normalize_group_exprs(partial_agg);
+    let (final_group_by, final_aggr_expr, final_filter_expr) = final_agg;
+    let (input_group_by, input_aggr_expr, input_filter_expr) = partial_agg;
 
-    final_group_by.eq(&input_group_by)
+    // Compare output expressions of the partial, and input expressions of the final operator.
+    physical_exprs_equal(
+        &input_group_by.output_exprs(),
+        &final_group_by.input_exprs(),
+    ) && input_group_by.groups() == final_group_by.groups()
+        && input_group_by.null_expr().len() == final_group_by.null_expr().len()
+        && input_group_by
+            .null_expr()
+            .iter()
+            .zip(final_group_by.null_expr().iter())
+            .all(|((lhs_expr, lhs_str), (rhs_expr, rhs_str))| {
+                lhs_expr.eq(rhs_expr) && lhs_str == rhs_str
+            })
         && final_aggr_expr.len() == input_aggr_expr.len()
         && final_aggr_expr
             .iter()
@@ -160,57 +163,21 @@ fn can_combine(final_agg: GroupExprsRef, partial_agg: GroupExprsRef) -> bool {
         )
 }
 
-// To compare the group expressions between the final and partial aggregations, need to discard all the column indexes and compare
-fn normalize_group_exprs(group_exprs: GroupExprsRef) -> GroupExprs {
-    let (group, agg, filter) = group_exprs;
-    let new_group_expr = group
-        .expr()
-        .iter()
-        .map(|(expr, name)| (discard_column_index(expr.clone()), name.clone()))
-        .collect::<Vec<_>>();
-    let new_group = PhysicalGroupBy::new(
-        new_group_expr,
-        group.null_expr().to_vec(),
-        group.groups().to_vec(),
-    );
-    (new_group, agg.to_vec(), filter.to_vec())
-}
-
-fn discard_column_index(group_expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
-    group_expr
-        .clone()
-        .transform(&|expr| {
-            let normalized_form: Option<Arc<dyn PhysicalExpr>> =
-                match expr.as_any().downcast_ref::<Column>() {
-                    Some(column) => Some(Arc::new(Column::new(column.name(), 0))),
-                    None => None,
-                };
-            Ok(if let Some(normalized_form) = normalized_form {
-                Transformed::yes(normalized_form)
-            } else {
-                Transformed::no(expr)
-            })
-        })
-        .data()
-        .unwrap_or(group_expr)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
-    use crate::physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupBy,
-    };
     use crate::physical_plan::expressions::lit;
     use crate::physical_plan::repartition::RepartitionExec;
-    use crate::physical_plan::{displayable, Partitioning, Statistics};
+    use crate::physical_plan::{displayable, Partitioning};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_physical_expr::expressions::{col, Count, Sum};
-    use datafusion_physical_expr::AggregateExpr;
+    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::sum::sum_udaf;
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
 
     /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
@@ -249,20 +216,14 @@ mod tests {
     }
 
     fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-        Arc::new(ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema.clone(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_unknown(schema),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
-            None,
-            None,
-        ))
+        ParquetExec::builder(
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("x".to_string(), 100)),
+        )
+        .build_arc()
     }
 
     fn partial_aggregate_exec(
@@ -311,15 +272,25 @@ mod tests {
         )
     }
 
+    // Return appropriate expr depending if COUNT is for col or table (*)
+    fn count_expr(
+        expr: Arc<dyn PhysicalExpr>,
+        name: &str,
+        schema: &Schema,
+    ) -> Arc<dyn AggregateExpr> {
+        AggregateExprBuilder::new(count_udaf(), vec![expr])
+            .schema(Arc::new(schema.clone()))
+            .name(name)
+            .build()
+            .unwrap()
+    }
+
     #[test]
     fn aggregations_not_combined() -> Result<()> {
         let schema = schema();
 
-        let aggr_expr = vec![Arc::new(Count::new(
-            lit(1i8),
-            "COUNT(1)".to_string(),
-            DataType::Int64,
-        )) as _];
+        let aggr_expr = vec![count_expr(lit(1i8), "COUNT(1)", &schema)];
+
         let plan = final_aggregate_exec(
             repartition_exec(partial_aggregate_exec(
                 parquet_exec(&schema),
@@ -338,16 +309,8 @@ mod tests {
         ];
         assert_optimized!(expected, plan);
 
-        let aggr_expr1 = vec![Arc::new(Count::new(
-            lit(1i8),
-            "COUNT(1)".to_string(),
-            DataType::Int64,
-        )) as _];
-        let aggr_expr2 = vec![Arc::new(Count::new(
-            lit(1i8),
-            "COUNT(2)".to_string(),
-            DataType::Int64,
-        )) as _];
+        let aggr_expr1 = vec![count_expr(lit(1i8), "COUNT(1)", &schema)];
+        let aggr_expr2 = vec![count_expr(lit(1i8), "COUNT(2)", &schema)];
 
         let plan = final_aggregate_exec(
             partial_aggregate_exec(
@@ -373,11 +336,7 @@ mod tests {
     #[test]
     fn aggregations_combined() -> Result<()> {
         let schema = schema();
-        let aggr_expr = vec![Arc::new(Count::new(
-            lit(1i8),
-            "COUNT(1)".to_string(),
-            DataType::Int64,
-        )) as _];
+        let aggr_expr = vec![count_expr(lit(1i8), "COUNT(1)", &schema)];
 
         let plan = final_aggregate_exec(
             partial_aggregate_exec(
@@ -388,7 +347,7 @@ mod tests {
             PhysicalGroupBy::default(),
             aggr_expr,
         );
-        // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
+        // should combine the Partial/Final AggregateExecs to the Single AggregateExec
         let expected = &[
             "AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
@@ -401,12 +360,14 @@ mod tests {
     #[test]
     fn aggregations_with_group_combined() -> Result<()> {
         let schema = schema();
-        let aggr_expr = vec![Arc::new(Sum::new(
-            col("b", &schema)?,
-            "Sum(b)".to_string(),
-            DataType::Int64,
-        )) as _];
-
+        let aggr_expr =
+            vec![
+                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .name("Sum(b)")
+                    .build()
+                    .unwrap(),
+            ];
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(col("c", &schema)?, "c".to_string())];
 
@@ -422,7 +383,7 @@ mod tests {
         let final_group_by = PhysicalGroupBy::new_single(groups);
 
         let plan = final_aggregate_exec(partial_agg, final_group_by, aggr_expr);
-        // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
+        // should combine the Partial/Final AggregateExecs to the Single AggregateExec
         let expected = &[
             "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[Sum(b)]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",

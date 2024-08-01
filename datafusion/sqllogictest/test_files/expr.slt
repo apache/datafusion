@@ -63,7 +63,7 @@ SELECT
 NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
 
 # test_array_cast_invalid_timezone_will_panic
-statement error Parser error: Invalid timezone "Foo": 'Foo' is not a valid timezone
+statement error Parser error: Invalid timezone "Foo": failed to parse timezone
 SELECT arrow_cast('2021-01-02T03:04:00', 'Timestamp(Nanosecond, Some("Foo"))')
 
 # test_array_index
@@ -336,6 +336,21 @@ SELECT ascii(NULL)
 NULL
 
 query I
+SELECT ascii('ésoj')
+----
+233
+
+query I
+SELECT ascii('💯')
+----
+128175
+
+query I
+SELECT ascii('💯a')
+----
+128175
+
+query I
 SELECT bit_length('')
 ----
 0
@@ -399,6 +414,12 @@ query T
 SELECT chr(CAST(NULL AS int))
 ----
 NULL
+
+statement error DataFusion error: Execution error: null character not permitted.
+SELECT chr(CAST(0 AS int))
+
+statement error DataFusion error: Execution error: requested character too large for encoding.
+SELECT chr(CAST(9223372036854775807 AS bigint))
 
 query T
 SELECT concat('a','b','c')
@@ -521,6 +542,11 @@ SELECT repeat('Pg', 4)
 PgPgPgPg
 
 query T
+SELECT repeat('Pg', -1)
+----
+(empty)
+
+query T
 SELECT repeat('Pg', CAST(NULL AS INT))
 ----
 NULL
@@ -600,6 +626,19 @@ SELECT split_part('abc~@~def~@~ghi', '~@~', CAST(NULL AS INT))
 ----
 NULL
 
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', -1)
+----
+ghi
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', -100)
+----
+(empty)
+
+statement error DataFusion error: Execution error: field position must not be zero
+SELECT split_part('abc~@~def~@~ghi', '~@~', 0)
+
 query B
 SELECT starts_with('alphabet', 'alph')
 ----
@@ -664,6 +703,14 @@ query T
 SELECT trim(TRAILING ' ' FROM ' tom ')
 ----
  tom
+
+query T
+SELECT trim('test.com', '.com')
+----
+test
+
+statement error
+SELECT trim(BOTH 'tom' FROM 'tommy', 'my')
 
 query T
 SELECT trim(BOTH ' ' FROM ' tom ')
@@ -746,7 +793,7 @@ SELECT upper(NULL)
 ----
 NULL
 
-# TODO issue: https://github.com/apache/arrow-datafusion/issues/6596
+# TODO issue: https://github.com/apache/datafusion/issues/6596
 # query ??
 #SELECT
 #    CAST([1,2,3,4] AS INT[]) as a,
@@ -780,6 +827,12 @@ SELECT
 
 # test_extract_date_part
 
+query error
+SELECT EXTRACT("'''year'''" FROM  timestamp '2020-09-08T12:00:00+00:00')
+
+query error
+SELECT EXTRACT("'year'" FROM  timestamp '2020-09-08T12:00:00+00:00')
+
 query R
 SELECT date_part('YEAR', CAST('2000-01-01' AS DATE))
 ----
@@ -789,6 +842,14 @@ query R
 SELECT EXTRACT(year FROM  timestamp '2020-09-08T12:00:00+00:00')
 ----
 2020
+
+query R
+SELECT EXTRACT("year" FROM  timestamp '2020-09-08T12:00:00+00:00')
+----
+2020
+
+query error
+SELECT EXTRACT('year' FROM  timestamp '2020-09-08T12:00:00+00:00')
 
 query R
 SELECT date_part('QUARTER', CAST('2000-01-01' AS DATE))
@@ -801,6 +862,14 @@ SELECT EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 3
 
 query R
+SELECT EXTRACT("quarter" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+3
+
+query error
+SELECT EXTRACT('quarter' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+
+query R
 SELECT date_part('MONTH', CAST('2000-01-01' AS DATE))
 ----
 1
@@ -809,6 +878,14 @@ query R
 SELECT EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 9
+
+query R
+SELECT EXTRACT("month" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+9
+
+query error
+SELECT EXTRACT('month' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 
 query R
 SELECT date_part('WEEK', CAST('2003-01-01' AS DATE))
@@ -821,6 +898,14 @@ SELECT EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 37
 
 query R
+SELECT EXTRACT("WEEK" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+37
+
+query error
+SELECT EXTRACT('WEEK' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+
+query R
 SELECT date_part('DAY', CAST('2000-01-01' AS DATE))
 ----
 1
@@ -829,6 +914,14 @@ query R
 SELECT EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 8
+
+query R
+SELECT EXTRACT("day" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+8
+
+query error
+SELECT EXTRACT('day' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 
 query R
 SELECT date_part('DOY', CAST('2000-01-01' AS DATE))
@@ -841,6 +934,14 @@ SELECT EXTRACT(doy FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 252
 
 query R
+SELECT EXTRACT("doy" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+252
+
+query error
+SELECT EXTRACT('doy' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+
+query R
 SELECT date_part('DOW', CAST('2000-01-01' AS DATE))
 ----
 6
@@ -849,6 +950,14 @@ query R
 SELECT EXTRACT(dow FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 2
+
+query R
+SELECT EXTRACT("dow" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+2
+
+query error
+SELECT EXTRACT('dow' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 
 query R
 SELECT date_part('HOUR', CAST('2000-01-01' AS DATE))
@@ -861,9 +970,25 @@ SELECT EXTRACT(hour FROM to_timestamp('2020-09-08T12:03:03+00:00'))
 12
 
 query R
+SELECT EXTRACT("hour" FROM to_timestamp('2020-09-08T12:03:03+00:00'))
+----
+12
+
+query error
+SELECT EXTRACT('hour' FROM to_timestamp('2020-09-08T12:03:03+00:00'))
+
+query R
 SELECT EXTRACT(minute FROM to_timestamp('2020-09-08T12:12:00+00:00'))
 ----
 12
+
+query R
+SELECT EXTRACT("minute" FROM to_timestamp('2020-09-08T12:12:00+00:00'))
+----
+12
+
+query error
+SELECT EXTRACT('minute' FROM to_timestamp('2020-09-08T12:12:00+00:00'))
 
 query R
 SELECT date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'))
@@ -889,6 +1014,38 @@ query R
 SELECT EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456780
+
+query R
+SELECT EXTRACT("second" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12.12345678
+
+query R
+SELECT EXTRACT("millisecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123.45678
+
+query R
+SELECT EXTRACT("microsecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123456.78
+
+query R
+SELECT EXTRACT("nanosecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123456780
+
+query error
+SELECT EXTRACT('second' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+
+query error
+SELECT EXTRACT('millisecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+
+query error
+SELECT EXTRACT('microsecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+
+query error
+SELECT EXTRACT('nanosecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 # Keep precision when coercing Utf8 to Timestamp
 query R
@@ -930,6 +1087,293 @@ query R
 SELECT date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456780
+
+# test_date_part_time
+
+## time32 seconds
+query R
+SELECT date_part('hour', arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+23
+
+query R
+SELECT extract(hour from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+23
+
+query R
+SELECT date_part('minute', arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+32
+
+query R
+SELECT extract(minute from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+32
+
+query R
+SELECT date_part('second', arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50
+
+query R
+SELECT extract(second from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50
+
+query R
+SELECT date_part('millisecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50000
+
+query R
+SELECT extract(millisecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50000
+
+query R
+SELECT date_part('microsecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50000000
+
+query R
+SELECT extract(microsecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50000000
+
+query R
+SELECT date_part('nanosecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50000000000
+
+query R
+SELECT extract(nanosecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50000000000
+
+query R
+SELECT date_part('epoch', arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+84770
+
+query R
+SELECT extract(epoch from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+84770
+
+## time32 milliseconds
+query R
+SELECT date_part('hour', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+23
+
+query R
+SELECT extract(hour from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+23
+
+query R
+SELECT date_part('minute', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+32
+
+query R
+SELECT extract(minute from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+32
+
+query R
+SELECT date_part('second', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50.123
+
+query R
+SELECT extract(second from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50.123
+
+query R
+SELECT date_part('millisecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50123
+
+query R
+SELECT extract(millisecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50123
+
+query R
+SELECT date_part('microsecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50123000
+
+query R
+SELECT extract(microsecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50123000
+
+query R
+SELECT date_part('nanosecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50123000000
+
+query R
+SELECT extract(nanosecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50123000000
+
+query R
+SELECT date_part('epoch', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+84770.123
+
+query R
+SELECT extract(epoch from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+84770.123
+
+## time64 microseconds
+query R
+SELECT date_part('hour', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+23
+
+query R
+SELECT extract(hour from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+23
+
+query R
+SELECT date_part('minute', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+32
+
+query R
+SELECT extract(minute from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+32
+
+query R
+SELECT date_part('second', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50.123456
+
+query R
+SELECT extract(second from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50.123456
+
+query R
+SELECT date_part('millisecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50123.456
+
+query R
+SELECT extract(millisecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50123.456
+
+query R
+SELECT date_part('microsecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50123456
+
+query R
+SELECT extract(microsecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50123456
+
+query R
+SELECT date_part('nanosecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50123456000
+
+query R
+SELECT extract(nanosecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50123456000
+
+query R
+SELECT date_part('epoch', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+84770.123456
+
+query R
+SELECT extract(epoch from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+84770.123456
+
+## time64 nanoseconds
+query R
+SELECT date_part('hour', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+23
+
+query R
+SELECT extract(hour from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+23
+
+query R
+SELECT date_part('minute', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+32
+
+query R
+SELECT extract(minute from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+32
+
+query R
+SELECT date_part('second', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50.123456789
+
+query R
+SELECT extract(second from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50.123456789
+
+query R
+SELECT date_part('millisecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123.456789
+
+query R
+SELECT extract(millisecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123.456789
+
+# just some floating point stuff happening in the result here
+query R
+SELECT date_part('microsecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123456.789000005
+
+query R
+SELECT extract(microsecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123456.789000005
+
+query R
+SELECT date_part('nanosecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123456789
+
+query R
+SELECT extract(nanosecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123456789
+
+query R
+SELECT date_part('epoch', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+84770.123456789
+
+query R
+SELECT extract(epoch from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+84770.123456789
 
 # test_extract_epoch
 
@@ -1555,6 +1999,17 @@ SELECT digest('','blake3');
 ----
 af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
 
+
+query T
+SELECT substring('alphabet', 1)
+----
+alphabet
+
+query T
+SELECT substring('alphabet', 3, 2)
+----
+ph
+
 query T
 SELECT substring('alphabet' from 2 for 1);
 ----
@@ -1569,6 +2024,23 @@ query T
 SELECT substring('alphabet' for 1);
 ----
 a
+
+# The 'from' and 'for' parameters don't support string types, because they should be treated as
+# regular expressions, which we have not implemented yet.
+query error
+SELECT substring('alphabet' FROM '3')
+
+query error
+SELECT substring('alphabet' FROM '3' FOR '2')
+
+query error
+SELECT substring('alphabet' FROM '3' FOR 2)
+
+query error
+SELECT substring('alphabet' FROM 3 FOR '2')
+
+query error
+SELECT substring('alphabet' FOR '2')
 
 ##### csv_query_nullif_divide_by_0
 
@@ -1590,8 +2062,8 @@ CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 
 
@@ -1884,7 +2356,7 @@ CREATE TABLE t_source(
     column1 String,
     column2 String,
     column3 String,
-    column4 String,
+    column4 String
 ) AS VALUES
 ('one', 'one', 'one', 'one'),
 ('two', 'two', '', 'two'),
@@ -1910,3 +2382,241 @@ false true false true
 NULL NULL NULL NULL
 false false true true
 false false true false
+
+
+#############
+## Common Subexpr Eliminate Tests
+#############
+
+statement ok
+CREATE TABLE doubles (
+    f64 DOUBLE
+) as VALUES
+  (10.1)
+;
+
+# common subexpr with alias
+query RRR rowsort
+select f64, round(1.0 / f64) as i64_1, acos(round(1.0 / f64)) from doubles;
+----
+10.1 0 1.570796326795
+
+# common subexpr with coalesce (short-circuited)
+query RRR
+select f64, coalesce(1.0 / f64, 0.0), acos(coalesce(1.0 / f64, 0.0)) from doubles;
+----
+10.1 0.09900990099 1.471623942989
+
+# common subexpr with coalesce (short-circuited) and alias
+query RRR
+select f64, coalesce(1.0 / f64, 0.0) as f64_1, acos(coalesce(1.0 / f64, 0.0)) from doubles;
+----
+10.1 0.09900990099 1.471623942989
+
+# common subexpr with case (short-circuited)
+query RRR rowsort
+select f64, case when f64 > 0 then 1.0 / f64 else null end, acos(case when f64 > 0 then 1.0 / f64 else null end) from doubles;
+----
+10.1 0.09900990099 1.471623942989
+
+
+statement ok
+CREATE TABLE t1(
+    time TIMESTAMP,
+    load1 DOUBLE,
+    load2 DOUBLE,
+    host VARCHAR
+) AS VALUES
+  (to_timestamp_nanos(1527018806000000000), 1.1, 101, 'host1'),
+  (to_timestamp_nanos(1527018806000000000), 2.2, 202, 'host2'),
+  (to_timestamp_nanos(1527018806000000000), 3.3, 303, 'host3'),
+  (to_timestamp_nanos(1527018806000000000), 1.1, 101, NULL)
+;
+
+# struct scalar function with columns
+query ?
+select struct(time,load1,load2,host) from t1;
+----
+{c0: 2018-05-22T19:53:26, c1: 1.1, c2: 101.0, c3: host1}
+{c0: 2018-05-22T19:53:26, c1: 2.2, c2: 202.0, c3: host2}
+{c0: 2018-05-22T19:53:26, c1: 3.3, c2: 303.0, c3: host3}
+{c0: 2018-05-22T19:53:26, c1: 1.1, c2: 101.0, c3: }
+
+# can have an aggregate function with an inner coalesce
+query TR
+select t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] as host, sum(coalesce(t2."struct(t1.time,t1.load1,t1.load2,t1.host)")['c1']) from (select struct(time,load1,load2,host) from t1) t2 where t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] IS NOT NULL group by t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] order by host;
+----
+host1 1.1
+host2 2.2
+host3 3.3
+
+# can have an aggregate function with an inner CASE WHEN
+query TR
+select 
+    t2.server_host as host, 
+    sum((
+        case when t2.server_host is not null 
+        then t2.server_load2
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host)['c2'] as server_load2,
+            struct(time,load1,load2,host)['c3'] as server_host
+        from t1
+    ) t2 
+    where server_host IS NOT NULL 
+    group by server_host order by host;
+----
+host1 101
+host2 202
+host3 303
+
+# TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
+query TR
+select 
+    t2.server['c3'] as host, 
+    sum((
+        case when t2.server['c3'] is not null 
+        then t2.server['c2']
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host) as server
+        from t1
+    ) t2 
+    where t2.server['c3'] IS NOT NULL 
+    group by t2.server['c3'] order by host;
+----
+host1 101
+host2 202
+host3 303
+
+# can have 2 projections with aggr(short_circuited), with different short-circuited expr
+query TRR
+select 
+    t2.server_host as host, 
+    sum(coalesce(server_load1)),
+    sum((
+        case when t2.server_host is not null 
+        then t2.server_load2
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host)['c1'] as server_load1,
+            struct(time,load1,load2,host)['c2'] as server_load2,
+            struct(time,load1,load2,host)['c3'] as server_host
+        from t1
+    ) t2 
+    where server_host IS NOT NULL 
+    group by server_host order by host;
+----
+host1 1.1 101
+host2 2.2 202
+host3 3.3 303
+
+# TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
+query error
+select 
+    t2.server['c3'] as host, 
+    sum(coalesce(server['c1'])),
+    sum((
+        case when t2.server['c3'] is not null 
+        then t2.server['c2']
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host) as server,
+        from t1
+    ) t2 
+    where server_host IS NOT NULL 
+    group by server_host order by host;
+
+query TRR
+select 
+    t2.server_host as host, 
+    sum((
+        case when t2.server_host is not null 
+        then server_load1 
+        end
+    )), 
+    sum((
+        case when server_host is not null 
+        then server_load2 
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host)['c1'] as server_load1,
+            struct(time,load1,load2,host)['c2'] as server_load2,
+            struct(time,load1,load2,host)['c3'] as server_host
+        from t1
+    ) t2 
+    where server_host IS NOT NULL 
+    group by server_host order by host;
+----
+host1 1.1 101
+host2 2.2 202
+host3 3.3 303
+
+# TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
+query TRR
+select 
+    t2.server['c3'] as host, 
+    sum((
+        case when t2.server['c3'] is not null 
+        then t2.server['c1']
+        end
+    )), 
+    sum((
+        case when t2.server['c3'] is not null 
+        then t2.server['c2']
+        end
+    )) 
+    from (
+        select 
+            struct(time,load1,load2,host) as server 
+        from t1
+    ) t2 
+    where t2.server['c3'] IS NOT NULL 
+    group by t2.server['c3'] order by host;
+----
+host1 1.1 101
+host2 2.2 202
+host3 3.3 303
+
+# can have 2 projections with aggr(short_circuited), with the same short-circuited expr (e.g. coalesce)
+query TRR
+select t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] as host, sum(coalesce(t2."struct(t1.time,t1.load1,t1.load2,t1.host)")['c1']), sum(coalesce(t2."struct(t1.time,t1.load1,t1.load2,t1.host)")['c2']) from (select struct(time,load1,load2,host) from t1) t2 where t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] IS NOT NULL group by t2."struct(t1.time,t1.load1,t1.load2,t1.host)"['c3'] order by host;
+----
+host1 1.1 101
+host2 2.2 202
+host3 3.3 303
+
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+statement ok
+create table t (a float) as values (1), (2), (3);
+
+query TT
+explain select min(a) filter (where a > 1) as x from t;
+----
+logical_plan
+01)Projection: MIN(t.a) FILTER (WHERE t.a > Int64(1)) AS x
+02)--Aggregate: groupBy=[[]], aggr=[[MIN(t.a) FILTER (WHERE t.a > Float32(1)) AS MIN(t.a) FILTER (WHERE t.a > Int64(1))]]
+03)----TableScan: t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[MIN(t.a) FILTER (WHERE t.a > Int64(1))@0 as x]
+02)--AggregateExec: mode=Single, gby=[], aggr=[MIN(t.a) FILTER (WHERE t.a > Int64(1))]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+
+
+statement ok
+drop table t;
+
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';

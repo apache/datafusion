@@ -15,26 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::{collections::HashMap, sync::Arc};
+
 use arrow_schema::{DataType, Field, Schema};
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
+use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::WindowUDF;
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
+use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_sql::{
     planner::{ContextProvider, SqlToRel},
     sqlparser::{dialect::GenericDialect, parser::Parser},
     TableReference,
 };
-use std::{collections::HashMap, sync::Arc};
 
 fn main() {
     let sql = "SELECT \
             c.id, c.first_name, c.last_name, \
             COUNT(*) as num_orders, \
-            SUM(o.price) AS total_price, \
-            SUM(o.price * s.sales_tax) AS state_tax \
+            sum(o.price) AS total_price, \
+            sum(o.price * s.sales_tax) AS state_tax \
         FROM customer c \
         JOIN state s ON c.state = s.id \
         JOIN orders o ON c.id = o.customer_id \
@@ -49,7 +55,10 @@ fn main() {
     let statement = &ast[0];
 
     // create a logical query plan
-    let context_provider = MyContextProvider::new();
+    let context_provider = MyContextProvider::new()
+        .with_udaf(sum_udaf())
+        .with_udaf(count_udaf())
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
@@ -60,9 +69,21 @@ fn main() {
 struct MyContextProvider {
     options: ConfigOptions,
     tables: HashMap<String, Arc<dyn TableSource>>,
+    udafs: HashMap<String, Arc<AggregateUDF>>,
+    expr_planners: Vec<Arc<dyn ExprPlanner>>,
 }
 
 impl MyContextProvider {
+    fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
+        self.udafs.insert(udaf.name().to_string(), udaf);
+        self
+    }
+
+    fn with_expr_planner(mut self, planner: Arc<dyn ExprPlanner>) -> Self {
+        self.expr_planners.push(planner);
+        self
+    }
+
     fn new() -> Self {
         let mut tables = HashMap::new();
         tables.insert(
@@ -94,6 +115,8 @@ impl MyContextProvider {
         Self {
             tables,
             options: Default::default(),
+            udafs: Default::default(),
+            expr_planners: vec![],
         }
     }
 }
@@ -107,7 +130,7 @@ fn create_table_source(fields: Vec<Field>) -> Arc<dyn TableSource> {
 impl ContextProvider for MyContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         match self.tables.get(name.table()) {
-            Some(table) => Ok(table.clone()),
+            Some(table) => Ok(Arc::clone(table)),
             _ => plan_err!("Table not found: {}", name.table()),
         }
     }
@@ -116,8 +139,8 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
-    fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-        None
+    fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+        self.udafs.get(name).cloned()
     }
 
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
@@ -130,5 +153,21 @@ impl ContextProvider for MyContextProvider {
 
     fn options(&self) -> &ConfigOptions {
         &self.options
+    }
+
+    fn udf_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn udaf_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn udwf_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.expr_planners
     }
 }

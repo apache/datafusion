@@ -25,46 +25,48 @@ use crate::expr::{Alias, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
 };
+use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
 
 mod order_by;
 pub use order_by::rewrite_sort_cols_by_aggs;
 
-/// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
-/// in the `expr` expression tree.
-pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    expr.transform(&|expr| {
-        Ok({
-            if let Expr::Column(c) = expr {
-                let col = LogicalPlanBuilder::normalize(plan, c)?;
-                Transformed::yes(Expr::Column(col))
-            } else {
-                Transformed::no(expr)
-            }
-        })
-    })
-    .data()
+/// Trait for rewriting [`Expr`]s into function calls.
+///
+/// This trait is used with `FunctionRegistry::register_function_rewrite` to
+/// to evaluating `Expr`s using functions that may not be built in to DataFusion
+///
+/// For example, concatenating arrays `a || b` is represented as
+/// `Operator::ArrowAt`, but can be implemented by calling a function
+/// `array_concat` from the `functions-nested` crate.
+// This is not used in datafusion internally, but it is still helpful for downstream project so don't remove it.
+pub trait FunctionRewrite {
+    /// Return a human readable name for this rewrite
+    fn name(&self) -> &str;
+
+    /// Potentially rewrite `expr` to some other expression
+    ///
+    /// Note that recursion is handled by the caller -- this method should only
+    /// handle `expr`, not recurse to its children.
+    fn rewrite(
+        &self,
+        expr: Expr,
+        schema: &DFSchema,
+        config: &ConfigOptions,
+    ) -> Result<Transformed<Expr>>;
 }
 
 /// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
-#[deprecated(
-    since = "20.0.0",
-    note = "use normalize_col_with_schemas_and_ambiguity_check instead"
-)]
-#[allow(deprecated)]
-pub fn normalize_col_with_schemas(
-    expr: Expr,
-    schemas: &[&Arc<DFSchema>],
-    using_columns: &[HashSet<Column>],
-) -> Result<Expr> {
-    expr.transform(&|expr| {
+pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
+    expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
-                let col = c.normalize_with_schemas(schemas, using_columns)?;
+                let col = LogicalPlanBuilder::normalize(plan, c)?;
                 Transformed::yes(Expr::Column(col))
             } else {
                 Transformed::no(expr)
@@ -81,16 +83,16 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
     // Normalize column inside Unnest
-    if let Expr::Unnest(Unnest { exprs }) = expr {
+    if let Expr::Unnest(Unnest { expr }) = expr {
         let e = normalize_col_with_schemas_and_ambiguity_check(
-            exprs[0].clone(),
+            expr.as_ref().clone(),
             schemas,
             using_columns,
         )?;
-        return Ok(Expr::Unnest(Unnest { exprs: vec![e] }));
+        return Ok(Expr::Unnest(Unnest { expr: Box::new(e) }));
     }
 
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
                 let col =
@@ -118,7 +120,7 @@ pub fn normalize_cols(
 /// Recursively replace all [`Column`] expressions in a given expression tree with
 /// `Column` expressions provided by the hash map argument.
 pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = &expr {
                 match replace_map.get(c) {
@@ -139,7 +141,7 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
 /// For example, if there were expressions like `foo.bar` this would
 /// rewrite it to just `bar`.
 pub fn unnormalize_col(expr: Expr) -> Expr {
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
                 let col = Column {
@@ -153,7 +155,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
         })
     })
     .data()
-    .expect("Unnormalize is infallable")
+    .expect("Unnormalize is infallible")
 }
 
 /// Create a Column from the Scalar Expr
@@ -162,13 +164,20 @@ pub fn create_col_from_scalar_expr(
     subqry_alias: String,
 ) -> Result<Column> {
     match scalar_expr {
-        Expr::Alias(Alias { name, .. }) => Ok(Column::new(Some(subqry_alias), name)),
-        Expr::Column(Column { relation: _, name }) => {
-            Ok(Column::new(Some(subqry_alias), name))
-        }
+        Expr::Alias(Alias { name, .. }) => Ok(Column::new(
+            Some::<TableReference>(subqry_alias.into()),
+            name,
+        )),
+        Expr::Column(Column { relation: _, name }) => Ok(Column::new(
+            Some::<TableReference>(subqry_alias.into()),
+            name,
+        )),
         _ => {
             let scalar_column = scalar_expr.display_name()?;
-            Ok(Column::new(Some(subqry_alias), scalar_column))
+            Ok(Column::new(
+                Some::<TableReference>(subqry_alias.into()),
+                scalar_column,
+            ))
         }
     }
 }
@@ -182,7 +191,7 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 /// Recursively remove all the ['OuterReferenceColumn'] and return the inside Column
 /// in the expression tree.
 pub fn strip_outer_reference(expr: Expr) -> Expr {
-    expr.transform(&|expr| {
+    expr.transform(|expr| {
         Ok({
             if let Expr::OuterReferenceColumn(_, col) = expr {
                 Transformed::yes(Expr::Column(col))
@@ -192,7 +201,7 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
         })
     })
     .data()
-    .expect("strip_outer_reference is infallable")
+    .expect("strip_outer_reference is infallible")
 }
 
 /// Returns plan with expressions coerced to types compatible with
@@ -206,19 +215,14 @@ pub fn coerce_plan_expr_for_schema(
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
             let new_exprs =
                 coerce_exprs_for_schema(expr.clone(), input.schema(), schema)?;
-            let projection = Projection::try_new(new_exprs, input.clone())?;
+            let projection = Projection::try_new(new_exprs, Arc::clone(input))?;
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
-            let exprs: Vec<Expr> = plan
-                .schema()
-                .fields()
-                .iter()
-                .map(|field| Expr::Column(field.qualified_column()))
-                .collect();
+            let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
 
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
-            let add_project = new_exprs.iter().any(|expr| expr.try_into_col().is_err());
+            let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
             if add_project {
                 let projection = Projection::try_new(new_exprs, Arc::new(plan.clone()))?;
                 Ok(LogicalPlan::Projection(projection))
@@ -247,7 +251,7 @@ fn coerce_exprs_for_schema(
                     _ => expr.cast_to(new_type, src_schema),
                 }
             } else {
-                Ok(expr.clone())
+                Ok(expr)
             }
         })
         .collect::<Result<_>>()
@@ -283,10 +287,8 @@ mod test {
     use super::*;
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
-
-    use arrow::datatypes::DataType;
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
-    use datafusion_common::{DFField, DFSchema, ScalarValue};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
 
     #[derive(Default)]
     struct RecordingRewriter {
@@ -328,7 +330,7 @@ mod test {
         // rewrites "foo" --> "bar"
         let rewritten = col("state")
             .eq(lit("foo"))
-            .transform(&transformer)
+            .transform(transformer)
             .data()
             .unwrap();
         assert_eq!(rewritten, col("state").eq(lit("bar")));
@@ -336,7 +338,7 @@ mod test {
         // doesn't rewrite
         let rewritten = col("state")
             .eq(lit("baz"))
-            .transform(&transformer)
+            .transform(transformer)
             .data()
             .unwrap();
         assert_eq!(rewritten, col("state").eq(lit("baz")));
@@ -347,20 +349,21 @@ mod test {
         let expr = col("a") + col("b") + col("c");
 
         // Schemas with some matching and some non matching cols
-        let schema_a = make_schema_with_empty_metadata(vec![
-            make_field("tableA", "a"),
-            make_field("tableA", "aa"),
-        ]);
-        let schema_c = make_schema_with_empty_metadata(vec![
-            make_field("tableC", "cc"),
-            make_field("tableC", "c"),
-        ]);
-        let schema_b = make_schema_with_empty_metadata(vec![make_field("tableB", "b")]);
+        let schema_a = make_schema_with_empty_metadata(
+            vec![Some("tableA".into()), Some("tableA".into())],
+            vec!["a", "aa"],
+        );
+        let schema_c = make_schema_with_empty_metadata(
+            vec![Some("tableC".into()), Some("tableC".into())],
+            vec!["cc", "c"],
+        );
+        let schema_b =
+            make_schema_with_empty_metadata(vec![Some("tableB".into())], vec!["b"]);
         // non matching
-        let schema_f = make_schema_with_empty_metadata(vec![
-            make_field("tableC", "f"),
-            make_field("tableC", "ff"),
-        ]);
+        let schema_f = make_schema_with_empty_metadata(
+            vec![Some("tableC".into()), Some("tableC".into())],
+            vec!["f", "ff"],
+        );
         let schemas = vec![schema_c, schema_f, schema_b, schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
@@ -374,30 +377,12 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn normalize_cols_priority() {
-        let expr = col("a") + col("b");
-        // Schemas with multiple matches for column a, first takes priority
-        let schema_a = make_schema_with_empty_metadata(vec![make_field("tableA", "a")]);
-        let schema_b = make_schema_with_empty_metadata(vec![make_field("tableB", "b")]);
-        let schema_a2 = make_schema_with_empty_metadata(vec![make_field("tableA2", "a")]);
-        let schemas = vec![schema_a2, schema_b, schema_a]
-            .into_iter()
-            .map(Arc::new)
-            .collect::<Vec<_>>();
-        let schemas = schemas.iter().collect::<Vec<_>>();
-
-        let normalized_expr = normalize_col_with_schemas(expr, &schemas, &[]).unwrap();
-        assert_eq!(normalized_expr, col("tableA2.a") + col("tableB.b"));
-    }
-
-    #[test]
     fn normalize_cols_non_exist() {
         // test normalizing columns when the name doesn't exist
         let expr = col("a") + col("b");
         let schema_a =
-            make_schema_with_empty_metadata(vec![make_field("\"tableA\"", "a")]);
-        let schemas = vec![schema_a];
+            make_schema_with_empty_metadata(vec![Some("\"tableA\"".into())], vec!["a"]);
+        let schemas = [schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
         let error =
@@ -417,12 +402,16 @@ mod test {
         assert_eq!(unnormalized_expr, col("a") + col("b"));
     }
 
-    fn make_schema_with_empty_metadata(fields: Vec<DFField>) -> DFSchema {
-        DFSchema::new_with_metadata(fields, HashMap::new()).unwrap()
-    }
-
-    fn make_field(relation: &str, column: &str) -> DFField {
-        DFField::new(Some(relation.to_string()), column, DataType::Int8, false)
+    fn make_schema_with_empty_metadata(
+        qualifiers: Vec<Option<TableReference>>,
+        fields: Vec<&str>,
+    ) -> DFSchema {
+        let fields = fields
+            .iter()
+            .map(|f| Arc::new(Field::new(f.to_string(), DataType::Int8, false)))
+            .collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new(fields));
+        DFSchema::from_field_specific_qualified_schema(qualifiers, &schema).unwrap()
     }
 
     #[test]

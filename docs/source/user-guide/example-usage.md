@@ -19,44 +19,21 @@
 
 # Example Usage
 
-In this example some simple processing is performed on the [`example.csv`](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/data/example.csv) file.
+In this example some simple processing is performed on the [`example.csv`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/data/example.csv) file.
 
-Even [`more code examples`](https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples) attached to the project.
+Even [`more code examples`](https://github.com/apache/datafusion/tree/main/datafusion-examples) attached to the project.
 
-## Add DataFusion as a dependency
+## Add published DataFusion dependency
 
 Find latest available Datafusion version on [DataFusion's
 crates.io] page. Add the dependency to your `Cargo.toml` file:
 
 ```toml
-datafusion = "31"
-tokio = "1.0"
+datafusion = "latest_version"
+tokio = { version = "1.0", features = ["rt-multi-thread"] }
 ```
 
-## Add DataFusion latest codebase as a dependency
-
-Cargo supports adding dependency directly from Github which allows testing out latest DataFusion codebase without waiting the code to be released to crates.io
-according to the [DataFusion release schedule](https://github.com/apache/arrow-datafusion/blob/main/dev/release/README.md#release-process)
-
-```toml
-datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main"}
-```
-
-Also it works on the package level
-
-```toml
-datafusion-common = { git = "https://github.com/apache/arrow-datafusion", branch = "main", package = "datafusion-common"}
-```
-
-And with features
-
-```toml
-datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main", default-features = false, features = ["unicode_expressions"] }
-```
-
-More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
-
-## Run a SQL query against data stored in a CSV:
+## Run a SQL query against data stored in a CSV
 
 ```rust
 use datafusion::prelude::*;
@@ -76,7 +53,10 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
-## Use the DataFrame API to process data stored in a CSV:
+See [the SQL API](../library-user-guide/using-the-sql-api.md) section of the
+library guide for more information on the SQL API.
+
+## Use the DataFrame API to process data stored in a CSV
 
 ```rust
 use datafusion::prelude::*;
@@ -198,91 +178,3 @@ async fn main() -> datafusion::error::Result<()> {
 | 1 | 2      |
 +---+--------+
 ```
-
-## Extensibility
-
-DataFusion is designed to be extensible at all points. To that end, you can provide your own custom:
-
-- [x] User Defined Functions (UDFs)
-- [x] User Defined Aggregate Functions (UDAFs)
-- [x] User Defined Table Source (`TableProvider`) for tables
-- [x] User Defined `Optimizer` passes (plan rewrites)
-- [x] User Defined `LogicalPlan` nodes
-- [x] User Defined `ExecutionPlan` nodes
-
-## Optimized Configuration
-
-For an optimized build several steps are required. First, use the below in your `Cargo.toml`. It is
-worth noting that using the settings in the `[profile.release]` section will significantly increase the build time.
-
-```toml
-[dependencies]
-datafusion = { version = "22.0" }
-tokio = { version = "^1.0", features = ["rt-multi-thread"] }
-snmalloc-rs = "0.3"
-
-[profile.release]
-lto = true
-codegen-units = 1
-```
-
-Then, in `main.rs.` update the memory allocator with the below after your imports:
-
-```rust ,ignore
-use datafusion::prelude::*;
-
-#[global_allocator]
-static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
-
-#[tokio::main]
-async fn main() -> datafusion::error::Result<()> {
-  Ok(())
-}
-```
-
-Finally, in order to build with the `simd` optimization `cargo nightly` is required.
-
-```shell
-rustup toolchain install nightly
-```
-
-Based on the instruction set architecture you are building on you will want to configure the `target-cpu` as well, ideally
-with `native` or at least `avx2`.
-
-```shell
-RUSTFLAGS='-C target-cpu=native' cargo +nightly run --release
-```
-
-## Enable backtraces
-
-By default Datafusion returns errors as a plain message. There is option to enable more verbose details about the error,
-like error backtrace. To enable a backtrace you need to add Datafusion `backtrace` feature to your `Cargo.toml` file:
-
-```toml
-datafusion = { version = "31.0.0", features = ["backtrace"]}
-```
-
-Set environment [variables](https://doc.rust-lang.org/std/backtrace/index.html#environment-variables)
-
-```bash
-RUST_BACKTRACE=1 ./target/debug/datafusion-cli
-DataFusion CLI v31.0.0
-❯ select row_numer() over (partition by a order by a) from (select 1 a);
-Error during planning: Invalid function 'row_numer'.
-Did you mean 'ROW_NUMBER'?
-
-backtrace:    0: std::backtrace_rs::backtrace::libunwind::trace
-             at /rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/../../backtrace/src/backtrace/libunwind.rs:93:5
-   1: std::backtrace_rs::backtrace::trace_unsynchronized
-             at /rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/../../backtrace/src/backtrace/mod.rs:66:5
-   2: std::backtrace::Backtrace::create
-             at /rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/backtrace.rs:332:13
-   3: std::backtrace::Backtrace::capture
-             at /rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/backtrace.rs:298:9
-   4: datafusion_common::error::DataFusionError::get_back_trace
-             at /arrow-datafusion/datafusion/common/src/error.rs:436:30
-   5: datafusion_sql::expr::function::<impl datafusion_sql::planner::SqlToRel<S>>::sql_function_to_expr
-   ............
-```
-
-Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored

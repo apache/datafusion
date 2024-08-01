@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
@@ -21,25 +23,39 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::coalesce_partitions::CoalescePartitionsExec;
-use crate::display::DisplayableExecutionPlan;
-use crate::metrics::MetricsSet;
-use crate::repartition::RepartitionExec;
-use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
-
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use futures::stream::{StreamExt, TryStreamExt};
+use tokio::task::JoinSet;
+
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::utils::DataPtr;
-use datafusion_common::Result;
+pub use datafusion_common::hash_utils;
+pub use datafusion_common::utils::project_schema;
+use datafusion_common::{exec_err, Result};
+pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::Column;
+pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+pub use datafusion_expr::{Accumulator, ColumnarValue};
+pub use datafusion_physical_expr::window::WindowExpr;
+pub use datafusion_physical_expr::{
+    expressions, functions, udf, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
+};
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use futures::stream::TryStreamExt;
-use tokio::task::JoinSet;
+use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::display::DisplayableExecutionPlan;
+pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+pub use crate::metrics::Metric;
+use crate::metrics::MetricsSet;
+pub use crate::ordering::InputOrderMode;
+use crate::repartition::RepartitionExec;
+use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
+pub use crate::stream::EmptyRecordBatchStream;
+use crate::stream::RecordBatchStreamAdapter;
+pub use crate::topk::TopK;
+pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 mod ordering;
 mod topk;
@@ -64,34 +80,21 @@ pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
 pub mod sorts;
+pub mod spill;
 pub mod stream;
 pub mod streaming;
 pub mod tree_node;
-pub mod udaf;
 pub mod union;
 pub mod unnest;
 pub mod values;
 pub mod windows;
 pub mod work_table;
 
-pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-pub use crate::metrics::Metric;
-pub use crate::ordering::InputOrderMode;
-pub use crate::topk::TopK;
-pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
-
-pub use datafusion_common::hash_utils;
-pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
-pub use datafusion_expr::{Accumulator, ColumnarValue};
-pub use datafusion_physical_expr::window::WindowExpr;
-pub use datafusion_physical_expr::{
-    expressions, functions, udf, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
-};
-
-// Backwards compatibility
-pub use crate::stream::EmptyRecordBatchStream;
-pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+pub mod udaf {
+    pub use datafusion_physical_expr_common::aggregate::{
+        create_aggregate_expr, create_aggregate_expr_with_dfschema, AggregateFunctionExpr,
+    };
+}
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -113,13 +116,36 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
+    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    ///
+    /// Implementation note: this method can just proxy to
+    /// [`static_name`](ExecutionPlan::static_name) if no special action is
+    /// needed. It doesn't provide a default implementation like that because
+    /// this method doesn't require the `Sized` constrain to allow a wilder
+    /// range of use cases.
+    fn name(&self) -> &str;
+
+    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
+    fn static_name() -> &'static str
+    where
+        Self: Sized,
+    {
+        let full_name = std::any::type_name::<Self>();
+        let maybe_start_idx = full_name.rfind(':');
+        match maybe_start_idx {
+            Some(start_idx) => &full_name[start_idx + 1..],
+            None => "UNKNOWN",
+        }
+    }
+
     /// Returns the execution plan as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
-        self.properties().schema().clone()
+        Arc::clone(self.properties().schema())
     }
 
     /// Return properties of the output of the `ExecutionPlan`, such as output
@@ -191,7 +217,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// The returned list will be empty for leaf nodes such as scans, will contain
     /// a single value for unary nodes, or two values for binary nodes (such as
     /// joins).
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>>;
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>>;
 
     /// Returns a new `ExecutionPlan` where all existing children were replaced
     /// by the `children`, in order
@@ -402,6 +428,22 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }
+
+    /// Returns `true` if a limit can be safely pushed down through this
+    /// `ExecutionPlan` node.
+    ///
+    /// If this method returns `true`, and the query plan contains a limit at
+    /// the output of this node, DataFusion will push the limit to the input
+    /// of this node.
+    fn supports_limit_pushdown(&self) -> bool {
+        false
+    }
+
+    /// Returns a fetching variant of this `ExecutionPlan` node, if it supports
+    /// fetch limits. Returns `None` otherwise.
+    fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
 }
 
 /// Extension trait provides an easy API to fetch various properties of
@@ -566,7 +608,7 @@ impl PlanProperties {
         execution_mode: ExecutionMode,
     ) -> Self {
         // Output ordering can be derived from `eq_properties`.
-        let output_ordering = eq_properties.oeq_class().output_ordering();
+        let output_ordering = eq_properties.output_ordering();
         Self {
             eq_properties,
             partitioning,
@@ -591,7 +633,7 @@ impl PlanProperties {
     pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
         // Changing equivalence properties also changes output ordering, so
         // make sure to overwrite it:
-        self.output_ordering = eq_properties.oeq_class().output_ordering();
+        self.output_ordering = eq_properties.output_ordering();
         self.eq_properties = eq_properties;
         self
     }
@@ -659,7 +701,7 @@ pub fn with_new_children_if_necessary(
         || children
             .iter()
             .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
+            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
         plan.with_new_children(children)
     } else {
@@ -700,7 +742,7 @@ pub fn execute_stream(
         1 => plan.execute(0, context),
         _ => {
             // merge into a single partition
-            let plan = CoalescePartitionsExec::new(plan.clone());
+            let plan = CoalescePartitionsExec::new(Arc::clone(&plan));
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.properties().output_partitioning().partition_count());
             plan.execute(0, context)
@@ -762,9 +804,100 @@ pub fn execute_stream_partitioned(
     let num_partitions = plan.output_partitioning().partition_count();
     let mut streams = Vec::with_capacity(num_partitions);
     for i in 0..num_partitions {
-        streams.push(plan.execute(i, context.clone())?);
+        streams.push(plan.execute(i, Arc::clone(&context))?);
     }
     Ok(streams)
+}
+
+/// Executes an input stream and ensures that the resulting stream adheres to
+/// the `not null` constraints specified in the `sink_schema`.
+///
+/// # Arguments
+///
+/// * `input` - An execution plan
+/// * `sink_schema` - The schema to be applied to the output stream
+/// * `partition` - The partition index to be executed
+/// * `context` - The task context
+///
+/// # Returns
+///
+/// * `Result<SendableRecordBatchStream>` - A stream of `RecordBatch`es if successful
+///
+/// This function first executes the given input plan for the specified partition
+/// and context. It then checks if there are any columns in the input that might
+/// violate the `not null` constraints specified in the `sink_schema`. If there are
+/// such columns, it wraps the resulting stream to enforce the `not null` constraints
+/// by invoking the `check_not_null_contraits` function on each batch of the stream.
+pub fn execute_input_stream(
+    input: Arc<dyn ExecutionPlan>,
+    sink_schema: SchemaRef,
+    partition: usize,
+    context: Arc<TaskContext>,
+) -> Result<SendableRecordBatchStream> {
+    let input_stream = input.execute(partition, context)?;
+
+    debug_assert_eq!(sink_schema.fields().len(), input.schema().fields().len());
+
+    // Find input columns that may violate the not null constraint.
+    let risky_columns: Vec<_> = sink_schema
+        .fields()
+        .iter()
+        .zip(input.schema().fields().iter())
+        .enumerate()
+        .filter_map(|(idx, (sink_field, input_field))| {
+            (!sink_field.is_nullable() && input_field.is_nullable()).then_some(idx)
+        })
+        .collect();
+
+    if risky_columns.is_empty() {
+        Ok(input_stream)
+    } else {
+        // Check not null constraint on the input stream
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            sink_schema,
+            input_stream
+                .map(move |batch| check_not_null_contraits(batch?, &risky_columns)),
+        )))
+    }
+}
+
+/// Checks a `RecordBatch` for `not null` constraints on specified columns.
+///
+/// # Arguments
+///
+/// * `batch` - The `RecordBatch` to be checked
+/// * `column_indices` - A vector of column indices that should be checked for
+///   `not null` constraints.
+///
+/// # Returns
+///
+/// * `Result<RecordBatch>` - The original `RecordBatch` if all constraints are met
+///
+/// This function iterates over the specified column indices and ensures that none
+/// of the columns contain null values. If any column contains null values, an error
+/// is returned.
+pub fn check_not_null_contraits(
+    batch: RecordBatch,
+    column_indices: &Vec<usize>,
+) -> Result<RecordBatch> {
+    for &index in column_indices {
+        if batch.num_columns() <= index {
+            return exec_err!(
+                "Invalid batch column count {} expected > {}",
+                batch.num_columns(),
+                index
+            );
+        }
+
+        if batch.column(index).null_count() > 0 {
+            return exec_err!(
+                "Invalid batch column at '{}' has null but schema specifies non-nullable",
+                index
+            );
+        }
+    }
+
+    Ok(batch)
 }
 
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].
@@ -775,7 +908,155 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 }
 
 #[cfg(test)]
-#[allow(clippy::single_component_path_imports)]
-use rstest_reuse;
+mod tests {
+    use std::any::Any;
+    use std::sync::Arc;
+
+    use arrow_schema::{Schema, SchemaRef};
+
+    use datafusion_common::{Result, Statistics};
+    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+
+    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+
+    #[derive(Debug)]
+    pub struct EmptyExec;
+
+    impl EmptyExec {
+        pub fn new(_schema: SchemaRef) -> Self {
+            Self
+        }
+    }
+
+    impl DisplayAs for EmptyExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for EmptyExec {
+        fn name(&self) -> &'static str {
+            Self::static_name()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            unimplemented!()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+
+        fn statistics(&self) -> Result<Statistics> {
+            unimplemented!()
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct RenamedEmptyExec;
+
+    impl RenamedEmptyExec {
+        pub fn new(_schema: SchemaRef) -> Self {
+            Self
+        }
+    }
+
+    impl DisplayAs for RenamedEmptyExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for RenamedEmptyExec {
+        fn name(&self) -> &'static str {
+            Self::static_name()
+        }
+
+        fn static_name() -> &'static str
+        where
+            Self: Sized,
+        {
+            "MyRenamedEmptyExec"
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            unimplemented!()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+
+        fn statistics(&self) -> Result<Statistics> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_execution_plan_name() {
+        let schema1 = Arc::new(Schema::empty());
+        let default_name_exec = EmptyExec::new(schema1);
+        assert_eq!(default_name_exec.name(), "EmptyExec");
+
+        let schema2 = Arc::new(Schema::empty());
+        let renamed_exec = RenamedEmptyExec::new(schema2);
+        assert_eq!(renamed_exec.name(), "MyRenamedEmptyExec");
+        assert_eq!(RenamedEmptyExec::static_name(), "MyRenamedEmptyExec");
+    }
+
+    /// A compilation test to ensure that the `ExecutionPlan::name()` method can
+    /// be called from a trait object.
+    /// Related ticket: https://github.com/apache/datafusion/pull/11047
+    #[allow(dead_code)]
+    fn use_execution_plan_as_trait_object(plan: &dyn ExecutionPlan) {
+        let _ = plan.name();
+    }
+}
 
 pub mod test;

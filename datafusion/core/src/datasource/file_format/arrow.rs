@@ -21,42 +21,43 @@
 
 use std::any::Any;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
+use super::file_compression_type::FileCompressionType;
+use super::write::demux::start_demuxer_task;
+use super::write::{create_writer, SharedBuffer};
+use super::FileFormatFactory;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::physical_plan::{
     ArrowExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use arrow::ipc::convert::fb_to_schema;
 use arrow::ipc::reader::FileReader;
-use arrow::ipc::root_as_message;
-use arrow_ipc::writer::IpcWriteOptions;
-use arrow_ipc::CompressionType;
+use arrow::ipc::writer::IpcWriteOptions;
+use arrow::ipc::{root_as_message, CompressionType};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-
-use bytes::Bytes;
-use datafusion_common::{not_impl_err, DataFusionError, FileType, Statistics};
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{
+    not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
+};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-
-use crate::physical_plan::{DisplayAs, DisplayFormatType};
-use async_trait::async_trait;
-use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
+use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
-
-use super::file_compression_type::FileCompressionType;
-use super::write::demux::start_demuxer_task;
-use super::write::{create_writer, SharedBuffer};
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -64,6 +65,42 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 
 /// If the buffered Arrow data exceeds this size, it is flushed to object store
 const BUFFER_FLUSH_BYTES: usize = 1024000;
+
+#[derive(Default, Debug)]
+/// Factory struct used to create [ArrowFormat]
+pub struct ArrowFormatFactory;
+
+impl ArrowFormatFactory {
+    /// Creates an instance of [ArrowFormatFactory]
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl FileFormatFactory for ArrowFormatFactory {
+    fn create(
+        &self,
+        _state: &SessionState,
+        _format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        Ok(Arc::new(ArrowFormat))
+    }
+
+    fn default(&self) -> Arc<dyn FileFormat> {
+        Arc::new(ArrowFormat)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl GetExt for ArrowFormatFactory {
+    fn get_ext(&self) -> String {
+        // Removes the dot, i.e. ".parquet" -> "parquet"
+        DEFAULT_ARROW_EXTENSION[1..].to_string()
+    }
+}
 
 /// Arrow `FileFormat` implementation.
 #[derive(Default, Debug)]
@@ -73,6 +110,23 @@ pub struct ArrowFormat;
 impl FileFormat for ArrowFormat {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn get_ext(&self) -> String {
+        ArrowFormatFactory::new().get_ext()
+    }
+
+    fn get_ext_with_compression(
+        &self,
+        file_compression_type: &FileCompressionType,
+    ) -> Result<String> {
+        let ext = self.get_ext();
+        match file_compression_type.get_variant() {
+            CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
+            _ => Err(DataFusionError::Internal(
+                "Arrow FileFormat does not support compression.".into(),
+            )),
+        }
     }
 
     async fn infer_schema(
@@ -133,16 +187,12 @@ impl FileFormat for ArrowFormat {
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(ArrowFileSink::new(conf));
 
-        Ok(Arc::new(FileSinkExec::new(
+        Ok(Arc::new(DataSinkExec::new(
             input,
             sink,
             sink_schema,
             order_requirements,
         )) as _)
-    }
-
-    fn file_type(&self) -> FileType {
-        FileType::ARROW
     }
 }
 
@@ -215,11 +265,6 @@ impl DataSink for ArrowFileSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        // No props are supported yet, but can be by updating FileTypeWriterOptions
-        // to populate this struct and use those options to initialize the arrow_ipc::writer::FileWriter
-        // https://github.com/apache/arrow-datafusion/issues/8635
-        let _arrow_props = self.config.file_type_writer_options.try_into_arrow()?;
-
         let object_store = context
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
@@ -236,6 +281,7 @@ impl DataSink for ArrowFileSink {
             part_col,
             self.config.table_paths[0].clone(),
             "arrow".into(),
+            self.config.keep_partition_by_columns,
         );
 
         let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
@@ -311,7 +357,7 @@ async fn infer_schema_from_file_stream(
     // Expected format:
     // <magic number "ARROW1"> - 6 bytes
     // <empty padding bytes [to 8 byte boundary]> - 2 bytes
-    // <continutation: 0xFFFFFFFF> - 4 bytes, not present below v0.15.0
+    // <continuation: 0xFFFFFFFF> - 4 bytes, not present below v0.15.0
     // <metadata_size: int32> - 4 bytes
     // <metadata_flatbuffer: bytes>
     // <rest of file bytes>
@@ -323,7 +369,7 @@ async fn infer_schema_from_file_stream(
     // Files should start with these magic bytes
     if bytes[0..6] != ARROW_MAGIC {
         return Err(ArrowError::ParseError(
-            "Arrow file does not contian correct header".to_string(),
+            "Arrow file does not contain correct header".to_string(),
         ))?;
     }
 
@@ -390,12 +436,11 @@ async fn collect_at_least_n_bytes(
 
 #[cfg(test)]
 mod tests {
-    use chrono::DateTime;
-    use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
-
+    use super::*;
     use crate::execution::context::SessionContext;
 
-    use super::*;
+    use chrono::DateTime;
+    use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
 
     #[tokio::test]
     async fn test_infer_schema_stream() -> Result<()> {

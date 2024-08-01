@@ -33,7 +33,7 @@ set -o pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ARROW_DIR="$(dirname $(dirname ${SOURCE_DIR}))"
-ARROW_DIST_URL='https://dist.apache.org/repos/dist/dev/arrow'
+ARROW_DIST_URL='https://dist.apache.org/repos/dist/dev/datafusion'
 
 download_dist_file() {
   curl \
@@ -45,7 +45,7 @@ download_dist_file() {
 }
 
 download_rc_file() {
-  download_dist_file apache-arrow-datafusion-${VERSION}-rc${RC_NUMBER}/$1
+  download_dist_file apache-datafusion-${VERSION}-rc${RC_NUMBER}/$1
 }
 
 import_gpg_keys() {
@@ -143,11 +143,11 @@ test_source_distribution() {
 
 TEST_SUCCESS=no
 
-setup_tempdir "arrow-${VERSION}"
+setup_tempdir "datafusion-${VERSION}"
 echo "Working in sandbox ${ARROW_TMPDIR}"
 cd ${ARROW_TMPDIR}
 
-dist_name="apache-arrow-datafusion-${VERSION}"
+dist_name="apache-datafusion-${VERSION}"
 import_gpg_keys
 fetch_archive ${dist_name}
 tar xf ${dist_name}.tar.gz

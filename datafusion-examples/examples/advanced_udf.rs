@@ -15,26 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::{
-    arrow::{
-        array::{ArrayRef, Float32Array, Float64Array},
-        datatypes::DataType,
-        record_batch::RecordBatch,
-    },
-    logical_expr::Volatility,
-};
 use std::any::Any;
+use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, AsArray};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, AsArray, Float32Array, Float64Array,
+};
 use arrow::compute;
-use arrow::datatypes::Float64Type;
+use arrow::datatypes::{DataType, Float64Type};
+use arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
+use datafusion::logical_expr::Volatility;
 use datafusion::prelude::*;
 use datafusion_common::{internal_err, ScalarValue};
-use datafusion_expr::{
-    ColumnarValue, FuncMonotonicity, ScalarUDF, ScalarUDFImpl, Signature,
-};
-use std::sync::Arc;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature};
 
 /// This example shows how to use the full ScalarUDFImpl API to implement a user
 /// defined function. As in the `simple_udf.rs` example, this struct implements
@@ -186,8 +181,9 @@ impl ScalarUDFImpl for PowUdf {
         &self.aliases
     }
 
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(Some(vec![Some(true)]))
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        // The POW function preserves the order of its argument.
+        Ok(input[0].sort_properties)
     }
 }
 

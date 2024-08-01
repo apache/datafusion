@@ -33,8 +33,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE aggregate_simple (
@@ -43,8 +43,8 @@ CREATE EXTERNAL TABLE aggregate_simple (
   c3 BOOLEAN NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
 
 ##########
 ## SELECT Tests
@@ -101,7 +101,7 @@ statement ok
 CREATE TABLE test (
   c1 BIGINT NOT NULL,
   c2 BIGINT NOT NULL,
-  c3 BOOLEAN NOT NULL,
+  c3 BOOLEAN NOT NULL
 ) AS VALUES (0, 1, false),
 (0, 10, true),
 (0, 2, true),
@@ -336,13 +336,13 @@ three 1
 NULL 1
 
 # select_values_list
-statement error DataFusion error: SQL error: ParserError\("Expected \(, found: EOF"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: \(, found: EOF"\)
 VALUES
 
-statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
 VALUES ()
 
-statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
 VALUES (1),()
 
 statement error DataFusion error: Error during planning: Inconsistent data length across values list: got 2 values in row 1 but expected 1
@@ -351,8 +351,11 @@ VALUES (1),(1,2)
 statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
 VALUES (1),('2')
 
-statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
+query R
 VALUES (1),(2.0)
+----
+1
+2
 
 statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 1
 VALUES (1,2), (1,'2')
@@ -473,6 +476,13 @@ CREATE TABLE foo AS VALUES
 (3, 4),
 (5, 6);
 
+# multiple rows and columns need type coercion
+statement ok
+CREATE TABLE foo2(c1 double, c2 double) AS VALUES
+(1.1, 4.1),
+(2, 5),
+(3, 6);
+
 # foo distinct
 query T
 select distinct '1' from foo;
@@ -488,7 +498,7 @@ select '1' from foo order by column1;
 1
 
 # foo distinct order by
-statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions column1 must appear in select list
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions foo\.column1 must appear in select list
 select distinct '1' from foo order by column1;
 
 # distincts for float nan
@@ -526,16 +536,16 @@ query TT
 EXPLAIN SELECT * FROM ((SELECT column1 FROM foo) "T1" CROSS JOIN (SELECT column2 FROM foo) "T2") AS "F"
 ----
 logical_plan
-SubqueryAlias: F
---CrossJoin:
-----SubqueryAlias: T1
-------TableScan: foo projection=[column1]
-----SubqueryAlias: T2
-------TableScan: foo projection=[column2]
+01)SubqueryAlias: F
+02)--CrossJoin:
+03)----SubqueryAlias: T1
+04)------TableScan: foo projection=[column1]
+05)----SubqueryAlias: T2
+06)------TableScan: foo projection=[column2]
 physical_plan
-CrossJoinExec
---MemoryExec: partitions=1, partition_sizes=[1]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)CrossJoinExec
+02)--MemoryExec: partitions=1, partition_sizes=[1]
+03)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # select NaNs
 query BBBB
@@ -550,8 +560,30 @@ select * from (select 1 a union all select 2) b order by a limit 1;
 1
 
 # select limit clause invalid
-statement error DataFusion error: Error during planning: LIMIT must not be negative
+statement error DataFusion error: Error during planning: LIMIT must be >= 0, '\-1' was provided\.
 select * from (select 1 a union all select 2) b order by a limit -1;
+
+# select limit with basic arithmetic
+query I
+select * from (select 1 a union all select 2) b order by a limit 1+1;
+----
+1
+2
+
+# select limit with basic arithmetic
+query I
+select * from (values (1)) LIMIT 10*100;
+----
+1
+
+# More complex expressions in the limit is not supported yet.
+# See issue: https://github.com/apache/datafusion/issues/9821
+statement error DataFusion error: Error during planning: Unsupported operator for LIMIT clause
+select * from (values (1)) LIMIT 100/10;
+
+# More complex expressions in the limit is not supported yet.
+statement error DataFusion error: Error during planning: Unexpected expression in LIMIT clause
+select * from (values (1)) LIMIT cast(column1 as tinyint);
 
 # select limit clause
 query I
@@ -581,8 +613,35 @@ END;
 ----
 2
 
+# select case when type is null
+query I
+select CASE
+  WHEN NULL THEN 1
+  ELSE 2
+END;
+----
+2
+
+# select case then type is null
+query I
+select CASE
+  WHEN 10 > 5 THEN NULL
+  ELSE 2
+END;
+----
+NULL
+
+# select case else type is null
+query I
+select CASE
+  WHEN 10 = 5 THEN 1
+  ELSE NULL
+END;
+----
+NULL
+
 # Binary Expression for LargeUtf8
-# issue: https://github.com/apache/arrow-datafusion/issues/5893
+# issue: https://github.com/apache/datafusion/issues/5893
 statement ok
 CREATE TABLE t as select arrow_cast('Bar', 'LargeUtf8') as column1, 'B%' as column2;
 
@@ -794,11 +853,11 @@ query TT
 EXPLAIN SELECT c1 BETWEEN 2 AND 3 FROM select_between_data
 ----
 logical_plan
-Projection: select_between_data.c1 >= Int64(2) AND select_between_data.c1 <= Int64(3) AS select_between_data.c1 BETWEEN Int64(2) AND Int64(3)
---TableScan: select_between_data projection=[c1]
+01)Projection: select_between_data.c1 >= Int64(2) AND select_between_data.c1 <= Int64(3) AS select_between_data.c1 BETWEEN Int64(2) AND Int64(3)
+02)--TableScan: select_between_data projection=[c1]
 physical_plan
-ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN Int64(2) AND Int64(3)]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN Int64(2) AND Int64(3)]
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # TODO: query_get_indexed_field
@@ -1045,9 +1104,9 @@ CREATE EXTERNAL TABLE annotated_data_finite2 (
   d INTEGER
 )
 STORED AS CSV
-WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-LOCATION '../core/tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
 
 # test_source_projection
 
@@ -1059,12 +1118,10 @@ EXPLAIN SELECT a FROM annotated_data_finite2
         LIMIT 5
 ----
 logical_plan
-Limit: skip=0, fetch=5
---Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
-----TableScan: annotated_data_finite2 projection=[a]
-physical_plan
-GlobalLimitExec: skip=0, fetch=5
---CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+01)Limit: skip=0, fetch=5
+02)--Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
+03)----TableScan: annotated_data_finite2 projection=[a]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], limit=5, output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 query I
 SELECT a FROM annotated_data_finite2
@@ -1166,6 +1223,63 @@ statement ok
 SELECT * EXCEPT(a, b, c, d)
 FROM table1
 
+# try zero column with LIMIT, 1 row but empty
+statement ok
+SELECT * EXCEPT (a, b, c, d)
+FROM table1
+LIMIT 1
+
+# try zero column with GROUP BY, 2 row but empty
+statement ok
+SELECT * EXCEPT (a, b, c, d)
+FROM table1
+GROUP BY a
+
+# try zero column with WHERE, 1 row but empty
+statement ok
+SELECT * EXCEPT (a, b, c, d)
+FROM table1
+WHERE a = 1
+
+# create table2 the same with table1
+statement ok
+CREATE TABLE table2 (
+  a int,
+  b int,
+  c int,
+  d int
+) as values
+  (1, 10, 100, 1000),
+  (2, 20, 200, 2000);
+
+# try zero column with inner JOIN, 2 row but empty
+statement ok
+WITH t1 AS (SELECT a AS t1_a FROM table1), t2 AS (SELECT a AS t2_a FROM table2)
+SELECT * EXCEPT (t1_a, t2_a)
+FROM t1
+JOIN t2 ON (t1_a = t2_a)
+
+# try zero column with more JOIN, 2 row but empty
+statement ok
+SELECT * EXCEPT (b1, b2)
+FROM (
+  SELECT b AS b1 FROM table1
+)
+JOIN (
+  SELECT b AS b2 FROM table2
+) ON b1 = b2
+
+# try zero column with Window, 2 row but empty
+statement ok
+SELECT * EXCEPT (a, b, row_num)
+FROM (
+    SELECT
+        a,
+        b,
+        ROW_NUMBER() OVER (ORDER BY b) AS row_num
+    FROM table1
+)
+
 # EXCLUDE order shouldn't matter
 query II
 SELECT * EXCLUDE(b, a)
@@ -1186,11 +1300,11 @@ query TT
 EXPLAIN select a as a FROM table1 order by a
 ----
 logical_plan
-Sort: table1.a ASC NULLS LAST
---TableScan: table1 projection=[a]
+01)Sort: table1.a ASC NULLS LAST
+02)--TableScan: table1 projection=[a]
 physical_plan
-SortExec: expr=[a@0 ASC NULLS LAST]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # ambiguous column references in on join
 query error DataFusion error: Schema error: Ambiguous reference to unqualified field a
@@ -1209,14 +1323,14 @@ FROM annotated_data_finite2
 ORDER BY a ASC;
 ----
 logical_plan
-Sort: annotated_data_finite2.a ASC NULLS LAST
---Projection: annotated_data_finite2.a, annotated_data_finite2.a + annotated_data_finite2.b
-----TableScan: annotated_data_finite2 projection=[a, b]
+01)Sort: annotated_data_finite2.a ASC NULLS LAST
+02)--Projection: annotated_data_finite2.a, annotated_data_finite2.a + annotated_data_finite2.b
+03)----TableScan: annotated_data_finite2 projection=[a, b]
 physical_plan
-SortPreservingMergeExec: [a@0 ASC NULLS LAST]
---ProjectionExec: expr=[a@0 as a, a@0 + b@1 as annotated_data_finite2.a + annotated_data_finite2.b]
-----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[a@0 as a, a@0 + b@1 as annotated_data_finite2.a + annotated_data_finite2.b]
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
 # since query below doesn't computation
 # inside projection expr, increasing partitions
@@ -1228,12 +1342,12 @@ FROM annotated_data_finite2
 ORDER BY a ASC;
 ----
 logical_plan
-Sort: annotated_data_finite2.a ASC NULLS LAST
---Projection: annotated_data_finite2.a, annotated_data_finite2.b, Int64(2)
-----TableScan: annotated_data_finite2 projection=[a, b]
+01)Sort: annotated_data_finite2.a ASC NULLS LAST
+02)--Projection: annotated_data_finite2.a, annotated_data_finite2.b, Int64(2)
+03)----TableScan: annotated_data_finite2 projection=[a, b]
 physical_plan
-ProjectionExec: expr=[a@0 as a, b@1 as b, 2 as Int64(2)]
---CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+01)ProjectionExec: expr=[a@0 as a, b@1 as b, 2 as Int64(2)]
+02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a
@@ -1246,15 +1360,15 @@ WHERE a=0
 ORDER BY b, c;
 ----
 logical_plan
-Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
---Filter: annotated_data_finite2.a = Int32(0)
-----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
+01)Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
+02)--Filter: annotated_data_finite2.a = Int32(0)
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
 physical_plan
-SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
---CoalesceBatchesExec: target_batch_size=8192
-----FilterExec: a@1 = 0
-------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: a@1 = 0
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a and b
@@ -1267,15 +1381,15 @@ WHERE a=0 and b=0
 ORDER BY c;
 ----
 logical_plan
-Sort: annotated_data_finite2.c ASC NULLS LAST
---Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
-----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
+01)Sort: annotated_data_finite2.c ASC NULLS LAST
+02)--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
-SortPreservingMergeExec: [c@3 ASC NULLS LAST]
---CoalesceBatchesExec: target_batch_size=8192
-----FilterExec: a@1 = 0 AND b@2 = 0
-------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [c@3 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: a@1 = 0 AND b@2 = 0
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a and b
@@ -1288,15 +1402,15 @@ WHERE a=0 and b=0
 ORDER BY b, c;
 ----
 logical_plan
-Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
---Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
-----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
+01)Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
+02)--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
-SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
---CoalesceBatchesExec: target_batch_size=8192
-----FilterExec: a@1 = 0 AND b@2 = 0
-------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: a@1 = 0 AND b@2 = 0
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a and b
@@ -1309,15 +1423,15 @@ WHERE a=0 and b=0
 ORDER BY a, b, c;
 ----
 logical_plan
-Sort: annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
---Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
-----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
+01)Sort: annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
+02)--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
-SortPreservingMergeExec: [a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
---CoalesceBatchesExec: target_batch_size=8192
-----FilterExec: a@1 = 0 AND b@2 = 0
-------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: a@1 = 0 AND b@2 = 0
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 
 # source is ordered by a,b,c
 # when filter result is when filter contains or
@@ -1330,16 +1444,16 @@ WHERE a=0 or b=0
 ORDER BY c;
 ----
 logical_plan
-Sort: annotated_data_finite2.c ASC NULLS LAST
---Filter: annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)
-----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)]
+01)Sort: annotated_data_finite2.c ASC NULLS LAST
+02)--Filter: annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)]
 physical_plan
-SortPreservingMergeExec: [c@3 ASC NULLS LAST]
---SortExec: expr=[c@3 ASC NULLS LAST]
-----CoalesceBatchesExec: target_batch_size=8192
-------FilterExec: a@1 = 0 OR b@2 = 0
---------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [c@3 ASC NULLS LAST]
+02)--SortExec: expr=[c@3 ASC NULLS LAST], preserve_partitioning=[true]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------FilterExec: a@1 = 0 OR b@2 = 0
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 
 # When ordering lost during projection, we shouldn't keep the SortExec.
 # in the final physical plan.
@@ -1351,18 +1465,39 @@ ORDER BY c1, c2)
 GROUP BY c2;
 ----
 logical_plan
-Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---Projection: aggregate_test_100.c2
-----Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST
-------Projection: aggregate_test_100.c2, aggregate_test_100.c1
---------TableScan: aggregate_test_100 projection=[c1, c2]
+01)Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[count(Int64(1)) AS count(*)]]
+02)--Projection: aggregate_test_100.c2
+03)----Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST
+04)------Projection: aggregate_test_100.c2, aggregate_test_100.c1
+05)--------TableScan: aggregate_test_100 projection=[c1, c2]
 physical_plan
-AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[COUNT(*)]
---CoalesceBatchesExec: target_batch_size=8192
-----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
-------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[COUNT(*)]
---------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2], has_header=true
+01)AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(*)]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
+04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(*)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2], has_header=true
+
+# FilterExec can track equality of non-column expressions.
+# plan below shouldn't have a SortExec because given column 'a' is ordered.
+# 'CAST(ROUND(b) as INT)' is also ordered. After filter is applied.
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_finite2
+WHERE CAST(ROUND(b) as INT) = a
+ORDER BY CAST(ROUND(b) as INT);
+----
+logical_plan
+01)Sort: CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) ASC NULLS LAST
+02)--Filter: CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) = annotated_data_finite2.a
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[CAST(round(CAST(annotated_data_finite2.b AS Float64)) AS Int32) = annotated_data_finite2.a]
+physical_plan
+01)SortPreservingMergeExec: [CAST(round(CAST(b@2 AS Float64)) AS Int32) ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: CAST(round(CAST(b@2 AS Float64)) AS Int32) = a@1
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
 
 statement ok
 drop table annotated_data_finite2;
@@ -1383,13 +1518,13 @@ query TT
 EXPLAIN SELECT x/2, x/2+1 FROM t;
 ----
 logical_plan
-Projection: t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2), t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2) + Int64(1)
---Projection: t.x / Int64(2) AS t.x / Int64(2)Int64(2)t.x
-----TableScan: t projection=[x]
+01)Projection: __common_expr_1 AS t.x / Int64(2), __common_expr_1 AS t.x / Int64(2) + Int64(1)
+02)--Projection: t.x / Int64(2) AS __common_expr_1
+03)----TableScan: t projection=[x]
 physical_plan
-ProjectionExec: expr=[t.x / Int64(2)Int64(2)t.x@0 as t.x / Int64(2), t.x / Int64(2)Int64(2)t.x@0 + 1 as t.x / Int64(2) + Int64(1)]
---ProjectionExec: expr=[x@0 / 2 as t.x / Int64(2)Int64(2)t.x]
-----MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[__common_expr_1@0 as t.x / Int64(2), __common_expr_1@0 + 1 as t.x / Int64(2) + Int64(1)]
+02)--ProjectionExec: expr=[x@0 / 2 as __common_expr_1]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT x/2, x/2+1 FROM t;
@@ -1401,13 +1536,13 @@ query TT
 EXPLAIN SELECT abs(x), abs(x) + abs(y) FROM t;
 ----
 logical_plan
-Projection: abs(t.x)t.x AS abs(t.x), abs(t.x)t.x AS abs(t.x) + abs(t.y)
---Projection: abs(t.x) AS abs(t.x)t.x, t.y
-----TableScan: t projection=[x, y]
+01)Projection: __common_expr_1 AS abs(t.x), __common_expr_1 AS abs(t.x) + abs(t.y)
+02)--Projection: abs(t.x) AS __common_expr_1, t.y
+03)----TableScan: t projection=[x, y]
 physical_plan
-ProjectionExec: expr=[abs(t.x)t.x@0 as abs(t.x), abs(t.x)t.x@0 + abs(y@1) as abs(t.x) + abs(t.y)]
---ProjectionExec: expr=[abs(x@0) as abs(t.x)t.x, y@1 as y]
-----MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[__common_expr_1@0 as abs(t.x), __common_expr_1@0 + abs(y@1) as abs(t.x) + abs(t.y)]
+02)--ProjectionExec: expr=[abs(x@0) as __common_expr_1, y@1 as y]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT abs(x), abs(x) + abs(y) FROM t;
@@ -1418,7 +1553,7 @@ SELECT abs(x), abs(x) + abs(y) FROM t;
 statement ok
 DROP TABLE t;
 
-# related to https://github.com/apache/arrow-datafusion/issues/8814
+# related to https://github.com/apache/datafusion/issues/8814
 statement ok
 create table t(x int, y int) as values (1,1), (2,2), (3,3), (0,0), (4,0);
 
@@ -1441,33 +1576,37 @@ query TT
 explain select coalesce(1, y/x), coalesce(2, y/x) from t;
 ----
 logical_plan
-Projection: coalesce(Int64(1), CAST(t.y / t.x AS Int64)), coalesce(Int64(2), CAST(t.y / t.x AS Int64))
---TableScan: t projection=[x, y]
+01)Projection: coalesce(Int64(1), CAST(t.y / t.x AS Int64)), coalesce(Int64(2), CAST(t.y / t.x AS Int64))
+02)--TableScan: t projection=[x, y]
 physical_plan
-ProjectionExec: expr=[coalesce(1, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(1),t.y / t.x), coalesce(2, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(2),t.y / t.x)]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[coalesce(1, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(1),t.y / t.x), coalesce(2, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(2),t.y / t.x)]
+02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
 ----
 logical_plan
-Projection: t.y > Int32(0) AND Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y > Int64(0) AND Int64(1) / t.y < Int64(1), t.x > Int32(0) AND t.y > Int32(0) AND Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x
---TableScan: t projection=[x, y]
+01)Projection: __common_expr_1 AND Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y > Int64(0) AND Int64(1) / t.y < Int64(1), t.x > Int32(0) AND __common_expr_1 AND Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x
+02)--Projection: t.y > Int32(0) AS __common_expr_1, t.x, t.y
+03)----TableScan: t projection=[x, y]
 physical_plan
-ProjectionExec: expr=[y@1 > 0 AND 1 / CAST(y@1 AS Int64) < 1 as t.y > Int64(0) AND Int64(1) / t.y < Int64(1), x@0 > 0 AND y@1 > 0 AND 1 / CAST(y@1 AS Int64) < 1 / CAST(x@0 AS Int64) as t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[__common_expr_1@0 AND 1 / CAST(y@2 AS Int64) < 1 as t.y > Int64(0) AND Int64(1) / t.y < Int64(1), x@1 > 0 AND __common_expr_1@0 AND 1 / CAST(y@2 AS Int64) < 1 / CAST(x@1 AS Int64) as t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x]
+02)--ProjectionExec: expr=[y@1 > 0 as __common_expr_1, x@0 as x, y@1 as y]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
 ----
 logical_plan
-Projection: t.y = Int32(0) OR Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y = Int64(0) OR Int64(1) / t.y < Int64(1), t.x = Int32(0) OR t.y = Int32(0) OR Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x
---TableScan: t projection=[x, y]
+01)Projection: __common_expr_1 OR Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y = Int64(0) OR Int64(1) / t.y < Int64(1), t.x = Int32(0) OR __common_expr_1 OR Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x
+02)--Projection: t.y = Int32(0) AS __common_expr_1, t.x, t.y
+03)----TableScan: t projection=[x, y]
 physical_plan
-ProjectionExec: expr=[y@1 = 0 OR 1 / CAST(y@1 AS Int64) < 1 as t.y = Int64(0) OR Int64(1) / t.y < Int64(1), x@0 = 0 OR y@1 = 0 OR 1 / CAST(y@1 AS Int64) < 1 / CAST(x@0 AS Int64) as t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x]
---MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[__common_expr_1@0 OR 1 / CAST(y@2 AS Int64) < 1 as t.y = Int64(0) OR Int64(1) / t.y < Int64(1), x@1 = 0 OR __common_expr_1@0 OR 1 / CAST(y@2 AS Int64) < 1 / CAST(x@1 AS Int64) as t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x]
+02)--ProjectionExec: expr=[y@1 = 0 as __common_expr_1, x@0 as x, y@1 as y]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
 
-# due to the reason describe in https://github.com/apache/arrow-datafusion/issues/8927,
+# due to the reason describe in https://github.com/apache/datafusion/issues/8927,
 # the following queries will fail
 query error
 select coalesce(1, y/x), coalesce(2, y/x) from t;
@@ -1550,7 +1689,7 @@ SELECT to_timestamp('I AM NOT A TIMESTAMP');
 query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 SELECT CAST('' AS int);
 
-# See issue: https://github.com/apache/arrow-datafusion/issues/8978
+# See issue: https://github.com/apache/datafusion/issues/8978
 statement ok
 create table users (id int, name varchar);
 
@@ -1569,6 +1708,23 @@ query I
 select count(1) from v;
 ----
 1
+
+# Ensure CSE resolves columns correctly
+# should be 3, not 1
+# https://github.com/apache/datafusion/issues/10413
+query I
+select a + b from (select 1 as a, 2 as b, 1 as "a + b");
+----
+3
+
+# Can't reference an output column by expression over projection.
+query error DataFusion error: Schema error: No field named a\. Valid fields are "a \+ Int64\(1\)"\.
+select a + 1 from (select a+1 from (select 1 as a));
+
+query I
+select "a + Int64(1)" + 10 from (select a+1 from (select 1 as a));
+----
+12
 
 # run below query without logical optimizations
 statement ok

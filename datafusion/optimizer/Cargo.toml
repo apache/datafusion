@@ -28,15 +28,16 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints]
+workspace = true
+
 [lib]
 name = "datafusion_optimizer"
 path = "src/lib.rs"
 
 [features]
-crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
-default = ["unicode_expressions", "crypto_expressions", "regex_expressions"]
+default = ["regex_expressions"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
-unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -45,12 +46,16 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
-hashbrown = { version = "0.14", features = ["raw"] }
+hashbrown = { workspace = true }
+indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
+paste = "1.0.14"
 regex-syntax = "0.8.0"
 
 [dev-dependencies]
+arrow-buffer = { workspace = true }
 ctor = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }

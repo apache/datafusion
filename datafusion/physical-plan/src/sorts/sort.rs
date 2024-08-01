@@ -22,18 +22,16 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::fs::File;
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::common::{spawn_buffered, IPCWriter};
+use crate::common::spawn_buffered;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use crate::sorts::streaming_merge::streaming_merge;
-use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
+use crate::spill::{read_spill_as_stream, spill_record_batches};
+use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
@@ -43,24 +41,19 @@ use crate::{
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn};
 use arrow::datatypes::SchemaRef;
-use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
-use arrow_array::{Array, UInt32Array};
+use arrow_array::{Array, RecordBatchOptions, UInt32Array};
 use arrow_schema::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_common_runtime::SpawnedTask;
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
-use datafusion_execution::memory_pool::{
-    human_readable_size, MemoryConsumer, MemoryReservation,
-};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 
 use futures::{StreamExt, TryStreamExt};
-use log::{debug, error, trace};
-use tokio::sync::mpsc::Sender;
+use log::{debug, trace};
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -71,6 +64,9 @@ struct ExternalSorterMetrics {
 
     /// total spilled bytes during the execution of the operator
     spilled_bytes: Count,
+
+    /// total spilled rows during the execution of the operator
+    spilled_rows: Count,
 }
 
 impl ExternalSorterMetrics {
@@ -79,6 +75,7 @@ impl ExternalSorterMetrics {
             baseline: BaselineMetrics::new(metrics, partition),
             spill_count: MetricBuilder::new(metrics).spill_count(partition),
             spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
+            spilled_rows: MetricBuilder::new(metrics).spilled_rows(partition),
         }
     }
 }
@@ -93,14 +90,14 @@ impl ExternalSorterMetrics {
 /// 1. get a non-empty new batch from input
 ///
 /// 2. check with the memory manager there is sufficient space to
-///   buffer the batch in memory 2.1 if memory sufficient, buffer
-///   batch in memory, go to 1.
+///    buffer the batch in memory 2.1 if memory sufficient, buffer
+///    batch in memory, go to 1.
 ///
 /// 2.2 if no more memory is available, sort all buffered batches and
 ///     spill to file.  buffer the next batch in memory, go to 1.
 ///
 /// 3. when input is exhausted, merge all in memory batches and spills
-/// to get a total order.
+///    to get a total order.
 ///
 /// # When data fits in available memory
 ///
@@ -231,13 +228,13 @@ struct ExternalSorter {
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
     /// If the in size of buffered memory batches is below this size,
-    /// the data will be concated and sorted in place rather than
+    /// the data will be concatenated and sorted in place rather than
     /// sort/merged.
     sort_in_place_threshold_bytes: usize,
 }
 
 impl ExternalSorter {
-    // TOOD: make a builder or some other nicer API to avoid the
+    // TODO: make a builder or some other nicer API to avoid the
     // clippy warning
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -324,7 +321,7 @@ impl ExternalSorter {
     /// 1. An in-memory sort/merge (if the input fit in memory)
     ///
     /// 2. A combined streaming merge incorporating both in-memory
-    /// batches and data from spill files on disk.
+    ///    batches and data from spill files on disk.
     fn sort(&mut self) -> Result<SendableRecordBatchStream> {
         if self.spilled_before() {
             let mut streams = vec![];
@@ -336,18 +333,15 @@ impl ExternalSorter {
 
             for spill in self.spills.drain(..) {
                 if !spill.path().exists() {
-                    return Err(DataFusionError::Internal(format!(
-                        "Spill file {:?} does not exist",
-                        spill.path()
-                    )));
+                    return internal_err!("Spill file {:?} does not exist", spill.path());
                 }
-                let stream = read_spill_as_stream(spill, self.schema.clone())?;
+                let stream = read_spill_as_stream(spill, Arc::clone(&self.schema), 2)?;
                 streams.push(stream);
             }
 
             streaming_merge(
                 streams,
-                self.schema.clone(),
+                Arc::clone(&self.schema),
                 &self.expr,
                 self.metrics.baseline.clone(),
                 self.batch_size,
@@ -357,7 +351,9 @@ impl ExternalSorter {
         } else if !self.in_mem_batches.is_empty() {
             self.in_mem_sort_stream(self.metrics.baseline.clone())
         } else {
-            Ok(Box::pin(EmptyRecordBatchStream::new(self.schema.clone())))
+            Ok(Box::pin(EmptyRecordBatchStream::new(Arc::clone(
+                &self.schema,
+            ))))
         }
     }
 
@@ -371,13 +367,18 @@ impl ExternalSorter {
         self.metrics.spilled_bytes.value()
     }
 
+    /// How many rows have been spilled to disk?
+    fn spilled_rows(&self) -> usize {
+        self.metrics.spilled_rows.value()
+    }
+
     /// How many spill files have been created?
     fn spill_count(&self) -> usize {
         self.metrics.spill_count.value()
     }
 
     /// Writes any `in_memory_batches` to a spill file and clears
-    /// the batches. The contents of the spil file are sorted.
+    /// the batches. The contents of the spill file are sorted.
     ///
     /// Returns the amount of memory freed.
     async fn spill(&mut self) -> Result<usize> {
@@ -390,13 +391,18 @@ impl ExternalSorter {
 
         self.in_mem_sort().await?;
 
-        let spillfile = self.runtime.disk_manager.create_tmp_file("Sorting")?;
+        let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let batches = std::mem::take(&mut self.in_mem_batches);
-        spill_sorted_batches(batches, spillfile.path(), self.schema.clone()).await?;
+        let spilled_rows = spill_record_batches(
+            batches,
+            spill_file.path().into(),
+            Arc::clone(&self.schema),
+        )?;
         let used = self.reservation.free();
         self.metrics.spill_count.add(1);
         self.metrics.spilled_bytes.add(used);
-        self.spills.push(spillfile);
+        self.metrics.spilled_rows.add(spilled_rows);
+        self.spills.push(spill_file);
         Ok(used)
     }
 
@@ -521,7 +527,7 @@ impl ExternalSorter {
 
         streaming_merge(
             streams,
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             &self.expr,
             metrics,
             self.batch_size,
@@ -544,7 +550,7 @@ impl ExternalSorter {
         let schema = batch.schema();
 
         let fetch = self.fetch;
-        let expressions = self.expr.clone();
+        let expressions = Arc::clone(&self.expr);
         let stream = futures::stream::once(futures::future::lazy(move |_| {
             let sorted = sort_batch(&batch, &expressions, fetch)?;
             metrics.record_output(sorted.num_rows());
@@ -576,12 +582,13 @@ impl Debug for ExternalSorter {
         f.debug_struct("ExternalSorter")
             .field("memory_used", &self.used())
             .field("spilled_bytes", &self.spilled_bytes())
+            .field("spilled_rows", &self.spilled_rows())
             .field("spill_count", &self.spill_count())
             .finish()
     }
 }
 
-pub(crate) fn sort_batch(
+pub fn sort_batch(
     batch: &RecordBatch,
     expressions: &[PhysicalSortExpr],
     fetch: Option<usize>,
@@ -592,7 +599,7 @@ pub(crate) fn sort_batch(
         .collect::<Result<Vec<_>>>()?;
 
     let indices = if is_multi_column_with_lists(&sort_columns) {
-        // lex_sort_to_indices doesn't support List with more than one colum
+        // lex_sort_to_indices doesn't support List with more than one column
         // https://github.com/apache/arrow-rs/issues/5454
         lexsort_to_indices_multi_columns(sort_columns, fetch)?
     } else {
@@ -605,7 +612,12 @@ pub(crate) fn sort_batch(
         .map(|c| take(c.as_ref(), &indices, None))
         .collect::<Result<_, _>>()?;
 
-    Ok(RecordBatch::try_new(batch.schema(), columns)?)
+    let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+    Ok(RecordBatch::try_new_with_options(
+        batch.schema(),
+        columns,
+        &options,
+    )?)
 }
 
 #[inline]
@@ -650,67 +662,6 @@ pub(crate) fn lexsort_to_indices_multi_columns(
     Ok(indices)
 }
 
-async fn spill_sorted_batches(
-    batches: Vec<RecordBatch>,
-    path: &Path,
-    schema: SchemaRef,
-) -> Result<()> {
-    let path: PathBuf = path.into();
-    let task = SpawnedTask::spawn_blocking(move || write_sorted(batches, path, schema));
-    match task.join().await {
-        Ok(r) => r,
-        Err(e) => exec_err!("Error occurred while spilling {e}"),
-    }
-}
-
-pub(crate) fn read_spill_as_stream(
-    path: RefCountedTempFile,
-    schema: SchemaRef,
-) -> Result<SendableRecordBatchStream> {
-    let mut builder = RecordBatchReceiverStream::builder(schema, 2);
-    let sender = builder.tx();
-
-    builder.spawn_blocking(move || {
-        let result = read_spill(sender, path.path());
-        if let Err(e) = &result {
-            error!("Failure while reading spill file: {:?}. Error: {}", path, e);
-        }
-        result
-    });
-
-    Ok(builder.build())
-}
-
-fn write_sorted(
-    batches: Vec<RecordBatch>,
-    path: PathBuf,
-    schema: SchemaRef,
-) -> Result<()> {
-    let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
-    for batch in batches {
-        writer.write(&batch)?;
-    }
-    writer.finish()?;
-    debug!(
-        "Spilled {} batches of total {} rows to disk, memory released {}",
-        writer.num_batches,
-        writer.num_rows,
-        human_readable_size(writer.num_bytes as usize),
-    );
-    Ok(())
-}
-
-fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
-    let file = BufReader::new(File::open(path)?);
-    let reader = FileReader::try_new(file, None)?;
-    for batch in reader {
-        sender
-            .blocking_send(batch.map_err(Into::into))
-            .map_err(|e| DataFusionError::Execution(format!("{e}")))?;
-    }
-    Ok(())
-}
-
 /// Sort execution plan.
 ///
 /// Support sorting datasets that are larger than the memory allotted
@@ -733,16 +684,6 @@ pub struct SortExec {
 }
 
 impl SortExec {
-    /// Create a new sort execution plan
-    #[deprecated(since = "22.0.0", note = "use `new` and `with_fetch`")]
-    pub fn try_new(
-        expr: Vec<PhysicalSortExpr>,
-        input: Arc<dyn ExecutionPlan>,
-        fetch: Option<usize>,
-    ) -> Result<Self> {
-        Ok(Self::new(expr, input).with_fetch(fetch))
-    }
-
     /// Create a new sort execution plan that produces a single,
     /// sorted output partition.
     pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
@@ -758,23 +699,6 @@ impl SortExec {
         }
     }
 
-    /// Create a new sort execution plan with the option to preserve
-    /// the partitioning of the input plan
-    #[deprecated(
-        since = "22.0.0",
-        note = "use `new`, `with_fetch` and `with_preserve_partioning` instead"
-    )]
-    pub fn new_with_partitioning(
-        expr: Vec<PhysicalSortExpr>,
-        input: Arc<dyn ExecutionPlan>,
-        preserve_partitioning: bool,
-        fetch: Option<usize>,
-    ) -> Self {
-        Self::new(expr, input)
-            .with_fetch(fetch)
-            .with_preserve_partitioning(preserve_partitioning)
-    }
-
     /// Whether this `SortExec` preserves partitioning of the children
     pub fn preserve_partitioning(&self) -> bool {
         self.preserve_partitioning
@@ -783,7 +707,7 @@ impl SortExec {
     /// Specify the partitioning behavior of this sort exec
     ///
     /// If `preserve_partitioning` is true, sorts each partition
-    /// individually, producing one sorted strema for each input partition.
+    /// individually, producing one sorted stream for each input partition.
     ///
     /// If `preserve_partitioning` is false, sorts and merges all
     /// input partitions producing a single, sorted partition.
@@ -875,11 +799,12 @@ impl DisplayAs for SortExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr = PhysicalSortExpr::format_list(&self.expr);
+                let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}]",)
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]",)
                     }
-                    None => write!(f, "SortExec: expr=[{expr}]"),
+                    None => write!(f, "SortExec: expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]"),
                 }
             }
         }
@@ -887,6 +812,10 @@ impl DisplayAs for SortExec {
 }
 
 impl ExecutionPlan for SortExec {
+    fn name(&self) -> &'static str {
+        "SortExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -905,8 +834,8 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -917,7 +846,7 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let new_sort = SortExec::new(self.expr.clone(), children[0].clone())
+        let new_sort = SortExec::new(self.expr.clone(), Arc::clone(&children[0]))
             .with_fetch(self.fetch)
             .with_preserve_partitioning(self.preserve_partitioning);
 
@@ -931,7 +860,7 @@ impl ExecutionPlan for SortExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        let mut input = self.input.execute(partition, context.clone())?;
+        let mut input = self.input.execute(partition, Arc::clone(&context))?;
 
         let execution_options = &context.session_config().options().execution;
 
@@ -994,6 +923,17 @@ impl ExecutionPlan for SortExec {
     fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
     }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(SortExec {
+            input: Arc::clone(&self.input),
+            expr: self.expr.clone(),
+            metrics_set: self.metrics_set.clone(),
+            preserve_partitioning: self.preserve_partitioning,
+            fetch: limit,
+            cache: self.cache.clone(),
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -1016,6 +956,8 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeConfig;
 
+    use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::expressions::Literal;
     use futures::FutureExt;
 
     #[tokio::test]
@@ -1033,7 +975,7 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(csv)),
         ));
 
-        let result = collect(sort_exec, task_ctx.clone()).await?;
+        let result = collect(sort_exec, Arc::clone(&task_ctx)).await?;
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].num_rows(), 400);
@@ -1076,7 +1018,11 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
 
-        let result = collect(sort_exec.clone(), task_ctx.clone()).await?;
+        let result = collect(
+            Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
 
         assert_eq!(result.len(), 2);
 
@@ -1085,8 +1031,9 @@ mod tests {
 
         assert_eq!(metrics.output_rows().unwrap(), 10000);
         assert!(metrics.elapsed_compute().unwrap() > 0);
-        assert!(metrics.spill_count().unwrap() > 0);
-        assert!(metrics.spilled_bytes().unwrap() > 0);
+        assert_eq!(metrics.spill_count().unwrap(), 4);
+        assert_eq!(metrics.spilled_bytes().unwrap(), 38784);
+        assert_eq!(metrics.spilled_rows().unwrap(), 9600);
 
         let columns = result[0].columns();
 
@@ -1151,7 +1098,11 @@ mod tests {
                 .with_fetch(fetch),
             );
 
-            let result = collect(sort_exec.clone(), task_ctx.clone()).await?;
+            let result = collect(
+                Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
+                Arc::clone(&task_ctx),
+            )
+            .await?;
             assert_eq!(result.len(), 1);
 
             let metrics = sort_exec.metrics().unwrap();
@@ -1181,9 +1132,10 @@ mod tests {
         let data: ArrayRef =
             Arc::new(vec![3, 2, 1].into_iter().map(Some).collect::<UInt64Array>());
 
-        let batch = RecordBatch::try_new(schema.clone(), vec![data]).unwrap();
-        let input =
-            Arc::new(MemoryExec::try_new(&[vec![batch]], schema.clone(), None).unwrap());
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data]).unwrap();
+        let input = Arc::new(
+            MemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None).unwrap(),
+        );
 
         let sort_exec = Arc::new(SortExec::new(
             vec![PhysicalSortExpr {
@@ -1198,7 +1150,7 @@ mod tests {
         let expected_data: ArrayRef =
             Arc::new(vec![1, 2, 3].into_iter().map(Some).collect::<UInt64Array>());
         let expected_batch =
-            RecordBatch::try_new(schema.clone(), vec![expected_data]).unwrap();
+            RecordBatch::try_new(Arc::clone(&schema), vec![expected_data]).unwrap();
 
         // Data is correct
         assert_eq!(&vec![expected_batch], &result);
@@ -1224,7 +1176,7 @@ mod tests {
 
         // define data.
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![
                 Arc::new(Int32Array::from(vec![Some(2), None, Some(1), Some(2)])),
                 Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
@@ -1253,7 +1205,11 @@ mod tests {
                     },
                 },
             ],
-            Arc::new(MemoryExec::try_new(&[vec![batch]], schema.clone(), None)?),
+            Arc::new(MemoryExec::try_new(
+                &[vec![batch]],
+                Arc::clone(&schema),
+                None,
+            )?),
         ));
 
         assert_eq!(DataType::Int32, *sort_exec.schema().field(0).data_type());
@@ -1262,7 +1218,8 @@ mod tests {
             *sort_exec.schema().field(1).data_type()
         );
 
-        let result: Vec<RecordBatch> = collect(sort_exec.clone(), task_ctx).await?;
+        let result: Vec<RecordBatch> =
+            collect(Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>, task_ctx).await?;
         let metrics = sort_exec.metrics().unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
         assert_eq!(metrics.output_rows().unwrap(), 4);
@@ -1296,7 +1253,7 @@ mod tests {
 
         // define data.
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![
                 Arc::new(Float32Array::from(vec![
                     Some(f32::NAN),
@@ -1344,7 +1301,8 @@ mod tests {
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());
         assert_eq!(DataType::Float64, *sort_exec.schema().field(1).data_type());
 
-        let result: Vec<RecordBatch> = collect(sort_exec.clone(), task_ctx).await?;
+        let result: Vec<RecordBatch> =
+            collect(Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>, task_ctx).await?;
         let metrics = sort_exec.metrics().unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
         assert_eq!(metrics.output_rows().unwrap(), 8);
@@ -1407,7 +1365,7 @@ mod tests {
             blocking_exec,
         ));
 
-        let fut = collect(sort_exec, task_ctx.clone());
+        let fut = collect(sort_exec, Arc::clone(&task_ctx));
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -1421,5 +1379,22 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_empty_sort_batch() {
+        let schema = Arc::new(Schema::empty());
+        let options = RecordBatchOptions::new().with_row_count(Some(1));
+        let batch =
+            RecordBatch::try_new_with_options(Arc::clone(&schema), vec![], &options)
+                .unwrap();
+
+        let expressions = vec![PhysicalSortExpr {
+            expr: Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+            options: SortOptions::default(),
+        }];
+
+        let result = sort_batch(&batch, &expressions, None).unwrap();
+        assert_eq!(result.num_rows(), 1);
     }
 }

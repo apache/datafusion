@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
+
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
@@ -27,7 +29,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{plan_err, Column, Result, ScalarValue};
+use datafusion_common::{internal_err, plan_err, Column, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
@@ -48,7 +50,7 @@ impl ScalarSubqueryToJoin {
     /// # Arguments
     /// * `predicate` - A conjunction to split and search
     ///
-    /// Returns a tuple (subqueries, rewrite expression)
+    /// Returns a tuple (subqueries, alias)
     fn extract_subquery_exprs(
         &self,
         predicate: &Expr,
@@ -67,21 +69,30 @@ impl ScalarSubqueryToJoin {
 }
 
 impl OptimizerRule for ScalarSubqueryToJoin {
-    fn try_optimize(
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
         &self,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
+    ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
+                // Optimization: skip the rest of the rule and its copies if
+                // there are no scalar subqueries
+                if !contains_scalar_subquery(&filter.predicate) {
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                }
+
                 let (subqueries, mut rewrite_expr) = self.extract_subquery_exprs(
                     &filter.predicate,
                     config.alias_generator(),
                 )?;
 
                 if subqueries.is_empty() {
-                    // regular filter, no subquery exists clause here
-                    return Ok(None);
+                    return internal_err!("Expected subqueries not found in filter");
                 }
 
                 // iterate through all subqueries in predicate, turning each into a left join
@@ -92,16 +103,13 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     {
                         if !expr_check_map.is_empty() {
                             rewrite_expr = rewrite_expr
-                                .clone()
-                                .transform_up(&|expr| {
-                                    if let Expr::Column(col) = &expr {
-                                        if let Some(map_expr) =
-                                            expr_check_map.get(&col.name)
-                                        {
-                                            Ok(Transformed::yes(map_expr.clone()))
-                                        } else {
-                                            Ok(Transformed::no(expr))
-                                        }
+                                .transform_up(|expr| {
+                                    // replace column references with entry in map, if it exists
+                                    if let Some(map_expr) = expr
+                                        .try_as_col()
+                                        .and_then(|col| expr_check_map.get(&col.name))
+                                    {
+                                        Ok(Transformed::yes(map_expr.clone()))
                                     } else {
                                         Ok(Transformed::no(expr))
                                     }
@@ -111,15 +119,21 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         cur_input = optimized_subquery;
                     } else {
                         // if we can't handle all of the subqueries then bail for now
-                        return Ok(None);
+                        return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                     }
                 }
                 let new_plan = LogicalPlanBuilder::from(cur_input)
                     .filter(rewrite_expr)?
                     .build()?;
-                Ok(Some(new_plan))
+                Ok(Transformed::yes(new_plan))
             }
             LogicalPlan::Projection(projection) => {
+                // Optimization: skip the rest of the rule and its copies if
+                // there are no scalar subqueries
+                if !projection.expr.iter().any(contains_scalar_subquery) {
+                    return Ok(Transformed::no(LogicalPlan::Projection(projection)));
+                }
+
                 let mut all_subqueryies = vec![];
                 let mut expr_to_rewrite_expr_map = HashMap::new();
                 let mut subquery_to_expr_map = HashMap::new();
@@ -133,8 +147,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     expr_to_rewrite_expr_map.insert(expr, rewrite_exprs);
                 }
                 if all_subqueryies.is_empty() {
-                    // regular projection, no subquery exists clause here
-                    return Ok(None);
+                    return internal_err!("Expected subqueries not found in projection");
                 }
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
@@ -150,15 +163,14 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                 {
                                     let new_expr = rewrite_expr
                                         .clone()
-                                        .transform_up(&|expr| {
-                                            if let Expr::Column(col) = &expr {
-                                                if let Some(map_expr) =
+                                        .transform_up(|expr| {
+                                            // replace column references with entry in map, if it exists
+                                            if let Some(map_expr) =
+                                                expr.try_as_col().and_then(|col| {
                                                     expr_check_map.get(&col.name)
-                                                {
-                                                    Ok(Transformed::yes(map_expr.clone()))
-                                                } else {
-                                                    Ok(Transformed::no(expr))
-                                                }
+                                                })
+                                            {
+                                                Ok(Transformed::yes(map_expr.clone()))
                                             } else {
                                                 Ok(Transformed::no(expr))
                                             }
@@ -170,7 +182,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         }
                     } else {
                         // if we can't handle all of the subqueries then bail for now
-                        return Ok(None);
+                        return Ok(Transformed::no(LogicalPlan::Projection(projection)));
                     }
                 }
 
@@ -188,10 +200,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let new_plan = LogicalPlanBuilder::from(cur_input)
                     .project(proj_exprs)?
                     .build()?;
-                Ok(Some(new_plan))
+                Ok(Transformed::yes(new_plan))
             }
 
-            _ => Ok(None),
+            plan => Ok(Transformed::no(plan)),
         }
     }
 
@@ -202,6 +214,13 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
     }
+}
+
+/// Returns true if the expression has a scalar subquery somewhere in it
+/// false otherwise
+fn contains_scalar_subquery(expr: &Expr) -> bool {
+    expr.exists(|expr| Ok(matches!(expr, Expr::ScalarSubquery(_))))
+        .expect("Inner is always Ok")
 }
 
 struct ExtractScalarSubQuery {
@@ -278,16 +297,7 @@ fn build_join(
     subquery_alias: &str,
 ) -> Result<Option<(LogicalPlan, HashMap<String, Expr>)>> {
     let subquery_plan = subquery.subquery.as_ref();
-    let mut pull_up = PullUpCorrelatedExpr {
-        join_filters: vec![],
-        correlated_subquery_cols_map: Default::default(),
-        in_predicate_opt: None,
-        exists_sub_query: false,
-        can_pull_up: true,
-        need_handle_count_bug: true,
-        collected_count_expr_map: Default::default(),
-        pull_up_having_expr: None,
-    };
+    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let new_plan = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
@@ -383,11 +393,8 @@ mod tests {
     use crate::test::*;
 
     use arrow::datatypes::DataType;
-    use datafusion_common::Result;
-    use datafusion_expr::logical_plan::LogicalPlanBuilder;
-    use datafusion_expr::{
-        col, lit, max, min, out_ref_col, scalar_subquery, sum, Between,
-    };
+    use datafusion_expr::test::function_stub::sum;
+    use datafusion_expr::{col, lit, max, min, out_ref_col, scalar_subquery, Between};
 
     /// Test multiple correlated subqueries
     #[test]
@@ -406,7 +413,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
                 lit(1)
-                    .lt(scalar_subquery(orders.clone()))
+                    .lt(scalar_subquery(Arc::clone(&orders)))
                     .and(lit(1).lt(scalar_subquery(orders))),
             )?
             .project(vec![col("customer.c_custkey")])?
@@ -427,7 +434,7 @@ mod tests {
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -468,22 +475,22 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: customer.c_acctbal < __scalar_sq_1.SUM(orders.o_totalprice) [c_custkey:Int64, c_name:Utf8, SUM(orders.o_totalprice):Float64;N, o_custkey:Int64;N]\
-        \n    Left Join:  Filter: __scalar_sq_1.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8, SUM(orders.o_totalprice):Float64;N, o_custkey:Int64;N]\
+        \n  Filter: customer.c_acctbal < __scalar_sq_1.sum(orders.o_totalprice) [c_custkey:Int64, c_name:Utf8, sum(orders.o_totalprice):Float64;N, o_custkey:Int64;N]\
+        \n    Left Join:  Filter: __scalar_sq_1.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8, sum(orders.o_totalprice):Float64;N, o_custkey:Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n      SubqueryAlias: __scalar_sq_1 [SUM(orders.o_totalprice):Float64;N, o_custkey:Int64]\
-        \n        Projection: SUM(orders.o_totalprice), orders.o_custkey [SUM(orders.o_totalprice):Float64;N, o_custkey:Int64]\
-        \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[SUM(orders.o_totalprice)]] [o_custkey:Int64, SUM(orders.o_totalprice):Float64;N]\
-        \n            Filter: orders.o_totalprice < __scalar_sq_2.SUM(lineitem.l_extendedprice) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N, SUM(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64;N]\
-        \n              Left Join:  Filter: __scalar_sq_2.l_orderkey = orders.o_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N, SUM(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64;N]\
+        \n      SubqueryAlias: __scalar_sq_1 [sum(orders.o_totalprice):Float64;N, o_custkey:Int64]\
+        \n        Projection: sum(orders.o_totalprice), orders.o_custkey [sum(orders.o_totalprice):Float64;N, o_custkey:Int64]\
+        \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[sum(orders.o_totalprice)]] [o_custkey:Int64, sum(orders.o_totalprice):Float64;N]\
+        \n            Filter: orders.o_totalprice < __scalar_sq_2.sum(lineitem.l_extendedprice) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N, sum(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64;N]\
+        \n              Left Join:  Filter: __scalar_sq_2.l_orderkey = orders.o_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N, sum(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64;N]\
         \n                TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-        \n                SubqueryAlias: __scalar_sq_2 [SUM(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64]\
-        \n                  Projection: SUM(lineitem.l_extendedprice), lineitem.l_orderkey [SUM(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64]\
-        \n                    Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_extendedprice)]] [l_orderkey:Int64, SUM(lineitem.l_extendedprice):Float64;N]\
+        \n                SubqueryAlias: __scalar_sq_2 [sum(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64]\
+        \n                  Projection: sum(lineitem.l_extendedprice), lineitem.l_orderkey [sum(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64]\
+        \n                    Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[sum(lineitem.l_extendedprice)]] [l_orderkey:Int64, sum(lineitem.l_extendedprice):Float64;N]\
         \n                      TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -521,7 +528,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -557,7 +564,7 @@ mod tests {
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -591,7 +598,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -620,7 +627,7 @@ mod tests {
         \ncaused by\
         \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) != orders.o_custkey";
 
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -647,7 +654,7 @@ mod tests {
         \ncaused by\
         \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) < orders.o_custkey";
 
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -675,7 +682,7 @@ mod tests {
         \ncaused by\
         \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) = orders.o_custkey OR orders.o_orderkey = Int32(1)";
 
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -696,7 +703,7 @@ mod tests {
         let expected = "check_analyzed_plan\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -730,7 +737,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -758,7 +765,7 @@ mod tests {
         let expected = "check_analyzed_plan\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
-        assert_analyzer_check_err(vec![], &plan, expected);
+        assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
 
@@ -796,7 +803,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -835,7 +842,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -875,7 +882,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -908,7 +915,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -940,7 +947,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -971,7 +978,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1028,7 +1035,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())
@@ -1077,7 +1084,7 @@ mod tests {
 
         assert_multi_rules_optimized_plan_eq_display_indent(
             vec![Arc::new(ScalarSubqueryToJoin::new())],
-            &plan,
+            plan,
             expected,
         );
         Ok(())

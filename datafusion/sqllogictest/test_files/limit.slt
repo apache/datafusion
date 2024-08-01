@@ -36,8 +36,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 # async fn csv_query_limit
 query T
@@ -307,12 +307,12 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---Limit: skip=11, fetch=3
-----TableScan: t1 projection=[], fetch=14
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+02)--Limit: skip=11, fetch=3
+03)----TableScan: t1 projection=[], fetch=14
 physical_plan
-ProjectionExec: expr=[0 as COUNT(*)]
---PlaceholderRowExec
+01)ProjectionExec: expr=[0 as count(*)]
+02)--PlaceholderRowExec
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
@@ -320,17 +320,17 @@ SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
 0
 
 # The aggregate does not need to be computed because the input statistics are exact and
-# the number of rows is less than or equal to the the "fetch+skip" value (LIMIT+OFFSET).
+# the number of rows is less than or equal to the "fetch+skip" value (LIMIT+OFFSET).
 query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---Limit: skip=8, fetch=3
-----TableScan: t1 projection=[], fetch=11
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+02)--Limit: skip=8, fetch=3
+03)----TableScan: t1 projection=[], fetch=11
 physical_plan
-ProjectionExec: expr=[2 as COUNT(*)]
---PlaceholderRowExec
+01)ProjectionExec: expr=[2 as count(*)]
+02)--PlaceholderRowExec
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
@@ -343,12 +343,12 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 OFFSET 8);
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---Limit: skip=8, fetch=None
-----TableScan: t1 projection=[]
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+02)--Limit: skip=8, fetch=None
+03)----TableScan: t1 projection=[]
 physical_plan
-ProjectionExec: expr=[2 as COUNT(*)]
---PlaceholderRowExec
+01)ProjectionExec: expr=[2 as count(*)]
+02)--PlaceholderRowExec
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
@@ -360,21 +360,21 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---Projection:
-----Limit: skip=6, fetch=3
-------Filter: t1.a > Int32(3)
---------TableScan: t1 projection=[a]
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+02)--Projection: 
+03)----Limit: skip=6, fetch=3
+04)------Filter: t1.a > Int32(3)
+05)--------TableScan: t1 projection=[a]
 physical_plan
-AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
---CoalescePartitionsExec
-----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
-------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------ProjectionExec: expr=[]
-----------GlobalLimitExec: skip=6, fetch=3
-------------CoalesceBatchesExec: target_batch_size=8192
---------------FilterExec: a@0 > 3
-----------------MemoryExec: partitions=1, partition_sizes=[1]
+01)AggregateExec: mode=Final, gby=[], aggr=[count(*)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[count(*)]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[]
+06)----------GlobalLimitExec: skip=6, fetch=3
+07)------------CoalesceBatchesExec: target_batch_size=8192, fetch=9
+08)--------------FilterExec: a@0 > 3
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
@@ -387,20 +387,26 @@ CREATE TABLE t1000 (i BIGINT) AS
 WITH t AS (VALUES (0), (0), (0), (0), (0), (0), (0), (0), (0), (0))
 SELECT ROW_NUMBER() OVER (PARTITION BY t1.column1) FROM t t1, t t2, t t3;
 
+statement ok
+set datafusion.explain.show_sizes = false;
+
 # verify that there are multiple partitions in the input (i.e. MemoryExec says
 # there are 4 partitions) so that this tests multi-partition limit.
 query TT
 EXPLAIN SELECT DISTINCT i FROM t1000;
 ----
 logical_plan
-Aggregate: groupBy=[[t1000.i]], aggr=[[]]
---TableScan: t1000 projection=[i]
+01)Aggregate: groupBy=[[t1000.i]], aggr=[[]]
+02)--TableScan: t1000 projection=[i]
 physical_plan
-AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
---CoalesceBatchesExec: target_batch_size=8192
-----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
-------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
---------MemoryExec: partitions=4, partition_sizes=[1, 2, 1, 1]
+01)AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
+05)--------MemoryExec: partitions=4
+
+statement ok
+set datafusion.explain.show_sizes = true;
 
 query I
 SELECT i FROM t1000 ORDER BY i DESC LIMIT 3;
@@ -506,3 +512,42 @@ SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 9);
 
 statement ok
 drop table aggregate_test_100;
+
+
+## Test limit pushdown in StreamingTableExec
+
+## Create sorted table with 5 rows
+query IT
+COPY (select * from (values
+   (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')
+)) TO 'test_files/scratch/limit/data.csv' STORED AS CSV;
+----
+5
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE data (
+    "column1"  INTEGER,
+    "column2" VARCHAR,
+) STORED AS CSV
+WITH ORDER ("column1", "column2")
+LOCATION 'test_files/scratch/limit/data.csv' OPTIONS ('format.has_header' 'false');
+
+query IT
+SELECT * from data LIMIT 3;
+----
+1 a
+2 b
+3 c
+
+# query
+query TT
+explain SELECT * FROM data LIMIT 3;
+----
+logical_plan
+01)Limit: skip=0, fetch=3
+02)--TableScan: data projection=[column1, column2], fetch=3
+physical_plan StreamingTableExec: partition_sizes=1, projection=[column1, column2], infinite_source=true, fetch=3, output_ordering=[column1@0 ASC NULLS LAST, column2@1 ASC NULLS LAST]
+
+
+statement ok
+drop table data;

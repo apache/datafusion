@@ -256,7 +256,7 @@ DROP VIEW non_existent_view
 ##########
 
 statement ok
-CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv';
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 # create_table_as
 statement ok
@@ -455,8 +455,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
         c13 VARCHAR NOT NULL
     )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TIIIIIIIIIRRT
 SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, 10, c11, c12, c13 FROM aggregate_test_100 LIMIT 1;
@@ -535,7 +535,7 @@ DROP VIEW y;
 # create_pipe_delimited_csv_table()
 
 statement ok
-CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION '../core/tests/data/aggregate_simple_pipe.csv';
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV LOCATION '../core/tests/data/aggregate_simple_pipe.csv' OPTIONS ('format.delimiter' '|', 'format.has_header' 'true');
 
 
 query RRB
@@ -581,14 +581,14 @@ statement ok
 CREATE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
 
 statement ok
-CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv'
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 # Should not recreate the same EXTERNAL table
 statement error Execution error: Table 'aggregate_simple' already exists
-CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv'
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 statement ok
-CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv'
+CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 # create bad custom table
 statement error DataFusion error: Execution error: Unable to find factory for DELTATABLE
@@ -690,7 +690,7 @@ drop table foo;
 
 # create csv table with empty csv file
 statement ok
-CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION '../core/tests/data/empty.csv';
+CREATE EXTERNAL TABLE empty STORED AS CSV LOCATION '../core/tests/data/empty.csv' OPTIONS ('format.has_header' 'true');
 
 query TTI
 select column_name, data_type, ordinal_position from information_schema.columns where table_name='empty';;
@@ -742,8 +742,8 @@ DROP SCHEMA empty_schema;
 statement ok
 CREATE UNBOUNDED external table t(c1 integer, c2 integer, c3 integer)
 STORED as CSV
-WITH HEADER ROW
-LOCATION '../core/tests/data/empty.csv';
+LOCATION '../core/tests/data/empty.csv'
+OPTIONS ('format.has_header' 'true');
 
 # should see infinite_source=true in the explain
 query TT
@@ -760,8 +760,8 @@ drop table t;
 statement ok
 CREATE external table t(c1 integer, c2 integer, c3 integer)
 STORED as CSV
-WITH HEADER ROW
-LOCATION '../core/tests/data/empty.csv';
+LOCATION '../core/tests/data/empty.csv'
+OPTIONS ('format.has_header' 'true');
 
 # expect to see no infinite_source in the explain
 query TT

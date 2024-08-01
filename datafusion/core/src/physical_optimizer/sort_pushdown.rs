@@ -123,7 +123,7 @@ fn pushdown_requirement_to_children(
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();
         let request_child = required_input_ordering[0].as_deref().unwrap_or(&[]);
-        let child_plan = plan.children().swap_remove(0);
+        let child_plan = plan.children().swap_remove(0).clone();
         match determine_children_requirement(parent_required, request_child, child_plan) {
             RequirementsCompatibility::Satisfy => {
                 let req = (!request_child.is_empty()).then(|| request_child.to_vec());
@@ -245,11 +245,38 @@ fn try_pushdown_requirements_to_join(
     sort_expr: Vec<PhysicalSortExpr>,
     push_side: JoinSide,
 ) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
+    let left_eq_properties = smj.left().equivalence_properties();
+    let right_eq_properties = smj.right().equivalence_properties();
+    let mut smj_required_orderings = smj.required_input_ordering();
+    let right_requirement = smj_required_orderings.swap_remove(1);
+    let left_requirement = smj_required_orderings.swap_remove(0);
     let left_ordering = smj.left().output_ordering().unwrap_or(&[]);
     let right_ordering = smj.right().output_ordering().unwrap_or(&[]);
     let (new_left_ordering, new_right_ordering) = match push_side {
-        JoinSide::Left => (sort_expr.as_slice(), right_ordering),
-        JoinSide::Right => (left_ordering, sort_expr.as_slice()),
+        JoinSide::Left => {
+            let left_eq_properties =
+                left_eq_properties.clone().with_reorder(sort_expr.clone());
+            if left_eq_properties
+                .ordering_satisfy_requirement(&left_requirement.unwrap_or_default())
+            {
+                // After re-ordering requirement is still satisfied
+                (sort_expr.as_slice(), right_ordering)
+            } else {
+                return Ok(None);
+            }
+        }
+        JoinSide::Right => {
+            let right_eq_properties =
+                right_eq_properties.clone().with_reorder(sort_expr.clone());
+            if right_eq_properties
+                .ordering_satisfy_requirement(&right_requirement.unwrap_or_default())
+            {
+                // After re-ordering requirement is still satisfied
+                (left_ordering, sort_expr.as_slice())
+            } else {
+                return Ok(None);
+            }
+        }
     };
     let join_type = smj.join_type();
     let probe_side = SortMergeJoinExec::probe_side(&join_type);

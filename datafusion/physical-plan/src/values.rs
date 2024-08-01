@@ -88,7 +88,7 @@ impl ValuesExec {
                     .and_then(ScalarValue::iter_to_array)
             })
             .collect::<Result<Vec<_>>>()?;
-        let batch = RecordBatch::try_new(schema.clone(), arr)?;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), arr)?;
         let data: Vec<RecordBatch> = vec![batch];
         Self::try_new_from_batches(schema, data)
     }
@@ -114,7 +114,7 @@ impl ValuesExec {
             }
         }
 
-        let cache = Self::compute_properties(schema.clone());
+        let cache = Self::compute_properties(Arc::clone(&schema));
         Ok(ValuesExec {
             schema,
             data: batches,
@@ -154,6 +154,10 @@ impl DisplayAs for ValuesExec {
 }
 
 impl ExecutionPlan for ValuesExec {
+    fn name(&self) -> &'static str {
+        "ValuesExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -163,7 +167,7 @@ impl ExecutionPlan for ValuesExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 
@@ -171,7 +175,7 @@ impl ExecutionPlan for ValuesExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        ValuesExec::try_new_from_batches(self.schema.clone(), self.data.clone())
+        ValuesExec::try_new_from_batches(Arc::clone(&self.schema), self.data.clone())
             .map(|e| Arc::new(e) as _)
     }
 
@@ -189,7 +193,7 @@ impl ExecutionPlan for ValuesExec {
 
         Ok(Box::pin(MemoryStream::try_new(
             self.data(),
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             None,
         )?))
     }
@@ -210,7 +214,7 @@ mod tests {
     use crate::expressions::lit;
     use crate::test::{self, make_partition};
 
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field};
 
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
@@ -248,7 +252,7 @@ mod tests {
         let _ = ValuesExec::try_new_from_batches(invalid_schema, batches).unwrap_err();
     }
 
-    // Test issue: https://github.com/apache/arrow-datafusion/issues/8763
+    // Test issue: https://github.com/apache/datafusion/issues/8763
     #[test]
     fn new_exec_with_non_nullable_schema() {
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -256,7 +260,7 @@ mod tests {
             DataType::UInt32,
             false,
         )]));
-        let _ = ValuesExec::try_new(schema.clone(), vec![vec![lit(1u32)]]).unwrap();
+        let _ = ValuesExec::try_new(Arc::clone(&schema), vec![vec![lit(1u32)]]).unwrap();
         // Test that a null value is rejected
         let _ = ValuesExec::try_new(schema, vec![vec![lit(ScalarValue::UInt32(None))]])
             .unwrap_err();

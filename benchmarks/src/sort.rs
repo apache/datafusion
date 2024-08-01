@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::AccessLogOpt;
-use crate::BenchmarkRun;
-use crate::CommonOpt;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use crate::{AccessLogOpt, BenchmarkRun, CommonOpt};
+
 use arrow::util::pretty;
 use datafusion::common::Result;
 use datafusion::physical_expr::PhysicalSortExpr;
@@ -26,8 +28,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::test_util::parquet::TestParquetFile;
 use datafusion_common::instant::Instant;
-use std::path::PathBuf;
-use std::sync::Arc;
+
 use structopt::StructOpt;
 
 /// Test performance of sorting large datasets
@@ -174,7 +175,7 @@ async fn exec_sort(
     debug: bool,
 ) -> Result<(usize, std::time::Duration)> {
     let start = Instant::now();
-    let scan = test_file.create_scan(None).await?;
+    let scan = test_file.create_scan(ctx, None).await?;
     let exec = Arc::new(SortExec::new(expr.to_owned(), scan));
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;

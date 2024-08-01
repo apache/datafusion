@@ -20,7 +20,6 @@
 //!
 //! [`Expr`]: crate::prelude::Expr
 use std::collections::HashSet;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::{
@@ -53,7 +52,7 @@ use log::trace;
 ///
 /// 1. Minimum and maximum values for columns
 ///
-/// 2. Null counts for columns
+/// 2. Null counts and row counts for columns
 ///
 /// 3. Whether the values in a column are contained in a set of literals
 ///
@@ -100,16 +99,29 @@ pub trait PruningStatistics {
     /// these statistics.
     ///
     /// This value corresponds to the size of the [`ArrayRef`] returned by
-    /// [`Self::min_values`], [`Self::max_values`], and [`Self::null_counts`].
+    /// [`Self::min_values`], [`Self::max_values`], [`Self::null_counts`],
+    /// and [`Self::row_counts`].
     fn num_containers(&self) -> usize;
 
     /// Return the number of null values for the named column as an
-    /// `Option<UInt64Array>`.
+    /// [`UInt64Array`]
     ///
     /// See [`Self::min_values`] for when to return `None` and null values.
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
+    ///
+    /// [`UInt64Array`]: arrow::array::UInt64Array
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
+
+    /// Return the number of rows for the named column in each container
+    /// as an [`UInt64Array`].
+    ///
+    /// See [`Self::min_values`] for when to return `None` and null values.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
+    ///
+    /// [`UInt64Array`]: arrow::array::UInt64Array
+    fn row_counts(&self, column: &Column) -> Option<ArrayRef>;
 
     /// Returns [`BooleanArray`] where each row represents information known
     /// about specific literal `values` in a column.
@@ -161,10 +173,10 @@ pub trait PruningStatistics {
 /// 1. Arbitrary expressions (including user defined functions)
 ///
 /// 2. Vectorized evaluation (provide more than one set of statistics at a time)
-/// so it is suitable for pruning 1000s of containers.
+///    so it is suitable for pruning 1000s of containers.
 ///
 /// 3. Any source of information that implements the [`PruningStatistics`] trait
-/// (not just Parquet metadata).
+///    (not just Parquet metadata).
 ///
 /// # Example
 ///
@@ -172,7 +184,7 @@ pub trait PruningStatistics {
 /// example of how to use `PruningPredicate` to prune files based on min/max
 /// values.
 ///
-/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/pruning.rs
+/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/pruning.rs
 ///
 /// Given an expression like `x = 5` and statistics for 3 containers (Row
 /// Groups, files, etc) `A`, `B`, and `C`:
@@ -266,17 +278,17 @@ pub trait PruningStatistics {
 /// 2. A predicate (expression that evaluates to a boolean)
 ///
 /// 3. [`PruningStatistics`] that provides information about columns in that
-/// schema, for multiple “containers”. For each column in each container, it
-/// provides optional information on contained values, min_values, max_values,
-/// and null_counts counts.
+///    schema, for multiple “containers”. For each column in each container, it
+///    provides optional information on contained values, min_values, max_values,
+///    null_counts counts, and row_counts counts.
 ///
 /// **Outputs**:
 /// A (non null) boolean value for each container:
 /// * `true`: There MAY be rows that match the predicate
 ///
 /// * `false`: There are no rows that could possibly match the predicate (the
-/// predicate can never possibly be true). The container can be pruned (skipped)
-/// entirely.
+///   predicate can never possibly be true). The container can be pruned (skipped)
+///   entirely.
 ///
 /// Note that in order to be correct, `PruningPredicate` must return false
 /// **only** if it can determine that for all rows in the container, the
@@ -306,17 +318,24 @@ pub trait PruningStatistics {
 /// * `false`: there are no rows that could possibly match the predicate,
 ///            **PRUNES** the container
 ///
-/// For example, given a column `x`, the `x_min` and `x_max` and `x_null_count`
-/// represent the minimum and maximum values, and the null count of column `x`,
-/// provided by the `PruningStatistics`. Here are some examples of the rewritten
-/// predicates:
+/// For example, given a column `x`, the `x_min`, `x_max`, `x_null_count`, and
+/// `x_row_count` represent the minimum and maximum values, the null count of
+/// column `x`, and the row count of column `x`, provided by the `PruningStatistics`.
+/// `x_null_count` and `x_row_count` are used to handle the case where the column `x`
+/// is known to be all `NULL`s. Note this is different from knowing nothing about
+/// the column `x`, which confusingly is encoded by returning `NULL` for the min/max
+/// values from [`PruningStatistics::max_values`] and [`PruningStatistics::min_values`].
+///
+/// Here are some examples of the rewritten predicates:
 ///
 /// Original Predicate | Rewritten Predicate
 /// ------------------ | --------------------
-/// `x = 5` | `x_min <= 5 AND 5 <= x_max`
-/// `x < 5` | `x_max < 5`
-/// `x = 5 AND y = 10` | `x_min <= 5 AND 5 <= x_max AND y_min <= 10 AND 10 <= y_max`
+/// `x = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END`
+/// `x < 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_max < 5 END`
+/// `x = 5 AND y = 10` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END AND CASE WHEN y_null_count = y_row_count THEN false ELSE y_min <= 10 AND 10 <= y_max END`
 /// `x IS NULL`  | `x_null_count > 0`
+/// `x IS NOT NULL`  | `x_null_count != row_count`
+/// `CAST(x as int) = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE CAST(x_min as int) <= 5 AND 5 <= CAST(x_max as int) END`
 ///
 /// ## Predicate Evaluation
 /// The PruningPredicate works in two passes
@@ -326,28 +345,47 @@ pub trait PruningStatistics {
 /// LiteralGuarantees are not satisfied
 ///
 /// **Second Pass**: Evaluates the rewritten expression using the
-/// min/max/null_counts values for each column for each container. For any
+/// min/max/null_counts/row_counts values for each column for each container. For any
 /// container that this expression evaluates to `false`, it rules out those
 /// containers.
 ///
-/// For example, given the predicate, `x = 5 AND y = 10`, if we know `x` is
-/// between `1 and 100` and we know that `y` is between `4` and `7`, the input
-/// statistics might look like
+///
+/// ### Example 1
+///
+/// Given the predicate, `x = 5 AND y = 10`, the rewritten predicate would look like:
+///
+/// ```sql
+/// CASE
+///     WHEN x_null_count = x_row_count THEN false
+///     ELSE x_min <= 5 AND 5 <= x_max
+/// END
+/// AND
+/// CASE
+///     WHEN y_null_count = y_row_count THEN false
+///     ELSE y_min <= 10 AND 10 <= y_max
+/// END
+/// ```
+///
+/// If we know that for a given container, `x` is between `1 and 100` and we know that
+/// `y` is between `4` and `7`, we know nothing about the null count and row count of
+/// `x` and `y`, the input statistics might look like:
 ///
 /// Column   | Value
 /// -------- | -----
 /// `x_min`  | `1`
 /// `x_max`  | `100`
+/// `x_null_count` | `null`
+/// `x_row_count`  | `null`
 /// `y_min`  | `4`
 /// `y_max`  | `7`
+/// `y_null_count` | `null`
+/// `y_row_count`  | `null`
 ///
-/// The rewritten predicate would look like
-///
-/// `x_min <= 5 AND 5 <= x_max AND  y_min <= 10 AND 10 <= y_max`
-///
-/// When these values are substituted in to the rewritten predicate and
+/// When these statistics values are substituted in to the rewritten predicate and
 /// simplified, the result is `false`:
 ///
+/// * `CASE WHEN null = null THEN false ELSE 1 <= 5 AND 5 <= 100 END AND CASE WHEN null = null THEN false ELSE 4 <= 10 AND 10 <= 7 END`
+/// * `null = null` is `null` which is not true, so the `CASE` expression will use the `ELSE` clause
 /// * `1 <= 5 AND 5 <= 100 AND 4 <= 10 AND 10 <= 7`
 /// * `true AND true AND true AND false`
 /// * `false`
@@ -363,6 +401,52 @@ pub trait PruningStatistics {
 /// predicate *might* evaluate to `true`, and the only way to find out is to do
 /// more analysis, for example by actually reading the data and evaluating the
 /// predicate row by row.
+///
+/// ### Example 2
+///
+/// Given the same predicate, `x = 5 AND y = 10`, the rewritten predicate would
+/// look like the same as example 1:
+///
+/// ```sql
+/// CASE
+///   WHEN x_null_count = x_row_count THEN false
+///   ELSE x_min <= 5 AND 5 <= x_max
+/// END
+/// AND
+/// CASE
+///   WHEN y_null_count = y_row_count THEN false
+///  ELSE y_min <= 10 AND 10 <= y_max
+/// END
+/// ```
+///
+/// If we know that for another given container, `x_min` is NULL and `x_max` is
+/// NULL (the min/max values are unknown), `x_null_count` is `100` and `x_row_count`
+///  is `100`; we know that `y` is between `4` and `7`, but we know nothing about
+/// the null count and row count of `y`. The input statistics might look like:
+///
+/// Column   | Value
+/// -------- | -----
+/// `x_min`  | `null`
+/// `x_max`  | `null`
+/// `x_null_count` | `100`
+/// `x_row_count`  | `100`
+/// `y_min`  | `4`
+/// `y_max`  | `7`
+/// `y_null_count` | `null`
+/// `y_row_count`  | `null`
+///
+/// When these statistics values are substituted in to the rewritten predicate and
+/// simplified, the result is `false`:
+///
+/// * `CASE WHEN 100 = 100 THEN false ELSE null <= 5 AND 5 <= null END AND CASE WHEN null = null THEN false ELSE 4 <= 10 AND 10 <= 7 END`
+/// * Since `100 = 100` is `true`, the `CASE` expression will use the `THEN` clause, i.e. `false`
+/// * The other `CASE` expression will use the `ELSE` clause, i.e. `4 <= 10 AND 10 <= 7`
+/// * `false AND true`
+/// * `false`
+///
+/// Returning `false` means the container can be pruned, which matches the
+/// intuition that  `x = 5 AND y = 10` can’t be true for all values in `x`
+/// are known to be NULL.
 ///
 /// # Related Work
 ///
@@ -387,8 +471,10 @@ pub struct PruningPredicate {
     /// Original physical predicate from which this predicate expr is derived
     /// (required for serialization)
     orig_expr: Arc<dyn PhysicalExpr>,
-    /// [`LiteralGuarantee`]s that are used to try and prove a predicate can not
-    /// possibly evaluate to `true`.
+    /// [`LiteralGuarantee`]s used to try and prove a predicate can not possibly
+    /// evaluate to `true`.
+    ///
+    /// See [`PruningPredicate::literal_guarantees`] for more details.
     literal_guarantees: Vec<LiteralGuarantee>,
 }
 
@@ -511,6 +597,10 @@ impl PruningPredicate {
     }
 
     /// Returns a reference to the literal guarantees
+    ///
+    /// Note that **All** `LiteralGuarantee`s must be satisfied for the
+    /// expression to possibly be `true`. If any is not satisfied, the
+    /// expression is guaranteed to be `null` or `false`.
     pub fn literal_guarantees(&self) -> &[LiteralGuarantee] {
         &self.literal_guarantees
     }
@@ -519,6 +609,8 @@ impl PruningPredicate {
     ///
     /// This happens if the predicate is a literal `true`  and
     /// literal_guarantees is empty.
+    ///
+    /// This can happen when a predicate is simplified to a constant `true`
     pub fn always_true(&self) -> bool {
         is_always_true(&self.predicate_expr) && self.literal_guarantees.is_empty()
     }
@@ -533,7 +625,7 @@ impl PruningPredicate {
     ///
     /// This is useful to avoid fetching statistics for columns that will not be
     /// used in the predicate. For example, it can be used to avoid reading
-    /// uneeded bloom filters (a non trivial operation).
+    /// unneeded bloom filters (a non trivial operation).
     pub fn literal_columns(&self) -> Vec<String> {
         let mut seen = HashSet::new();
         self.literal_guarantees
@@ -646,12 +738,25 @@ impl RequiredColumns {
         Self::default()
     }
 
-    /// Returns number of unique columns
-    pub(crate) fn n_columns(&self) -> usize {
-        self.iter()
-            .map(|(c, _s, _f)| c)
-            .collect::<HashSet<_>>()
-            .len()
+    /// Returns Some(column) if this is a single column predicate.
+    ///
+    /// Returns None if this is a multi-column predicate.
+    ///
+    /// Examples:
+    /// * `a > 5 OR a < 10` returns `Some(a)`
+    /// * `a > 5 OR b < 10` returns `None`
+    /// * `true` returns None
+    pub(crate) fn single_column(&self) -> Option<&phys_expr::Column> {
+        if self.columns.windows(2).all(|w| {
+            // check if all columns are the same (ignoring statistics and field)
+            let c1 = &w[0].0;
+            let c2 = &w[1].0;
+            c1 == c2
+        }) {
+            self.columns.first().map(|r| &r.0)
+        } else {
+            None
+        }
     }
 
     /// Returns an iterator over items in columns (see doc on
@@ -688,11 +793,17 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
         stat_type: StatisticsType,
-        suffix: &str,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let (idx, need_to_insert) = match self.find_stat_column(column, stat_type) {
             Some(idx) => (idx, false),
             None => (self.columns.len(), true),
+        };
+
+        let suffix = match stat_type {
+            StatisticsType::Min => "min",
+            StatisticsType::Max => "max",
+            StatisticsType::NullCount => "null_count",
+            StatisticsType::RowCount => "row_count",
         };
 
         let stat_column =
@@ -716,7 +827,7 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(column, column_expr, field, StatisticsType::Min, "min")
+        self.stat_column_expr(column, column_expr, field, StatisticsType::Min)
     }
 
     /// rewrite col --> col_max
@@ -726,7 +837,7 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(column, column_expr, field, StatisticsType::Max, "max")
+        self.stat_column_expr(column, column_expr, field, StatisticsType::Max)
     }
 
     /// rewrite col --> col_null_count
@@ -736,13 +847,17 @@ impl RequiredColumns {
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(
-            column,
-            column_expr,
-            field,
-            StatisticsType::NullCount,
-            "null_count",
-        )
+        self.stat_column_expr(column, column_expr, field, StatisticsType::NullCount)
+    }
+
+    /// rewrite col --> col_row_count
+    fn row_count_column_expr(
+        &mut self,
+        column: &phys_expr::Column,
+        column_expr: &Arc<dyn PhysicalExpr>,
+        field: &Field,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.stat_column_expr(column, column_expr, field, StatisticsType::RowCount)
     }
 }
 
@@ -794,6 +909,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
             StatisticsType::Min => statistics.min_values(&column),
             StatisticsType::Max => statistics.max_values(&column),
             StatisticsType::NullCount => statistics.null_counts(&column),
+            StatisticsType::RowCount => statistics.row_counts(&column),
         };
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
@@ -902,6 +1018,46 @@ impl<'a> PruningExpressionBuilder<'a> {
     fn max_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
         self.required_columns
             .max_column_expr(&self.column, &self.column_expr, self.field)
+    }
+
+    /// This function is to simply retune the `null_count` physical expression no matter what the
+    /// predicate expression is
+    ///
+    /// i.e., x > 5 => x_null_count,
+    ///       cast(x as int) < 10 => x_null_count,
+    ///       try_cast(x as float) < 10.0 => x_null_count
+    fn null_count_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
+        // Retune to [`phys_expr::Column`]
+        let column_expr = Arc::new(self.column.clone()) as _;
+
+        // null_count is DataType::UInt64, which is different from the column's data type (i.e. self.field)
+        let null_count_field = &Field::new(self.field.name(), DataType::UInt64, true);
+
+        self.required_columns.null_count_column_expr(
+            &self.column,
+            &column_expr,
+            null_count_field,
+        )
+    }
+
+    /// This function is to simply retune the `row_count` physical expression no matter what the
+    /// predicate expression is
+    ///
+    /// i.e., x > 5 => x_row_count,
+    ///       cast(x as int) < 10 => x_row_count,
+    ///       try_cast(x as float) < 10.0 => x_row_count
+    fn row_count_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
+        // Retune to [`phys_expr::Column`]
+        let column_expr = Arc::new(self.column.clone()) as _;
+
+        // row_count is DataType::UInt64, which is different from the column's data type (i.e. self.field)
+        let row_count_field = &Field::new(self.field.name(), DataType::UInt64, true);
+
+        self.required_columns.row_count_column_expr(
+            &self.column,
+            &column_expr,
+            row_count_field,
+        )
     }
 }
 
@@ -1033,7 +1189,7 @@ fn rewrite_column_expr(
     column_old: &phys_expr::Column,
     column_new: &phys_expr::Column,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    e.transform(&|expr| {
+    e.transform(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
             if column == column_old {
                 return Ok(Transformed::yes(Arc::new(column_new.clone())));
@@ -1098,26 +1254,51 @@ fn build_single_column_expr(
 /// returns a pruning expression in terms of IsNull that will evaluate to true
 /// if the column may contain null, and false if definitely does not
 /// contain null.
+/// If `with_not` is true, build a pruning expression for `col IS NOT NULL`: `col_count != col_null_count`
+/// The pruning expression evaluates to true ONLY if the column definitely CONTAINS
+/// at least one NULL value.  In this case we can know that `IS NOT NULL` can not be true and
+/// thus can prune the row group / value
 fn build_is_null_column_expr(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
     required_columns: &mut RequiredColumns,
+    with_not: bool,
 ) -> Option<Arc<dyn PhysicalExpr>> {
     if let Some(col) = expr.as_any().downcast_ref::<phys_expr::Column>() {
         let field = schema.field_with_name(col.name()).ok()?;
 
         let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
-        required_columns
-            .null_count_column_expr(col, expr, null_count_field)
-            .map(|null_count_column_expr| {
-                // IsNull(column) => null_count > 0
-                Arc::new(phys_expr::BinaryExpr::new(
-                    null_count_column_expr,
-                    Operator::Gt,
-                    Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
-                )) as _
-            })
-            .ok()
+        if with_not {
+            if let Ok(row_count_expr) =
+                required_columns.row_count_column_expr(col, expr, null_count_field)
+            {
+                required_columns
+                    .null_count_column_expr(col, expr, null_count_field)
+                    .map(|null_count_column_expr| {
+                        // IsNotNull(column) => null_count != row_count
+                        Arc::new(phys_expr::BinaryExpr::new(
+                            null_count_column_expr,
+                            Operator::NotEq,
+                            row_count_expr,
+                        )) as _
+                    })
+                    .ok()
+            } else {
+                None
+            }
+        } else {
+            required_columns
+                .null_count_column_expr(col, expr, null_count_field)
+                .map(|null_count_column_expr| {
+                    // IsNull(column) => null_count > 0
+                    Arc::new(phys_expr::BinaryExpr::new(
+                        null_count_column_expr,
+                        Operator::Gt,
+                        Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
+                    )) as _
+                })
+                .ok()
+        }
     } else {
         None
     }
@@ -1146,8 +1327,17 @@ fn build_predicate_expression(
     // predicate expression can only be a binary expression
     let expr_any = expr.as_any();
     if let Some(is_null) = expr_any.downcast_ref::<phys_expr::IsNullExpr>() {
-        return build_is_null_column_expr(is_null.arg(), schema, required_columns)
+        return build_is_null_column_expr(is_null.arg(), schema, required_columns, false)
             .unwrap_or(unhandled);
+    }
+    if let Some(is_not_null) = expr_any.downcast_ref::<phys_expr::IsNotNullExpr>() {
+        return build_is_null_column_expr(
+            is_not_null.arg(),
+            schema,
+            required_columns,
+            true,
+        )
+        .unwrap_or(unhandled);
     }
     if let Some(col) = expr_any.downcast_ref::<phys_expr::Column>() {
         return build_single_column_expr(col, schema, required_columns, false)
@@ -1320,7 +1510,48 @@ fn build_statistics_expr(
             );
         }
     };
+    let statistics_expr = wrap_case_expr(statistics_expr, expr_builder)?;
     Ok(statistics_expr)
+}
+
+/// Wrap the statistics expression in a case expression.
+/// This is necessary to handle the case where the column is known
+/// to be all nulls.
+///
+/// For example:
+///
+/// `x_min <= 10 AND 10 <= x_max`
+///
+/// will become
+///
+/// ```sql
+/// CASE
+///  WHEN x_null_count = x_row_count THEN false
+///  ELSE x_min <= 10 AND 10 <= x_max
+/// END
+/// ````
+///
+/// If the column is known to be all nulls, then the expression
+/// `x_null_count = x_row_count` will be true, which will cause the
+/// case expression to return false. Therefore, prune out the container.
+fn wrap_case_expr(
+    statistics_expr: Arc<dyn PhysicalExpr>,
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    // x_null_count = x_row_count
+    let when_null_count_eq_row_count = Arc::new(phys_expr::BinaryExpr::new(
+        expr_builder.null_count_column_expr()?,
+        Operator::Eq,
+        expr_builder.row_count_column_expr()?,
+    ));
+    let then = Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(false))));
+
+    // CASE WHEN x_null_count = x_row_count THEN false ELSE <statistics_expr> END
+    Ok(Arc::new(phys_expr::CaseExpr::try_new(
+        None,
+        vec![(when_null_count_eq_row_count, then)],
+        Some(statistics_expr),
+    )?))
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -1328,25 +1559,27 @@ pub(crate) enum StatisticsType {
     Min,
     Max,
     NullCount,
+    RowCount,
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::ops::{Not, Rem};
+
     use super::*;
+    use crate::assert_batches_eq;
     use crate::logical_expr::{col, lit};
-    use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
+
     use arrow::array::Decimal128Array;
     use arrow::{
         array::{BinaryArray, Int32Array, Int64Array, StringArray},
-        datatypes::{DataType, TimeUnit},
+        datatypes::TimeUnit,
     };
-    use datafusion_common::{ScalarValue, ToDFSchema};
+    use arrow_array::UInt64Array;
     use datafusion_expr::expr::InList;
     use datafusion_expr::{cast, is_null, try_cast, Expr};
-    use datafusion_physical_expr::create_physical_expr;
-    use datafusion_physical_expr::execution_props::ExecutionProps;
-    use std::collections::HashMap;
-    use std::ops::{Not, Rem};
+    use datafusion_physical_expr::planner::logical2physical;
 
     #[derive(Debug, Default)]
     /// Mock statistic provider for tests
@@ -1361,6 +1594,7 @@ mod tests {
         max: Option<ArrayRef>,
         /// Optional values
         null_counts: Option<ArrayRef>,
+        row_counts: Option<ArrayRef>,
         /// Optional known values (e.g. mimic a bloom filter)
         /// (value, contained)
         /// If present, all BooleanArrays must be the same size as min/max
@@ -1440,6 +1674,10 @@ mod tests {
             self.null_counts.clone()
         }
 
+        fn row_counts(&self) -> Option<ArrayRef> {
+            self.row_counts.clone()
+        }
+
         /// return an iterator over all arrays in this statistics
         fn arrays(&self) -> Vec<ArrayRef> {
             let contained_arrays = self
@@ -1451,6 +1689,7 @@ mod tests {
                 self.min.as_ref().cloned(),
                 self.max.as_ref().cloned(),
                 self.null_counts.as_ref().cloned(),
+                self.row_counts.as_ref().cloned(),
             ]
             .into_iter()
             .flatten()
@@ -1499,13 +1738,27 @@ mod tests {
         /// there are containers
         fn with_null_counts(
             mut self,
-            counts: impl IntoIterator<Item = Option<i64>>,
+            counts: impl IntoIterator<Item = Option<u64>>,
         ) -> Self {
             let null_counts: ArrayRef =
-                Arc::new(counts.into_iter().collect::<Int64Array>());
+                Arc::new(counts.into_iter().collect::<UInt64Array>());
 
             self.assert_invariants();
             self.null_counts = Some(null_counts);
+            self
+        }
+
+        /// Add row counts. There must be the same number of row counts as
+        /// there are containers
+        fn with_row_counts(
+            mut self,
+            counts: impl IntoIterator<Item = Option<u64>>,
+        ) -> Self {
+            let row_counts: ArrayRef =
+                Arc::new(counts.into_iter().collect::<UInt64Array>());
+
+            self.assert_invariants();
+            self.row_counts = Some(row_counts);
             self
         }
 
@@ -1554,13 +1807,13 @@ mod tests {
             self
         }
 
-        /// Add null counts for the specified columm.
+        /// Add null counts for the specified column.
         /// There must be the same number of null counts as
         /// there are containers
         fn with_null_counts(
             mut self,
             name: impl Into<String>,
-            counts: impl IntoIterator<Item = Option<i64>>,
+            counts: impl IntoIterator<Item = Option<u64>>,
         ) -> Self {
             let col = Column::from_name(name.into());
 
@@ -1576,7 +1829,29 @@ mod tests {
             self
         }
 
-        /// Add contained information for the specified columm.
+        /// Add row counts for the specified column.
+        /// There must be the same number of row counts as
+        /// there are containers
+        fn with_row_counts(
+            mut self,
+            name: impl Into<String>,
+            counts: impl IntoIterator<Item = Option<u64>>,
+        ) -> Self {
+            let col = Column::from_name(name.into());
+
+            // take stats out and update them
+            let container_stats = self
+                .stats
+                .remove(&col)
+                .unwrap_or_default()
+                .with_row_counts(counts);
+
+            // put stats back in
+            self.stats.insert(col, container_stats);
+            self
+        }
+
+        /// Add contained information for the specified column.
         fn with_contained(
             mut self,
             name: impl Into<String>,
@@ -1628,6 +1903,13 @@ mod tests {
                 .unwrap_or(None)
         }
 
+        fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+            self.stats
+                .get(column)
+                .map(|container_stats| container_stats.row_counts())
+                .unwrap_or(None)
+        }
+
         fn contained(
             &self,
             column: &Column,
@@ -1660,6 +1942,10 @@ mod tests {
         }
 
         fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+            None
+        }
+
+        fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
             None
         }
 
@@ -1853,7 +2139,7 @@ mod tests {
     #[test]
     fn row_group_predicate_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "c1_min@0 <= 1 AND 1 <= c1_max@1";
+        let expected_expr = "CASE WHEN c1_null_count@2 = c1_row_count@3 THEN false ELSE c1_min@0 <= 1 AND 1 <= c1_max@1 END";
 
         // test column on the left
         let expr = col("c1").eq(lit(1));
@@ -1873,7 +2159,7 @@ mod tests {
     #[test]
     fn row_group_predicate_not_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "c1_min@0 != 1 OR 1 != c1_max@1";
+        let expected_expr = "CASE WHEN c1_null_count@2 = c1_row_count@3 THEN false ELSE c1_min@0 != 1 OR 1 != c1_max@1 END";
 
         // test column on the left
         let expr = col("c1").not_eq(lit(1));
@@ -1893,7 +2179,8 @@ mod tests {
     #[test]
     fn row_group_predicate_gt() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "c1_max@0 > 1";
+        let expected_expr =
+            "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_max@0 > 1 END";
 
         // test column on the left
         let expr = col("c1").gt(lit(1));
@@ -1913,7 +2200,7 @@ mod tests {
     #[test]
     fn row_group_predicate_gt_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "c1_max@0 >= 1";
+        let expected_expr = "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_max@0 >= 1 END";
 
         // test column on the left
         let expr = col("c1").gt_eq(lit(1));
@@ -1932,7 +2219,8 @@ mod tests {
     #[test]
     fn row_group_predicate_lt() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "c1_min@0 < 1";
+        let expected_expr =
+            "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_min@0 < 1 END";
 
         // test column on the left
         let expr = col("c1").lt(lit(1));
@@ -1952,7 +2240,7 @@ mod tests {
     #[test]
     fn row_group_predicate_lt_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "c1_min@0 <= 1";
+        let expected_expr = "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_min@0 <= 1 END";
 
         // test column on the left
         let expr = col("c1").lt_eq(lit(1));
@@ -1977,7 +2265,8 @@ mod tests {
         ]);
         // test AND operator joining supported c1 < 1 expression and unsupported c2 > c3 expression
         let expr = col("c1").lt(lit(1)).and(col("c2").lt(col("c3")));
-        let expected_expr = "c1_min@0 < 1";
+        let expected_expr =
+            "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_min@0 < 1 END";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2043,7 +2332,7 @@ mod tests {
     #[test]
     fn row_group_predicate_lt_bool() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
-        let expected_expr = "c1_min@0 < true";
+        let expected_expr = "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_min@0 < true END";
 
         // DF doesn't support arithmetic on boolean columns so
         // this predicate will error when evaluated
@@ -2066,7 +2355,21 @@ mod tests {
         let expr = col("c1")
             .lt(lit(1))
             .and(col("c2").eq(lit(2)).or(col("c2").eq(lit(3))));
-        let expected_expr = "c1_min@0 < 1 AND (c2_min@1 <= 2 AND 2 <= c2_max@2 OR c2_min@1 <= 3 AND 3 <= c2_max@2)";
+        let expected_expr = "\
+            CASE \
+                WHEN c1_null_count@1 = c1_row_count@2 THEN false \
+                ELSE c1_min@0 < 1 \
+            END \
+        AND (\
+                CASE \
+                    WHEN c2_null_count@5 = c2_row_count@6 THEN false \
+                    ELSE c2_min@3 <= 2 AND 2 <= c2_max@4 \
+                END \
+            OR CASE \
+                    WHEN c2_null_count@5 = c2_row_count@6 THEN false \
+                    ELSE c2_min@3 <= 3 AND 3 <= c2_max@4 \
+                END\
+            )";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut required_columns);
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2080,10 +2383,30 @@ mod tests {
                 c1_min_field.with_nullable(true) // could be nullable if stats are not present
             )
         );
+        // c1 < 1 should add c1_null_count
+        let c1_null_count_field = Field::new("c1_null_count", DataType::UInt64, false);
+        assert_eq!(
+            required_columns.columns[1],
+            (
+                phys_expr::Column::new("c1", 0),
+                StatisticsType::NullCount,
+                c1_null_count_field.with_nullable(true) // could be nullable if stats are not present
+            )
+        );
+        // c1 < 1 should add c1_row_count
+        let c1_row_count_field = Field::new("c1_row_count", DataType::UInt64, false);
+        assert_eq!(
+            required_columns.columns[2],
+            (
+                phys_expr::Column::new("c1", 0),
+                StatisticsType::RowCount,
+                c1_row_count_field.with_nullable(true) // could be nullable if stats are not present
+            )
+        );
         // c2 = 2 should add c2_min and c2_max
         let c2_min_field = Field::new("c2_min", DataType::Int32, false);
         assert_eq!(
-            required_columns.columns[1],
+            required_columns.columns[3],
             (
                 phys_expr::Column::new("c2", 1),
                 StatisticsType::Min,
@@ -2092,15 +2415,35 @@ mod tests {
         );
         let c2_max_field = Field::new("c2_max", DataType::Int32, false);
         assert_eq!(
-            required_columns.columns[2],
+            required_columns.columns[4],
             (
                 phys_expr::Column::new("c2", 1),
                 StatisticsType::Max,
                 c2_max_field.with_nullable(true) // could be nullable if stats are not present
             )
         );
+        // c2 = 2 should add c2_null_count
+        let c2_null_count_field = Field::new("c2_null_count", DataType::UInt64, false);
+        assert_eq!(
+            required_columns.columns[5],
+            (
+                phys_expr::Column::new("c2", 1),
+                StatisticsType::NullCount,
+                c2_null_count_field.with_nullable(true) // could be nullable if stats are not present
+            )
+        );
+        // c2 = 2 should add c2_row_count
+        let c2_row_count_field = Field::new("c2_row_count", DataType::UInt64, false);
+        assert_eq!(
+            required_columns.columns[6],
+            (
+                phys_expr::Column::new("c2", 1),
+                StatisticsType::RowCount,
+                c2_row_count_field.with_nullable(true) // could be nullable if stats are not present
+            )
+        );
         // c2 = 3 shouldn't add any new statistics fields
-        assert_eq!(required_columns.columns.len(), 3);
+        assert_eq!(required_columns.columns.len(), 7);
 
         Ok(())
     }
@@ -2117,7 +2460,18 @@ mod tests {
             vec![lit(1), lit(2), lit(3)],
             false,
         ));
-        let expected_expr = "c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_min@0 <= 2 AND 2 <= c1_max@1 OR c1_min@0 <= 3 AND 3 <= c1_max@1";
+        let expected_expr = "CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE c1_min@0 <= 1 AND 1 <= c1_max@1 \
+            END \
+        OR CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE c1_min@0 <= 2 AND 2 <= c1_max@1 \
+            END \
+        OR CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE c1_min@0 <= 3 AND 3 <= c1_max@1 \
+            END";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2153,9 +2507,19 @@ mod tests {
             vec![lit(1), lit(2), lit(3)],
             true,
         ));
-        let expected_expr = "(c1_min@0 != 1 OR 1 != c1_max@1) \
-        AND (c1_min@0 != 2 OR 2 != c1_max@1) \
-        AND (c1_min@0 != 3 OR 3 != c1_max@1)";
+        let expected_expr = "\
+            CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE c1_min@0 != 1 OR 1 != c1_max@1 \
+            END \
+        AND CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE c1_min@0 != 2 OR 2 != c1_max@1 \
+            END \
+        AND CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE c1_min@0 != 3 OR 3 != c1_max@1 \
+            END";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2201,7 +2565,24 @@ mod tests {
         // test c1 in(1, 2) and c2 BETWEEN 4 AND 5
         let expr3 = expr1.and(expr2);
 
-        let expected_expr = "(c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_min@0 <= 2 AND 2 <= c1_max@1) AND c2_max@2 >= 4 AND c2_min@3 <= 5";
+        let expected_expr = "\
+        (\
+            CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE c1_min@0 <= 1 AND 1 <= c1_max@1 \
+            END \
+        OR CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE c1_min@0 <= 2 AND 2 <= c1_max@1 \
+            END\
+        ) AND CASE \
+                WHEN c2_null_count@5 = c2_row_count@6 THEN false \
+                ELSE c2_max@4 >= 4 \
+            END \
+        AND CASE \
+                WHEN c2_null_count@5 = c2_row_count@6 THEN false \
+                ELSE c2_min@7 <= 5 \
+            END";
         let predicate_expr =
             test_build_predicate_expression(&expr3, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2228,9 +2609,12 @@ mod tests {
     #[test]
     fn row_group_predicate_cast() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr =
-            "CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64)";
+        let expected_expr = "CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) \
+            END";
 
+        // test cast(c1 as int64) = 1
         // test column on the left
         let expr = cast(col("c1"), DataType::Int64).eq(lit(ScalarValue::Int64(Some(1))));
         let predicate_expr =
@@ -2243,7 +2627,10 @@ mod tests {
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
-        let expected_expr = "TRY_CAST(c1_max@0 AS Int64) > 1";
+        let expected_expr = "CASE \
+                WHEN c1_null_count@1 = c1_row_count@2 THEN false \
+                ELSE TRY_CAST(c1_max@0 AS Int64) > 1 \
+            END";
 
         // test column on the left
         let expr =
@@ -2275,7 +2662,18 @@ mod tests {
             ],
             false,
         ));
-        let expected_expr = "CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) OR CAST(c1_min@0 AS Int64) <= 2 AND 2 <= CAST(c1_max@1 AS Int64) OR CAST(c1_min@0 AS Int64) <= 3 AND 3 <= CAST(c1_max@1 AS Int64)";
+        let expected_expr = "CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) \
+            END \
+        OR CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE CAST(c1_min@0 AS Int64) <= 2 AND 2 <= CAST(c1_max@1 AS Int64) \
+            END \
+        OR CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE CAST(c1_min@0 AS Int64) <= 3 AND 3 <= CAST(c1_max@1 AS Int64) \
+            END";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2289,10 +2687,18 @@ mod tests {
             ],
             true,
         ));
-        let expected_expr =
-            "(CAST(c1_min@0 AS Int64) != 1 OR 1 != CAST(c1_max@1 AS Int64)) \
-        AND (CAST(c1_min@0 AS Int64) != 2 OR 2 != CAST(c1_max@1 AS Int64)) \
-        AND (CAST(c1_min@0 AS Int64) != 3 OR 3 != CAST(c1_max@1 AS Int64))";
+        let expected_expr = "CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE CAST(c1_min@0 AS Int64) != 1 OR 1 != CAST(c1_max@1 AS Int64) \
+            END \
+        AND CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE CAST(c1_min@0 AS Int64) != 2 OR 2 != CAST(c1_max@1 AS Int64) \
+            END \
+        AND CASE \
+                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
+                ELSE CAST(c1_min@0 AS Int64) != 3 OR 3 != CAST(c1_max@1 AS Int64) \
+            END";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2819,8 +3225,80 @@ mod tests {
         let expected_ret = &[false, true, true, true, false];
 
         prune_with_expr(
-            // i IS NULL, with actual null statistcs
+            // i IS NULL, with actual null statistics
             col("i").is_null(),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+    }
+
+    #[test]
+    fn prune_int32_column_is_known_all_null() {
+        let (schema, statistics) = int32_setup();
+
+        // Expression "i < 0"
+        // i [-5, 5] ==> some rows could pass (must keep)
+        // i [1, 11] ==> no rows can pass (not keep)
+        // i [-11, -1] ==>  all rows must pass (must keep)
+        // i [NULL, NULL]  ==> unknown (must keep)
+        // i [1, NULL]  ==> no rows can pass (not keep)
+        let expected_ret = &[true, false, true, true, false];
+
+        prune_with_expr(
+            // i < 0
+            col("i").lt(lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // provide row counts for each column
+        let statistics = statistics.with_row_counts(
+            "i",
+            vec![
+                Some(10), // 10 rows of data
+                Some(9),  // 9 rows of data
+                None,     // unknown row counts
+                Some(4),
+                Some(10),
+            ],
+        );
+
+        // pruning result is still the same if we only know row counts
+        prune_with_expr(
+            // i < 0, with only row counts statistics
+            col("i").lt(lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // provide null counts for each column
+        let statistics = statistics.with_null_counts(
+            "i",
+            vec![
+                Some(0), // no nulls
+                Some(1), // 1 null
+                None,    // unknown nulls
+                Some(4), // 4 nulls, which is the same as the row counts, i.e. this column is all null (don't keep)
+                Some(0), // 0 nulls (max=null too which means no known max)
+            ],
+        );
+
+        // Expression "i < 0" with actual null and row counts statistics
+        // col | min, max     | row counts | null counts |
+        // ----+--------------+------------+-------------+
+        //  i  | [-5, 5]      | 10         | 0           | ==> Some rows could pass (must keep)
+        //  i  | [1, 11]      | 9          | 1           | ==> No rows can pass (not keep)
+        //  i  | [-11,-1]     | Unknown    | Unknown     | ==> All rows must pass (must keep)
+        //  i  | [NULL, NULL] | 4          | 4           | ==> The column is all null (not keep)
+        //  i  | [1, NULL]    | 10         | 0           | ==> No rows can pass (not keep)
+        let expected_ret = &[true, false, true, false, false];
+
+        prune_with_expr(
+            // i < 0, with actual null and row counts statistics
+            col("i").lt(lit(0)),
             &schema,
             &statistics,
             expected_ret,
@@ -3406,11 +3884,5 @@ mod tests {
     ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
         build_predicate_expression(&expr, schema, required_columns)
-    }
-
-    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-        let df_schema = schema.clone().to_dfschema().unwrap();
-        let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 }

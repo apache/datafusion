@@ -54,10 +54,10 @@ type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 /// which should be contained within the same output file. The outer channel
 /// is used to send a dynamic number of inner channels, representing a dynamic
 /// number of total output files. The caller is also responsible to monitor
-/// the demux task for errors and abort accordingly. The single_file_ouput parameter
+/// the demux task for errors and abort accordingly. The single_file_output parameter
 /// overrides all other settings to force only a single file to be written.
 /// partition_by parameter will additionally split the input based on the unique
-/// values of a specific column `<https://github.com/apache/arrow-datafusion/issues/7744>``
+/// values of a specific column `<https://github.com/apache/datafusion/issues/7744>``
 ///                                                                              ┌───────────┐               ┌────────────┐    ┌─────────────┐
 ///                                                                     ┌──────▶ │  batch 1  ├────▶...──────▶│   Batch a  │    │ Output File1│
 ///                                                                     │        └───────────┘               └────────────┘    └─────────────┘
@@ -75,6 +75,7 @@ pub(crate) fn start_demuxer_task(
     partition_by: Option<Vec<(String, DataType)>>,
     base_output_path: ListingTableUrl,
     file_extension: String,
+    keep_partition_by_columns: bool,
 ) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
     let (tx, rx) = mpsc::unbounded_channel();
     let context = context.clone();
@@ -91,6 +92,7 @@ pub(crate) fn start_demuxer_task(
                     parts,
                     base_output_path,
                     file_extension,
+                    keep_partition_by_columns,
                 )
                 .await
             })
@@ -111,7 +113,7 @@ pub(crate) fn start_demuxer_task(
     (task, rx)
 }
 
-/// Dynamically partitions input stream to acheive desired maximum rows per file
+/// Dynamically partitions input stream to achieve desired maximum rows per file
 async fn row_count_demuxer(
     mut tx: UnboundedSender<(Path, Receiver<RecordBatch>)>,
     mut input: SendableRecordBatchStream,
@@ -240,6 +242,7 @@ async fn hive_style_partitions_demuxer(
     partition_by: Vec<(String, DataType)>,
     base_output_path: ListingTableUrl,
     file_extension: String,
+    keep_partition_by_columns: bool,
 ) -> Result<()> {
     let write_id =
         rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
@@ -298,9 +301,11 @@ async fn hive_style_partitions_demuxer(
                 }
             };
 
-            // remove partitions columns
-            let final_batch_to_send =
-                remove_partition_by_columns(&parted_batch, &partition_by)?;
+            let final_batch_to_send = if keep_partition_by_columns {
+                parted_batch
+            } else {
+                remove_partition_by_columns(&parted_batch, &partition_by)?
+            };
 
             // Finally send the partial batch partitioned by distinct value!
             part_tx.send(final_batch_to_send).await.map_err(|_| {

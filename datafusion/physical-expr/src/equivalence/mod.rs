@@ -27,14 +27,20 @@ mod ordering;
 mod projection;
 mod properties;
 
-pub use class::{EquivalenceClass, EquivalenceGroup};
+pub use class::{ConstExpr, EquivalenceClass, EquivalenceGroup};
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
-pub use properties::{join_equivalence_properties, EquivalenceProperties};
+pub use properties::{
+    calculate_union, join_equivalence_properties, EquivalenceProperties,
+};
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a Some(ASC)]`.
+///
+/// It will also filter out entries that are ordered if the next entry is;
+/// for instance, `vec![floor(a) Some(ASC), a Some(ASC)]` will be collapsed to
+/// `vec![a Some(ASC)]`.
 pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
     let mut output = Vec::<PhysicalSortRequirement>::new();
     for item in input {
@@ -51,7 +57,7 @@ pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: usize,
 ) -> Arc<dyn PhysicalExpr> {
-    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+    expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
         Some(col) => Ok(Transformed::yes(Arc::new(Column::new(
             col.name(),
             offset + col.index(),
@@ -66,10 +72,8 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-    use crate::expressions::{col, Column};
+    use crate::expressions::col;
     use crate::PhysicalSortExpr;
 
     use arrow::compute::{lexsort_to_indices, SortColumn};
@@ -143,8 +147,8 @@ mod tests {
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
         let col_g = &col("g", &test_schema)?;
-        let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
-        eq_properties.add_equal_conditions(col_a, col_c);
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
+        eq_properties.add_equal_conditions(col_a, col_c)?;
 
         let option_asc = SortOptions {
             descending: false,
@@ -199,11 +203,11 @@ mod tests {
         let col_f = &col("f", &test_schema)?;
         let col_exprs = [col_a, col_b, col_c, col_d, col_e, col_f];
 
-        let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
         // Define a and f are aliases
-        eq_properties.add_equal_conditions(col_a, col_f);
+        eq_properties.add_equal_conditions(col_a, col_f)?;
         // Column e has constant value.
-        eq_properties = eq_properties.add_constants([col_e.clone()]);
+        eq_properties = eq_properties.add_constants([ConstExpr::from(col_e)]);
 
         // Randomly order columns for sorting
         let mut rng = StdRng::seed_from_u64(seed);
@@ -221,7 +225,7 @@ mod tests {
             let ordering = remaining_exprs
                 .drain(0..n_sort_expr)
                 .map(|expr| PhysicalSortExpr {
-                    expr: expr.clone(),
+                    expr: Arc::clone(expr),
                     options: options_asc,
                 })
                 .collect();
@@ -239,7 +243,7 @@ mod tests {
         in_data
             .iter()
             .map(|(expr, options)| {
-                PhysicalSortRequirement::new((*expr).clone(), *options)
+                PhysicalSortRequirement::new(Arc::clone(*expr), *options)
             })
             .collect()
     }
@@ -251,7 +255,7 @@ mod tests {
         in_data
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
-                expr: (*expr).clone(),
+                expr: Arc::clone(*expr),
                 options: *options,
             })
             .collect()
@@ -274,7 +278,7 @@ mod tests {
         in_data
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
-                expr: (*expr).clone(),
+                expr: Arc::clone(expr),
                 options: *options,
             })
             .collect()
@@ -307,9 +311,9 @@ mod tests {
             .map(|(source, _target)| source.evaluate(input_data)?.into_array(num_rows))
             .collect::<Result<Vec<_>>>()?;
         let projected_batch = if projected_values.is_empty() {
-            RecordBatch::new_empty(output_schema.clone())
+            RecordBatch::new_empty(Arc::clone(&output_schema))
         } else {
-            RecordBatch::try_new(output_schema.clone(), projected_values)?
+            RecordBatch::try_new(Arc::clone(&output_schema), projected_values)?
         };
 
         let projected_eq =
@@ -335,11 +339,11 @@ mod tests {
         let col_y_expr = Arc::new(Column::new("y", 4)) as Arc<dyn PhysicalExpr>;
 
         // a and b are aliases
-        eq_properties.add_equal_conditions(&col_a_expr, &col_b_expr);
+        eq_properties.add_equal_conditions(&col_a_expr, &col_b_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
 
         // This new entry is redundant, size shouldn't increase
-        eq_properties.add_equal_conditions(&col_b_expr, &col_a_expr);
+        eq_properties.add_equal_conditions(&col_b_expr, &col_a_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = &eq_properties.eq_group().classes[0];
         assert_eq!(eq_groups.len(), 2);
@@ -348,7 +352,7 @@ mod tests {
 
         // b and c are aliases. Exising equivalence class should expand,
         // however there shouldn't be any new equivalence class
-        eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr);
+        eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = &eq_properties.eq_group().classes[0];
         assert_eq!(eq_groups.len(), 3);
@@ -357,12 +361,12 @@ mod tests {
         assert!(eq_groups.contains(&col_c_expr));
 
         // This is a new set of equality. Hence equivalent class count should be 2.
-        eq_properties.add_equal_conditions(&col_x_expr, &col_y_expr);
+        eq_properties.add_equal_conditions(&col_x_expr, &col_y_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 2);
 
         // This equality bridges distinct equality sets.
         // Hence equivalent class count should decrease from 2 to 1.
-        eq_properties.add_equal_conditions(&col_x_expr, &col_a_expr);
+        eq_properties.add_equal_conditions(&col_x_expr, &col_a_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = &eq_properties.eq_group().classes[0];
         assert_eq!(eq_groups.len(), 5);
@@ -397,7 +401,7 @@ mod tests {
         let vals: Vec<usize> = (0..n_row).collect::<Vec<_>>();
         let vals: Vec<f64> = vals.into_iter().map(|val| val as f64).collect();
         let unique_col = Arc::new(Float64Array::from_iter_values(vals)) as ArrayRef;
-        columns.push(unique_col.clone());
+        columns.push(Arc::clone(&unique_col));
 
         // Create a new schema with the added unique column
         let unique_col_name = "unique";
@@ -412,7 +416,7 @@ mod tests {
         let schema = Arc::new(Schema::new(fields));
 
         // Create a new batch with the added column
-        let new_batch = RecordBatch::try_new(schema.clone(), columns)?;
+        let new_batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
 
         // Add the unique column to the required ordering to ensure deterministic results
         required_ordering.push(PhysicalSortExpr {
@@ -452,7 +456,7 @@ mod tests {
             let col = expr.as_any().downcast_ref::<Column>().unwrap();
             let (idx, _field) = schema.column_with_name(col.name()).unwrap();
             if let Some(res) = &existing_vec[idx] {
-                return Some(res.clone());
+                return Some(Arc::clone(res));
             }
         }
         None
@@ -480,7 +484,7 @@ mod tests {
 
         // Fill constant columns
         for constant in &eq_properties.constants {
-            let col = constant.as_any().downcast_ref::<Column>().unwrap();
+            let col = constant.expr().as_any().downcast_ref::<Column>().unwrap();
             let (idx, _field) = schema.column_with_name(col.name()).unwrap();
             let arr = Arc::new(Float64Array::from_iter_values(vec![0 as f64; n_elem]))
                 as ArrayRef;
@@ -514,13 +518,13 @@ mod tests {
         // Fill columns based on equivalence groups
         for eq_group in eq_properties.eq_group.iter() {
             let representative_array =
-                get_representative_arr(eq_group, &schema_vec, schema.clone())
+                get_representative_arr(eq_group, &schema_vec, Arc::clone(schema))
                     .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
 
             for expr in eq_group.iter() {
                 let col = expr.as_any().downcast_ref::<Column>().unwrap();
                 let (idx, _field) = schema.column_with_name(col.name()).unwrap();
-                schema_vec[idx] = Some(representative_array.clone());
+                schema_vec[idx] = Some(Arc::clone(&representative_array));
             }
         }
 

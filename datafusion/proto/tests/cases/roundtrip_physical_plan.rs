@@ -15,10 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::fmt::Display;
+use std::hash::Hasher;
+use std::ops::Deref;
+use std::sync::Arc;
+use std::vec;
+
+use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
+use datafusion::physical_expr_common::aggregate::AggregateExprBuilder;
+use prost::Message;
+
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
@@ -28,13 +39,11 @@ use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
     FileSinkConfig, ParquetExec,
 };
-use datafusion::execution::context::ExecutionProps;
-use datafusion::logical_expr::{
-    create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
-};
-use datafusion::parquet::file::properties::WriterProperties;
-use datafusion::physical_expr::expressions::Literal;
-use datafusion::physical_expr::expressions::NthValueAgg;
+use datafusion::execution::FunctionRegistry;
+use datafusion::functions_aggregate::sum::sum_udaf;
+use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
+use datafusion::physical_expr::aggregate::utils::down_cast_any_ref;
+use datafusion::physical_expr::expressions::{Literal, Max};
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -43,13 +52,11 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, DistinctCount,
-    GetFieldAccessExpr, GetIndexedFieldExpr, NotExpr, NthValue, PhysicalSortExpr,
-    StringAgg, Sum,
+    binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, NthValue,
+    PhysicalSortExpr,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::functions;
-use datafusion::physical_plan::insert::FileSinkExec;
+use datafusion::physical_plan::insert::DataSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
 };
@@ -63,31 +70,37 @@ use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
 use datafusion::physical_plan::{
-    udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
+    AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{FileTypeWriterOptions, Result};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, Signature,
-    SimpleAggregateUDF, WindowFrame, WindowFrameBound,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
+    Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
-use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
+use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::nth_value::nth_value_udaf;
+use datafusion_functions_aggregate::string_agg::string_agg_udaf;
+use datafusion_proto::physical_plan::{
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+};
 use datafusion_proto::protobuf;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::vec;
+
+use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
 /// lost during serde because the string representation of a plan often only shows a subset of state.
 fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
-    let _ = roundtrip_test_and_return(exec_plan);
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    roundtrip_test_and_return(exec_plan, &ctx, &codec)?;
     Ok(())
 }
 
@@ -99,15 +112,15 @@ fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
 /// farther in tests.
 fn roundtrip_test_and_return(
     exec_plan: Arc<dyn ExecutionPlan>,
+    ctx: &SessionContext,
+    codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
     let proto: protobuf::PhysicalPlanNode =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
+        protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec)
             .expect("to proto");
     let runtime = ctx.runtime_env();
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx, runtime.deref(), &codec)
+        .try_into_physical_plan(ctx, runtime.deref(), codec)
         .expect("from proto");
     assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
     Ok(result_exec_plan)
@@ -121,17 +134,10 @@ fn roundtrip_test_and_return(
 /// performing serde on some plans.
 fn roundtrip_test_with_context(
     exec_plan: Arc<dyn ExecutionPlan>,
-    ctx: SessionContext,
+    ctx: &SessionContext,
 ) -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto: protobuf::PhysicalPlanNode =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
-            .expect("to proto");
-    let runtime = ctx.runtime_env();
-    let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx, runtime.deref(), &codec)
-        .expect("from proto");
-    assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
+    roundtrip_test_and_return(exec_plan, ctx, &codec)?;
     Ok(())
 }
 
@@ -217,6 +223,7 @@ fn roundtrip_hash_join() -> Result<()> {
                 on.clone(),
                 None,
                 join_type,
+                None,
                 *partition_mode,
                 false,
             )?))?;
@@ -257,8 +264,7 @@ fn roundtrip_nested_loop_join() -> Result<()> {
 fn roundtrip_window() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
-    let field_c = Field::new("FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
     let window_frame = WindowFrame::new_bounds(
         datafusion_expr::WindowFrameUnits::Range,
@@ -271,6 +277,7 @@ fn roundtrip_window() -> Result<()> {
             "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
             col("a", &schema)?,
             DataType::Int64,
+            false,
         )),
         &[col("b", &schema)?],
         &[PhysicalSortExpr {
@@ -284,11 +291,13 @@ fn roundtrip_window() -> Result<()> {
     ));
 
     let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
-        Arc::new(Avg::new(
-            cast(col("b", &schema)?, &schema, DataType::Float64)?,
-            "AVG(b)".to_string(),
-            DataType::Float64,
-        )),
+        AggregateExprBuilder::new(
+            avg_udaf(),
+            vec![cast(col("b", &schema)?, &schema, DataType::Float64)?],
+        )
+        .schema(Arc::clone(&schema))
+        .name("avg(b)")
+        .build()?,
         &[],
         &[],
         Arc::new(WindowFrame::new(None)),
@@ -300,12 +309,14 @@ fn roundtrip_window() -> Result<()> {
         WindowFrameBound::Preceding(ScalarValue::Int64(None)),
     );
 
+    let args = vec![cast(col("a", &schema)?, &schema, DataType::Float64)?];
+    let sum_expr = AggregateExprBuilder::new(sum_udaf(), args)
+        .schema(Arc::clone(&schema))
+        .name("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING")
+        .build()?;
+
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
-        Arc::new(Sum::new(
-            cast(col("a", &schema)?, &schema, DataType::Float64)?,
-            "SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING",
-            DataType::Float64,
-        )),
+        sum_expr,
         &[],
         &[],
         Arc::new(window_frame),
@@ -333,30 +344,28 @@ fn rountrip_aggregate() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
+    let avg_expr = AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+        .schema(Arc::clone(&schema))
+        .name("AVG(b)")
+        .build()?;
+    let nth_expr =
+        AggregateExprBuilder::new(nth_value_udaf(), vec![col("b", &schema)?, lit(1u64)])
+            .schema(Arc::clone(&schema))
+            .name("NTH_VALUE(b, 1)")
+            .build()?;
+    let str_agg_expr =
+        AggregateExprBuilder::new(string_agg_udaf(), vec![col("b", &schema)?, lit(1u64)])
+            .schema(Arc::clone(&schema))
+            .name("NTH_VALUE(b, 1)")
+            .build()?;
+
     let test_cases: Vec<Vec<Arc<dyn AggregateExpr>>> = vec![
         // AVG
-        vec![Arc::new(Avg::new(
-            cast(col("b", &schema)?, &schema, DataType::Float64)?,
-            "AVG(b)".to_string(),
-            DataType::Float64,
-        ))],
+        vec![avg_expr],
         // NTH_VALUE
-        vec![Arc::new(NthValueAgg::new(
-            col("b", &schema)?,
-            1,
-            "NTH_VALUE(b, 1)".to_string(),
-            DataType::Int64,
-            false,
-            Vec::new(),
-            Vec::new(),
-        ))],
+        vec![nth_expr],
         // STRING_AGG
-        vec![Arc::new(StringAgg::new(
-            cast(col("b", &schema)?, &schema, DataType::Utf8)?,
-            lit(ScalarValue::Utf8(Some(",".to_string()))),
-            "STRING_AGG(name, ',')".to_string(),
-            DataType::Utf8,
-        ))],
+        vec![str_agg_expr],
     ];
 
     for aggregates in test_cases {
@@ -372,6 +381,35 @@ fn rountrip_aggregate() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[test]
+fn rountrip_aggregate_with_limit() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        vec![(col("a", &schema)?, "unused".to_string())];
+
+    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+        vec![
+            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .name("AVG(b)")
+                .build()?,
+        ];
+
+    let agg = AggregateExec::try_new(
+        AggregateMode::Final,
+        PhysicalGroupBy::new_single(groups.clone()),
+        aggregates.clone(),
+        vec![None],
+        Arc::new(EmptyExec::new(schema.clone())),
+        schema,
+    )?;
+    let agg = agg.with_limit(Some(12));
+    roundtrip_test(Arc::new(agg))
 }
 
 #[test]
@@ -406,14 +444,13 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
 
     let return_type = DataType::Int64;
     let accumulator: AccumulatorFactoryFunction = Arc::new(|_| Ok(Box::new(Example)));
-    let state_type = vec![DataType::Int64];
 
     let udaf = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
         "example",
         Signature::exact(vec![DataType::Int64], Volatility::Immutable),
         return_type,
         accumulator,
-        state_type,
+        vec![Field::new("value", DataType::Int64, true)],
     ));
 
     let ctx = SessionContext::new();
@@ -422,12 +459,13 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![udaf::create_aggregate_expr(
-        &udaf,
-        &[col("b", &schema)?],
-        &schema,
-        "example_agg",
-    )?];
+    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+        vec![
+            AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .name("example_agg")
+                .build()?,
+        ];
 
     roundtrip_test_with_context(
         Arc::new(AggregateExec::try_new(
@@ -438,7 +476,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
             Arc::new(EmptyExec::new(schema.clone())),
             schema,
         )?),
-        ctx,
+        &ctx,
     )
 }
 
@@ -556,11 +594,11 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         Operator::Eq,
         lit("1"),
     ));
-    roundtrip_test(Arc::new(ParquetExec::new(
-        scan_config,
-        Some(predicate),
-        None,
-    )))
+    roundtrip_test(
+        ParquetExec::builder(scan_config)
+            .with_predicate(predicate)
+            .build_arc(),
+    )
 }
 
 #[tokio::test]
@@ -586,35 +624,148 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         output_ordering: vec![],
     };
 
-    roundtrip_test(Arc::new(ParquetExec::new(scan_config, None, None)))
+    roundtrip_test(ParquetExec::builder(scan_config).build_arc())
 }
 
 #[test]
-fn roundtrip_builtin_scalar_function() -> Result<()> {
-    let field_a = Field::new("a", DataType::Int64, false);
-    let field_b = Field::new("b", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
+    let scan_config = FileScanConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_schema: Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Utf8,
+            false,
+        )])),
+        file_groups: vec![vec![PartitionedFile::new(
+            "/path/to/file.parquet".to_string(),
+            1024,
+        )]],
+        statistics: Statistics {
+            num_rows: Precision::Inexact(100),
+            total_byte_size: Precision::Inexact(1024),
+            column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+                Field::new("col", DataType::Utf8, false),
+            ]))),
+        },
+        projection: None,
+        limit: None,
+        table_partition_cols: vec![],
+        output_ordering: vec![],
+    };
 
-    let input = Arc::new(EmptyExec::new(schema.clone()));
+    #[derive(Debug, Hash, Clone)]
+    struct CustomPredicateExpr {
+        inner: Arc<dyn PhysicalExpr>,
+    }
+    impl Display for CustomPredicateExpr {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "CustomPredicateExpr")
+        }
+    }
+    impl PartialEq<dyn Any> for CustomPredicateExpr {
+        fn eq(&self, other: &dyn Any) -> bool {
+            down_cast_any_ref(other)
+                .downcast_ref::<Self>()
+                .map(|x| self.inner.eq(&x.inner))
+                .unwrap_or(false)
+        }
+    }
+    impl PhysicalExpr for CustomPredicateExpr {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
 
-    let execution_props = ExecutionProps::new();
+        fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+            unreachable!()
+        }
 
-    let fun_expr =
-        functions::create_physical_fun(&BuiltinScalarFunction::Sin, &execution_props)?;
+        fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+            unreachable!()
+        }
 
-    let expr = ScalarFunctionExpr::new(
-        "sin",
-        fun_expr,
-        vec![col("a", &schema)?],
-        DataType::Float64,
-        None,
-        false,
-    );
+        fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
+            unreachable!()
+        }
 
-    let project =
-        ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.inner]
+        }
 
-    roundtrip_test(Arc::new(project))
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            todo!()
+        }
+
+        fn dyn_hash(&self, _state: &mut dyn Hasher) {
+            unreachable!()
+        }
+    }
+
+    #[derive(Debug)]
+    struct CustomPhysicalExtensionCodec;
+    impl PhysicalExtensionCodec for CustomPhysicalExtensionCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[Arc<dyn ExecutionPlan>],
+            _registry: &dyn FunctionRegistry,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unreachable!()
+        }
+
+        fn try_encode(
+            &self,
+            _node: Arc<dyn ExecutionPlan>,
+            _buf: &mut Vec<u8>,
+        ) -> Result<()> {
+            unreachable!()
+        }
+
+        fn try_decode_expr(
+            &self,
+            buf: &[u8],
+            inputs: &[Arc<dyn PhysicalExpr>],
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            if buf == "CustomPredicateExpr".as_bytes() {
+                Ok(Arc::new(CustomPredicateExpr {
+                    inner: inputs[0].clone(),
+                }))
+            } else {
+                internal_err!("Not supported")
+            }
+        }
+
+        fn try_encode_expr(
+            &self,
+            node: Arc<dyn PhysicalExpr>,
+            buf: &mut Vec<u8>,
+        ) -> Result<()> {
+            if node
+                .as_ref()
+                .as_any()
+                .downcast_ref::<CustomPredicateExpr>()
+                .is_some()
+            {
+                buf.extend_from_slice("CustomPredicateExpr".as_bytes());
+                Ok(())
+            } else {
+                internal_err!("Not supported")
+            }
+        }
+    }
+
+    let custom_predicate_expr = Arc::new(CustomPredicateExpr {
+        inner: Arc::new(Column::new("col", 1)),
+    });
+    let exec_plan = ParquetExec::builder(scan_config)
+        .with_predicate(custom_predicate_expr)
+        .build_arc();
+
+    let ctx = SessionContext::new();
+    roundtrip_test_and_return(exec_plan, &ctx, &CustomPhysicalExtensionCodec {})?;
+    Ok(())
 }
 
 #[test]
@@ -640,13 +791,13 @@ fn roundtrip_scalar_udf() -> Result<()> {
         scalar_fn.clone(),
     );
 
+    let fun_def = Arc::new(udf.clone());
+
     let expr = ScalarFunctionExpr::new(
         "dummy",
-        scalar_fn,
+        fun_def,
         vec![col("a", &schema)?],
         DataType::Int64,
-        None,
-        false,
     );
 
     let project =
@@ -656,32 +807,199 @@ fn roundtrip_scalar_udf() -> Result<()> {
 
     ctx.register_udf(udf);
 
-    roundtrip_test_with_context(Arc::new(project), ctx)
+    roundtrip_test_with_context(Arc::new(project), &ctx)
+}
+
+#[derive(Debug)]
+struct UDFExtensionCodec;
+
+impl PhysicalExtensionCodec for UDFExtensionCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn ExecutionPlan>],
+        _registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("No extension codec provided")
+    }
+
+    fn try_encode(
+        &self,
+        _node: Arc<dyn ExecutionPlan>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        not_impl_err!("No extension codec provided")
+    }
+
+    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        if name == "regex_udf" {
+            let proto = MyRegexUdfNode::decode(buf).map_err(|err| {
+                DataFusionError::Internal(format!("failed to decode regex_udf: {err}"))
+            })?;
+
+            Ok(Arc::new(ScalarUDF::from(MyRegexUdf::new(proto.pattern))))
+        } else {
+            not_impl_err!("unrecognized scalar UDF implementation, cannot decode")
+        }
+    }
+
+    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+        let binding = node.inner();
+        if let Some(udf) = binding.as_any().downcast_ref::<MyRegexUdf>() {
+            let proto = MyRegexUdfNode {
+                pattern: udf.pattern.clone(),
+            };
+            proto.encode(buf).map_err(|err| {
+                DataFusionError::Internal(format!("failed to encode udf: {err}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        if name == "aggregate_udf" {
+            let proto = MyAggregateUdfNode::decode(buf).map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "failed to decode aggregate_udf: {err}"
+                ))
+            })?;
+
+            Ok(Arc::new(AggregateUDF::from(MyAggregateUDF::new(
+                proto.result,
+            ))))
+        } else {
+            not_impl_err!("unrecognized scalar UDF implementation, cannot decode")
+        }
+    }
+
+    fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
+        let binding = node.inner();
+        if let Some(udf) = binding.as_any().downcast_ref::<MyAggregateUDF>() {
+            let proto = MyAggregateUdfNode {
+                result: udf.result.clone(),
+            };
+            proto.encode(buf).map_err(|err| {
+                DataFusionError::Internal(format!("failed to encode udf: {err:?}"))
+            })?;
+        }
+        Ok(())
+    }
 }
 
 #[test]
-fn roundtrip_distinct_count() -> Result<()> {
-    let field_a = Field::new("a", DataType::Int64, false);
-    let field_b = Field::new("b", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
+    let field_text = Field::new("text", DataType::Utf8, true);
+    let field_published = Field::new("published", DataType::Boolean, false);
+    let field_author = Field::new("author", DataType::Utf8, false);
+    let schema = Arc::new(Schema::new(vec![field_text, field_published, field_author]));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(DistinctCount::new(
+    let udf_expr = Arc::new(ScalarFunctionExpr::new(
+        "regex_udf",
+        Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
+        vec![col("text", &schema)?],
         DataType::Int64,
-        col("b", &schema)?,
-        "COUNT(DISTINCT b)".to_string(),
-    ))];
+    ));
 
-    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
-        vec![(col("a", &schema)?, "unused".to_string())];
+    let filter = Arc::new(FilterExec::try_new(
+        Arc::new(BinaryExpr::new(
+            col("published", &schema)?,
+            Operator::And,
+            Arc::new(BinaryExpr::new(udf_expr.clone(), Operator::Gt, lit(0))),
+        )),
+        input,
+    )?);
 
-    roundtrip_test(Arc::new(AggregateExec::try_new(
+    let window = Arc::new(WindowAggExec::try_new(
+        vec![Arc::new(PlainAggregateWindowExpr::new(
+            Arc::new(Max::new(udf_expr.clone(), "max", DataType::Int64)),
+            &[col("author", &schema)?],
+            &[],
+            Arc::new(WindowFrame::new(None)),
+        ))],
+        filter,
+        vec![col("author", &schema)?],
+    )?);
+
+    let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,
-        PhysicalGroupBy::new_single(groups),
-        aggregates.clone(),
+        PhysicalGroupBy::new(vec![], vec![], vec![]),
+        vec![Arc::new(Max::new(udf_expr, "max", DataType::Int64))],
         vec![None],
-        Arc::new(EmptyExec::new(schema.clone())),
-        schema,
-    )?))
+        window,
+        schema.clone(),
+    )?);
+
+    let ctx = SessionContext::new();
+    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec)?;
+    Ok(())
+}
+
+#[test]
+fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
+    let field_text = Field::new("text", DataType::Utf8, true);
+    let field_published = Field::new("published", DataType::Boolean, false);
+    let field_author = Field::new("author", DataType::Utf8, false);
+    let schema = Arc::new(Schema::new(vec![field_text, field_published, field_author]));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    let udf_expr = Arc::new(ScalarFunctionExpr::new(
+        "regex_udf",
+        Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
+        vec![col("text", &schema)?],
+        DataType::Int64,
+    ));
+
+    let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(
+        "result".to_string(),
+    )));
+    let aggr_args: Vec<Arc<dyn PhysicalExpr>> =
+        vec![Arc::new(Literal::new(ScalarValue::from(42)))];
+
+    let aggr_expr = AggregateExprBuilder::new(Arc::clone(&udaf), aggr_args.clone())
+        .schema(Arc::clone(&schema))
+        .name("aggregate_udf")
+        .build()?;
+
+    let filter = Arc::new(FilterExec::try_new(
+        Arc::new(BinaryExpr::new(
+            col("published", &schema)?,
+            Operator::And,
+            Arc::new(BinaryExpr::new(udf_expr.clone(), Operator::Gt, lit(0))),
+        )),
+        input,
+    )?);
+
+    let window = Arc::new(WindowAggExec::try_new(
+        vec![Arc::new(PlainAggregateWindowExpr::new(
+            aggr_expr,
+            &[col("author", &schema)?],
+            &[],
+            Arc::new(WindowFrame::new(None)),
+        ))],
+        filter,
+        vec![col("author", &schema)?],
+    )?);
+
+    let aggr_expr = AggregateExprBuilder::new(udaf, aggr_args.clone())
+        .schema(Arc::clone(&schema))
+        .name("aggregate_udf")
+        .distinct()
+        .ignore_nulls()
+        .build()?;
+
+    let aggregate = Arc::new(AggregateExec::try_new(
+        AggregateMode::Final,
+        PhysicalGroupBy::new(vec![], vec![], vec![]),
+        vec![aggr_expr],
+        vec![None],
+        window,
+        schema.clone(),
+    )?);
+
+    let ctx = SessionContext::new();
+    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec)?;
+    Ok(())
 }
 
 #[test]
@@ -702,95 +1020,6 @@ fn roundtrip_like() -> Result<()> {
         vec![(like_expr, "result".to_string())],
         input,
     )?);
-    roundtrip_test(plan)
-}
-
-#[test]
-fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
-    let fields = vec![
-        Field::new("id", DataType::Int64, true),
-        Field::new_struct(
-            "arg",
-            Fields::from(vec![Field::new("name", DataType::Float64, true)]),
-            true,
-        ),
-    ];
-
-    let schema = Schema::new(fields);
-    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
-
-    let col_arg = col("arg", &schema)?;
-    let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
-        col_arg,
-        GetFieldAccessExpr::NamedStructField {
-            name: ScalarValue::from("name"),
-        },
-    ));
-
-    let plan = Arc::new(ProjectionExec::try_new(
-        vec![(get_indexed_field_expr, "result".to_string())],
-        input,
-    )?);
-
-    roundtrip_test(plan)
-}
-
-#[test]
-fn roundtrip_get_indexed_field_list_index() -> Result<()> {
-    let fields = vec![
-        Field::new("id", DataType::Int64, true),
-        Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
-        Field::new("key", DataType::Int64, true),
-    ];
-
-    let schema = Schema::new(fields);
-    let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
-
-    let col_arg = col("arg", &schema)?;
-    let col_key = col("key", &schema)?;
-    let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
-        col_arg,
-        GetFieldAccessExpr::ListIndex { key: col_key },
-    ));
-
-    let plan = Arc::new(ProjectionExec::try_new(
-        vec![(get_indexed_field_expr, "result".to_string())],
-        input,
-    )?);
-
-    roundtrip_test(plan)
-}
-
-#[test]
-fn roundtrip_get_indexed_field_list_range() -> Result<()> {
-    let fields = vec![
-        Field::new("id", DataType::Int64, true),
-        Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
-        Field::new("start", DataType::Int64, true),
-        Field::new("stop", DataType::Int64, true),
-    ];
-
-    let schema = Schema::new(fields);
-    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
-
-    let col_arg = col("arg", &schema)?;
-    let col_start = col("start", &schema)?;
-    let col_stop = col("stop", &schema)?;
-    let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
-        col_arg,
-        GetFieldAccessExpr::ListRange {
-            start: col_start,
-            stop: col_stop,
-            stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))
-                as Arc<dyn PhysicalExpr>,
-        },
-    ));
-
-    let plan = Arc::new(ProjectionExec::try_new(
-        vec![(get_indexed_field_expr, "result".to_string())],
-        input,
-    )?);
-
     roundtrip_test(plan)
 }
 
@@ -823,11 +1052,12 @@ fn roundtrip_json_sink() -> Result<()> {
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         overwrite: true,
-        file_type_writer_options: FileTypeWriterOptions::JSON(JsonWriterOptions::new(
-            CompressionTypeVariant::UNCOMPRESSED,
-        )),
+        keep_partition_by_columns: true,
     };
-    let data_sink = Arc::new(JsonSink::new(file_sink_config));
+    let data_sink = Arc::new(JsonSink::new(
+        file_sink_config,
+        JsonWriterOptions::new(CompressionTypeVariant::UNCOMPRESSED),
+    ));
     let sort_order = vec![PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
@@ -836,7 +1066,7 @@ fn roundtrip_json_sink() -> Result<()> {
         }),
     )];
 
-    roundtrip_test(Arc::new(FileSinkExec::new(
+    roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
         schema.clone(),
@@ -858,12 +1088,12 @@ fn roundtrip_csv_sink() -> Result<()> {
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         overwrite: true,
-        file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
-            WriterBuilder::default(),
-            CompressionTypeVariant::ZSTD,
-        )),
+        keep_partition_by_columns: true,
     };
-    let data_sink = Arc::new(CsvSink::new(file_sink_config));
+    let data_sink = Arc::new(CsvSink::new(
+        file_sink_config,
+        CsvWriterOptions::new(WriterBuilder::default(), CompressionTypeVariant::ZSTD),
+    ));
     let sort_order = vec![PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
@@ -872,17 +1102,23 @@ fn roundtrip_csv_sink() -> Result<()> {
         }),
     )];
 
-    let roundtrip_plan = roundtrip_test_and_return(Arc::new(FileSinkExec::new(
-        input,
-        data_sink,
-        schema.clone(),
-        Some(sort_order),
-    )))
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let roundtrip_plan = roundtrip_test_and_return(
+        Arc::new(DataSinkExec::new(
+            input,
+            data_sink,
+            schema.clone(),
+            Some(sort_order),
+        )),
+        &ctx,
+        &codec,
+    )
     .unwrap();
 
     let roundtrip_plan = roundtrip_plan
         .as_any()
-        .downcast_ref::<FileSinkExec>()
+        .downcast_ref::<DataSinkExec>()
         .unwrap();
     let csv_sink = roundtrip_plan
         .sink()
@@ -891,12 +1127,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         .unwrap();
     assert_eq!(
         CompressionTypeVariant::ZSTD,
-        csv_sink
-            .config()
-            .file_type_writer_options
-            .try_into_csv()
-            .unwrap()
-            .compression
+        csv_sink.writer_options().compression
     );
 
     Ok(())
@@ -916,11 +1147,12 @@ fn roundtrip_parquet_sink() -> Result<()> {
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         overwrite: true,
-        file_type_writer_options: FileTypeWriterOptions::Parquet(
-            ParquetWriterOptions::new(WriterProperties::default()),
-        ),
+        keep_partition_by_columns: true,
     };
-    let data_sink = Arc::new(ParquetSink::new(file_sink_config));
+    let data_sink = Arc::new(ParquetSink::new(
+        file_sink_config,
+        TableParquetOptions::default(),
+    ));
     let sort_order = vec![PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
@@ -929,7 +1161,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
         }),
     )];
 
-    roundtrip_test(Arc::new(FileSinkExec::new(
+    roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
         schema.clone(),

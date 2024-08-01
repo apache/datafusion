@@ -22,14 +22,14 @@
 We welcome participation from everyone and encourage you to join us, ask
 questions, and get involved.
 
-All participation in the Apache Arrow DataFusion project is governed by the
+All participation in the Apache DataFusion project is governed by the
 Apache Software Foundation's [code of
 conduct](https://www.apache.org/foundation/policies/conduct.html).
 
 ## GitHub
 
 The vast majority of communication occurs in the open on our
-[github repository](https://github.com/apache/arrow-datafusion) in the form of tickets, issues, discussions, and Pull Requests.
+[github repository](https://github.com/apache/datafusion) in the form of tickets, issues, discussions, and Pull Requests.
 
 ## Slack and Discord
 
@@ -37,18 +37,54 @@ We use the Slack and Discord platforms for informal discussions and coordination
 meet other contributors and get guidance on where to contribute. It is important to note that any technical designs and
 decisions are made fully in the open, on GitHub.
 
-Most of us use the `#arrow-datafusion` and `#arrow-rust` channels in the [ASF Slack workspace](https://s.apache.org/slack-invite) .
-Unfortunately, due to spammers, the ASF Slack workspace requires an invitation to join. To get an invitation,
-request one in the `Arrow Rust` channel of the [Arrow Rust Discord server](https://discord.gg/Qw5gKqHxUM).
+Most of us use the [ASF Slack
+workspace](https://s.apache.org/slack-invite) and the [Arrow Rust Discord
+server](https://discord.gg/Qw5gKqHxUM) for discussions.
 
-## Mailing list
+There are specific channels for Arrow, DataFusion, and the DataFusion subprojects (Ballista, Comet, Python, etc).
 
-We also use arrow.apache.org's `dev@` mailing list for release coordination and occasional design discussions. Other
-than the the release process, most DataFusion mailing list traffic will link to a GitHub issue or PR for discussion.
-([subscribe](mailto:dev-subscribe@arrow.apache.org),
-[unsubscribe](mailto:dev-unsubscribe@arrow.apache.org),
-[archives](https://lists.apache.org/list.html?dev@arrow.apache.org)).
+In Slack we use these channels:
 
-When emailing the dev list, please make sure to prefix the subject line with a
-`[DataFusion]` tag, e.g. `"[DataFusion] New API for remote data sources"`, so
-that the appropriate people in the Apache Arrow community notice the message.
+- #arrow
+- #arrow-rust
+- #datafusion
+- #datafusion-ballista
+- #datafusion-comet
+- #datafusion-python
+
+In Discord we use these channels:
+
+- #ballista
+- #comet
+- #contrib-federation
+- #datafusion
+- #datafusion-python
+- #dolomite-optimizer
+- #general
+- #hiring
+- #incremental-materialized-views
+
+Unfortunately, due to spammers, the ASF Slack workspace requires an invitation
+to join. We are happy to invite you -- please ask for an invitation in the
+Discord server.
+
+## Mailing Lists
+
+Like other Apache projects, we use [mailing lists] for certain purposes, most
+importantly release coordination. Other than the release process, most
+DataFusion mailing list traffic will simply link to a GitHub issue or PR where
+the actual discussion occurs. The project mailing lists are:
+
+- [`dev@datafusion.apache.org`](mailto:dev@datafusion.apache.org): the main
+  mailing list for release coordination and other project-wide discussions. Links:
+  [archives](https://lists.apache.org/list.html?dev@datafusion.apache.org),
+  [subscribe](mailto:dev-subscribe@datafusion.apache.org),
+  [unsubscribe](mailto:dev-unsubscribe@datafusion.apache.org)
+- `github@datafusion.apache.org`: read-only mailing list that receives all GitHub notifications for the project. Links:
+  [archives](https://lists.apache.org/list.html?github@datafusion.apache.org)
+- `commits@datafusion.apache.org`: read-only mailing list that receives all GitHub commits for the project. Links:
+  [archives](https://lists.apache.org/list.html?commits@datafusion.apache.org)
+- `private@datafusion.apache.org`: private mailing list for PMC members. This list has very little traffic, almost exclusively discussions on growing the committer and PMC membership. Links:
+  [archives](https://lists.apache.org/list.html?private@datafusion.apache.org)
+
+[mailing lists]: https://www.apache.org/foundation/mailinglists

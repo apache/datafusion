@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 use datafusion_physical_plan::work_table::WorkTableExec;
 
 use crate::{
@@ -31,14 +32,13 @@ use crate::{
 };
 
 use crate::datasource::{TableProvider, TableType};
-use crate::execution::context::SessionState;
 
 /// The temporary working table where the previous iteration of a recursive query is stored
 /// Naming is based on PostgreSQL's implementation.
 /// See here for more details: www.postgresql.org/docs/11/queries-with.html#id-1.5.6.12.5.4
 pub struct CteWorkTable {
     /// The name of the CTE work table
-    // WIP, see https://github.com/apache/arrow-datafusion/issues/462
+    // WIP, see https://github.com/apache/datafusion/issues/462
     #[allow(dead_code)]
     name: String,
     /// This schema must be shared across both the static and recursive terms of a recursive query
@@ -77,7 +77,7 @@ impl TableProvider for CteWorkTable {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
@@ -89,11 +89,14 @@ impl TableProvider for CteWorkTable {
         )))
     }
 
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        _filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
         // TODO: should we support filter pushdown?
-        Ok(TableProviderFilterPushDown::Unsupported)
+        Ok(vec![
+            TableProviderFilterPushDown::Unsupported;
+            filters.len()
+        ])
     }
 }

@@ -50,7 +50,7 @@ impl PlaceholderRowExec {
     /// Create a new PlaceholderRowExec
     pub fn new(schema: SchemaRef) -> Self {
         let partitions = 1;
-        let cache = Self::compute_properties(schema.clone(), partitions);
+        let cache = Self::compute_properties(Arc::clone(&schema), partitions);
         PlaceholderRowExec {
             schema,
             partitions,
@@ -119,6 +119,10 @@ impl DisplayAs for PlaceholderRowExec {
 }
 
 impl ExecutionPlan for PlaceholderRowExec {
+    fn name(&self) -> &'static str {
+        "PlaceholderRowExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -128,7 +132,7 @@ impl ExecutionPlan for PlaceholderRowExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 
@@ -136,7 +140,7 @@ impl ExecutionPlan for PlaceholderRowExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(PlaceholderRowExec::new(self.schema.clone())))
+        Ok(self)
     }
 
     fn execute(
@@ -156,7 +160,7 @@ impl ExecutionPlan for PlaceholderRowExec {
 
         Ok(Box::pin(MemoryStream::try_new(
             self.data()?,
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             None,
         )?))
     }
@@ -176,7 +180,7 @@ impl ExecutionPlan for PlaceholderRowExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{common, test, with_new_children_if_necessary};
+    use crate::{test, with_new_children_if_necessary};
 
     #[test]
     fn with_new_children() -> Result<()> {
@@ -184,7 +188,10 @@ mod tests {
 
         let placeholder = Arc::new(PlaceholderRowExec::new(schema));
 
-        let placeholder_2 = with_new_children_if_necessary(placeholder.clone(), vec![])?;
+        let placeholder_2 = with_new_children_if_necessary(
+            Arc::clone(&placeholder) as Arc<dyn ExecutionPlan>,
+            vec![],
+        )?;
         assert_eq!(placeholder.schema(), placeholder_2.schema());
 
         let too_many_kids = vec![placeholder_2];
@@ -202,7 +209,7 @@ mod tests {
         let placeholder = PlaceholderRowExec::new(schema);
 
         // ask for the wrong partition
-        assert!(placeholder.execute(1, task_ctx.clone()).is_err());
+        assert!(placeholder.execute(1, Arc::clone(&task_ctx)).is_err());
         assert!(placeholder.execute(20, task_ctx).is_err());
         Ok(())
     }
@@ -230,7 +237,7 @@ mod tests {
         let placeholder = PlaceholderRowExec::new(schema).with_partitions(partitions);
 
         for n in 0..partitions {
-            let iter = placeholder.execute(n, task_ctx.clone())?;
+            let iter = placeholder.execute(n, Arc::clone(&task_ctx))?;
             let batches = common::collect(iter).await?;
 
             // should have one item

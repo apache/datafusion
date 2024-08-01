@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::AggregateExec;
 use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use crate::physical_plan::filter::FilterExec;
@@ -34,6 +33,7 @@ use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
@@ -73,7 +73,7 @@ impl TopKAggregation {
         // We found what we want: clone, copy the limit down, and return modified node
         let new_aggr = AggregateExec::try_new(
             *aggr.mode(),
-            aggr.group_by().clone(),
+            aggr.group_expr().clone(),
             aggr.aggr_expr().to_vec(),
             aggr.filter_expr().to_vec(),
             aggr.input().clone(),
@@ -88,7 +88,7 @@ impl TopKAggregation {
         let sort = plan.as_any().downcast_ref::<SortExec>()?;
 
         let children = sort.children();
-        let child = children.iter().exactly_one().ok()?;
+        let child = children.into_iter().exactly_one().ok()?;
         let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
         let limit = sort.fetch()?;
@@ -102,7 +102,7 @@ impl TopKAggregation {
         };
 
         let mut cardinality_preserved = true;
-        let mut closure = |plan: Arc<dyn ExecutionPlan>| {
+        let closure = |plan: Arc<dyn ExecutionPlan>| {
             if !cardinality_preserved {
                 return Ok(Transformed::no(plan));
             }
@@ -120,7 +120,7 @@ impl TopKAggregation {
             }
             Ok(Transformed::no(plan))
         };
-        let child = child.clone().transform_down_mut(&mut closure).data().ok()?;
+        let child = child.clone().transform_down(closure).data().ok()?;
         let sort = SortExec::new(sort.expr().to_vec(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
@@ -141,7 +141,7 @@ impl PhysicalOptimizerRule for TopKAggregation {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if config.optimizer.enable_topk_aggregation {
-            plan.transform_down(&|plan| {
+            plan.transform_down(|plan| {
                 Ok(
                     if let Some(plan) = TopKAggregation::transform_sort(plan.clone()) {
                         Transformed::yes(plan)

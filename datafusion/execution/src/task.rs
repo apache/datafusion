@@ -20,24 +20,21 @@ use std::{
     sync::Arc,
 };
 
-use datafusion_common::{
-    config::{ConfigOptions, Extensions},
-    plan_datafusion_err, DataFusionError, Result,
-};
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
-
 use crate::{
     config::SessionConfig,
     memory_pool::MemoryPool,
     registry::FunctionRegistry,
     runtime_env::{RuntimeConfig, RuntimeEnv},
 };
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 /// Task Execution Context
 ///
-/// A [`TaskContext`] contains the state available during a single
-/// query's execution. Please see [`SessionContext`] for a user level
-/// multi-query API.
+/// A [`TaskContext`] contains the state required during a single query's
+/// execution. Please see the documentation on [`SessionContext`] for more
+/// information.
 ///
 /// [`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
 #[derive(Debug)]
@@ -61,7 +58,7 @@ pub struct TaskContext {
 impl Default for TaskContext {
     fn default() -> Self {
         let runtime = RuntimeEnv::new(RuntimeConfig::new())
-            .expect("defauly runtime created successfully");
+            .expect("default runtime created successfully");
 
         // Create a default task context, mostly useful for testing
         Self {
@@ -102,39 +99,6 @@ impl TaskContext {
         }
     }
 
-    /// Create a new task context instance, by first copying all
-    /// name/value pairs from `task_props` into a `SessionConfig`.
-    #[deprecated(
-        since = "21.0.0",
-        note = "Construct SessionConfig and call TaskContext::new() instead"
-    )]
-    pub fn try_new(
-        task_id: String,
-        session_id: String,
-        task_props: HashMap<String, String>,
-        scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-        aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
-        runtime: Arc<RuntimeEnv>,
-        extensions: Extensions,
-    ) -> Result<Self> {
-        let mut config = ConfigOptions::new().with_extensions(extensions);
-        for (k, v) in task_props {
-            config.set(&k, &v)?;
-        }
-        let session_config = SessionConfig::from(config);
-        let window_functions = HashMap::new();
-
-        Ok(Self::new(
-            Some(task_id),
-            session_id,
-            session_config,
-            scalar_functions,
-            aggregate_functions,
-            window_functions,
-            runtime,
-        ))
-    }
-
     /// Return the SessionConfig associated with this [TaskContext]
     pub fn session_config(&self) -> &SessionConfig {
         &self.session_config
@@ -157,10 +121,10 @@ impl TaskContext {
 
     /// Return the [RuntimeEnv] associated with this [TaskContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.runtime.clone()
+        Arc::clone(&self.runtime)
     }
 
-    /// Update the [`ConfigOptions`]
+    /// Update the [`SessionConfig`]
     pub fn with_session_config(mut self, session_config: SessionConfig) -> Self {
         self.session_config = session_config;
         self
@@ -207,23 +171,39 @@ impl FunctionRegistry for TaskContext {
         &mut self,
         udaf: Arc<AggregateUDF>,
     ) -> Result<Option<Arc<AggregateUDF>>> {
+        udaf.aliases().iter().for_each(|alias| {
+            self.aggregate_functions
+                .insert(alias.clone(), Arc::clone(&udaf));
+        });
         Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
     }
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        udwf.aliases().iter().for_each(|alias| {
+            self.window_functions
+                .insert(alias.clone(), Arc::clone(&udwf));
+        });
         Ok(self.window_functions.insert(udwf.name().into(), udwf))
     }
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         udf.aliases().iter().for_each(|alias| {
-            self.scalar_functions.insert(alias.clone(), udf.clone());
+            self.scalar_functions
+                .insert(alias.clone(), Arc::clone(&udf));
         });
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
+    }
+
+    fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
+        vec![]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::{config::ConfigExtension, extensions_options};
+    use datafusion_common::{
+        config::{ConfigExtension, ConfigOptions, Extensions},
+        extensions_options,
+    };
 
     extensions_options! {
         struct TestExtension {

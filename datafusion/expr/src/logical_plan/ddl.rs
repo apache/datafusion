@@ -22,12 +22,11 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::{Expr, LogicalPlan};
+use crate::{Expr, LogicalPlan, Volatility};
 
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{
-    Constraints, DFSchemaRef, OwnedSchemaReference, OwnedTableReference,
-};
+use arrow::datatypes::DataType;
+use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReference};
+use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -48,6 +47,10 @@ pub enum DdlStatement {
     DropView(DropView),
     /// Drops a catalog schema
     DropCatalogSchema(DropCatalogSchema),
+    /// Create function statement
+    CreateFunction(CreateFunction),
+    /// Drop function statement
+    DropFunction(DropFunction),
 }
 
 impl DdlStatement {
@@ -66,6 +69,8 @@ impl DdlStatement {
             DdlStatement::DropTable(DropTable { schema, .. }) => schema,
             DdlStatement::DropView(DropView { schema, .. }) => schema,
             DdlStatement::DropCatalogSchema(DropCatalogSchema { schema, .. }) => schema,
+            DdlStatement::CreateFunction(CreateFunction { schema, .. }) => schema,
+            DdlStatement::DropFunction(DropFunction { schema, .. }) => schema,
         }
     }
 
@@ -81,6 +86,8 @@ impl DdlStatement {
             DdlStatement::DropTable(_) => "DropTable",
             DdlStatement::DropView(_) => "DropView",
             DdlStatement::DropCatalogSchema(_) => "DropCatalogSchema",
+            DdlStatement::CreateFunction(_) => "CreateFunction",
+            DdlStatement::DropFunction(_) => "DropFunction",
         }
     }
 
@@ -97,6 +104,8 @@ impl DdlStatement {
             DdlStatement::DropTable(_) => vec![],
             DdlStatement::DropView(_) => vec![],
             DdlStatement::DropCatalogSchema(_) => vec![],
+            DdlStatement::CreateFunction(_) => vec![],
+            DdlStatement::DropFunction(_) => vec![],
         }
     }
 
@@ -156,6 +165,12 @@ impl DdlStatement {
                     }) => {
                         write!(f, "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}")
                     }
+                    DdlStatement::CreateFunction(CreateFunction { name, .. }) => {
+                        write!(f, "CreateFunction: name {name:?}")
+                    }
+                    DdlStatement::DropFunction(DropFunction { name, .. }) => {
+                        write!(f, "CreateFunction: name {name:?}")
+                    }
                 }
             }
         }
@@ -169,15 +184,11 @@ pub struct CreateExternalTable {
     /// The table schema
     pub schema: DFSchemaRef,
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference,
     /// The physical location
     pub location: String,
     /// The file type of physical file
     pub file_type: String,
-    /// Whether the CSV file contains a header
-    pub has_header: bool,
-    /// Delimiter for CSV
-    pub delimiter: char,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
@@ -186,8 +197,6 @@ pub struct CreateExternalTable {
     pub definition: Option<String>,
     /// Order expressions supplied by user
     pub order_exprs: Vec<Vec<Expr>>,
-    /// File compression type (GZIP, BZIP2, XZ, ZSTD)
-    pub file_compression_type: CompressionTypeVariant,
     /// Whether the table is an infinite streams
     pub unbounded: bool,
     /// Table(provider) specific options
@@ -205,12 +214,9 @@ impl Hash for CreateExternalTable {
         self.name.hash(state);
         self.location.hash(state);
         self.file_type.hash(state);
-        self.has_header.hash(state);
-        self.delimiter.hash(state);
         self.table_partition_cols.hash(state);
         self.if_not_exists.hash(state);
         self.definition.hash(state);
-        self.file_compression_type.hash(state);
         self.order_exprs.hash(state);
         self.unbounded.hash(state);
         self.options.len().hash(state); // HashMap is not hashable
@@ -221,7 +227,7 @@ impl Hash for CreateExternalTable {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CreateMemoryTable {
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference,
     /// The list of constraints in the schema, such as primary key, unique, etc.
     pub constraints: Constraints,
     /// The logical plan
@@ -238,7 +244,7 @@ pub struct CreateMemoryTable {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CreateView {
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
@@ -273,7 +279,7 @@ pub struct CreateCatalogSchema {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DropTable {
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference,
     /// If the table exists
     pub if_exists: bool,
     /// Dummy schema
@@ -284,7 +290,7 @@ pub struct DropTable {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DropView {
     /// The view name
-    pub name: OwnedTableReference,
+    pub name: TableReference,
     /// If the view exists
     pub if_exists: bool,
     /// Dummy schema
@@ -295,11 +301,53 @@ pub struct DropView {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DropCatalogSchema {
     /// The schema name
-    pub name: OwnedSchemaReference,
+    pub name: SchemaReference,
     /// If the schema exists
     pub if_exists: bool,
     /// Whether drop should cascade
     pub cascade: bool,
     /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+/// Arguments passed to `CREATE FUNCTION`
+///
+/// Note this meant to be the same as from sqlparser's [`sqlparser::ast::Statement::CreateFunction`]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct CreateFunction {
+    // TODO: There is open question should we expose sqlparser types or redefine them here?
+    //       At the moment it make more sense to expose sqlparser types and leave
+    //       user to convert them as needed
+    pub or_replace: bool,
+    pub temporary: bool,
+    pub name: String,
+    pub args: Option<Vec<OperateFunctionArg>>,
+    pub return_type: Option<DataType>,
+    pub params: CreateFunctionBody,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct OperateFunctionArg {
+    // TODO: figure out how to support mode
+    // pub mode: Option<ArgMode>,
+    pub name: Option<Ident>,
+    pub data_type: DataType,
+    pub default_expr: Option<Expr>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct CreateFunctionBody {
+    /// LANGUAGE lang_name
+    pub language: Option<Ident>,
+    /// IMMUTABLE | STABLE | VOLATILE
+    pub behavior: Option<Volatility>,
+    /// RETURN or AS function body
+    pub function_body: Option<Expr>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct DropFunction {
+    pub name: String,
+    pub if_exists: bool,
     pub schema: DFSchemaRef,
 }

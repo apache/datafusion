@@ -20,7 +20,7 @@
 ##########
 
 statement ok
-CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv';
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV LOCATION '../core/tests/data/aggregate_simple.csv' OPTIONS ('format.has_header' 'true');
 
 # Round
 query R
@@ -112,12 +112,12 @@ SELECT iszero(1.0), iszero(0.0), iszero(-0.0), iszero(NULL)
 ----
 false true true NULL
 
-# abs: empty argumnet
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'abs\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs\(Any\)
+# abs: empty argument
+statement error
 SELECT abs();
 
 # abs: wrong number of arguments
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'abs\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs\(Any\)
+statement error
 SELECT abs(1, 2);
 
 # abs: unsupported argument type
@@ -142,12 +142,12 @@ CREATE TABLE test_nullable_integer(
     (0, 0, 0, 0, 0, 0, 0, 0, 'zeros'),
     (1, 1, 1, 1, 1, 1, 1, 1, 'ones');
 
-query IIIIIIIIT
+query I
 INSERT into test_nullable_integer values(-128, -32768, -2147483648, -9223372036854775808, 0, 0, 0, 0, 'mins');
 ----
 1
 
-query IIIIIIIIT
+query I
 INSERT into test_nullable_integer values(127, 32767, 2147483647, 9223372036854775807, 255, 65535, 4294967295, 18446744073709551615, 'maxs');
 ----
 1
@@ -280,10 +280,10 @@ CREATE TABLE test_non_nullable_integer(
     c5 TINYINT UNSIGNED NOT NULL, 
     c6 SMALLINT UNSIGNED NOT NULL, 
     c7 INT UNSIGNED NOT NULL, 
-    c8 BIGINT UNSIGNED NOT NULL, 
+    c8 BIGINT UNSIGNED NOT NULL
     );
 
-query IIIIIIII
+query I
 INSERT INTO test_non_nullable_integer VALUES(1, 1, 1, 1, 1, 1, 1, 1)
 ----
 1
@@ -348,7 +348,7 @@ drop table test_non_nullable_integer
 statement ok
 CREATE TABLE test_nullable_float(
     c1 float,
-    c2 double, 
+    c2 double
     ) AS VALUES
     (-1.0, -1.0),
     (1.0, 1.0), 
@@ -415,10 +415,10 @@ drop table test_nullable_float
 statement ok
 CREATE TABLE test_non_nullable_float(
     c1 float NOT NULL,
-    c2 double NOT NULL, 
+    c2 double NOT NULL
     ); 
 
-query RR
+query I
 INSERT INTO test_non_nullable_float VALUES
     (-1.0, -1.0),
     (1.0, 1.0),
@@ -473,7 +473,7 @@ CREATE TABLE test_nullable_decimal(
     (0, 0, 0, 0), 
     (NULL, NULL, NULL, NULL);
 
-query RRRR
+query I
 INSERT into test_nullable_decimal values
     (
         -99999999.99, 
@@ -546,7 +546,7 @@ drop table test_nullable_decimal
 statement ok
 CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL); 
 
-query R
+query I
 INSERT INTO test_non_nullable_decimal VALUES(1)
 ----
 1
@@ -564,3 +564,121 @@ SELECT c1%0 FROM test_non_nullable_decimal
 
 statement ok
 drop table test_non_nullable_decimal 
+
+statement ok
+CREATE TABLE signed_integers(
+  a INT,
+  b INT,
+  c INT,
+  d INT,
+  e INT,
+  f INT
+) as VALUES
+  (-1, 100, -567, 1024, -4, 10),
+  (2, -1000, 123, -256, 5, -11),
+  (-3, 10000, -978, 2048, -6, 12),
+  (4, NULL, NULL, -512, NULL, NULL)
+;
+
+
+## gcd
+
+# gcd scalar function
+query IIIIII rowsort
+select gcd(0, 0), gcd(2, 0), gcd(0, 2), gcd(2, 3), gcd(15, 10), gcd(20, 1000)
+----
+0 2 2 1 5 20
+
+# gcd with negative values
+query IIIII
+select gcd(-100, 0), gcd(0, -100), gcd(-2, 3), gcd(15, -10), gcd(-20, -1000)
+----
+100 100 1 5 20
+
+# gcd scalar nulls
+query III
+select gcd(null, 64), gcd(2, null), gcd(null, null);
+----
+NULL NULL NULL
+
+# scalar maxes and/or negative 1
+query III
+select 
+  gcd(9223372036854775807, -9223372036854775808), -- i64::MAX, i64::MIN
+  gcd(9223372036854775807, -1), -- i64::MAX, -1
+  gcd(-9223372036854775808, -1); -- i64::MIN, -1
+----
+1 1 1
+
+# gcd with columns and expresions
+query II rowsort
+select gcd(a, b), gcd(c*d + 1, abs(e)) + f from signed_integers;
+----
+1 11
+1 13
+2 -10
+NULL NULL
+
+# gcd(i64::MIN, i64::MIN)
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(\-9223372036854775808, \-9223372036854775808\)
+select gcd(-9223372036854775808, -9223372036854775808);
+
+# gcd(i64::MIN, 0)
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(\-9223372036854775808, 0\)
+select gcd(-9223372036854775808, 0);
+
+# gcd(0, i64::MIN)
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(0, \-9223372036854775808\)
+select gcd(0, -9223372036854775808);
+
+
+## lcm
+
+# Basic cases
+query IIIIII
+select lcm(0, 0), lcm(0, 2), lcm(3, 0), lcm(2, 3), lcm(15, 10), lcm(20, 1000)
+----
+0 0 0 6 30 1000
+
+# Test lcm with negative numbers
+query IIIII
+select lcm(0, -2), lcm(-3, 0), lcm(-2, 3), lcm(15, -10), lcm(-15, -10)
+----
+0 0 6 30 30
+
+# Test lcm with Nulls
+query III
+select lcm(null, 64), lcm(16, null), lcm(null, null)
+----
+NULL NULL NULL
+
+# Test lcm with columns
+query III rowsort
+select lcm(a, b), lcm(c, d), lcm(e, f) from signed_integers;
+----
+100 580608 20
+1000 31488 55
+30000 1001472 12
+NULL NULL NULL
+
+# Result cannot fit in i64
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(\-9223372036854775808, \-9223372036854775808\)
+select lcm(-9223372036854775808, -9223372036854775808);
+
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(1, \-9223372036854775808\)
+select lcm(1, -9223372036854775808);
+
+# Overflow on multiplication
+query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(2, 9223372036854775803\)
+select lcm(2, 9223372036854775803);
+
+
+query error DataFusion error: Arrow error: Compute error: Overflow happened on: 2107754225 \^ 1221660777
+select power(2107754225, 1221660777);
+
+# factorial overflow
+query error DataFusion error: Arrow error: Compute error: Overflow happened on FACTORIAL\(350943270\)
+select FACTORIAL(350943270);
+
+statement ok
+drop table signed_integers

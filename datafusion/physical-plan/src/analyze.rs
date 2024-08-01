@@ -59,7 +59,7 @@ impl AnalyzeExec {
         input: Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> Self {
-        let cache = Self::compute_properties(&input, schema.clone());
+        let cache = Self::compute_properties(&input, Arc::clone(&schema));
         AnalyzeExec {
             verbose,
             show_statistics,
@@ -111,6 +111,10 @@ impl DisplayAs for AnalyzeExec {
 }
 
 impl ExecutionPlan for AnalyzeExec {
+    fn name(&self) -> &'static str {
+        "AnalyzeExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -120,8 +124,8 @@ impl ExecutionPlan for AnalyzeExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     /// AnalyzeExec is handled specially so this value is ignored
@@ -137,7 +141,7 @@ impl ExecutionPlan for AnalyzeExec {
             self.verbose,
             self.show_statistics,
             children.pop().unwrap(),
-            self.schema.clone(),
+            Arc::clone(&self.schema),
         )))
     }
 
@@ -160,13 +164,17 @@ impl ExecutionPlan for AnalyzeExec {
             RecordBatchReceiverStream::builder(self.schema(), num_input_partitions);
 
         for input_partition in 0..num_input_partitions {
-            builder.run_input(self.input.clone(), input_partition, context.clone());
+            builder.run_input(
+                Arc::clone(&self.input),
+                input_partition,
+                Arc::clone(&context),
+            );
         }
 
         // Create future that computes thefinal output
         let start = Instant::now();
-        let captured_input = self.input.clone();
-        let captured_schema = self.schema.clone();
+        let captured_input = Arc::clone(&self.input);
+        let captured_schema = Arc::clone(&self.schema);
         let verbose = self.verbose;
         let show_statistics = self.show_statistics;
 
@@ -192,13 +200,13 @@ impl ExecutionPlan for AnalyzeExec {
         };
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             futures::stream::once(output),
         )))
     }
 }
 
-/// Creates the ouput of AnalyzeExec as a RecordBatch
+/// Creates the output of AnalyzeExec as a RecordBatch
 fn create_output_batch(
     verbose: bool,
     show_statistics: bool,

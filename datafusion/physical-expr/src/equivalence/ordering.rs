@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::SortOptions;
 use std::hash::Hash;
 use std::sync::Arc;
+
+use arrow_schema::SortOptions;
 
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
@@ -173,7 +174,7 @@ impl OrderingEquivalenceClass {
     pub fn add_offset(&mut self, offset: usize) {
         for ordering in self.orderings.iter_mut() {
             for sort_expr in ordering {
-                sort_expr.expr = add_offset_to_expr(sort_expr.expr.clone(), offset);
+                sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
             }
         }
     }
@@ -220,25 +221,27 @@ fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) ->
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::equivalence::tests::{
         convert_to_orderings, convert_to_sort_exprs, create_random_schema,
-        create_test_params, generate_table_for_eq_properties, is_table_same_after_sort,
+        create_test_params, create_test_schema, generate_table_for_eq_properties,
+        is_table_same_after_sort,
     };
-    use crate::equivalence::{tests::create_test_schema, EquivalenceProperties};
     use crate::equivalence::{
-        EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass,
+        EquivalenceClass, EquivalenceGroup, EquivalenceProperties,
+        OrderingEquivalenceClass,
     };
-    use crate::execution_props::ExecutionProps;
-    use crate::expressions::Column;
-    use crate::expressions::{col, BinaryExpr};
-    use crate::functions::create_physical_expr;
-    use crate::{PhysicalExpr, PhysicalSortExpr};
+    use crate::expressions::{col, BinaryExpr, Column};
+    use crate::utils::tests::TestScalarUDF;
+    use crate::{ConstExpr, PhysicalExpr, PhysicalSortExpr};
+
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
-    use datafusion_common::Result;
-    use datafusion_expr::{BuiltinScalarFunction, Operator};
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::{Operator, ScalarUDF};
+
     use itertools::Itertools;
-    use std::sync::Arc;
 
     #[test]
     fn test_ordering_satisfy() -> Result<()> {
@@ -261,12 +264,14 @@ mod tests {
             },
         ];
         // finer ordering satisfies, crude ordering should return true
-        let mut eq_properties_finer = EquivalenceProperties::new(input_schema.clone());
+        let mut eq_properties_finer =
+            EquivalenceProperties::new(Arc::clone(&input_schema));
         eq_properties_finer.oeq_class.push(finer.clone());
         assert!(eq_properties_finer.ordering_satisfy(&crude));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
-        let mut eq_properties_crude = EquivalenceProperties::new(input_schema.clone());
+        let mut eq_properties_crude =
+            EquivalenceProperties::new(Arc::clone(&input_schema));
         eq_properties_crude.oeq_class.push(crude.clone());
         assert!(!eq_properties_crude.ordering_satisfy(&finer));
         Ok(())
@@ -281,28 +286,32 @@ mod tests {
         let col_d = &col("d", &test_schema)?;
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
-        let floor_a = &create_physical_expr(
-            &BuiltinScalarFunction::Floor,
+        let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
+        let floor_a = &crate::udf::create_physical_expr(
+            &test_fun,
             &[col("a", &test_schema)?],
             &test_schema,
-            &ExecutionProps::default(),
+            &[],
+            &DFSchema::empty(),
         )?;
-        let floor_f = &create_physical_expr(
-            &BuiltinScalarFunction::Floor,
+        let floor_f = &crate::udf::create_physical_expr(
+            &test_fun,
             &[col("f", &test_schema)?],
             &test_schema,
-            &ExecutionProps::default(),
+            &[],
+            &DFSchema::empty(),
         )?;
-        let exp_a = &create_physical_expr(
-            &BuiltinScalarFunction::Exp,
+        let exp_a = &crate::udf::create_physical_expr(
+            &test_fun,
             &[col("a", &test_schema)?],
             &test_schema,
-            &ExecutionProps::default(),
+            &[],
+            &DFSchema::empty(),
         )?;
         let a_plus_b = Arc::new(BinaryExpr::new(
-            col_a.clone(),
+            Arc::clone(col_a),
             Operator::Plus,
-            col_b.clone(),
+            Arc::clone(col_b),
         )) as Arc<dyn PhysicalExpr>;
         let options = SortOptions {
             descending: false,
@@ -534,7 +543,7 @@ mod tests {
         for (orderings, eq_group, constants, reqs, expected) in test_cases {
             let err_msg =
                 format!("error in test orderings: {orderings:?}, eq_group: {eq_group:?}, constants: {constants:?}, reqs: {reqs:?}, expected: {expected:?}");
-            let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
+            let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
             let orderings = convert_to_orderings(&orderings);
             eq_properties.add_new_orderings(orderings);
             let eq_group = eq_group
@@ -547,7 +556,9 @@ mod tests {
             let eq_group = EquivalenceGroup::new(eq_group);
             eq_properties.add_equivalence_group(eq_group);
 
-            let constants = constants.into_iter().cloned();
+            let constants = constants
+                .into_iter()
+                .map(|expr| ConstExpr::from(expr).with_across_partitions(true));
             eq_properties = eq_properties.add_constants(constants);
 
             let reqs = convert_to_sort_exprs(&reqs);
@@ -708,7 +719,7 @@ mod tests {
             let required = cols
                 .into_iter()
                 .map(|(expr, options)| PhysicalSortExpr {
-                    expr: expr.clone(),
+                    expr: Arc::clone(expr),
                     options,
                 })
                 .collect::<Vec<_>>();
@@ -746,7 +757,7 @@ mod tests {
             // Generate a data that satisfies properties given
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
-            let col_exprs = vec![
+            let col_exprs = [
                 col("a", &test_schema)?,
                 col("b", &test_schema)?,
                 col("c", &test_schema)?,
@@ -760,7 +771,7 @@ mod tests {
                     let requirement = exprs
                         .into_iter()
                         .map(|expr| PhysicalSortExpr {
-                            expr: expr.clone(),
+                            expr: Arc::clone(expr),
                             options: SORT_OPTIONS,
                         })
                         .collect::<Vec<_>>();
@@ -804,18 +815,20 @@ mod tests {
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
 
-            let floor_a = create_physical_expr(
-                &BuiltinScalarFunction::Floor,
+            let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
+            let floor_a = crate::udf::create_physical_expr(
+                &test_fun,
                 &[col("a", &test_schema)?],
                 &test_schema,
-                &ExecutionProps::default(),
+                &[],
+                &DFSchema::empty(),
             )?;
             let a_plus_b = Arc::new(BinaryExpr::new(
                 col("a", &test_schema)?,
                 Operator::Plus,
                 col("b", &test_schema)?,
             )) as Arc<dyn PhysicalExpr>;
-            let exprs = vec![
+            let exprs = [
                 col("a", &test_schema)?,
                 col("b", &test_schema)?,
                 col("c", &test_schema)?,
@@ -831,7 +844,7 @@ mod tests {
                     let requirement = exprs
                         .into_iter()
                         .map(|expr| PhysicalSortExpr {
-                            expr: expr.clone(),
+                            expr: Arc::clone(expr),
                             options: SORT_OPTIONS,
                         })
                         .collect::<Vec<_>>();
@@ -874,7 +887,7 @@ mod tests {
         };
         // a=c (e.g they are aliases).
         let mut eq_properties = EquivalenceProperties::new(test_schema);
-        eq_properties.add_equal_conditions(col_a, col_c);
+        eq_properties.add_equal_conditions(col_a, col_c)?;
 
         let orderings = vec![
             vec![(col_a, options)],

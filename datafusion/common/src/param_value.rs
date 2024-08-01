@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::_plan_err;
-use crate::{DataFusionError, Result, ScalarValue};
+use crate::error::{_plan_datafusion_err, _plan_err};
+use crate::{Result, ScalarValue};
 use arrow_schema::DataType;
 use std::collections::HashMap;
 
@@ -75,16 +75,12 @@ impl ParamValues {
                 let idx = id[1..]
                     .parse::<usize>()
                     .map_err(|e| {
-                        DataFusionError::Internal(format!(
-                            "Failed to parse placeholder id: {e}"
-                        ))
+                        _plan_datafusion_err!("Failed to parse placeholder id: {e}")
                     })?
                     .checked_sub(1);
                 // value at the idx-th position in param_values should be the value for the placeholder
                 let value = idx.and_then(|idx| list.get(idx)).ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "No value found for placeholder with id {id}"
-                    ))
+                    _plan_datafusion_err!("No value found for placeholder with id {id}")
                 })?;
                 Ok(value.clone())
             }
@@ -93,9 +89,7 @@ impl ParamValues {
                 let name = &id[1..];
                 // value at the name position in param_values should be the value for the placeholder
                 let value = map.get(name).ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "No value found for placeholder with name {id}"
-                    ))
+                    _plan_datafusion_err!("No value found for placeholder with name {id}")
                 })?;
                 Ok(value.clone())
             }

@@ -17,18 +17,22 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
-use crate::ExprSchemable;
-use crate::{
-    ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
-    ScalarFunctionImplementation, Signature,
-};
-use arrow::datatypes::DataType;
-use datafusion_common::{ExprSchema, Result};
 use std::any::Any;
-use std::fmt;
-use std::fmt::Debug;
-use std::fmt::Formatter;
+use std::fmt::{self, Debug, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
+
+use arrow::datatypes::DataType;
+
+use datafusion_common::{not_impl_err, ExprSchema, Result};
+
+use crate::expr::create_name;
+use crate::interval_arithmetic::Interval;
+use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
+use crate::sort_properties::{ExprProperties, SortProperties};
+use crate::{
+    ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
+};
 
 /// Logical representation of a Scalar User Defined Function.
 ///
@@ -40,7 +44,7 @@ use std::sync::Arc;
 /// 1. For simple use cases, use [`create_udf`] (examples in [`simple_udf.rs`]).
 ///
 /// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
-/// access (examples in  [`advanced_udf.rs`]).
+///    access (examples in  [`advanced_udf.rs`]).
 ///
 /// # API Note
 ///
@@ -48,8 +52,8 @@ use std::sync::Arc;
 /// compatibility with the older API.
 ///
 /// [`create_udf`]: crate::expr_fn::create_udf
-/// [`simple_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-/// [`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`simple_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 #[derive(Debug, Clone)]
 pub struct ScalarUDF {
     inner: Arc<dyn ScalarUDFImpl>,
@@ -57,16 +61,15 @@ pub struct ScalarUDF {
 
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        self.inner.equals(other.inner.as_ref())
     }
 }
 
 impl Eq for ScalarUDF {}
 
-impl std::hash::Hash for ScalarUDF {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name().hash(state);
-        self.signature().hash(state);
+impl Hash for ScalarUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.hash_value().hash(state)
     }
 }
 
@@ -85,8 +88,8 @@ impl ScalarUDF {
         Self::new_from_impl(ScalarUdfLegacyWrapper {
             name: name.to_owned(),
             signature: signature.clone(),
-            return_type: return_type.clone(),
-            fun: fun.clone(),
+            return_type: Arc::clone(return_type),
+            fun: Arc::clone(fun),
         })
     }
 
@@ -103,8 +106,8 @@ impl ScalarUDF {
     }
 
     /// Return the underlying [`ScalarUDFImpl`] trait object for this function
-    pub fn inner(&self) -> Arc<dyn ScalarUDFImpl> {
-        self.inner.clone()
+    pub fn inner(&self) -> &Arc<dyn ScalarUDFImpl> {
+        &self.inner
     }
 
     /// Adds additional names that can be used to invoke this function, in
@@ -112,7 +115,7 @@ impl ScalarUDF {
     ///
     /// If you implement [`ScalarUDFImpl`] directly you should return aliases directly.
     pub fn with_aliases(self, aliases: impl IntoIterator<Item = &'static str>) -> Self {
-        Self::new_from_impl(AliasedScalarUDFImpl::new(self.inner.clone(), aliases))
+        Self::new_from_impl(AliasedScalarUDFImpl::new(Arc::clone(&self.inner), aliases))
     }
 
     /// Returns a [`Expr`] logical expression to call this UDF with specified
@@ -131,6 +134,13 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    /// Returns this function's display_name.
+    ///
+    /// See [`ScalarUDFImpl::display_name`] for more details
+    pub fn display_name(&self, args: &[Expr]) -> Result<String> {
+        self.inner.display_name(args)
     }
 
     /// Returns the aliases for this function.
@@ -156,9 +166,21 @@ impl ScalarUDF {
         &self,
         args: &[Expr],
         schema: &dyn ExprSchema,
+        arg_types: &[DataType],
     ) -> Result<DataType> {
         // If the implementation provides a return_type_from_exprs, use it
-        self.inner.return_type_from_exprs(args, schema)
+        self.inner.return_type_from_exprs(args, schema, arg_types)
+    }
+
+    /// Do the function rewrite
+    ///
+    /// See [`ScalarUDFImpl::simplify`] for more details.
+    pub fn simplify(
+        &self,
+        args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        self.inner.simplify(args, info)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -168,18 +190,79 @@ impl ScalarUDF {
         self.inner.invoke(args)
     }
 
+    /// Invoke the function without `args` but number of rows, returning the appropriate result.
+    ///
+    /// See [`ScalarUDFImpl::invoke_no_args`] for more details.
+    pub fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
+        self.inner.invoke_no_args(number_rows)
+    }
+
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
     /// during execution
     pub fn fun(&self) -> ScalarFunctionImplementation {
-        let captured = self.inner.clone();
+        let captured = Arc::clone(&self.inner);
         Arc::new(move |args| captured.invoke(args))
     }
 
-    /// This function specifies monotonicity behaviors for User defined scalar functions.
+    /// Get the circuits of inner implementation
+    pub fn short_circuits(&self) -> bool {
+        self.inner.short_circuits()
+    }
+
+    /// Computes the output interval for a [`ScalarUDF`], given the input
+    /// intervals.
     ///
-    /// See [`ScalarUDFImpl::monotonicity`] for more details.
-    pub fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        self.inner.monotonicity()
+    /// # Parameters
+    ///
+    /// * `inputs` are the intervals for the inputs (children) of this function.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
+    /// then the output interval would be `[0, 3]`.
+    pub fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        self.inner.evaluate_bounds(inputs)
+    }
+
+    /// Updates bounds for child expressions, given a known interval for this
+    /// function. This is used to propagate constraints down through an expression
+    /// tree.
+    ///
+    /// # Parameters
+    ///
+    /// * `interval` is the currently known interval for this function.
+    /// * `inputs` are the current intervals for the inputs (children) of this function.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec` of new intervals for the children, in order.
+    ///
+    /// If constraint propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children intervals change as a result of
+    /// propagation, may return an empty vector instead of cloning `children`.
+    /// This is the default (and conservative) return value.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
+    /// input `a` is given as `[-7, 3]`, then propagation would return `[-5, 3]`.
+    pub fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        self.inner.propagate_constraints(interval, inputs)
+    }
+
+    /// Calculates the [`SortProperties`] of this function based on its
+    /// children's properties.
+    pub fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
+        self.inner.output_ordering(inputs)
+    }
+
+    /// See [`ScalarUDFImpl::coerce_types`] for more details.
+    pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(arg_types)
     }
 }
 
@@ -201,7 +284,7 @@ where
 /// [`ScalarUDF`] for other available options.
 ///
 ///
-/// [`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
@@ -212,7 +295,7 @@ where
 /// #[derive(Debug)]
 /// struct AddOne {
 ///   signature: Signature
-/// };
+/// }
 ///
 /// impl AddOne {
 ///   fn new() -> Self {
@@ -249,6 +332,13 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns the user-defined display name of the UDF given the arguments
+    ///
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
+        Ok(format!("{}({})", self.name(), names.join(",")))
+    }
 
     /// Returns the function's [`Signature`] for information about what input
     /// types are accepted and the function's Volatility.
@@ -293,14 +383,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_type_from_exprs(
         &self,
-        args: &[Expr],
-        schema: &dyn ExprSchema,
+        _args: &[Expr],
+        _schema: &dyn ExprSchema,
+        arg_types: &[DataType],
     ) -> Result<DataType> {
-        let arg_types = args
-            .iter()
-            .map(|arg| arg.get_type(schema))
-            .collect::<Result<Vec<_>>>()?;
-        self.return_type(&arg_types)
+        self.return_type(arg_types)
     }
 
     /// Invoke the function on `args`, returning the appropriate result
@@ -308,18 +395,30 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// The function will be invoked passed with the slice of [`ColumnarValue`]
     /// (either scalar or array).
     ///
-    /// # Zero Argument Functions
-    /// If the function has zero parameters (e.g. `now()`) it will be passed a
-    /// single element slice which is a a null array to indicate the batch's row
-    /// count (so the function can know the resulting array size).
+    /// If the function does not take any arguments, please use [invoke_no_args]
+    /// instead and return [not_impl_err] for this function.
+    ///
     ///
     /// # Performance
     ///
     /// For the best performance, the implementations of `invoke` should handle
     /// the common case when one or more of their arguments are constant values
-    /// (aka  [`ColumnarValue::Scalar`]). Calling [`ColumnarValue::into_array`]
-    /// and treating all arguments as arrays will work, but will be slower.
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue>;
+    /// (aka  [`ColumnarValue::Scalar`]).
+    ///
+    /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
+    /// to arrays, which will likely be simpler code, but be slower.
+    ///
+    /// [invoke_no_args]: ScalarUDFImpl::invoke_no_args
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue>;
+
+    /// Invoke the function without `args`, instead the number of rows are provided,
+    /// returning the appropriate result.
+    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+        not_impl_err!(
+            "Function {} does not implement invoke_no_args but called",
+            self.name()
+        )
+    }
 
     /// Returns any aliases (alternate names) for this function.
     ///
@@ -334,9 +433,140 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         &[]
     }
 
-    /// This function specifies monotonicity behaviors for User defined scalar functions.
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(None)
+    /// Optionally apply per-UDF simplification / rewrite rules.
+    ///
+    /// This can be used to apply function specific simplification rules during
+    /// optimization (e.g. `arrow_cast` --> `Expr::Cast`). The default
+    /// implementation does nothing.
+    ///
+    /// Note that DataFusion handles simplifying arguments and  "constant
+    /// folding" (replacing a function call with constant arguments such as
+    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
+    /// optimizations manually for specific UDFs.
+    ///
+    /// # Arguments
+    /// * `args`: The arguments of the function
+    /// * `info`: The necessary information for simplification
+    ///
+    /// # Returns
+    /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE
+    /// if the function cannot be simplified, the arguments *MUST* be returned
+    /// unmodified
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        Ok(ExprSimplifyResult::Original(args))
+    }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered
+    /// Setting this to true prevents certain optimizations such as common subexpression elimination
+    fn short_circuits(&self) -> bool {
+        false
+    }
+
+    /// Computes the output interval for a [`ScalarUDFImpl`], given the input
+    /// intervals.
+    ///
+    /// # Parameters
+    ///
+    /// * `children` are the intervals for the children (inputs) of this function.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
+    /// then the output interval would be `[0, 3]`.
+    fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
+        // We cannot assume the input datatype is the same of output type.
+        Interval::make_unbounded(&DataType::Null)
+    }
+
+    /// Updates bounds for child expressions, given a known interval for this
+    /// function. This is used to propagate constraints down through an expression
+    /// tree.
+    ///
+    /// # Parameters
+    ///
+    /// * `interval` is the currently known interval for this function.
+    /// * `inputs` are the current intervals for the inputs (children) of this function.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec` of new intervals for the children, in order.
+    ///
+    /// If constraint propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children intervals change as a result of
+    /// propagation, may return an empty vector instead of cloning `children`.
+    /// This is the default (and conservative) return value.
+    ///
+    /// # Example
+    ///
+    /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
+    /// input `a` is given as `[-7, 3]`, then propagation would return `[-5, 3]`.
+    fn propagate_constraints(
+        &self,
+        _interval: &Interval,
+        _inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        Ok(Some(vec![]))
+    }
+
+    /// Calculates the [`SortProperties`] of this function based on its
+    /// children's properties.
+    fn output_ordering(&self, _inputs: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(SortProperties::Unordered)
+    }
+
+    /// Coerce arguments of a function call to types that the function can evaluate.
+    ///
+    /// This function is only called if [`ScalarUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
+    /// UDFs should return one of the other variants of `TypeSignature` which handle common
+    /// cases
+    ///
+    /// See the [type coercion module](crate::type_coercion)
+    /// documentation for more details on type coercion
+    ///
+    /// For example, if your function requires a floating point arguments, but the user calls
+    /// it like `my_func(1::int)` (aka with `1` as an integer), coerce_types could return `[DataType::Float64]`
+    /// to ensure the argument was cast to `1::double`
+    ///
+    /// # Parameters
+    /// * `arg_types`: The argument types of the arguments  this function with
+    ///
+    /// # Return value
+    /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
+    /// arguments to these specific types.
+    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!("Function {} does not implement coerce_types", self.name())
+    }
+
+    /// Return true if this scalar UDF is equal to the other.
+    ///
+    /// Allows customizing the equality of scalar UDFs.
+    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
+    ///
+    /// - reflexive: `a.equals(a)`;
+    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
+    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
+    ///
+    /// By default, compares [`Self::name`] and [`Self::signature`].
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        self.name() == other.name() && self.signature() == other.signature()
+    }
+
+    /// Returns a hash value for this scalar UDF.
+    ///
+    /// Allows customizing the hash code of scalar UDFs. Similarly to [`Hash`] and [`Eq`],
+    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
+    ///
+    /// By default, hashes [`Self::name`] and [`Self::signature`].
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.name().hash(hasher);
+        self.signature().hash(hasher);
+        hasher.finish()
     }
 }
 
@@ -355,7 +585,6 @@ impl AliasedScalarUDFImpl {
     ) -> Self {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
-
         Self { inner, aliases }
     }
 }
@@ -364,6 +593,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         self.inner.name()
     }
@@ -383,10 +613,25 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<AliasedScalarUDFImpl>() {
+            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
+        } else {
+            false
+        }
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.inner.hash_value().hash(hasher);
+        self.aliases.hash(hasher);
+        hasher.finish()
+    }
 }
 
 /// Implementation of [`ScalarUDFImpl`] that wraps the function style pointers
-/// of the older API (see <https://github.com/apache/arrow-datafusion/pull/8578>
+/// of the older API (see <https://github.com/apache/datafusion/pull/8578>
 /// for more details)
 struct ScalarUdfLegacyWrapper {
     /// The name of the function

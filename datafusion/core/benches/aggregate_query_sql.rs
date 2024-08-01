@@ -163,6 +163,16 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
+
+    c.bench_function("aggregate_query_distinct_median", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                "SELECT MEDIAN(DISTINCT u64_wide), MEDIAN(DISTINCT u64_narrow) \
+                 FROM t",
+            )
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);

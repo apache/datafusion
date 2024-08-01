@@ -43,7 +43,8 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
 use futures::{ready, StreamExt, TryStreamExt};
-use object_store::{self, GetOptions, GetResultPayload, ObjectStore};
+use object_store::buffered::BufWriter;
+use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
 
@@ -126,6 +127,10 @@ impl DisplayAs for NdJsonExec {
 }
 
 impl ExecutionPlan for NdJsonExec {
+    fn name(&self) -> &'static str {
+        "NdJsonExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -133,7 +138,7 @@ impl ExecutionPlan for NdJsonExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
     }
 
@@ -149,6 +154,9 @@ impl ExecutionPlan for NdJsonExec {
         target_partitions: usize,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.file_compression_type.is_compressed() {
+            return Ok(None);
+        }
         let repartition_file_min_size = config.optimizer.repartition_file_min_size;
         let preserve_order_within_groups = self.properties().output_ordering().is_some();
         let file_groups = &self.base_config.file_groups;
@@ -197,6 +205,18 @@ impl ExecutionPlan for NdJsonExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let new_config = self.base_config.clone().with_limit(limit);
+
+        Some(Arc::new(Self {
+            base_config: new_config,
+            projected_statistics: self.projected_statistics.clone(),
+            metrics: self.metrics.clone(),
+            file_compression_type: self.file_compression_type,
+            cache: self.cache.clone(),
+        }))
     }
 }
 
@@ -338,21 +358,18 @@ pub async fn plan_to_json(
 
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
+            let mut buf_writer = BufWriter::new(storeref, file.clone());
 
             let mut buffer = Vec::with_capacity(1024);
             while let Some(batch) = stream.next().await.transpose()? {
                 let mut writer = json::LineDelimitedWriter::new(buffer);
                 writer.write(&batch)?;
                 buffer = writer.into_inner();
-                multipart_writer.write_all(&buffer).await?;
+                buf_writer.write_all(&buffer).await?;
                 buffer.clear();
             }
 
-            multipart_writer
-                .shutdown()
-                .await
-                .map_err(DataFusionError::from)
+            buf_writer.shutdown().await.map_err(DataFusionError::from)
         });
     }
 
@@ -378,24 +395,19 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::assert_batches_eq;
     use crate::dataframe::DataFrameWriteOptions;
-    use crate::datasource::file_format::file_compression_type::FileTypeExt;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
-    use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
     use crate::prelude::{
         CsvReadOptions, NdJsonReadOptions, SessionConfig, SessionContext,
     };
     use crate::test::partitioned_file_groups;
+    use crate::{assert_batches_eq, assert_batches_sorted_eq};
 
     use arrow::array::Array;
     use arrow::datatypes::{Field, SchemaBuilder};
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
-    use datafusion_common::FileType;
-
-    use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
@@ -417,7 +429,7 @@ mod tests {
             TEST_DATA_BASE,
             filename,
             1,
-            FileType::JSON,
+            Arc::new(JsonFormat::default()),
             file_compression_type.to_owned(),
             work_dir,
         )
@@ -444,14 +456,14 @@ mod tests {
     ) -> Result<()> {
         let ctx = SessionContext::new();
         let url = Url::parse("file://").unwrap();
-        ctx.runtime_env().register_object_store(&url, store.clone());
+        ctx.register_object_store(&url, store.clone());
         let filename = "1.json";
         let tmp_dir = TempDir::new()?;
         let file_groups = partitioned_file_groups(
             TEST_DATA_BASE,
             filename,
             1,
-            FileType::JSON,
+            Arc::new(JsonFormat::default()),
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )
@@ -470,8 +482,8 @@ mod tests {
         let path_buf = Path::new(url.path()).join(path);
         let path = path_buf.to_str().unwrap();
 
-        let ext = FileType::JSON
-            .get_ext_with_compression(file_compression_type.to_owned())
+        let ext = JsonFormat::default()
+            .get_ext_with_compression(&file_compression_type)
             .unwrap();
 
         let read_options = NdJsonReadOptions::default()
@@ -519,16 +531,9 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: None,
-                limit: Some(3),
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_limit(Some(3)),
             file_compression_type.to_owned(),
         );
 
@@ -597,16 +602,9 @@ mod tests {
         let missing_field_idx = file_schema.fields.len() - 1;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: None,
-                limit: Some(3),
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_limit(Some(3)),
             file_compression_type.to_owned(),
         );
 
@@ -644,16 +642,9 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: Some(vec![0, 2]),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_projection(Some(vec![0, 2])),
             file_compression_type.to_owned(),
         );
         let inferred_schema = exec.schema();
@@ -696,16 +687,9 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
-            FileScanConfig {
-                object_store_url,
-                file_groups,
-                statistics: Statistics::new_unknown(&file_schema),
-                file_schema,
-                projection: Some(vec![3, 0, 2]),
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-            },
+            FileScanConfig::new(object_store_url, file_schema)
+                .with_file_groups(file_groups)
+                .with_projection(Some(vec![3, 0, 2])),
             file_compression_type.to_owned(),
         );
         let inferred_schema = exec.schema();
@@ -750,13 +734,13 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
-        ctx.runtime_env().register_object_store(&local_url, local);
+        ctx.register_object_store(&local_url, local);
 
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
         let out_dir_url = "file://local/out/";
         let df = ctx.sql("SELECT a, b FROM test").await?;
-        df.write_json(out_dir_url, DataFrameWriteOptions::new())
+        df.write_json(out_dir_url, DataFrameWriteOptions::new(), None)
             .await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
@@ -843,14 +827,14 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
-        ctx.runtime_env().register_object_store(&local_url, local);
+        ctx.register_object_store(&local_url, local);
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let out_dir_url = "file://local/out";
         let e = df
-            .write_json(out_dir_url, DataFrameWriteOptions::new())
+            .write_json(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value d for column 0 at line 4");
@@ -884,6 +868,79 @@ mod tests {
         let schema = read_test_data(10).await?;
         assert_eq!(schema.fields().len(), 5);
 
+        Ok(())
+    }
+
+    #[rstest(
+        file_compression_type,
+        case::uncompressed(FileCompressionType::UNCOMPRESSED),
+        case::gzip(FileCompressionType::GZIP),
+        case::bzip2(FileCompressionType::BZIP2),
+        case::xz(FileCompressionType::XZ),
+        case::zstd(FileCompressionType::ZSTD)
+    )]
+    #[cfg(feature = "compression")]
+    #[tokio::test]
+    async fn test_json_with_repartitioing(
+        file_compression_type: FileCompressionType,
+    ) -> Result<()> {
+        let config = SessionConfig::new()
+            .with_repartition_file_scans(true)
+            .with_repartition_file_min_size(0)
+            .with_target_partitions(4);
+        let ctx = SessionContext::new_with_config(config);
+
+        let tmp_dir = TempDir::new()?;
+        let (store_url, file_groups, _) =
+            prepare_store(&ctx.state(), file_compression_type, tmp_dir.path()).await;
+
+        // It's important to have less than `target_partitions` amount of file groups, to
+        // trigger repartitioning.
+        assert_eq!(
+            file_groups.len(),
+            1,
+            "Expected prepared store with single file group"
+        );
+
+        let path = file_groups
+            .first()
+            .unwrap()
+            .first()
+            .unwrap()
+            .object_meta
+            .location
+            .as_ref();
+
+        let url: &Url = store_url.as_ref();
+        let path_buf = Path::new(url.path()).join(path);
+        let path = path_buf.to_str().unwrap();
+        let ext = JsonFormat::default()
+            .get_ext_with_compression(&file_compression_type)
+            .unwrap();
+
+        let read_option = NdJsonReadOptions::default()
+            .file_compression_type(file_compression_type)
+            .file_extension(ext.as_str());
+
+        let df = ctx.read_json(path, read_option).await?;
+        let res = df.collect().await;
+
+        // Output sort order is nondeterministic due to multiple
+        // target partitions. To handle it, assert compares sorted
+        // result.
+        assert_batches_sorted_eq!(
+            &[
+                "+-----+------------------+---------------+------+",
+                "| a   | b                | c             | d    |",
+                "+-----+------------------+---------------+------+",
+                "| 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |",
+                "| -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |",
+                "| 2   | [2.0, , -6.1]    | [false, ]     | text |",
+                "|     |                  |               |      |",
+                "+-----+------------------+---------------+------+",
+            ],
+            &res?
+        );
         Ok(())
     }
 }

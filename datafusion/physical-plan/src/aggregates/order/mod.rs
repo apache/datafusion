@@ -40,7 +40,7 @@ pub(crate) enum GroupOrdering {
 }
 
 impl GroupOrdering {
-    /// Create a `GroupOrdering` for the the specified ordering
+    /// Create a `GroupOrdering` for the specified ordering
     pub fn try_new(
         input_schema: &Schema,
         mode: &InputOrderMode,
@@ -87,7 +87,7 @@ impl GroupOrdering {
     /// Called when new groups are added in a batch
     ///
     /// * `total_num_groups`: total number of groups (so max
-    /// group_index is total_num_groups - 1).
+    ///   group_index is total_num_groups - 1).
     ///
     /// * `group_values`: group key values for *each row* in the batch
     ///

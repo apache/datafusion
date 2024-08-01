@@ -27,5 +27,5 @@ This crate contains the main entry points and high level DataFusion APIs such as
 
 For more information, please see:
 
-- [DataFusion Website](https://arrow.apache.org/datafusion)
+- [DataFusion Website](https://datafusion.apache.org)
 - [DataFusion API Docs](https://docs.rs/datafusion/latest/datafusion/)

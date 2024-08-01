@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     # only run for users whose permissions allow them to update PRs
     # otherwise labeler is failing:
-    # https://github.com/apache/arrow-datafusion/issues/3743
+    # https://github.com/apache/datafusion/issues/3743
     permissions:
       contents: read
       pull-requests: write

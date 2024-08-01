@@ -18,15 +18,21 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
-use arrow::{array::AsArray, datatypes::Fields};
-use arrow_array::{types::UInt64Type, Int32Array, PrimitiveArray, StructArray};
-use arrow_schema::Schema;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 
+use arrow::{array::AsArray, datatypes::Fields};
+use arrow_array::{
+    types::UInt64Type, Int32Array, PrimitiveArray, StringArray, StructArray,
+};
+use arrow_schema::Schema;
+
+use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
+use datafusion::test_util::plan_and_collect;
 use datafusion::{
     arrow::{
         array::{ArrayRef, Float64Array, TimestampNanosecondArray},
@@ -44,9 +50,10 @@ use datafusion::{
 };
 use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err};
 use datafusion_expr::{
-    create_udaf, AggregateUDFImpl, GroupsAccumulator, SimpleAggregateUDF,
+    col, create_udaf, function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator,
+    LogicalPlanBuilder, SimpleAggregateUDF,
 };
-use datafusion_physical_expr::expressions::AvgAccumulator;
+use datafusion_functions_aggregate::average::AvgAccumulator;
 
 /// Test to show the contents of the setup
 #[tokio::test]
@@ -140,7 +147,7 @@ async fn test_udaf_as_window_with_frame_without_retract_batch() {
     let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
     // Note if this query ever does start working
     let err = execute(&ctx, sql).await.unwrap_err();
-    assert_contains!(err.to_string(), "This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented: AggregateUDF { inner: AggregateUDF { name: \"time_sum\", signature: Signature { type_signature: Exact([Timestamp(Nanosecond, None)]), volatility: Immutable }, fun: \"<FUNC>\" } }(t.time) ORDER BY [t.time ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING");
+    assert_contains!(err.to_string(), "This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented: time_sum(t.time) ORDER BY [t.time ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING");
 }
 
 /// Basic query for with a udaf returning a structure
@@ -183,11 +190,11 @@ async fn test_udaf_shadows_builtin_fn() {
 
     // compute with builtin `sum` aggregator
     let expected = [
-        "+-------------+",
-        "| SUM(t.time) |",
-        "+-------------+",
-        "| 19000       |",
-        "+-------------+",
+        "+---------------------------------------+",
+        "| sum(arrow_cast(t.time,Utf8(\"Int64\"))) |",
+        "+---------------------------------------+",
+        "| 19000                                 |",
+        "+---------------------------------------+",
     ];
     assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 
@@ -321,6 +328,42 @@ async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_user_defined_functions_with_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+    let arr = Int32Array::from(vec![1]);
+    let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch).unwrap();
+
+    let my_avg = create_udaf(
+        "dummy",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(vec![DataType::UInt64, DataType::Float64]),
+    )
+    .with_aliases(vec!["dummy_alias"]);
+
+    ctx.register_udaf(my_avg);
+
+    let expected = [
+        "+------------+",
+        "| dummy(t.i) |",
+        "+------------+",
+        "| 1.0        |",
+        "+------------+",
+    ];
+
+    let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
+    assert_batches_eq!(expected, &result);
+
+    let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
+    assert_batches_eq!(expected, &alias_result);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_groups_accumulator() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
@@ -336,6 +379,55 @@ async fn test_groups_accumulator() -> Result<()> {
     let sql_df = ctx.sql("SELECT geo_mean(a) FROM t group by a").await?;
     sql_df.show().await?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_parameterized_aggregate_udf() -> Result<()> {
+    let batch = RecordBatch::try_from_iter([(
+        "text",
+        Arc::new(StringArray::from(vec!["foo"])) as ArrayRef,
+    )])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let t = ctx.table("t").await?;
+    let signature = Signature::exact(vec![DataType::Utf8], Volatility::Immutable);
+    let udf1 = AggregateUDF::from(TestGroupsAccumulator {
+        signature: signature.clone(),
+        result: 1,
+    });
+    let udf2 = AggregateUDF::from(TestGroupsAccumulator {
+        signature: signature.clone(),
+        result: 2,
+    });
+
+    let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
+        .aggregate(
+            [col("text")],
+            [
+                udf1.call(vec![col("text")]).alias("a"),
+                udf2.call(vec![col("text")]).alias("b"),
+            ],
+        )?
+        .build()?;
+
+    assert_eq!(
+        format!("{plan:?}"),
+        "Aggregate: groupBy=[[t.text]], aggr=[[geo_mean(t.text) AS a, geo_mean(t.text) AS b]]\n  TableScan: t projection=[text]"
+    );
+
+    let actual = DataFrame::new(ctx.state(), plan).collect().await?;
+    let expected = [
+        "+------+---+---+",
+        "| text | a | b |",
+        "+------+---+---+",
+        "| foo  | 1 | 2 |",
+        "+------+---+---+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    ctx.deregister_table("t")?;
     Ok(())
 }
 
@@ -454,7 +546,7 @@ impl TimeSum {
         // Returns the same type as its input
         let return_type = timestamp_type.clone();
 
-        let state_type = vec![timestamp_type.clone()];
+        let state_fields = vec![Field::new("sum", timestamp_type, true)];
 
         let volatility = Volatility::Immutable;
 
@@ -468,7 +560,7 @@ impl TimeSum {
             return_type,
             volatility,
             accumulator,
-            state_type,
+            state_fields,
         ));
 
         // register the selector as "time_sum"
@@ -488,7 +580,6 @@ impl Accumulator for TimeSum {
         let arr = arr.as_primitive::<TimestampNanosecondType>();
 
         for v in arr.values().iter() {
-            println!("Adding {v}");
             self.sum += v;
         }
         Ok(())
@@ -500,7 +591,6 @@ impl Accumulator for TimeSum {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        println!("Evaluating to {}", self.sum);
         Ok(ScalarValue::TimestampNanosecond(Some(self.sum), None))
     }
 
@@ -520,7 +610,6 @@ impl Accumulator for TimeSum {
         let arr = arr.as_primitive::<TimestampNanosecondType>();
 
         for v in arr.values().iter() {
-            println!("Retracting {v}");
             self.sum -= v;
         }
         Ok(())
@@ -554,6 +643,11 @@ impl FirstSelector {
     fn register(ctx: &mut SessionContext) {
         let return_type = Self::output_datatype();
         let state_type = Self::state_datatypes();
+        let state_fields = state_type
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| Field::new(format!("{i}"), t, true))
+            .collect::<Vec<_>>();
 
         // Possible input signatures
         let signatures = vec![TypeSignature::Exact(Self::input_datatypes())];
@@ -570,7 +664,7 @@ impl FirstSelector {
             Signature::one_of(signatures, volatility),
             return_type,
             accumulator,
-            state_type,
+            state_fields,
         ));
 
         // register the selector as "first"
@@ -680,21 +774,35 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         Ok(DataType::UInt64)
     }
 
-    fn accumulator(&self, _arg: &DataType) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         // should use groups accumulator
         panic!("accumulator shouldn't invoke");
     }
 
-    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
-        Ok(vec![DataType::UInt64])
-    }
-
-    fn groups_accumulator_supported(&self) -> bool {
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         true
     }
 
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(self.clone()))
+    }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<TestGroupsAccumulator>() {
+            self.result == other.result && self.signature == other.signature
+        } else {
+            false
+        }
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.signature.hash(hasher);
+        self.result.hash(hasher);
+        hasher.finish()
     }
 }
 

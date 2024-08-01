@@ -15,28 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Unwrap-cast binary comparison rule can be used to the binary/inlist comparison expr now, and other type
-//! of expr can be added if needed.
-//! This rule can reduce adding the `Expr::Cast` the expr instead of adding the `Expr::Cast` to literal expr.
+//! [`UnwrapCastInComparison`] rewrites `CAST(col) = lit` to `col = CAST(lit)`
 
 use std::cmp::Ordering;
+use std::mem;
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
+use crate::utils::NamePreserver;
 use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
-use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
-use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::{
-    binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
-};
+use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan};
 
 /// [`UnwrapCastInComparison`] attempts to remove casts from
 /// comparisons to literals ([`ScalarValue`]s) by applying the casts
@@ -85,16 +82,30 @@ impl UnwrapCastInComparison {
 }
 
 impl OptimizerRule for UnwrapCastInComparison {
-    fn try_optimize(
+    fn name(&self) -> &str {
+        "unwrap_cast_in_comparison"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
         &self,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
+    ) -> Result<Transformed<LogicalPlan>> {
         let mut schema = merge_schema(plan.inputs());
 
-        if let LogicalPlan::TableScan(ts) = plan {
-            let source_schema =
-                DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
+        if let LogicalPlan::TableScan(ts) = &plan {
+            let source_schema = DFSchema::try_from_qualified_schema(
+                ts.table_name.clone(),
+                &ts.source.schema(),
+            )?;
             schema.merge(&source_schema);
         }
 
@@ -104,22 +115,12 @@ impl OptimizerRule for UnwrapCastInComparison {
             schema: Arc::new(schema),
         };
 
-        let new_exprs = plan
-            .expressions()
-            .into_iter()
-            .map(|expr| rewrite_preserving_name(expr, &mut expr_rewriter))
-            .collect::<Result<Vec<_>>>()?;
-
-        let inputs = plan.inputs().into_iter().cloned().collect();
-        plan.with_new_exprs(new_exprs, inputs).map(Some)
-    }
-
-    fn name(&self) -> &str {
-        "unwrap_cast_in_comparison"
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
+        let name_preserver = NamePreserver::new(&plan);
+        plan.map_expressions(|expr| {
+            let original_name = name_preserver.save(&expr)?;
+            expr.rewrite(&mut expr_rewriter)?
+                .map_data(|expr| original_name.restore(expr))
+        })
     }
 }
 
@@ -130,140 +131,130 @@ struct UnwrapCastExprRewriter {
 impl TreeNodeRewriter for UnwrapCastExprRewriter {
     type Node = Expr;
 
-    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        match &expr {
+    fn f_up(&mut self, mut expr: Expr) -> Result<Transformed<Expr>> {
+        match &mut expr {
             // For case:
             // try_cast/cast(expr as data_type) op literal
             // literal op try_cast/cast(expr as data_type)
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let left = left.as_ref().clone();
-                let right = right.as_ref().clone();
-                let left_type = left.get_type(&self.schema)?;
-                let right_type = right.get_type(&self.schema)?;
-                // Because the plan has been done the type coercion, the left and right must be equal
-                if is_support_data_type(&left_type)
-                    && is_support_data_type(&right_type)
-                    && is_comparison_op(op)
-                {
-                    match (&left, &right) {
-                        (
-                            Expr::Literal(left_lit_value),
-                            Expr::TryCast(TryCast { expr, .. })
-                            | Expr::Cast(Cast { expr, .. }),
-                        ) => {
-                            // if the left_lit_value can be casted to the type of expr
-                            // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
-                            let expr_type = expr.get_type(&self.schema)?;
-                            let casted_scalar_value =
-                                try_cast_literal_to_type(left_lit_value, &expr_type)?;
-                            if let Some(value) = casted_scalar_value {
-                                // unwrap the cast/try_cast for the right expr
-                                return Ok(Transformed::yes(binary_expr(
-                                    lit(value),
-                                    *op,
-                                    expr.as_ref().clone(),
-                                )));
-                            }
-                        }
-                        (
-                            Expr::TryCast(TryCast { expr, .. })
-                            | Expr::Cast(Cast { expr, .. }),
-                            Expr::Literal(right_lit_value),
-                        ) => {
-                            // if the right_lit_value can be casted to the type of expr
-                            // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
-                            let expr_type = expr.get_type(&self.schema)?;
-                            let casted_scalar_value =
-                                try_cast_literal_to_type(right_lit_value, &expr_type)?;
-                            if let Some(value) = casted_scalar_value {
-                                // unwrap the cast/try_cast for the left expr
-                                return Ok(Transformed::yes(binary_expr(
-                                    expr.as_ref().clone(),
-                                    *op,
-                                    lit(value),
-                                )));
-                            }
-                        }
-                        (_, _) => {
-                            // do nothing
-                        }
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if {
+                    let Ok(left_type) = left.get_type(&self.schema) else {
+                        return Ok(Transformed::no(expr));
                     };
+                    let Ok(right_type) = right.get_type(&self.schema) else {
+                        return Ok(Transformed::no(expr));
+                    };
+                    is_supported_type(&left_type)
+                        && is_supported_type(&right_type)
+                        && op.is_comparison_operator()
+                } =>
+            {
+                match (left.as_mut(), right.as_mut()) {
+                    (
+                        Expr::Literal(left_lit_value),
+                        Expr::TryCast(TryCast {
+                            expr: right_expr, ..
+                        })
+                        | Expr::Cast(Cast {
+                            expr: right_expr, ..
+                        }),
+                    ) => {
+                        // if the left_lit_value can be casted to the type of expr
+                        // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
+                        let Ok(expr_type) = right_expr.get_type(&self.schema) else {
+                            return Ok(Transformed::no(expr));
+                        };
+                        let Some(value) =
+                            try_cast_literal_to_type(left_lit_value, &expr_type)
+                        else {
+                            return Ok(Transformed::no(expr));
+                        };
+                        **left = lit(value);
+                        // unwrap the cast/try_cast for the right expr
+                        **right = mem::take(right_expr);
+                        Ok(Transformed::yes(expr))
+                    }
+                    (
+                        Expr::TryCast(TryCast {
+                            expr: left_expr, ..
+                        })
+                        | Expr::Cast(Cast {
+                            expr: left_expr, ..
+                        }),
+                        Expr::Literal(right_lit_value),
+                    ) => {
+                        // if the right_lit_value can be casted to the type of expr
+                        // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
+                        let Ok(expr_type) = left_expr.get_type(&self.schema) else {
+                            return Ok(Transformed::no(expr));
+                        };
+                        let Some(value) =
+                            try_cast_literal_to_type(right_lit_value, &expr_type)
+                        else {
+                            return Ok(Transformed::no(expr));
+                        };
+                        // unwrap the cast/try_cast for the left expr
+                        **left = mem::take(left_expr);
+                        **right = lit(value);
+                        Ok(Transformed::yes(expr))
+                    }
+                    _ => Ok(Transformed::no(expr)),
                 }
-                // return the new binary op
-                Ok(Transformed::yes(binary_expr(left, *op, right)))
             }
             // For case:
             // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
             Expr::InList(InList {
-                expr: left_expr,
-                list,
-                negated,
+                expr: left, list, ..
             }) => {
-                if let Some(
-                    Expr::TryCast(TryCast {
-                        expr: internal_left_expr,
-                        ..
-                    })
-                    | Expr::Cast(Cast {
-                        expr: internal_left_expr,
-                        ..
-                    }),
-                ) = Some(left_expr.as_ref())
-                {
-                    let internal_left = internal_left_expr.as_ref().clone();
-                    let internal_left_type = internal_left.get_type(&self.schema);
-                    if internal_left_type.is_err() {
-                        // error data type
-                        return Ok(Transformed::no(expr));
-                    }
-                    let internal_left_type = internal_left_type?;
-                    if !is_support_data_type(&internal_left_type) {
-                        // not supported data type
-                        return Ok(Transformed::no(expr));
-                    }
-                    let right_exprs = list
-                        .iter()
-                        .map(|right| {
-                            let right_type = right.get_type(&self.schema)?;
-                            if !is_support_data_type(&right_type) {
-                                return internal_err!(
-                                    "The type of list expr {} not support",
-                                    &right_type
-                                );
-                            }
-                            match right {
-                                Expr::Literal(right_lit_value) => {
-                                    // if the right_lit_value can be casted to the type of internal_left_expr
-                                    // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
-                                    let casted_scalar_value =
-                                        try_cast_literal_to_type(right_lit_value, &internal_left_type)?;
-                                    if let Some(value) = casted_scalar_value {
-                                        Ok(lit(value))
-                                    } else {
-                                        internal_err!(
-                                            "Can't cast the list expr {:?} to type {:?}",
-                                            right_lit_value, &internal_left_type
-                                        )
-                                    }
-                                }
-                                other_expr => internal_err!(
-                                    "Only support literal expr to optimize, but the expr is {:?}",
-                                    &other_expr
-                                ),
-                            }
-                        })
-                        .collect::<Result<Vec<_>>>();
-                    match right_exprs {
-                        Ok(right_exprs) => Ok(Transformed::yes(in_list(
-                            internal_left,
-                            right_exprs,
-                            *negated,
-                        ))),
-                        Err(_) => Ok(Transformed::no(expr)),
-                    }
-                } else {
-                    Ok(Transformed::no(expr))
+                let (Expr::TryCast(TryCast {
+                    expr: left_expr, ..
+                })
+                | Expr::Cast(Cast {
+                    expr: left_expr, ..
+                })) = left.as_mut()
+                else {
+                    return Ok(Transformed::no(expr));
+                };
+                let Ok(expr_type) = left_expr.get_type(&self.schema) else {
+                    return Ok(Transformed::no(expr));
+                };
+                if !is_supported_type(&expr_type) {
+                    return Ok(Transformed::no(expr));
                 }
+                let Ok(right_exprs) = list
+                    .iter()
+                    .map(|right| {
+                        let right_type = right.get_type(&self.schema)?;
+                        if !is_supported_type(&right_type) {
+                            internal_err!(
+                                "The type of list expr {} is not supported",
+                                &right_type
+                            )?;
+                        }
+                        match right {
+                            Expr::Literal(right_lit_value) => {
+                                // if the right_lit_value can be casted to the type of internal_left_expr
+                                // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
+                                let Some(value) = try_cast_literal_to_type(right_lit_value, &expr_type) else {
+                                    internal_err!(
+                                        "Can't cast the list expr {:?} to type {:?}",
+                                        right_lit_value, &expr_type
+                                    )?
+                                };
+                                Ok(lit(value))
+                            }
+                            other_expr => internal_err!(
+                                "Only support literal expr to optimize, but the expr is {:?}",
+                                &other_expr
+                            ),
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>() else {
+                    return Ok(Transformed::no(expr))
+                };
+                **left = mem::take(left_expr);
+                *list = right_exprs;
+                Ok(Transformed::yes(expr))
             }
             // TODO: handle other expr type and dfs visit them
             _ => Ok(Transformed::no(expr)),
@@ -271,19 +262,15 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
     }
 }
 
-fn is_comparison_op(op: &Operator) -> bool {
-    matches!(
-        op,
-        Operator::Eq
-            | Operator::NotEq
-            | Operator::Gt
-            | Operator::GtEq
-            | Operator::Lt
-            | Operator::LtEq
-    )
+/// Returns true if [UnwrapCastExprRewriter] supports this data type
+fn is_supported_type(data_type: &DataType) -> bool {
+    is_supported_numeric_type(data_type)
+        || is_supported_string_type(data_type)
+        || is_supported_dictionary_type(data_type)
 }
 
-fn is_support_data_type(data_type: &DataType) -> bool {
+/// Returns true if [[UnwrapCastExprRewriter]] suppors this numeric type
+fn is_supported_numeric_type(data_type: &DataType) -> bool {
     matches!(
         data_type,
         DataType::UInt8
@@ -299,19 +286,50 @@ fn is_support_data_type(data_type: &DataType) -> bool {
     )
 }
 
+/// Returns true if [UnwrapCastExprRewriter] supports casting this value as a string
+fn is_supported_string_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
+/// Returns true if [UnwrapCastExprRewriter] supports casting this value as a dictionary
+fn is_supported_dictionary_type(data_type: &DataType) -> bool {
+    matches!(data_type,
+                    DataType::Dictionary(_, inner) if is_supported_type(inner))
+}
+
+/// Convert a literal value from one data type to another
 fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
-) -> Result<Option<ScalarValue>> {
+) -> Option<ScalarValue> {
     let lit_data_type = lit_value.data_type();
-    // the rule just support the signed numeric data type now
-    if !is_support_data_type(&lit_data_type) || !is_support_data_type(target_type) {
-        return Ok(None);
+    if !is_supported_type(&lit_data_type) || !is_supported_type(target_type) {
+        return None;
     }
     if lit_value.is_null() {
         // null value can be cast to any type of null value
-        return Ok(Some(ScalarValue::try_from(target_type)?));
+        return ScalarValue::try_from(target_type).ok();
     }
+    try_cast_numeric_literal(lit_value, target_type)
+        .or_else(|| try_cast_string_literal(lit_value, target_type))
+        .or_else(|| try_cast_dictionary(lit_value, target_type))
+}
+
+/// Convert a numeric value from one numeric data type to another
+fn try_cast_numeric_literal(
+    lit_value: &ScalarValue,
+    target_type: &DataType,
+) -> Option<ScalarValue> {
+    let lit_data_type = lit_value.data_type();
+    if !is_supported_numeric_type(&lit_data_type)
+        || !is_supported_numeric_type(target_type)
+    {
+        return None;
+    }
+
     let mul = match target_type {
         DataType::UInt8
         | DataType::UInt16
@@ -323,9 +341,7 @@ fn try_cast_literal_to_type(
         | DataType::Int64 => 1_i128,
         DataType::Timestamp(_, _) => 1_i128,
         DataType::Decimal128(_, scale) => 10_i128.pow(*scale as u32),
-        other_type => {
-            return internal_err!("Error target data type {other_type:?}");
-        }
+        _ => return None,
     };
     let (target_min, target_max) = match target_type {
         DataType::UInt8 => (u8::MIN as i128, u8::MAX as i128),
@@ -344,9 +360,7 @@ fn try_cast_literal_to_type(
             MIN_DECIMAL_FOR_EACH_PRECISION[*precision as usize - 1],
             MAX_DECIMAL_FOR_EACH_PRECISION[*precision as usize - 1],
         ),
-        other_type => {
-            return internal_err!("Error target data type {other_type:?}");
-        }
+        _ => return None,
     };
     let lit_value_target_type = match lit_value {
         ScalarValue::Int8(Some(v)) => (*v as i128).checked_mul(mul),
@@ -380,13 +394,11 @@ fn try_cast_literal_to_type(
                 None
             }
         }
-        other_value => {
-            return internal_err!("Invalid literal value {other_value:?}");
-        }
+        _ => None,
     };
 
     match lit_value_target_type {
-        None => Ok(None),
+        None => None,
         Some(value) => {
             if value >= target_min && value <= target_max {
                 // the value casted from lit to the target type is in the range of target type.
@@ -435,16 +447,61 @@ fn try_cast_literal_to_type(
                     DataType::Decimal128(p, s) => {
                         ScalarValue::Decimal128(Some(value), *p, *s)
                     }
-                    other_type => {
-                        return internal_err!("Error target data type {other_type:?}");
+                    _ => {
+                        return None;
                     }
                 };
-                Ok(Some(result_scalar))
+                Some(result_scalar)
             } else {
-                Ok(None)
+                None
             }
         }
     }
+}
+
+fn try_cast_string_literal(
+    lit_value: &ScalarValue,
+    target_type: &DataType,
+) -> Option<ScalarValue> {
+    let string_value = match lit_value {
+        ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s) => {
+            s.clone()
+        }
+        _ => return None,
+    };
+    let scalar_value = match target_type {
+        DataType::Utf8 => ScalarValue::Utf8(string_value),
+        DataType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),
+        DataType::Utf8View => ScalarValue::Utf8View(string_value),
+        _ => return None,
+    };
+    Some(scalar_value)
+}
+
+/// Attempt to cast to/from a dictionary type by wrapping/unwrapping the dictionary
+fn try_cast_dictionary(
+    lit_value: &ScalarValue,
+    target_type: &DataType,
+) -> Option<ScalarValue> {
+    let lit_value_type = lit_value.data_type();
+    let result_scalar = match (lit_value, target_type) {
+        // Unwrap dictionary when inner type matches target type
+        (ScalarValue::Dictionary(_, inner_value), _)
+            if inner_value.data_type() == *target_type =>
+        {
+            (**inner_value).clone()
+        }
+        // Wrap type when target type is dictionary
+        (_, DataType::Dictionary(index_type, inner_type))
+            if **inner_type == lit_value_type =>
+        {
+            ScalarValue::Dictionary(index_type.clone(), Box::new(lit_value.clone()))
+        }
+        _ => {
+            return None;
+        }
+    };
+    Some(result_scalar)
 }
 
 /// Cast a timestamp value from one unit to another
@@ -476,16 +533,13 @@ fn cast_between_timestamp(from: DataType, to: DataType, value: i128) -> Option<i
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use super::*;
-    use crate::unwrap_cast_in_comparison::UnwrapCastExprRewriter;
 
     use arrow::compute::{cast_with_options, CastOptions};
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
-    use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
+    use arrow::datatypes::Field;
+    use datafusion_common::tree_node::TransformedResult;
+    use datafusion_expr::{cast, col, in_list, try_cast};
 
     #[test]
     fn test_not_unwrap_cast_comparison() {
@@ -537,6 +591,45 @@ mod tests {
         let schema = expr_test_schema();
         let expr_input = cast(col("c6"), DataType::UInt64).eq(lit(0u64));
         let expected = col("c6").eq(lit(0u32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+    }
+
+    #[test]
+    fn test_unwrap_cast_comparison_string() {
+        let schema = expr_test_schema();
+        let dict = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::from("value")),
+        );
+
+        // cast(str1 as Dictionary<Int32, Utf8>) = arrow_cast('value', 'Dictionary<Int32, Utf8>') => str1 = Utf8('value1')
+        let expr_input = cast(col("str1"), dict.data_type()).eq(lit(dict.clone()));
+        let expected = col("str1").eq(lit("value"));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(tag as Utf8) = Utf8('value') => tag = arrow_cast('value', 'Dictionary<Int32, Utf8>')
+        let expr_input = cast(col("tag"), DataType::Utf8).eq(lit("value"));
+        let expected = col("tag").eq(lit(dict.clone()));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // Verify reversed argument order
+        // arrow_cast('value', 'Dictionary<Int32, Utf8>') = cast(str1 as Dictionary<Int32, Utf8>) => Utf8('value1') = str1
+        let expr_input = lit(dict.clone()).eq(cast(col("str1"), dict.data_type()));
+        let expected = lit("value").eq(col("str1"));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+    }
+
+    #[test]
+    fn test_unwrap_cast_comparison_large_string() {
+        let schema = expr_test_schema();
+        // cast(largestr as Dictionary<Int32, LargeUtf8>) = arrow_cast('value', 'Dictionary<Int32, LargeUtf8>') => str1 = LargeUtf8('value1')
+        let dict = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::LargeUtf8(Some("value".to_owned()))),
+        );
+        let expr_input = cast(col("largestr"), dict.data_type()).eq(lit(dict.clone()));
+        let expected =
+            col("largestr").eq(lit(ScalarValue::LargeUtf8(Some("value".to_owned()))));
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
@@ -733,32 +826,28 @@ mod tests {
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let mut expr_rewriter = UnwrapCastExprRewriter {
-            schema: schema.clone(),
+            schema: Arc::clone(schema),
         };
         expr.rewrite(&mut expr_rewriter).data().unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
         Arc::new(
-            DFSchema::new_with_metadata(
+            DFSchema::from_unqualified_fields(
                 vec![
-                    DFField::new_unqualified("c1", DataType::Int32, false),
-                    DFField::new_unqualified("c2", DataType::Int64, false),
-                    DFField::new_unqualified("c3", DataType::Decimal128(18, 2), false),
-                    DFField::new_unqualified("c4", DataType::Decimal128(38, 37), false),
-                    DFField::new_unqualified("c5", DataType::Float32, false),
-                    DFField::new_unqualified("c6", DataType::UInt32, false),
-                    DFField::new_unqualified(
-                        "ts_nano_none",
-                        timestamp_nano_none_type(),
-                        false,
-                    ),
-                    DFField::new_unqualified(
-                        "ts_nano_utf",
-                        timestamp_nano_utc_type(),
-                        false,
-                    ),
-                ],
+                    Field::new("c1", DataType::Int32, false),
+                    Field::new("c2", DataType::Int64, false),
+                    Field::new("c3", DataType::Decimal128(18, 2), false),
+                    Field::new("c4", DataType::Decimal128(38, 37), false),
+                    Field::new("c5", DataType::Float32, false),
+                    Field::new("c6", DataType::UInt32, false),
+                    Field::new("ts_nano_none", timestamp_nano_none_type(), false),
+                    Field::new("ts_nano_utf", timestamp_nano_utc_type(), false),
+                    Field::new("str1", DataType::Utf8, false),
+                    Field::new("largestr", DataType::LargeUtf8, false),
+                    Field::new("tag", dictionary_tag_type(), false),
+                ]
+                .into(),
                 HashMap::new(),
             )
             .unwrap(),
@@ -804,6 +893,11 @@ mod tests {
         DataType::Timestamp(TimeUnit::Nanosecond, utc)
     }
 
+    // a dictionary type for storing string tags
+    fn dictionary_tag_type() -> DataType {
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+    }
+
     #[test]
     fn test_try_cast_to_type_nulls() {
         // test that nulls can be cast to/from all integer types
@@ -818,6 +912,8 @@ mod tests {
             ScalarValue::UInt64(None),
             ScalarValue::Decimal128(None, 3, 0),
             ScalarValue::Decimal128(None, 8, 2),
+            ScalarValue::Utf8(None),
+            ScalarValue::LargeUtf8(None),
         ];
 
         for s1 in &scalars {
@@ -978,7 +1074,7 @@ mod tests {
                 ),
             };
 
-            // Datafusion ignores timezones for comparisons of ScalarValue
+            // DataFusion ignores timezones for comparisons of ScalarValue
             // so double check it here
             assert_eq!(lit_tz_none, lit_tz_utc);
 
@@ -1072,18 +1168,17 @@ mod tests {
         target_type: DataType,
         expected_result: ExpectedCast,
     ) {
-        let actual_result = try_cast_literal_to_type(&literal, &target_type);
+        let actual_value = try_cast_literal_to_type(&literal, &target_type);
 
         println!("expect_cast: ");
         println!("  {literal:?} --> {target_type:?}");
         println!("  expected_result: {expected_result:?}");
-        println!("  actual_result:   {actual_result:?}");
+        println!("  actual_result:   {actual_value:?}");
 
         match expected_result {
             ExpectedCast::Value(expected_value) => {
-                let actual_value = actual_result
-                    .expect("Expected success but got error")
-                    .expect("Expected cast value but got None");
+                let actual_value =
+                    actual_value.expect("Expected cast value but got None");
 
                 assert_eq!(actual_value, expected_value);
 
@@ -1105,7 +1200,7 @@ mod tests {
 
                 assert_eq!(
                     &expected_array, &cast_array,
-                    "Result of casing {literal:?} with arrow was\n {cast_array:#?}\nbut expected\n{expected_array:#?}"
+                    "Result of casting {literal:?} with arrow was\n {cast_array:#?}\nbut expected\n{expected_array:#?}"
                 );
 
                 // Verify that for timestamp types the timezones are the same
@@ -1120,8 +1215,6 @@ mod tests {
                 }
             }
             ExpectedCast::NoValue => {
-                let actual_value = actual_result.expect("Expected success but got error");
-
                 assert!(
                     actual_value.is_none(),
                     "Expected no cast value, but got {actual_value:?}"
@@ -1137,7 +1230,6 @@ mod tests {
             &ScalarValue::TimestampNanosecond(Some(123456), None),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
-        .unwrap()
         .unwrap();
 
         assert_eq!(
@@ -1150,7 +1242,6 @@ mod tests {
             &ScalarValue::TimestampNanosecond(Some(123456), None),
             &DataType::Timestamp(TimeUnit::Microsecond, None),
         )
-        .unwrap()
         .unwrap();
 
         assert_eq!(
@@ -1163,7 +1254,6 @@ mod tests {
             &ScalarValue::TimestampNanosecond(Some(123456), None),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
-        .unwrap()
         .unwrap();
 
         assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(Some(0), None));
@@ -1173,7 +1263,6 @@ mod tests {
             &ScalarValue::TimestampNanosecond(Some(123456), None),
             &DataType::Timestamp(TimeUnit::Second, None),
         )
-        .unwrap()
         .unwrap();
 
         assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(0), None));
@@ -1183,7 +1272,6 @@ mod tests {
             &ScalarValue::TimestampMicrosecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
-        .unwrap()
         .unwrap();
 
         assert_eq!(
@@ -1196,7 +1284,6 @@ mod tests {
             &ScalarValue::TimestampMicrosecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
-        .unwrap()
         .unwrap();
 
         assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(Some(0), None));
@@ -1206,7 +1293,6 @@ mod tests {
             &ScalarValue::TimestampMicrosecond(Some(123456789), None),
             &DataType::Timestamp(TimeUnit::Second, None),
         )
-        .unwrap()
         .unwrap();
         assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(123), None));
 
@@ -1215,7 +1301,6 @@ mod tests {
             &ScalarValue::TimestampMillisecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
-        .unwrap()
         .unwrap();
         assert_eq!(
             new_scalar,
@@ -1227,7 +1312,6 @@ mod tests {
             &ScalarValue::TimestampMillisecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Microsecond, None),
         )
-        .unwrap()
         .unwrap();
         assert_eq!(
             new_scalar,
@@ -1238,7 +1322,6 @@ mod tests {
             &ScalarValue::TimestampMillisecond(Some(123456789), None),
             &DataType::Timestamp(TimeUnit::Second, None),
         )
-        .unwrap()
         .unwrap();
         assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(123456), None));
 
@@ -1247,7 +1330,6 @@ mod tests {
             &ScalarValue::TimestampSecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
-        .unwrap()
         .unwrap();
         assert_eq!(
             new_scalar,
@@ -1259,7 +1341,6 @@ mod tests {
             &ScalarValue::TimestampSecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Microsecond, None),
         )
-        .unwrap()
         .unwrap();
         assert_eq!(
             new_scalar,
@@ -1271,7 +1352,6 @@ mod tests {
             &ScalarValue::TimestampSecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
-        .unwrap()
         .unwrap();
         assert_eq!(
             new_scalar,
@@ -1283,8 +1363,48 @@ mod tests {
             &ScalarValue::TimestampSecond(Some(i64::MAX), None),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
-        .unwrap()
         .unwrap();
         assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(None, None));
+    }
+
+    #[test]
+    fn test_try_cast_to_string_type() {
+        let scalars = vec![
+            ScalarValue::from("string"),
+            ScalarValue::LargeUtf8(Some("string".to_owned())),
+        ];
+
+        for s1 in &scalars {
+            for s2 in &scalars {
+                let expected_value = ExpectedCast::Value(s2.clone());
+
+                expect_cast(s1.clone(), s2.data_type(), expected_value);
+            }
+        }
+    }
+    #[test]
+    fn test_try_cast_to_dictionary_type() {
+        fn dictionary_type(t: DataType) -> DataType {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(t))
+        }
+        fn dictionary_value(value: ScalarValue) -> ScalarValue {
+            ScalarValue::Dictionary(Box::new(DataType::Int32), Box::new(value))
+        }
+        let scalars = vec![
+            ScalarValue::from("string"),
+            ScalarValue::LargeUtf8(Some("string".to_owned())),
+        ];
+        for s in &scalars {
+            expect_cast(
+                s.clone(),
+                dictionary_type(s.data_type()),
+                ExpectedCast::Value(dictionary_value(s.clone())),
+            );
+            expect_cast(
+                dictionary_value(s.clone()),
+                s.data_type(),
+                ExpectedCast::Value(s.clone()),
+            )
+        }
     }
 }

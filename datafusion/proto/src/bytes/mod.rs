@@ -39,6 +39,7 @@ use std::sync::Arc;
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_expr::planner::ExprPlanner;
 
 mod registry;
 
@@ -99,7 +100,7 @@ impl Serializeable for Expr {
         let bytes: Bytes = buffer.into();
 
         // the produced byte stream may lead to "recursion limit" errors, see
-        // https://github.com/apache/arrow-datafusion/issues/3968
+        // https://github.com/apache/datafusion/issues/3968
         // Until the underlying prost issue ( https://github.com/tokio-rs/prost/issues/736 ) is fixed, we try to
         // deserialize the data here and check for errors.
         //
@@ -164,6 +165,10 @@ impl Serializeable for Expr {
                 datafusion_common::internal_err!(
                     "register_udwf called in Placeholder Registry!"
                 )
+            }
+
+            fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
+                vec![]
             }
         }
         Expr::from_bytes_with_registry(&bytes, &PlaceHolderRegistry)?;

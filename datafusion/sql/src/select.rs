@@ -18,28 +18,32 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{
+    idents_to_table_reference, ContextProvider, PlannerContext, SqlToRel,
+};
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs,
+    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnest,
 };
 
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_common::{Column, UnnestOptions};
-use datafusion_expr::expr::{Alias, Unnest};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
-    normalize_col, normalize_col_with_schemas_and_ambiguity_check,
+    normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
 };
+use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, ReplaceSelectItem, WildcardAdditionalOptions,
-    WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
+    ReplaceSelectItem, WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -48,6 +52,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn select_to_plan(
         &self,
         mut select: Select,
+        order_by: Vec<OrderByExpr>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
@@ -89,9 +94,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
-        // See https://github.com/apache/arrow-datafusion/issues/9162
+        // See https://github.com/apache/datafusion/issues/9162
         let mut combined_schema = base_plan.schema().as_ref().clone();
         combined_schema.merge(projected_plan.schema());
+
+        // Order-by expressions prioritize referencing columns from the select list,
+        // then from the FROM clause.
+        let order_by_rex = self.order_by_to_sort_expr(
+            order_by,
+            projected_plan.schema().as_ref(),
+            planner_context,
+            true,
+            Some(base_plan.schema().as_ref()),
+        )?;
+        let order_by_rex = normalize_cols(order_by_rex, &projected_plan)?;
 
         // this alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
@@ -118,7 +134,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 //
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
-                let having_expr = resolve_aliases_to_exprs(&having_expr, &alias_map)?;
+                let having_expr = resolve_aliases_to_exprs(having_expr, &alias_map)?;
                 normalize_col(having_expr, &projected_plan)
             })
             .transpose()?;
@@ -135,7 +151,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let aggr_exprs = find_aggregate_exprs(&aggr_expr_haystack);
 
         // All of the group by expressions
-        let group_by_exprs = if let GroupByExpr::Expressions(exprs) = select.group_by {
+        let group_by_exprs = if let GroupByExpr::Expressions(exprs, _) = select.group_by {
             exprs
                 .into_iter()
                 .map(|e| {
@@ -150,10 +166,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         alias_map.remove(f.name());
                     }
                     let group_by_expr =
-                        resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
+                        resolve_aliases_to_exprs(group_by_expr, &alias_map)?;
                     let group_by_expr =
-                        resolve_positions_to_exprs(&group_by_expr, &select_exprs)
-                            .unwrap_or(group_by_expr);
+                        resolve_positions_to_exprs(group_by_expr, &select_exprs)?;
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),
@@ -247,9 +262,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()?;
 
                 // Build the final plan
-                return LogicalPlanBuilder::from(base_plan)
+                LogicalPlanBuilder::from(base_plan)
                     .distinct_on(on_expr, select_exprs, None)?
-                    .build();
+                    .build()
             }
         }?;
 
@@ -273,49 +288,186 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
+        let plan = self.order_by(plan, order_by_rex)?;
+
         Ok(plan)
     }
 
-    // Try converting Expr::Unnest to LogicalPlan::Unnest if possible, otherwise do the final projection
+    /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
     pub(super) fn try_process_unnest(
         &self,
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
-        let mut unnest_columns = vec![];
-        // Map unnest expressions to their argument
-        let projection_exprs = select_exprs
-            .into_iter()
-            .map(|expr| {
-                if let Expr::Unnest(Unnest { ref exprs }) = expr {
-                    let column_name = expr.display_name()?;
-                    unnest_columns.push(column_name.clone());
-                    // Add alias for the argument expression, to avoid naming conflicts with other expressions
-                    // in the select list. For example: `select unnest(col1), col1 from t`.
-                    Ok(exprs[0].clone().alias(column_name))
-                } else {
-                    Ok(expr)
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
+        // Try process group by unnest
+        let input = self.try_process_aggregate_unnest(input)?;
 
-        // Do the final projection
-        if unnest_columns.is_empty() {
-            LogicalPlanBuilder::from(input)
-                .project(projection_exprs)?
-                .build()
-        } else {
-            if unnest_columns.len() > 1 {
-                return not_impl_err!("Only support single unnest expression for now");
+        let mut intermediate_plan = input;
+        let mut intermediate_select_exprs = select_exprs;
+        // Each expr in select_exprs can contains multiple unnest stage
+        // The transformation happen bottom up, one at a time for each iteration
+        // Only exaust the loop if no more unnest transformation is found
+        for i in 0.. {
+            let mut unnest_columns = vec![];
+            // from which column used for projection, before the unnest happen
+            // including non unnest column and unnest column
+            let mut inner_projection_exprs = vec![];
+
+            // expr returned here maybe different from the originals in inner_projection_exprs
+            // for example:
+            // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
+            // - unnest(array_col) will be transformed into unnest(array_col).element
+            // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
+            let outer_projection_exprs: Vec<Expr> = intermediate_select_exprs
+                .iter()
+                .map(|expr| {
+                    transform_bottom_unnest(
+                        &intermediate_plan,
+                        &mut unnest_columns,
+                        &mut inner_projection_exprs,
+                        expr,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect();
+
+            // No more unnest is possible
+            if unnest_columns.is_empty() {
+                // The original expr does not contain any unnest
+                if i == 0 {
+                    return LogicalPlanBuilder::from(intermediate_plan)
+                        .project(inner_projection_exprs)?
+                        .build();
+                }
+                break;
+            } else {
+                let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
+                // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
+                let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+                let plan = LogicalPlanBuilder::from(intermediate_plan)
+                    .project(inner_projection_exprs)?
+                    .unnest_columns_with_options(columns, unnest_options)?
+                    .build()?;
+                intermediate_plan = plan;
+                intermediate_select_exprs = outer_projection_exprs;
             }
-            let unnest_column = unnest_columns.pop().unwrap();
-            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
-            let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-            LogicalPlanBuilder::from(input)
-                .project(projection_exprs)?
-                .unnest_column_with_options(unnest_column, unnest_options)?
-                .build()
         }
+        LogicalPlanBuilder::from(intermediate_plan)
+            .project(intermediate_select_exprs)?
+            .build()
+    }
+
+    fn try_process_aggregate_unnest(&self, input: LogicalPlan) -> Result<LogicalPlan> {
+        match input {
+            LogicalPlan::Aggregate(agg) => {
+                let agg_expr = agg.aggr_expr.clone();
+                let (new_input, new_group_by_exprs) =
+                    self.try_process_group_by_unnest(agg)?;
+                LogicalPlanBuilder::from(new_input)
+                    .aggregate(new_group_by_exprs, agg_expr)?
+                    .build()
+            }
+            LogicalPlan::Filter(mut filter) => {
+                filter.input = Arc::new(
+                    self.try_process_aggregate_unnest(unwrap_arc(filter.input))?,
+                );
+                Ok(LogicalPlan::Filter(filter))
+            }
+            _ => Ok(input),
+        }
+    }
+
+    /// Try converting Unnest(Expr) of group by to Unnest/Projection
+    /// Return the new input and group_by_exprs of Aggregate.
+    fn try_process_group_by_unnest(
+        &self,
+        agg: Aggregate,
+    ) -> Result<(LogicalPlan, Vec<Expr>)> {
+        let mut aggr_expr_using_columns: Option<HashSet<Expr>> = None;
+
+        let Aggregate {
+            input,
+            group_expr,
+            aggr_expr,
+            ..
+        } = agg;
+
+        // process unnest of group_by_exprs, and input of agg will be rewritten
+        // for example:
+        //
+        // ```
+        // Aggregate: groupBy=[[UNNEST(Column(Column { relation: Some(Bare { table: "tab" }), name: "array_col" }))]], aggr=[[]]
+        //   TableScan: tab
+        // ```
+        //
+        // will be transformed into
+        //
+        // ```
+        // Aggregate: groupBy=[[unnest(tab.array_col)]], aggr=[[]]
+        //   Unnest: lists[unnest(tab.array_col)] structs[]
+        //     Projection: tab.array_col AS unnest(tab.array_col)
+        //       TableScan: tab
+        // ```
+        let mut intermediate_plan = unwrap_arc(input);
+        let mut intermediate_select_exprs = group_expr;
+
+        loop {
+            let mut unnest_columns = vec![];
+            let mut inner_projection_exprs = vec![];
+
+            let outer_projection_exprs: Vec<Expr> = intermediate_select_exprs
+                .iter()
+                .map(|expr| {
+                    transform_bottom_unnest(
+                        &intermediate_plan,
+                        &mut unnest_columns,
+                        &mut inner_projection_exprs,
+                        expr,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect();
+
+            if unnest_columns.is_empty() {
+                break;
+            } else {
+                let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
+                let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+
+                let mut projection_exprs = match &aggr_expr_using_columns {
+                    Some(exprs) => (*exprs).clone(),
+                    None => {
+                        let mut columns = HashSet::new();
+                        for expr in &aggr_expr {
+                            expr.apply(|expr| {
+                                if let Expr::Column(c) = expr {
+                                    columns.insert(Expr::Column(c.clone()));
+                                }
+                                Ok(TreeNodeRecursion::Continue)
+                            })
+                            // As the closure always returns Ok, this "can't" error
+                            .expect("Unexpected error");
+                        }
+                        aggr_expr_using_columns = Some(columns.clone());
+                        columns
+                    }
+                };
+                projection_exprs.extend(inner_projection_exprs);
+
+                intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
+                    .project(projection_exprs)?
+                    .unnest_columns_with_options(columns, unnest_options)?
+                    .build()?;
+
+                intermediate_select_exprs = outer_projection_exprs;
+            }
+        }
+
+        Ok((intermediate_plan, intermediate_select_exprs))
     }
 
     fn plan_selection(
@@ -424,7 +576,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let name = self.normalizer.normalize(alias);
+                let name = self.ident_normalizer.normalize(alias);
                 // avoiding adding an alias if the column name is the same.
                 let expr = match &col {
                     Expr::Column(column) if column.name.eq(&name) => col,
@@ -455,9 +607,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(expanded_exprs)
                 }
             }
-            SelectItem::QualifiedWildcard(ref object_name, options) => {
+            SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
-                let qualifier = format!("{object_name}");
+                let qualifier = idents_to_table_reference(object_name.0, false)?;
                 // do not expand from outer schema
                 let expanded_exprs = expand_qualified_wildcard(
                     &qualifier,
@@ -488,6 +640,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             opt_except: _opt_except,
             opt_rename,
             opt_replace: _opt_replace,
+            opt_ilike: _opt_ilike,
         } = options;
 
         if opt_rename.is_some() {
@@ -687,10 +840,17 @@ fn match_window_definitions(
         }
         | SelectItem::UnnamedExpr(SQLExpr::Function(f)) = proj
         {
-            for NamedWindowDefinition(window_ident, window_spec) in named_windows.iter() {
+            for NamedWindowDefinition(window_ident, window_expr) in named_windows.iter() {
                 if let Some(WindowType::NamedWindow(ident)) = &f.over {
                     if ident.eq(window_ident) {
-                        f.over = Some(WindowType::WindowSpec(window_spec.clone()))
+                        f.over = Some(match window_expr {
+                            NamedWindowExpr::NamedWindow(ident) => {
+                                WindowType::NamedWindow(ident.clone())
+                            }
+                            NamedWindowExpr::WindowSpec(spec) => {
+                                WindowType::WindowSpec(spec.clone())
+                            }
+                        })
                     }
                 }
             }

@@ -27,34 +27,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         t: TableWithJoins,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // From clause may exist CTEs, we should separate them from global CTEs.
-        // CTEs in from clause are allowed to be duplicated.
-        // Such as `select * from (WITH source AS (select 1 as e) SELECT * FROM source) t1, (WITH source AS (select 1 as e) SELECT * FROM source) t2;` which is valid.
-        // So always use original global CTEs to plan CTEs in from clause.
-        // Btw, don't need to add CTEs in from to global CTEs.
-        let origin_planner_context = planner_context.clone();
-        let left = self.create_relation(t.relation, planner_context)?;
-        match t.joins.len() {
-            0 => {
-                *planner_context = origin_planner_context;
-                Ok(left)
-            }
-            _ => {
-                let mut joins = t.joins.into_iter();
-                *planner_context = origin_planner_context.clone();
-                let mut left = self.parse_relation_join(
-                    left,
-                    joins.next().unwrap(), // length of joins > 0
-                    planner_context,
-                )?;
-                for join in joins {
-                    *planner_context = origin_planner_context.clone();
-                    left = self.parse_relation_join(left, join, planner_context)?;
-                }
-                *planner_context = origin_planner_context;
-                Ok(left)
-            }
+        let mut left = self.create_relation(t.relation, planner_context)?;
+        for join in t.joins.into_iter() {
+            left = self.parse_relation_join(left, join, planner_context)?;
         }
+        Ok(left)
     }
 
     fn parse_relation_join(
@@ -138,24 +115,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(self.normalizer.normalize(x)))
+                    .map(|x| Column::from_name(self.ident_normalizer.normalize(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(right, join_type, keys)?
                     .build()
             }
             JoinConstraint::Natural => {
-                let left_cols: HashSet<&String> = left
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|f| f.field().name())
-                    .collect();
+                let left_cols: HashSet<&String> =
+                    left.schema().fields().iter().map(|f| f.name()).collect();
                 let keys: Vec<Column> = right
                     .schema()
                     .fields()
                     .iter()
-                    .map(|f| f.field().name())
+                    .map(|f| f.name())
                     .filter(|f| left_cols.contains(f))
                     .map(Column::from_name)
                     .collect();

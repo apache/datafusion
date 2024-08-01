@@ -65,7 +65,7 @@ impl CoalescePartitionsExec {
         // Coalescing partitions loses existing orderings:
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_orderings();
-
+        eq_properties.clear_per_partition_constants();
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
@@ -89,6 +89,10 @@ impl DisplayAs for CoalescePartitionsExec {
 }
 
 impl ExecutionPlan for CoalescePartitionsExec {
+    fn name(&self) -> &'static str {
+        "CoalescePartitionsExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -98,8 +102,8 @@ impl ExecutionPlan for CoalescePartitionsExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -110,7 +114,9 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CoalescePartitionsExec::new(children[0].clone())))
+        Ok(Arc::new(CoalescePartitionsExec::new(Arc::clone(
+            &children[0],
+        ))))
     }
 
     fn execute(
@@ -148,7 +154,11 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 // spawn independent tasks whose resulting streams (of batches)
                 // are sent to the channel for consumption.
                 for part_i in 0..input_partitions {
-                    builder.run_input(self.input.clone(), part_i, context.clone());
+                    builder.run_input(
+                        Arc::clone(&self.input),
+                        part_i,
+                        Arc::clone(&context),
+                    );
                 }
 
                 let stream = builder.build();
@@ -163,6 +173,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
     }
 }
 

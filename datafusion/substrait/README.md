@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Apache Arrow DataFusion Substrait
+# Apache DataFusion Substrait
 
 This crate contains a [Substrait] producer and consumer for Apache Arrow
 [DataFusion] plans. See [API Docs] for details and examples.

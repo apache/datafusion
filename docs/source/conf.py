@@ -33,7 +33,7 @@
 
 # -- Project information -----------------------------------------------------
 
-project = 'Apache Arrow DataFusion'
+project = 'Apache DataFusion'
 copyright = '2019-2024, Apache Software Foundation'
 author = 'Apache Software Foundation'
 

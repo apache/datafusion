@@ -125,9 +125,8 @@ impl PartitionEvaluator for NumRowsEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
-    use datafusion_common::{cast::as_uint64_array, Result};
+    use datafusion_common::cast::as_uint64_array;
 
     #[test]
     fn row_number_all_null() -> Result<()> {

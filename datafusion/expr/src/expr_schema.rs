@@ -17,18 +17,19 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateFunctionDefinition, Alias, BinaryExpr, Cast,
-    GetFieldAccess, GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionDefinition, Alias, BinaryExpr, Cast, InList,
+    InSubquery, Placeholder, ScalarFunction, Sort, TryCast, Unnest, WindowFunction,
 };
-use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
-use crate::type_coercion::functions::data_types;
-use crate::{utils, LogicalPlan, Projection, Subquery};
+use crate::type_coercion::functions::{
+    data_types_with_aggregate_udf, data_types_with_scalar_udf,
+};
+use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFField, ExprSchema, Result,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema,
+    Result, TableReference,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,10 +46,17 @@ pub trait ExprSchemable {
     fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>>;
 
     /// convert to a field with respect to a schema
-    fn to_field(&self, input_schema: &dyn ExprSchema) -> Result<DFField>;
+    fn to_field(
+        &self,
+        input_schema: &dyn ExprSchema,
+    ) -> Result<(Option<TableReference>, Arc<Field>)>;
 
     /// cast to a type with respect to a schema
     fn cast_to(self, cast_to_type: &DataType, schema: &dyn ExprSchema) -> Result<Expr>;
+
+    /// given a schema, return the type and nullability of the expr
+    fn data_type_and_nullable(&self, schema: &dyn ExprSchema)
+        -> Result<(DataType, bool)>;
 }
 
 impl ExprSchemable for Expr {
@@ -61,25 +69,24 @@ impl ExprSchemable for Expr {
     ///
     /// # Examples
     ///
-    /// ## Get the type of an expression that adds 2 columns. Adding an Int32
-    /// ## and Float32 results in Float32 type
+    /// Get the type of an expression that adds 2 columns. Adding an Int32
+    /// and Float32 results in Float32 type
     ///
     /// ```
-    /// # use arrow::datatypes::DataType;
-    /// # use datafusion_common::{DFField, DFSchema};
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::DFSchema;
     /// # use datafusion_expr::{col, ExprSchemable};
     /// # use std::collections::HashMap;
     ///
     /// fn main() {
     ///   let expr = col("c1") + col("c2");
-    ///   let schema = DFSchema::new_with_metadata(
+    ///   let schema = DFSchema::from_unqualified_fields(
     ///     vec![
-    ///       DFField::new_unqualified("c1", DataType::Int32, true),
-    ///       DFField::new_unqualified("c2", DataType::Float32, true),
-    ///       ],
+    ///       Field::new("c1", DataType::Int32, true),
+    ///       Field::new("c2", DataType::Float32, true),
+    ///       ].into(),
     ///       HashMap::new(),
-    ///   )
-    ///   .unwrap();
+    ///   ).unwrap();
     ///   assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
     /// }
     /// ```
@@ -105,82 +112,114 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.data_type()),
-            Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
+            Expr::Case(case) => {
+                for (_, then_expr) in &case.when_then_expr {
+                    let then_type = then_expr.get_type(schema)?;
+                    if !then_type.is_null() {
+                        return Ok(then_type);
+                    }
+                }
+                case.else_expr
+                    .as_ref()
+                    .map_or(Ok(DataType::Null), |e| e.get_type(schema))
+            }
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
-            Expr::Unnest(Unnest { exprs }) => {
-                let arg_data_types = exprs
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(arg_data_types[0].clone())
+            Expr::Unnest(Unnest { expr }) => {
+                let arg_data_type = expr.get_type(schema)?;
+                // Unnest's output type is the inner type of the list
+                match arg_data_type {
+                    DataType::List(field)
+                    | DataType::LargeList(field)
+                    | DataType::FixedSizeList(field, _) => Ok(field.data_type().clone()),
+                    DataType::Struct(_) => Ok(arg_data_type),
+                    DataType::Null => {
+                        not_impl_err!("unnest() does not support null yet")
+                    }
+                    _ => {
+                        plan_err!(
+                            "unnest() can only be applied to array, struct and null"
+                        )
+                    }
+                }
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let arg_data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                match func_def {
-                    ScalarFunctionDefinition::BuiltIn(fun) => {
-                        // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                        data_types(&arg_data_types, &fun.signature()).map_err(|_| {
-                            plan_datafusion_err!(
-                                "{}",
-                                utils::generate_signature_error_msg(
-                                    &format!("{fun}"),
-                                    fun.signature(),
-                                    &arg_data_types,
-                                )
-                            )
-                        })?;
+                // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
+                data_types_with_scalar_udf(&arg_data_types, func).map_err(|err| {
+                    plan_datafusion_err!(
+                        "{} {}",
+                        err,
+                        utils::generate_signature_error_msg(
+                            func.name(),
+                            func.signature().clone(),
+                            &arg_data_types,
+                        )
+                    )
+                })?;
 
-                        // perform additional function arguments validation (due to limited
-                        // expressiveness of `TypeSignature`), then infer return type
-                        fun.return_type(&arg_data_types)
-                    }
-                    ScalarFunctionDefinition::UDF(fun) => {
-                        // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                        data_types(&arg_data_types, fun.signature()).map_err(|_| {
-                            plan_datafusion_err!(
-                                "{}",
-                                utils::generate_signature_error_msg(
-                                    fun.name(),
-                                    fun.signature().clone(),
-                                    &arg_data_types,
-                                )
-                            )
-                        })?;
-
-                        // perform additional function arguments validation (due to limited
-                        // expressiveness of `TypeSignature`), then infer return type
-                        Ok(fun.return_type_from_exprs(args, schema)?)
-                    }
-                    ScalarFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
-                    }
-                }
+                // perform additional function arguments validation (due to limited
+                // expressiveness of `TypeSignature`), then infer return type
+                Ok(func.return_type_from_exprs(args, schema, &arg_data_types)?)
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                fun.return_type(&data_types)
+                let nullability = args
+                    .iter()
+                    .map(|e| e.nullable(schema))
+                    .collect::<Result<Vec<_>>>()?;
+                match fun {
+                    WindowFunctionDefinition::AggregateUDF(udf) => {
+                        let new_types = data_types_with_aggregate_udf(&data_types, udf)
+                            .map_err(|err| {
+                            plan_datafusion_err!(
+                                "{} {}",
+                                err,
+                                utils::generate_signature_error_msg(
+                                    fun.name(),
+                                    fun.signature().clone(),
+                                    &data_types
+                                )
+                            )
+                        })?;
+                        Ok(fun.return_type(&new_types, &nullability)?)
+                    }
+                    _ => fun.return_type(&data_types, &nullability),
+                }
             }
             Expr::AggregateFunction(AggregateFunction { func_def, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
+                let nullability = args
+                    .iter()
+                    .map(|e| e.nullable(schema))
+                    .collect::<Result<Vec<_>>>()?;
                 match func_def {
                     AggregateFunctionDefinition::BuiltIn(fun) => {
-                        fun.return_type(&data_types)
+                        fun.return_type(&data_types, &nullability)
                     }
                     AggregateFunctionDefinition::UDF(fun) => {
-                        Ok(fun.return_type(&data_types)?)
-                    }
-                    AggregateFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
+                        let new_types = data_types_with_aggregate_udf(&data_types, fun)
+                            .map_err(|err| {
+                            plan_datafusion_err!(
+                                "{} {}",
+                                err,
+                                utils::generate_signature_error_msg(
+                                    fun.name(),
+                                    fun.signature().clone(),
+                                    &data_types
+                                )
+                            )
+                        })?;
+                        Ok(fun.return_type(&new_types)?)
                     }
                 }
             }
@@ -208,7 +247,11 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 data_type.clone().ok_or_else(|| {
-                    plan_datafusion_err!("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values.")
+                    plan_datafusion_err!(
+                        "Placeholder type could not be resolved. Make sure that the \
+                         placeholder is bound to a concrete type, e.g. by providing \
+                         parameter values."
+                    )
                 })
             }
             Expr::Wildcard { qualifier } => {
@@ -221,9 +264,6 @@ impl ExprSchemable for Expr {
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
-            }
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                field_for_index(expr, field, schema).map(|x| x.data_type().clone())
             }
         }
     }
@@ -296,11 +336,20 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
+            Expr::AggregateFunction(AggregateFunction { func_def, .. }) => {
+                match func_def {
+                    AggregateFunctionDefinition::BuiltIn(fun) => fun.nullable(),
+                    // TODO: UDF should be able to customize nullability
+                    AggregateFunctionDefinition::UDF(udf) if udf.name() == "count" => {
+                        Ok(false)
+                    }
+                    AggregateFunctionDefinition::UDF(_) => Ok(true),
+                }
+            }
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
             | Expr::ScalarFunction(..)
             | Expr::WindowFunction { .. }
-            | Expr::AggregateFunction { .. }
             | Expr::Unnest(_)
             | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
@@ -325,19 +374,12 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
-            Expr::Wildcard { .. } => internal_err!(
-                "Wildcard expressions are not valid in a logical query plan"
-            ),
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                // If schema is nested, check if parent is nullable
-                // if it is, return early
-                if let Expr::Column(col) = expr.as_ref() {
-                    if input_schema.nullable(col)? {
-                        return Ok(true);
-                    }
-                }
-                field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
-            }
+            Expr::Wildcard { qualifier } => match qualifier {
+                Some(_) => internal_err!(
+                    "QualifiedWildcard expressions are not valid in a logical query plan"
+                ),
+                None => Ok(false),
+            },
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear
                 // in projections
@@ -354,32 +396,101 @@ impl ExprSchemable for Expr {
         }
     }
 
+    /// Returns the datatype and nullability of the expression based on [ExprSchema].
+    ///
+    /// Note: [`DFSchema`] implements [ExprSchema].
+    ///
+    /// [`DFSchema`]: datafusion_common::DFSchema
+    ///
+    /// # Errors
+    ///
+    /// This function errors when it is not possible to compute its
+    /// datatype or nullability.
+    fn data_type_and_nullable(
+        &self,
+        schema: &dyn ExprSchema,
+    ) -> Result<(DataType, bool)> {
+        match self {
+            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
+                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
+                    None => schema
+                        .data_type_and_nullable(&Column::from_name(name))
+                        .map(|(d, n)| (d.clone(), n)),
+                    Some(dt) => Ok((dt.clone(), expr.nullable(schema)?)),
+                },
+                _ => expr.data_type_and_nullable(schema),
+            },
+            Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => {
+                expr.data_type_and_nullable(schema)
+            }
+            Expr::Column(c) => schema
+                .data_type_and_nullable(c)
+                .map(|(d, n)| (d.clone(), n)),
+            Expr::OuterReferenceColumn(ty, _) => Ok((ty.clone(), true)),
+            Expr::ScalarVariable(ty, _) => Ok((ty.clone(), true)),
+            Expr::Literal(l) => Ok((l.data_type(), l.is_null())),
+            Expr::IsNull(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Exists { .. } => Ok((DataType::Boolean, false)),
+            Expr::ScalarSubquery(subquery) => Ok((
+                subquery.subquery.schema().field(0).data_type().clone(),
+                subquery.subquery.schema().field(0).is_nullable(),
+            )),
+            Expr::BinaryExpr(BinaryExpr {
+                ref left,
+                ref right,
+                ref op,
+            }) => {
+                let left = left.data_type_and_nullable(schema)?;
+                let right = right.data_type_and_nullable(schema)?;
+                Ok((get_result_type(&left.0, op, &right.0)?, left.1 || right.1))
+            }
+            _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
+        }
+    }
+
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
     ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
     /// placed in an output field **named** col("c1 + c2")
-    fn to_field(&self, input_schema: &dyn ExprSchema) -> Result<DFField> {
+    fn to_field(
+        &self,
+        input_schema: &dyn ExprSchema,
+    ) -> Result<(Option<TableReference>, Arc<Field>)> {
         match self {
-            Expr::Column(c) => Ok(DFField::new(
-                c.relation.clone(),
-                &c.name,
-                self.get_type(input_schema)?,
-                self.nullable(input_schema)?,
-            )
-            .with_metadata(self.metadata(input_schema)?)),
-            Expr::Alias(Alias { relation, name, .. }) => Ok(DFField::new(
-                relation.clone(),
-                name,
-                self.get_type(input_schema)?,
-                self.nullable(input_schema)?,
-            )
-            .with_metadata(self.metadata(input_schema)?)),
-            _ => Ok(DFField::new_unqualified(
-                &self.display_name()?,
-                self.get_type(input_schema)?,
-                self.nullable(input_schema)?,
-            )
-            .with_metadata(self.metadata(input_schema)?)),
+            Expr::Column(c) => {
+                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+                Ok((
+                    c.relation.clone(),
+                    Field::new(&c.name, data_type, nullable)
+                        .with_metadata(self.metadata(input_schema)?)
+                        .into(),
+                ))
+            }
+            Expr::Alias(Alias { relation, name, .. }) => {
+                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+                Ok((
+                    relation.clone(),
+                    Field::new(name, data_type, nullable)
+                        .with_metadata(self.metadata(input_schema)?)
+                        .into(),
+                ))
+            }
+            _ => {
+                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+                Ok((
+                    None,
+                    Field::new(self.display_name()?, data_type, nullable)
+                        .with_metadata(self.metadata(input_schema)?)
+                        .into(),
+                ))
+            }
         }
     }
 
@@ -412,33 +523,6 @@ impl ExprSchemable for Expr {
     }
 }
 
-/// return the schema [`Field`] for the type referenced by `get_indexed_field`
-fn field_for_index(
-    expr: &Expr,
-    field: &GetFieldAccess,
-    schema: &dyn ExprSchema,
-) -> Result<Field> {
-    let expr_dt = expr.get_type(schema)?;
-    match field {
-        GetFieldAccess::NamedStructField { name } => {
-            GetFieldAccessSchema::NamedStructField { name: name.clone() }
-        }
-        GetFieldAccess::ListIndex { key } => GetFieldAccessSchema::ListIndex {
-            key_dt: key.get_type(schema)?,
-        },
-        GetFieldAccess::ListRange {
-            start,
-            stop,
-            stride,
-        } => GetFieldAccessSchema::ListRange {
-            start_dt: start.get_type(schema)?,
-            stop_dt: stop.get_type(schema)?,
-            stride_dt: stride.get_type(schema)?,
-        },
-    }
-    .get_accessed_field(&expr_dt)
-}
-
 /// cast subquery in InSubquery/ScalarSubquery to a given type.
 pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
     if subquery.subquery.schema().field(0).data_type() == cast_to_type {
@@ -453,11 +537,11 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
                 .cast_to(cast_to_type, projection.input.schema())?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
-                projection.input.clone(),
+                Arc::clone(&projection.input),
             )?)
         }
         _ => {
-            let cast_expr = Expr::Column(plan.schema().field(0).qualified_column())
+            let cast_expr = Expr::Column(Column::from(plan.schema().qualified_field(0)))
                 .cast_to(cast_to_type, subquery.subquery.schema())?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
@@ -475,8 +559,8 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 mod tests {
     use super::*;
     use crate::{col, lit};
-    use arrow::datatypes::{DataType, Fields};
-    use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
+
+    use datafusion_common::{DFSchema, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -601,36 +685,15 @@ mod tests {
                 .unwrap()
         );
 
-        let schema = DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("foo", DataType::Int32, true)
-                .with_metadata(meta.clone())],
+        let schema = DFSchema::from_unqualified_fields(
+            vec![Field::new("foo", DataType::Int32, true).with_metadata(meta.clone())]
+                .into(),
             HashMap::new(),
         )
         .unwrap();
 
         // verify to_field method populates metadata
-        assert_eq!(&meta, expr.to_field(&schema).unwrap().metadata());
-    }
-
-    #[test]
-    fn test_nested_schema_nullability() {
-        let fields = DFField::new(
-            Some(TableReference::Bare {
-                table: "table_name".into(),
-            }),
-            "parent",
-            DataType::Struct(Fields::from(vec![Field::new(
-                "child",
-                DataType::Int64,
-                false,
-            )])),
-            true,
-        );
-
-        let schema = DFSchema::new_with_metadata(vec![fields], HashMap::new()).unwrap();
-
-        let expr = col("parent").field("child");
-        assert!(expr.nullable(&schema).unwrap());
+        assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());
     }
 
     #[derive(Debug)]
@@ -687,6 +750,10 @@ mod tests {
 
         fn metadata(&self, _col: &Column) -> Result<&HashMap<String, String>> {
             Ok(&self.metadata)
+        }
+
+        fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
+            Ok((self.data_type(col)?, self.nullable(col)?))
         }
     }
 }

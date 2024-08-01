@@ -26,6 +26,9 @@ repository = { workspace = true }
 rust-version = { workspace = true }
 version = { workspace = true }
 
+[lints]
+workspace = true
+
 [lib]
 name = "datafusion_sqllogictest"
 path = "src/lib.rs"
@@ -37,7 +40,7 @@ bigdecimal = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 clap = { version = "4.4.8", features = ["derive", "env"] }
-datafusion = { workspace = true, default-features = true }
+datafusion = { workspace = true, default-features = true, features = ["avro"] }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 futures = { workspace = true }
@@ -48,7 +51,7 @@ object_store = { workspace = true }
 postgres-protocol = { version = "0.6.4", optional = true }
 postgres-types = { version = "0.2.4", optional = true }
 rust_decimal = { version = "1.27.0" }
-sqllogictest = "0.19.0"
+sqllogictest = "0.21.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -57,7 +60,13 @@ tokio-postgres = { version = "0.7.7", optional = true }
 
 [features]
 avro = ["datafusion/avro"]
-postgres = ["bytes", "chrono", "tokio-postgres", "postgres-types", "postgres-protocol"]
+postgres = [
+    "bytes",
+    "chrono",
+    "tokio-postgres",
+    "postgres-types",
+    "postgres-protocol",
+]
 
 [dev-dependencies]
 env_logger = { workspace = true }

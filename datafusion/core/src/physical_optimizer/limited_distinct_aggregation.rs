@@ -20,7 +20,6 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::AggregateExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -29,6 +28,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint into grouped aggregations which don't require all
@@ -55,7 +55,7 @@ impl LimitedDistinctAggregation {
         // We found what we want: clone, copy the limit down, and return modified node
         let new_aggr = AggregateExec::try_new(
             *aggr.mode(),
-            aggr.group_by().clone(),
+            aggr.group_expr().clone(),
             aggr.aggr_expr().to_vec(),
             aggr.filter_expr().to_vec(),
             aggr.input().clone(),
@@ -78,7 +78,7 @@ impl LimitedDistinctAggregation {
         let mut is_global_limit = false;
         if let Some(local_limit) = plan.as_any().downcast_ref::<LocalLimitExec>() {
             limit = local_limit.fetch();
-            children = local_limit.children();
+            children = local_limit.children().into_iter().cloned().collect();
         } else if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>()
         {
             global_fetch = global_limit.fetch();
@@ -86,7 +86,7 @@ impl LimitedDistinctAggregation {
             global_skip = global_limit.skip();
             // the aggregate must read at least fetch+skip number of rows
             limit = global_fetch.unwrap() + global_skip;
-            children = global_limit.children();
+            children = global_limit.children().into_iter().cloned().collect();
             is_global_limit = true
         } else {
             return None;
@@ -107,7 +107,7 @@ impl LimitedDistinctAggregation {
         let mut found_match_aggr = false;
 
         let mut rewrite_applicable = true;
-        let mut closure = |plan: Arc<dyn ExecutionPlan>| {
+        let closure = |plan: Arc<dyn ExecutionPlan>| {
             if !rewrite_applicable {
                 return Ok(Transformed::no(plan));
             }
@@ -116,7 +116,7 @@ impl LimitedDistinctAggregation {
                     if let Some(parent_aggr) =
                         match_aggr.as_any().downcast_ref::<AggregateExec>()
                     {
-                        if !parent_aggr.group_by().eq(aggr.group_by()) {
+                        if !parent_aggr.group_expr().eq(aggr.group_expr()) {
                             // a partial and final aggregation with different groupings disqualifies
                             // rewriting the child aggregation
                             rewrite_applicable = false;
@@ -138,7 +138,7 @@ impl LimitedDistinctAggregation {
             rewrite_applicable = false;
             Ok(Transformed::no(plan))
         };
-        let child = child.clone().transform_down_mut(&mut closure).data().ok()?;
+        let child = child.clone().transform_down(closure).data().ok()?;
         if is_global_limit {
             return Some(Arc::new(GlobalLimitExec::new(
                 child,
@@ -163,7 +163,7 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if config.optimizer.enable_distinct_aggregation_soft_limit {
-            plan.transform_down(&|plan| {
+            plan.transform_down(|plan| {
                 Ok(
                     if let Some(plan) =
                         LimitedDistinctAggregation::transform_limit(plan.clone())
@@ -191,15 +191,13 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
-    use crate::error::Result;
     use crate::physical_optimizer::aggregate_statistics::tests::TestAggregate;
     use crate::physical_optimizer::enforce_distribution::tests::{
         parquet_exec_with_sort, schema, trim_plan_display,
     };
-    use crate::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
+    use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::collect;
     use crate::physical_plan::memory::MemoryExec;
     use crate::prelude::SessionContext;
@@ -519,10 +517,10 @@ mod tests {
         let single_agg = AggregateExec::try_new(
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
-            vec![agg.count_expr()], /* aggr_expr */
-            vec![None],             /* filter_expr */
-            source,                 /* input */
-            schema.clone(),         /* input_schema */
+            vec![agg.count_expr(&schema)], /* aggr_expr */
+            vec![None],                    /* filter_expr */
+            source,                        /* input */
+            schema.clone(),                /* input_schema */
         )?;
         let limit_exec = LocalLimitExec::new(
             Arc::new(single_agg),
@@ -556,10 +554,10 @@ mod tests {
         let single_agg = AggregateExec::try_new(
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
-            vec![agg.count_expr()], /* aggr_expr */
-            vec![filter_expr],      /* filter_expr */
-            source,                 /* input */
-            schema.clone(),         /* input_schema */
+            vec![agg.count_expr(&schema)], /* aggr_expr */
+            vec![filter_expr],             /* filter_expr */
+            source,                        /* input */
+            schema.clone(),                /* input_schema */
         )?;
         let limit_exec = LocalLimitExec::new(
             Arc::new(single_agg),

@@ -84,9 +84,9 @@ use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 ///                                                        └──────────┐│┌──────────┘
 ///                                                                   │││
 ///                                                                   │││
-/// RepartitionExec with one input
-/// that has 3 partitions, but                        3 (async) streams, that internally
-/// itself has only 1 output partition                  pull from the same input stream
+/// RepartitionExec with 1 input
+/// partition and 3 output partitions                 3 (async) streams, that internally
+///                                                    pull from the same input stream
 ///                                                                  ...
 /// ```
 ///
@@ -152,6 +152,8 @@ impl Partitioning {
         match required {
             Distribution::UnspecifiedDistribution => true,
             Distribution::SinglePartition if self.partition_count() == 1 => true,
+            // When partition count is 1, hash requirement is satisfied.
+            Distribution::HashPartitioned(_) if self.partition_count() == 1 => true,
             Distribution::HashPartitioned(required_exprs) => {
                 match self {
                     // Here we do not check the partition count for hash partitioning and assumes the partition count
@@ -167,11 +169,11 @@ impl Partitioning {
                             if !eq_groups.is_empty() {
                                 let normalized_required_exprs = required_exprs
                                     .iter()
-                                    .map(|e| eq_groups.normalize_expr(e.clone()))
+                                    .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
                                     .collect::<Vec<_>>();
                                 let normalized_partition_exprs = partition_exprs
                                     .iter()
-                                    .map(|e| eq_groups.normalize_expr(e.clone()))
+                                    .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
                                     .collect::<Vec<_>>();
                                 return physical_exprs_equal(
                                     &normalized_required_exprs,
@@ -236,7 +238,6 @@ impl Distribution {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::expressions::Column;
@@ -291,7 +292,7 @@ mod tests {
                     assert_eq!(result, (true, false, false, false, false))
                 }
                 Distribution::HashPartitioned(_) => {
-                    assert_eq!(result, (false, false, false, true, false))
+                    assert_eq!(result, (true, false, false, true, false))
                 }
             }
         }

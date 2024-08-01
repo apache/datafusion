@@ -17,9 +17,9 @@
 
 //! This module defines the interface for logical nodes
 use crate::{Expr, LogicalPlan};
-use datafusion_common::{DFSchema, DFSchemaRef};
+use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use std::hash::{Hash, Hasher};
-use std::{any::Any, cmp::Eq, collections::HashSet, fmt, sync::Arc};
+use std::{any::Any, collections::HashSet, fmt, sync::Arc};
 
 /// This defines the interface for [`LogicalPlan`] nodes that can be
 /// used to extend DataFusion with custom relational operators.
@@ -53,10 +53,11 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Return the output schema of this logical plan node.
     fn schema(&self) -> &DFSchemaRef;
 
-    /// Returns all expressions in the current logical plan node. This
-    /// should not include expressions of any inputs (aka
-    /// non-recursively). These expressions are used for optimizer
-    /// passes and rewrites.
+    /// Returns all expressions in the current logical plan node. This should
+    /// not include expressions of any inputs (aka non-recursively).
+    ///
+    /// These expressions are used for optimizer
+    /// passes and rewrites. See [`LogicalPlan::expressions`] for more details.
     fn expressions(&self) -> Vec<Expr>;
 
     /// A list of output columns (e.g. the names of columns in
@@ -75,27 +76,49 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// For example: `TopK: k=10`
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result;
 
-    /// Create a new `ExtensionPlanNode` with the specified children
-    /// and expressions. This function is used during optimization
-    /// when the plan is being rewritten and a new instance of the
-    /// `ExtensionPlanNode` must be created.
-    ///
-    /// Note that exprs and inputs are in the same order as the result
-    /// of self.inputs and self.exprs.
-    ///
-    /// So, `self.from_template(exprs, ..).expressions() == exprs
-    //
-    // TODO(clippy): This should probably be renamed to use a `with_*` prefix. Something
-    // like `with_template`, or `with_exprs_and_inputs`.
-    //
-    // Also, I think `ExtensionPlanNode` has been renamed to `UserDefinedLogicalNode`
-    // but the doc comments have not been updated.
+    #[deprecated(since = "39.0.0", note = "use with_exprs_and_inputs instead")]
     #[allow(clippy::wrong_self_convention)]
     fn from_template(
         &self,
         exprs: &[Expr],
         inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode>;
+    ) -> Arc<dyn UserDefinedLogicalNode> {
+        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
+            .unwrap()
+    }
+
+    /// Create a new `UserDefinedLogicalNode` with the specified children
+    /// and expressions. This function is used during optimization
+    /// when the plan is being rewritten and a new instance of the
+    /// `UserDefinedLogicalNode` must be created.
+    ///
+    /// Note that exprs and inputs are in the same order as the result
+    /// of self.inputs and self.exprs.
+    ///
+    /// So, `self.with_exprs_and_inputs(exprs, ..).expressions() == exprs
+    fn with_exprs_and_inputs(
+        &self,
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>>;
+
+    /// Returns the necessary input columns for this node required to compute
+    /// the columns in the output schema
+    ///
+    /// This is used for projection push-down when DataFusion has determined that
+    /// only a subset of the output columns of this node are needed by its parents.
+    /// This API is used to tell DataFusion which, if any, of the input columns are no longer
+    /// needed.
+    ///
+    /// Return `None`, the default, if this information can not be determined.
+    /// Returns `Some(_)` with the column indices for each child of this node that are
+    /// needed to compute `output_columns`
+    fn necessary_children_exprs(
+        &self,
+        _output_columns: &[usize],
+    ) -> Option<Vec<Vec<usize>>> {
+        None
+    }
 
     /// Update the hash `state` with this node requirements from
     /// [`Hash`].
@@ -192,7 +215,7 @@ impl Eq for dyn UserDefinedLogicalNode {}
 /// [user_defined_plan.rs](../../tests/user_defined_plan.rs) for an
 /// example of how to use this extension API.
 pub trait UserDefinedLogicalNodeCore:
-    fmt::Debug + Eq + Hash + Send + Sync + 'static
+    fmt::Debug + Eq + Hash + Sized + Send + Sync + 'static
 {
     /// Return the plan's name.
     fn name(&self) -> &str;
@@ -225,23 +248,45 @@ pub trait UserDefinedLogicalNodeCore:
     /// For example: `TopK: k=10`
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result;
 
-    /// Create a new `ExtensionPlanNode` with the specified children
+    #[deprecated(since = "39.0.0", note = "use with_exprs_and_inputs instead")]
+    #[allow(clippy::wrong_self_convention)]
+    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
+            .unwrap()
+    }
+
+    /// Create a new `UserDefinedLogicalNode` with the specified children
     /// and expressions. This function is used during optimization
     /// when the plan is being rewritten and a new instance of the
-    /// `ExtensionPlanNode` must be created.
+    /// `UserDefinedLogicalNode` must be created.
     ///
     /// Note that exprs and inputs are in the same order as the result
     /// of self.inputs and self.exprs.
     ///
-    /// So, `self.from_template(exprs, ..).expressions() == exprs
-    //
-    // TODO(clippy): This should probably be renamed to use a `with_*` prefix. Something
-    // like `with_template`, or `with_exprs_and_inputs`.
-    //
-    // Also, I think `ExtensionPlanNode` has been renamed to `UserDefinedLogicalNode`
-    // but the doc comments have not been updated.
-    #[allow(clippy::wrong_self_convention)]
-    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self;
+    /// So, `self.with_exprs_and_inputs(exprs, ..).expressions() == exprs
+    fn with_exprs_and_inputs(
+        &self,
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<Self>;
+
+    /// Returns the necessary input columns for this node required to compute
+    /// the columns in the output schema
+    ///
+    /// This is used for projection push-down when DataFusion has determined that
+    /// only a subset of the output columns of this node are needed by its parents.
+    /// This API is used to tell DataFusion which, if any, of the input columns are no longer
+    /// needed.
+    ///
+    /// Return `None`, the default, if this information can not be determined.
+    /// Returns `Some(_)` with the column indices for each child of this node that are
+    /// needed to compute `output_columns`
+    fn necessary_children_exprs(
+        &self,
+        _output_columns: &[usize],
+    ) -> Option<Vec<Vec<usize>>> {
+        None
+    }
 }
 
 /// Automatically derive UserDefinedLogicalNode to `UserDefinedLogicalNode`
@@ -275,12 +320,19 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
         self.fmt_for_explain(f)
     }
 
-    fn from_template(
+    fn with_exprs_and_inputs(
         &self,
-        exprs: &[Expr],
-        inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
-        Arc::new(self.from_template(exprs, inputs))
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+        Ok(Arc::new(self.with_exprs_and_inputs(exprs, inputs)?))
+    }
+
+    fn necessary_children_exprs(
+        &self,
+        output_columns: &[usize],
+    ) -> Option<Vec<Vec<usize>>> {
+        self.necessary_children_exprs(output_columns)
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {

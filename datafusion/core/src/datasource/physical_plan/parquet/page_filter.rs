@@ -17,40 +17,33 @@
 
 //! Contains code to filter entire pages
 
-use arrow::array::{
-    BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    StringArray,
-};
-use arrow::datatypes::DataType;
-use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
+use crate::datasource::physical_plan::parquet::ParquetAccessPlan;
+use crate::datasource::physical_plan::parquet::StatisticsConverter;
+use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use arrow::array::BooleanArray;
+use arrow::{array::ArrayRef, datatypes::SchemaRef};
 use arrow_schema::Schema;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_physical_expr::expressions::Column;
+use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 use log::{debug, trace};
-use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
+use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
+use parquet::format::PageLocation;
+use parquet::schema::types::SchemaDescriptor;
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
-    errors::ParquetError,
-    file::{
-        metadata::{ParquetMetaData, RowGroupMetaData},
-        page_index::index::Index,
-    },
-    format::PageLocation,
+    file::metadata::{ParquetMetaData, RowGroupMetaData},
 };
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::datasource::physical_plan::parquet::parquet_to_arrow_decimal_type;
-use crate::datasource::physical_plan::parquet::statistics::{
-    from_bytes_to_i128, parquet_column,
-};
-use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-
 use super::metrics::ParquetFileMetrics;
 
-/// A [`PagePruningPredicate`] provides the ability to construct a [`RowSelection`]
-/// based on parquet page level statistics, if any
+/// Filters a [`ParquetAccessPlan`] based on the [Parquet PageIndex], if present
+///
+/// It does so by evaluating statistics from the [`ParquetColumnIndex`] and
+/// [`ParquetOffsetIndex`] and converting them to [`RowSelection`].
+///
+/// [Parquet PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 ///
 /// For example, given a row group with two column (chunks) for `A`
 /// and `B` with the following with page level statistics:
@@ -99,451 +92,405 @@ use super::metrics::ParquetFileMetrics;
 ///
 /// Using `A > 35`: can rule out all of values in Page 1 (rows 0 -> 199)
 ///
-/// Using `B = 'F'`: can rule out all vaues in Page 3 and Page 5 (rows 0 -> 99, and 250 -> 299)
+/// Using `B = 'F'`: can rule out all values in Page 3 and Page 5 (rows 0 -> 99, and 250 -> 299)
 ///
 /// So we can entirely skip rows 0->199 and 250->299 as we know they
 /// can not contain rows that match the predicate.
+///
+/// # Implementation notes
+///
+/// Single column predicates are evaluated using the PageIndex information
+/// for that column to determine which row ranges can be skipped based.
+///
+/// The resulting [`RowSelection`]'s are combined into a final
+/// row selection that is added to the [`ParquetAccessPlan`].
 #[derive(Debug)]
-pub struct PagePruningPredicate {
+pub struct PagePruningAccessPlanFilter {
+    /// single column predicates (e.g. (`col = 5`) extracted from the overall
+    /// predicate. Must all be true for a row to be included in the result.
     predicates: Vec<PruningPredicate>,
 }
 
-impl PagePruningPredicate {
-    /// Create a new [`PagePruningPredicate`]
-    pub fn try_new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+impl PagePruningAccessPlanFilter {
+    /// Create a new [`PagePruningAccessPlanFilter`] from a physical
+    /// expression.
+    pub fn new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Self {
+        // extract any single column predicates
         let predicates = split_conjunction(expr)
             .into_iter()
             .filter_map(|predicate| {
-                match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
-                    Ok(p)
-                        if (!p.always_true())
-                            && (p.required_columns().n_columns() < 2) =>
-                    {
-                        Some(Ok(p))
-                    }
-                    _ => None,
+                let pp =
+                    match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
+                        Ok(pp) => pp,
+                        Err(e) => {
+                            debug!("Ignoring error creating page pruning predicate: {e}");
+                            return None;
+                        }
+                    };
+
+                if pp.always_true() {
+                    debug!("Ignoring always true page pruning predicate: {predicate}");
+                    return None;
                 }
+
+                if pp.required_columns().single_column().is_none() {
+                    debug!("Ignoring multi-column page pruning predicate: {predicate}");
+                    return None;
+                }
+
+                Some(pp)
             })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self { predicates })
+            .collect::<Vec<_>>();
+        Self { predicates }
     }
 
-    /// Returns a [`RowSelection`] for the given file
-    pub fn prune(
+    /// Returns an updated [`ParquetAccessPlan`] by applying predicates to the
+    /// parquet page index, if any
+    pub fn prune_plan_with_page_index(
         &self,
+        mut access_plan: ParquetAccessPlan,
         arrow_schema: &Schema,
         parquet_schema: &SchemaDescriptor,
-        row_groups: &[usize],
-        file_metadata: &ParquetMetaData,
+        parquet_metadata: &ParquetMetaData,
         file_metrics: &ParquetFileMetrics,
-    ) -> Result<Option<RowSelection>> {
+    ) -> ParquetAccessPlan {
         // scoped timer updates on drop
         let _timer_guard = file_metrics.page_index_eval_time.timer();
         if self.predicates.is_empty() {
-            return Ok(None);
+            return access_plan;
         }
 
         let page_index_predicates = &self.predicates;
-        let groups = file_metadata.row_groups();
+        let groups = parquet_metadata.row_groups();
 
         if groups.is_empty() {
-            return Ok(None);
+            return access_plan;
         }
 
-        let file_offset_indexes = file_metadata.offset_index();
-        let file_page_indexes = file_metadata.column_index();
-        let (file_offset_indexes, file_page_indexes) = match (
-            file_offset_indexes,
-            file_page_indexes,
-        ) {
-            (Some(o), Some(i)) => (o, i),
-            _ => {
-                trace!(
-                    "skip page pruning due to lack of indexes. Have offset: {}, column index: {}",
-                    file_offset_indexes.is_some(), file_page_indexes.is_some()
+        if parquet_metadata.offset_index().is_none()
+            || parquet_metadata.column_index().is_none()
+        {
+            debug!(
+                    "Can not prune pages due to lack of indexes. Have offset: {}, column index: {}",
+                    parquet_metadata.offset_index().is_some(), parquet_metadata.column_index().is_some()
                 );
-                return Ok(None);
-            }
+            return access_plan;
         };
 
-        let mut row_selections = Vec::with_capacity(page_index_predicates.len());
-        for predicate in page_index_predicates {
-            // find column index in the parquet schema
-            let col_idx = find_column_index(predicate, arrow_schema, parquet_schema);
-            let mut selectors = Vec::with_capacity(row_groups.len());
-            for r in row_groups.iter() {
-                let row_group_metadata = &groups[*r];
+        // track the total number of rows that should be skipped
+        let mut total_skip = 0;
 
-                let rg_offset_indexes = file_offset_indexes.get(*r);
-                let rg_page_indexes = file_page_indexes.get(*r);
-                if let (Some(rg_page_indexes), Some(rg_offset_indexes), Some(col_idx)) =
-                    (rg_page_indexes, rg_offset_indexes, col_idx)
-                {
-                    selectors.extend(
-                        prune_pages_in_one_row_group(
-                            row_group_metadata,
-                            predicate,
-                            rg_offset_indexes.get(col_idx),
-                            rg_page_indexes.get(col_idx),
-                            groups[*r].column(col_idx).column_descr(),
-                            file_metrics,
-                        )
-                        .map_err(|e| {
-                            ArrowError::ParquetError(format!(
-                                "Fail in prune_pages_in_one_row_group: {e}"
-                            ))
-                        }),
-                    );
-                } else {
-                    trace!(
-                        "Did not have enough metadata to prune with page indexes, \
-                         falling back to all rows",
-                    );
-                    // fallback select all rows
-                    let all_selected =
-                        vec![RowSelector::select(groups[*r].num_rows() as usize)];
-                    selectors.push(all_selected);
+        // for each row group specified in the access plan
+        let row_group_indexes = access_plan.row_group_indexes();
+        for row_group_index in row_group_indexes {
+            // The selection for this particular row group
+            let mut overall_selection = None;
+            for predicate in page_index_predicates {
+                let column = predicate
+                    .required_columns()
+                    .single_column()
+                    .expect("Page pruning requires single column predicates");
+
+                let converter = StatisticsConverter::try_new(
+                    column.name(),
+                    arrow_schema,
+                    parquet_schema,
+                );
+
+                let converter = match converter {
+                    Ok(converter) => converter,
+                    Err(e) => {
+                        debug!(
+                            "Could not create statistics converter for column {}: {e}",
+                            column.name()
+                        );
+                        continue;
+                    }
+                };
+
+                let selection = prune_pages_in_one_row_group(
+                    row_group_index,
+                    predicate,
+                    converter,
+                    parquet_metadata,
+                    file_metrics,
+                );
+
+                let Some(selection) = selection else {
+                    trace!("No pages pruned in prune_pages_in_one_row_group");
+                    continue;
+                };
+
+                debug!("Use filter and page index to create RowSelection {:?} from predicate: {:?}",
+                    &selection,
+                    predicate.predicate_expr(),
+                );
+
+                overall_selection = update_selection(overall_selection, selection);
+
+                // if the overall selection has ruled out all rows, no need to
+                // continue with the other predicates
+                let selects_any = overall_selection
+                    .as_ref()
+                    .map(|selection| selection.selects_any())
+                    .unwrap_or(true);
+
+                if !selects_any {
+                    break;
                 }
             }
-            debug!(
-                "Use filter and page index create RowSelection {:?} from predicate: {:?}",
-                &selectors,
-                predicate.predicate_expr(),
-            );
-            row_selections.push(selectors.into_iter().flatten().collect::<Vec<_>>());
+
+            if let Some(overall_selection) = overall_selection {
+                if overall_selection.selects_any() {
+                    let rows_skipped = rows_skipped(&overall_selection);
+                    trace!("Overall selection from predicate skipped {rows_skipped}: {overall_selection:?}");
+                    total_skip += rows_skipped;
+                    access_plan.scan_selection(row_group_index, overall_selection)
+                } else {
+                    // Selection skips all rows, so skip the entire row group
+                    let rows_skipped = groups[row_group_index].num_rows() as usize;
+                    access_plan.skip(row_group_index);
+                    total_skip += rows_skipped;
+                    trace!(
+                        "Overall selection from predicate is empty, \
+                        skipping all {rows_skipped} rows in row group {row_group_index}"
+                    );
+                }
+            }
         }
 
-        let final_selection = combine_multi_col_selection(row_selections);
-        let total_skip =
-            final_selection.iter().fold(
-                0,
-                |acc, x| {
-                    if x.skip {
-                        acc + x.row_count
-                    } else {
-                        acc
-                    }
-                },
-            );
         file_metrics.page_index_rows_filtered.add(total_skip);
-        Ok(Some(final_selection))
+        access_plan
     }
 
-    /// Returns the number of filters in the [`PagePruningPredicate`]
+    /// Returns the number of filters in the [`PagePruningAccessPlanFilter`]
     pub fn filter_number(&self) -> usize {
         self.predicates.len()
     }
 }
 
-/// Returns the column index in the row parquet schema for the single
-/// column of a single column pruning predicate.
-///
-/// For example, give the predicate `y > 5`
-///
-/// And columns in the RowGroupMetadata like `['x', 'y', 'z']` will
-/// return 1.
-///
-/// Returns `None` if the column is not found, or if there are no
-/// required columns, which is the case for predicate like `abs(i) =
-/// 1` which are rewritten to `lit(true)`
-///
-/// Panics:
-///
-/// If the predicate contains more than one column reference (assumes
-/// that `extract_page_index_push_down_predicates` only returns
-/// predicate with one col)
-fn find_column_index(
-    predicate: &PruningPredicate,
-    arrow_schema: &Schema,
-    parquet_schema: &SchemaDescriptor,
-) -> Option<usize> {
-    let mut found_required_column: Option<&Column> = None;
+/// returns the number of rows skipped in the selection
+/// TODO should this be upstreamed to RowSelection?
+fn rows_skipped(selection: &RowSelection) -> usize {
+    selection
+        .iter()
+        .fold(0, |acc, x| if x.skip { acc + x.row_count } else { acc })
+}
 
-    for required_column_details in predicate.required_columns().iter() {
-        let column = &required_column_details.0;
-        if let Some(found_required_column) = found_required_column.as_ref() {
-            // make sure it is the same name we have seen previously
-            assert_eq!(
-                column.name(),
-                found_required_column.name(),
-                "Unexpected multi column predicate"
-            );
-        } else {
-            found_required_column = Some(column);
-        }
+fn update_selection(
+    current_selection: Option<RowSelection>,
+    row_selection: RowSelection,
+) -> Option<RowSelection> {
+    match current_selection {
+        None => Some(row_selection),
+        Some(current_selection) => Some(current_selection.intersection(&row_selection)),
     }
+}
 
-    let Some(column) = found_required_column.as_ref() else {
-        trace!("No column references in pruning predicate");
+/// Returns a [`RowSelection`] for the rows in this row group to scan.
+///
+/// This Row Selection is formed from the page index and the predicate skips row
+/// ranges that can be ruled out based on the predicate.
+///
+/// Returns `None` if there is an error evaluating the predicate or the required
+/// page information is not present.
+fn prune_pages_in_one_row_group(
+    row_group_index: usize,
+    pruning_predicate: &PruningPredicate,
+    converter: StatisticsConverter<'_>,
+    parquet_metadata: &ParquetMetaData,
+    metrics: &ParquetFileMetrics,
+) -> Option<RowSelection> {
+    let pruning_stats =
+        PagesPruningStatistics::try_new(row_group_index, converter, parquet_metadata)?;
+
+    // Each element in values is a boolean indicating whether the page may have
+    // values that match the predicate (true) or could not possibly have values
+    // that match the predicate (false).
+    let values = match pruning_predicate.prune(&pruning_stats) {
+        Ok(values) => values,
+        Err(e) => {
+            debug!("Error evaluating page index predicate values {e}");
+            metrics.predicate_evaluation_errors.add(1);
+            return None;
+        }
+    };
+
+    // Convert the information of which pages to skip into a RowSelection
+    // that describes the ranges of rows to skip.
+    let Some(page_row_counts) = pruning_stats.page_row_counts() else {
+        debug!(
+            "Can not determine page row counts for row group {row_group_index}, skipping"
+        );
+        metrics.predicate_evaluation_errors.add(1);
         return None;
     };
 
-    parquet_column(parquet_schema, arrow_schema, column.name()).map(|x| x.0)
-}
-
-/// Intersects the [`RowSelector`]s
-///
-/// For exampe, given:
-/// * `RowSelector1: [ Skip(0~199), Read(200~299)]`
-/// * `RowSelector2: [ Skip(0~99), Read(100~249), Skip(250~299)]`
-///
-/// The final selection is the intersection of these  `RowSelector`s:
-/// * `final_selection:[ Skip(0~199), Read(200~249), Skip(250~299)]`
-fn combine_multi_col_selection(row_selections: Vec<Vec<RowSelector>>) -> RowSelection {
-    row_selections
-        .into_iter()
-        .map(RowSelection::from)
-        .reduce(|s1, s2| s1.intersection(&s2))
-        .unwrap()
-}
-
-fn prune_pages_in_one_row_group(
-    group: &RowGroupMetaData,
-    predicate: &PruningPredicate,
-    col_offset_indexes: Option<&Vec<PageLocation>>,
-    col_page_indexes: Option<&Index>,
-    col_desc: &ColumnDescriptor,
-    metrics: &ParquetFileMetrics,
-) -> Result<Vec<RowSelector>> {
-    let num_rows = group.num_rows() as usize;
-    if let (Some(col_offset_indexes), Some(col_page_indexes)) =
-        (col_offset_indexes, col_page_indexes)
-    {
-        let target_type = parquet_to_arrow_decimal_type(col_desc);
-        let pruning_stats = PagesPruningStatistics {
-            col_page_indexes,
-            col_offset_indexes,
-            target_type: &target_type,
-        };
-
-        match predicate.prune(&pruning_stats) {
-            Ok(values) => {
-                let mut vec = Vec::with_capacity(values.len());
-                let row_vec = create_row_count_in_each_page(col_offset_indexes, num_rows);
-                assert_eq!(row_vec.len(), values.len());
-                let mut sum_row = *row_vec.first().unwrap();
-                let mut selected = *values.first().unwrap();
-                trace!("Pruned to {:?} using {:?}", values, pruning_stats);
-                for (i, &f) in values.iter().enumerate().skip(1) {
-                    if f == selected {
-                        sum_row += *row_vec.get(i).unwrap();
-                    } else {
-                        let selector = if selected {
-                            RowSelector::select(sum_row)
-                        } else {
-                            RowSelector::skip(sum_row)
-                        };
-                        vec.push(selector);
-                        sum_row = *row_vec.get(i).unwrap();
-                        selected = f;
-                    }
-                }
-
-                let selector = if selected {
-                    RowSelector::select(sum_row)
-                } else {
-                    RowSelector::skip(sum_row)
-                };
-                vec.push(selector);
-                return Ok(vec);
-            }
-            // stats filter array could not be built
-            // return a result which will not filter out any pages
-            Err(e) => {
-                debug!("Error evaluating page index predicate values {e}");
-                metrics.predicate_evaluation_errors.add(1);
-                return Ok(vec![RowSelector::select(group.num_rows() as usize)]);
-            }
+    let mut vec = Vec::with_capacity(values.len());
+    assert_eq!(page_row_counts.len(), values.len());
+    let mut sum_row = *page_row_counts.first().unwrap();
+    let mut selected = *values.first().unwrap();
+    trace!("Pruned to {:?} using {:?}", values, pruning_stats);
+    for (i, &f) in values.iter().enumerate().skip(1) {
+        if f == selected {
+            sum_row += *page_row_counts.get(i).unwrap();
+        } else {
+            let selector = if selected {
+                RowSelector::select(sum_row)
+            } else {
+                RowSelector::skip(sum_row)
+            };
+            vec.push(selector);
+            sum_row = *page_row_counts.get(i).unwrap();
+            selected = f;
         }
     }
-    Err(DataFusionError::ParquetError(ParquetError::General(
-        "Got some error in prune_pages_in_one_row_group, plz try open the debuglog mode"
-            .to_string(),
-    )))
+
+    let selector = if selected {
+        RowSelector::select(sum_row)
+    } else {
+        RowSelector::skip(sum_row)
+    };
+    vec.push(selector);
+    Some(RowSelection::from(vec))
 }
 
-fn create_row_count_in_each_page(
-    location: &[PageLocation],
-    num_rows: usize,
-) -> Vec<usize> {
-    let mut vec = Vec::with_capacity(location.len());
-    location.windows(2).for_each(|x| {
-        let start = x[0].first_row_index as usize;
-        let end = x[1].first_row_index as usize;
-        vec.push(end - start);
-    });
-    vec.push(num_rows - location.last().unwrap().first_row_index as usize);
-    vec
-}
-
-/// Wraps one col page_index in one rowGroup statistics in a way
-/// that implements [`PruningStatistics`]
+/// Implement [`PruningStatistics`] for one column's PageIndex (column_index + offset_index)
 #[derive(Debug)]
 struct PagesPruningStatistics<'a> {
-    col_page_indexes: &'a Index,
-    col_offset_indexes: &'a Vec<PageLocation>,
-    // target_type means the logical type in schema: like 'DECIMAL' is the logical type, but the
-    // real physical type in parquet file may be `INT32, INT64, FIXED_LEN_BYTE_ARRAY`
-    target_type: &'a Option<DataType>,
+    row_group_index: usize,
+    row_group_metadatas: &'a [RowGroupMetaData],
+    converter: StatisticsConverter<'a>,
+    column_index: &'a ParquetColumnIndex,
+    offset_index: &'a ParquetOffsetIndex,
+    page_offsets: &'a Vec<PageLocation>,
 }
 
-// Extract the min or max value calling `func` from page idex
-macro_rules! get_min_max_values_for_page_index {
-    ($self:expr, $func:ident) => {{
-        match $self.col_page_indexes {
-            Index::NONE => None,
-            Index::INT32(index) => {
-                match $self.target_type {
-                    // int32 to decimal with the precision and scale
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        let vec = &index.indexes;
-                        let vec: Vec<Option<i128>> = vec
-                            .iter()
-                            .map(|x| x.$func().and_then(|x| Some(*x as i128)))
-                            .collect();
-                        Decimal128Array::from(vec)
-                            .with_precision_and_scale(*precision, *scale)
-                            .ok()
-                            .map(|arr| Arc::new(arr) as ArrayRef)
-                    }
-                    _ => {
-                        let vec = &index.indexes;
-                        Some(Arc::new(Int32Array::from_iter(
-                            vec.iter().map(|x| x.$func().cloned()),
-                        )))
-                    }
-                }
-            }
-            Index::INT64(index) => {
-                match $self.target_type {
-                    // int64 to decimal with the precision and scale
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        let vec = &index.indexes;
-                        let vec: Vec<Option<i128>> = vec
-                            .iter()
-                            .map(|x| x.$func().and_then(|x| Some(*x as i128)))
-                            .collect();
-                        Decimal128Array::from(vec)
-                            .with_precision_and_scale(*precision, *scale)
-                            .ok()
-                            .map(|arr| Arc::new(arr) as ArrayRef)
-                    }
-                    _ => {
-                        let vec = &index.indexes;
-                        Some(Arc::new(Int64Array::from_iter(
-                            vec.iter().map(|x| x.$func().cloned()),
-                        )))
-                    }
-                }
-            }
-            Index::FLOAT(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(Float32Array::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
-            }
-            Index::DOUBLE(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(Float64Array::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
-            }
-            Index::BOOLEAN(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(BooleanArray::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
-            }
-            Index::BYTE_ARRAY(index) => match $self.target_type {
-                Some(DataType::Decimal128(precision, scale)) => {
-                    let vec = &index.indexes;
-                    Decimal128Array::from(
-                        vec.iter()
-                            .map(|x| {
-                                x.$func()
-                                    .and_then(|x| Some(from_bytes_to_i128(x.as_ref())))
-                            })
-                            .collect::<Vec<Option<i128>>>(),
-                    )
-                    .with_precision_and_scale(*precision, *scale)
-                    .ok()
-                    .map(|arr| Arc::new(arr) as ArrayRef)
-                }
-                _ => {
-                    let vec = &index.indexes;
-                    let array: StringArray = vec
-                        .iter()
-                        .map(|x| x.$func())
-                        .map(|x| x.and_then(|x| std::str::from_utf8(x.as_ref()).ok()))
-                        .collect();
-                    Some(Arc::new(array))
-                }
-            },
-            Index::INT96(_) => {
-                //Todo support these type
-                None
-            }
-            Index::FIXED_LEN_BYTE_ARRAY(index) => match $self.target_type {
-                Some(DataType::Decimal128(precision, scale)) => {
-                    let vec = &index.indexes;
-                    Decimal128Array::from(
-                        vec.iter()
-                            .map(|x| {
-                                x.$func()
-                                    .and_then(|x| Some(from_bytes_to_i128(x.as_ref())))
-                            })
-                            .collect::<Vec<Option<i128>>>(),
-                    )
-                    .with_precision_and_scale(*precision, *scale)
-                    .ok()
-                    .map(|arr| Arc::new(arr) as ArrayRef)
-                }
-                _ => None,
-            },
-        }
-    }};
+impl<'a> PagesPruningStatistics<'a> {
+    /// Creates a new [`PagesPruningStatistics`] for a column in a row group, if
+    /// possible.
+    ///
+    /// Returns None if the `parquet_metadata` does not have sufficient
+    /// information to create the statistics.
+    fn try_new(
+        row_group_index: usize,
+        converter: StatisticsConverter<'a>,
+        parquet_metadata: &'a ParquetMetaData,
+    ) -> Option<Self> {
+        let Some(parquet_column_index) = converter.parquet_index() else {
+            trace!(
+                "Column {:?} not in parquet file, skipping",
+                converter.arrow_field()
+            );
+            return None;
+        };
+
+        let column_index = parquet_metadata.column_index()?;
+        let offset_index = parquet_metadata.offset_index()?;
+        let row_group_metadatas = parquet_metadata.row_groups();
+
+        let Some(row_group_page_offsets) = offset_index.get(row_group_index) else {
+            trace!("No page offsets for row group {row_group_index}, skipping");
+            return None;
+        };
+        let Some(page_offsets) = row_group_page_offsets.get(parquet_column_index) else {
+            trace!(
+                "No page offsets for column {:?} in row group {row_group_index}, skipping",
+                converter.arrow_field()
+            );
+            return None;
+        };
+
+        Some(Self {
+            row_group_index,
+            row_group_metadatas,
+            converter,
+            column_index,
+            offset_index,
+            page_offsets,
+        })
+    }
+
+    /// return the row counts in each data page, if possible.
+    fn page_row_counts(&self) -> Option<Vec<usize>> {
+        let row_group_metadata = self
+            .row_group_metadatas
+            .get(self.row_group_index)
+            // fail fast/panic if row_group_index is out of bounds
+            .unwrap();
+
+        let num_rows_in_row_group = row_group_metadata.num_rows() as usize;
+
+        let page_offsets = self.page_offsets;
+        let mut vec = Vec::with_capacity(page_offsets.len());
+        page_offsets.windows(2).for_each(|x| {
+            let start = x[0].first_row_index as usize;
+            let end = x[1].first_row_index as usize;
+            vec.push(end - start);
+        });
+        vec.push(num_rows_in_row_group - page_offsets.last()?.first_row_index as usize);
+        Some(vec)
+    }
 }
 
 impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
     fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
-        get_min_max_values_for_page_index!(self, min)
+        match self.converter.data_page_mins(
+            self.column_index,
+            self.offset_index,
+            [&self.row_group_index],
+        ) {
+            Ok(min_values) => Some(min_values),
+            Err(e) => {
+                debug!("Error evaluating data page min values {e}");
+                None
+            }
+        }
     }
 
     fn max_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
-        get_min_max_values_for_page_index!(self, max)
+        match self.converter.data_page_maxes(
+            self.column_index,
+            self.offset_index,
+            [&self.row_group_index],
+        ) {
+            Ok(min_values) => Some(min_values),
+            Err(e) => {
+                debug!("Error evaluating data page max values {e}");
+                None
+            }
+        }
     }
 
     fn num_containers(&self) -> usize {
-        self.col_offset_indexes.len()
+        self.page_offsets.len()
     }
 
     fn null_counts(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
-        match self.col_page_indexes {
-            Index::NONE => None,
-            Index::BOOLEAN(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::INT32(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::INT64(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::FLOAT(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::DOUBLE(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::INT96(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::BYTE_ARRAY(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::FIXED_LEN_BYTE_ARRAY(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
+        match self.converter.data_page_null_counts(
+            self.column_index,
+            self.offset_index,
+            [&self.row_group_index],
+        ) {
+            Ok(null_counts) => Some(Arc::new(null_counts)),
+            Err(e) => {
+                debug!("Error evaluating data page null counts {e}");
+                None
+            }
+        }
+    }
+
+    fn row_counts(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
+        match self.converter.data_page_row_counts(
+            self.offset_index,
+            self.row_group_metadatas,
+            [&self.row_group_index],
+        ) {
+            Ok(row_counts) => row_counts.map(|a| Arc::new(a) as ArrayRef),
+            Err(e) => {
+                debug!("Error evaluating data page row counts {e}");
+                None
+            }
         }
     }
 

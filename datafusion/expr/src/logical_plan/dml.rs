@@ -15,70 +15,47 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    fmt::{self, Display},
-    sync::Arc,
-};
+use std::collections::HashMap;
+use std::fmt::{self, Display};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-use datafusion_common::{
-    file_options::StatementOptions, DFSchemaRef, FileType, FileTypeWriterOptions,
-    OwnedTableReference,
-};
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::{DFSchemaRef, TableReference};
 
 use crate::LogicalPlan;
 
 /// Operator that copies the contents of a database to file(s)
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct CopyTo {
     /// The relation that determines the tuples to write to the output file(s)
     pub input: Arc<LogicalPlan>,
     /// The location to write the file(s)
     pub output_url: String,
-    /// The file format to output (explicitly defined or inferred from file extension)
-    pub file_format: FileType,
     /// Determines which, if any, columns should be used for hive-style partitioned writes
     pub partition_by: Vec<String>,
-    /// Arbitrary options as tuples
-    pub copy_options: CopyOptions,
+    /// File type trait
+    pub file_type: Arc<dyn FileType>,
+    /// SQL Options that can affect the formats
+    pub options: HashMap<String, String>,
 }
 
-/// When the logical plan is constructed from SQL, CopyOptions
-/// will contain arbitrary string tuples which must be parsed into
-/// FileTypeWriterOptions. When the logical plan is constructed directly
-/// from rust code (such as via the DataFrame API), FileTypeWriterOptions
-/// can be provided directly, avoiding the run time cost and fallibility of
-/// parsing string based options.
-#[derive(Clone)]
-pub enum CopyOptions {
-    /// Holds StatementOptions parsed from a SQL statement
-    SQLOptions(StatementOptions),
-    /// Holds FileTypeWriterOptions directly provided
-    WriterOptions(Box<FileTypeWriterOptions>),
-}
-
-impl PartialEq for CopyOptions {
-    fn eq(&self, other: &CopyOptions) -> bool {
-        match self {
-            Self::SQLOptions(statement1) => match other {
-                Self::SQLOptions(statement2) => statement1.eq(statement2),
-                Self::WriterOptions(_) => false,
-            },
-            Self::WriterOptions(_) => false,
-        }
+// Implement PartialEq manually
+impl PartialEq for CopyTo {
+    fn eq(&self, other: &Self) -> bool {
+        self.input == other.input && self.output_url == other.output_url
     }
 }
 
-impl Eq for CopyOptions {}
+// Implement Eq (no need for additional logic over PartialEq)
+impl Eq for CopyTo {}
 
-impl std::hash::Hash for CopyOptions {
-    fn hash<H>(&self, hasher: &mut H)
-    where
-        H: std::hash::Hasher,
-    {
-        match self {
-            Self::SQLOptions(statement) => statement.hash(hasher),
-            Self::WriterOptions(_) => (),
-        }
+// Implement Hash manually
+impl Hash for CopyTo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.input.hash(state);
+        self.output_url.hash(state);
     }
 }
 
@@ -87,16 +64,36 @@ impl std::hash::Hash for CopyOptions {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DmlStatement {
     /// The table name
-    pub table_name: OwnedTableReference,
+    pub table_name: TableReference,
     /// The schema of the table (must align with Rel input)
     pub table_schema: DFSchemaRef,
     /// The type of operation to perform
     pub op: WriteOp,
     /// The relation that determines the tuples to add/remove/modify the schema must match with table_schema
     pub input: Arc<LogicalPlan>,
+    /// The schema of the output relation
+    pub output_schema: DFSchemaRef,
 }
 
 impl DmlStatement {
+    /// Creates a new DML statement with the output schema set to a single `count` column.
+    pub fn new(
+        table_name: TableReference,
+        table_schema: DFSchemaRef,
+        op: WriteOp,
+        input: Arc<LogicalPlan>,
+    ) -> Self {
+        Self {
+            table_name,
+            table_schema,
+            op,
+            input,
+
+            // The output schema is always a single column with the number of rows affected
+            output_schema: make_count_schema(),
+        }
+    }
+
     /// Return a descriptive name of this [`DmlStatement`]
     pub fn name(&self) -> &str {
         self.op.name()
@@ -129,4 +126,12 @@ impl Display for WriteOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())
     }
+}
+
+fn make_count_schema() -> DFSchemaRef {
+    Arc::new(
+        Schema::new(vec![Field::new("count", DataType::UInt64, false)])
+            .try_into()
+            .unwrap(),
+    )
 }

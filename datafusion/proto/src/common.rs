@@ -68,7 +68,3 @@ macro_rules! convert_box_required {
         }
     }};
 }
-
-pub fn proto_error<S: Into<String>>(message: S) -> DataFusionError {
-    DataFusionError::Internal(message.into())
-}

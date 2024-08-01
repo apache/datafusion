@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::path::Path;
+use std::sync::Arc;
+
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::prelude::*;
+
 use object_store::local::LocalFileSystem;
-use std::path::Path;
-use std::sync::Arc;
 
 /// This example demonstrates executing a simple query against an Arrow data source (a directory
 /// with multiple Parquet files) and fetching results. The query is run twice, once showing
@@ -34,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let test_data = datafusion::test_util::parquet_test_data();
 
     // Configure listing options
-    let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
+    let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions::new(Arc::new(file_format))
         // This is a workaround for this example since `test_data` contains
         // many different parquet different files,
@@ -78,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let local_fs = Arc::new(LocalFileSystem::default());
 
     let u = url::Url::parse("file://./")?;
-    ctx.runtime_env().register_object_store(&u, local_fs);
+    ctx.register_object_store(&u, local_fs);
 
     // Register a listing table - this will use all files in the directory as data sources
     // for the query

@@ -27,18 +27,19 @@ pub mod combine_partial_final_agg;
 pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod join_selection;
+pub mod limit_pushdown;
 pub mod limited_distinct_aggregation;
 pub mod optimizer;
-pub mod output_requirements;
-pub mod pipeline_checker;
-mod projection_pushdown;
+pub mod projection_pushdown;
 pub mod pruning;
 pub mod replace_with_order_preserving_variants;
-mod sort_pushdown;
-pub mod topk_aggregation;
-mod utils;
-
+pub mod sanity_checker;
 #[cfg(test)]
 pub mod test_utils;
+pub mod topk_aggregation;
+pub mod update_aggr_exprs;
 
-pub use optimizer::PhysicalOptimizerRule;
+mod sort_pushdown;
+mod utils;
+
+pub use datafusion_physical_optimizer::*;

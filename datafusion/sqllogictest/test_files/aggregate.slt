@@ -35,8 +35,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE TABLE d_table (c1 decimal(10,3), c2 varchar)
@@ -71,31 +71,31 @@ CREATE TABLE test (c1 BIGINT,c2 BIGINT) as values
 # Error tests
 #######
 
-# https://github.com/apache/arrow-datafusion/issues/3353
-statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "APPROX_DISTINCT\(aggregate_test_100\.c9\)"
+# https://github.com/apache/datafusion/issues/3353
+statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct\(aggregate_test_100\.c9\)"
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Utf8, Int8, Float64\)'. You might need to add explicit type casts.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Utf8, Int8, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Int16, Utf8, Float64\)'\. You might need to add explicit type casts\.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Utf8, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Int16, Int8, Utf8\)'\. You might need to add explicit type casts\.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Int8, Utf8\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
-statement error This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\).
+statement error DataFusion error: External error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Utf8\)'\. You might need to add explicit type casts\.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Float64, Utf8\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Float64\)'\. You might need to add explicit type casts\.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Float64, Float64, Float64\)'\. You might need to add explicit type casts\.
+statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
 
 # array agg can use order by
@@ -116,8 +116,8 @@ c2 INT NOT NULL,
 c3 INT NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv'
+OPTIONS ('format.has_header' 'true');
 
 # test array_agg with order by multiple columns
 query ?
@@ -129,15 +129,15 @@ query TT
 explain select array_agg(c1 order by c2 desc, c3) from agg_order;
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]]
---TableScan: agg_order projection=[c1, c2, c3]
+01)Aggregate: groupBy=[[]], aggr=[[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]]
+02)--TableScan: agg_order projection=[c1, c2, c3]
 physical_plan
-AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
---CoalescePartitionsExec
-----AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
-------SortExec: expr=[c2@1 DESC,c3@2 ASC NULLS LAST]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
+01)AggregateExec: mode=Final, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
+04)------SortExec: expr=[c2@1 DESC,c3@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
 
 # test array_agg_order with list data type
 statement ok
@@ -182,8 +182,8 @@ CREATE TABLE array_agg_distinct_list_table AS VALUES
   ('b', [0,1])
 ;
 
-# Apply array_sort to have determinisitic result, higher dimension nested array also works but not for array sort,
-# so they are covered in `datafusion/physical-expr/src/aggregate/array_agg_distinct.rs`
+# Apply array_sort to have deterministic result, higher dimension nested array also works but not for array sort,
+# so they are covered in `datafusion/functions-aggregate/src/array_agg.rs`
 query ??
 select array_sort(c1), array_sort(c2) from (
   select array_agg(distinct column1) as c1, array_agg(distinct column2) as c2 from array_agg_distinct_list_table
@@ -194,8 +194,75 @@ select array_sort(c1), array_sort(c2) from (
 statement ok
 drop table array_agg_distinct_list_table;
 
-statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
+statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
+
+
+# Test distinct aggregate function with merge batch
+query II
+with A as (
+    select 1 as id, 2 as foo
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, 3
+    UNION ALL
+    select 1, 2
+    ---- The order is non-deterministic, verify with length
+) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
+----
+3 1
+
+# It has only AggregateExec with FinalPartitioned mode, so `merge_batch` is used
+# If the plan is changed, whether the `merge_batch` is used should be verified to ensure the test coverage
+query TT
+explain with A as (
+    select 1 as id, 2 as foo
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, 3
+    UNION ALL
+    select 1, 2
+) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
+----
+logical_plan
+01)Projection: array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))
+02)--Aggregate: groupBy=[[a.id]], aggr=[[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))]]
+03)----SubqueryAlias: a
+04)------SubqueryAlias: a
+05)--------Union
+06)----------Projection: Int64(1) AS id, Int64(2) AS foo
+07)------------EmptyRelation
+08)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
+09)------------EmptyRelation
+10)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
+11)------------EmptyRelation
+12)----------Projection: Int64(1) AS id, Int64(3) AS foo
+13)------------EmptyRelation
+14)----------Projection: Int64(1) AS id, Int64(2) AS foo
+15)------------EmptyRelation
+physical_plan
+01)ProjectionExec: expr=[array_length(array_agg(DISTINCT a.foo)@1) as array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+06)----------UnionExec
+07)------------ProjectionExec: expr=[1 as id, 2 as foo]
+08)--------------PlaceholderRowExec
+09)------------ProjectionExec: expr=[1 as id, NULL as foo]
+10)--------------PlaceholderRowExec
+11)------------ProjectionExec: expr=[1 as id, NULL as foo]
+12)--------------PlaceholderRowExec
+13)------------ProjectionExec: expr=[1 as id, 3 as foo]
+14)--------------PlaceholderRowExec
+15)------------ProjectionExec: expr=[1 as id, 2 as foo]
+16)--------------PlaceholderRowExec
 
 
 # FIX: custom absolute values
@@ -373,6 +440,24 @@ SELECT var(c2) FROM aggregate_test_100
 ----
 1.886363636364
 
+# csv_query_distinct_variance
+query R
+SELECT var(distinct c2) FROM aggregate_test_100
+----
+2.5
+
+statement error DataFusion error: This feature is not implemented: VAR\(DISTINCT\) aggregations are not available
+SELECT var(c2), var(distinct c2) FROM aggregate_test_100
+
+# csv_query_distinct_variance_population
+query R
+SELECT var_pop(distinct c2) FROM aggregate_test_100
+----
+2
+
+statement error DataFusion error: This feature is not implemented: VAR_POP\(DISTINCT\) aggregations are not available
+SELECT var_pop(c2), var_pop(distinct c2) FROM aggregate_test_100
+
 # csv_query_variance_5
 query R
 SELECT var_samp(c2) FROM aggregate_test_100
@@ -433,6 +518,11 @@ SELECT approx_median(c12) FROM aggregate_test_100
 ----
 0.555006541052
 
+# csv_query_approx_median_4
+# test with string, approx median only supports numeric
+statement error
+SELECT approx_median(c1) FROM aggregate_test_100
+
 # csv_query_median_1
 query I
 SELECT median(c2) FROM aggregate_test_100
@@ -456,6 +546,26 @@ query I
 SELECT median(col_i8) FROM median_table
 ----
 -14
+
+# distinct_median_i8
+query I
+SELECT median(distinct col_i8) FROM median_table
+----
+100
+
+query II
+SELECT median(col_i8), median(distinct col_i8) FROM median_table
+----
+-14 100
+
+# approx_distinct_median_i8
+query I
+SELECT approx_median(distinct col_i8) FROM median_table
+----
+100
+
+statement error DataFusion error: This feature is not implemented: APPROX_MEDIAN\(DISTINCT\) aggregations are not available
+SELECT approx_median(col_i8), approx_median(distinct col_i8) FROM median_table
 
 # median_i16
 query I
@@ -523,8 +633,292 @@ SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
 
+# median decimal
+statement ok
+create table t(c decimal(10, 4)) as values (0.0001), (0.0002), (0.0003), (0.0004), (0.0005), (0.0006);
+
+query RT
+select median(c), arrow_typeof(median(c)) from t;
+----
+0.0003 Decimal128(10, 4)
+
+query RT
+select approx_median(c), arrow_typeof(approx_median(c)) from t;
+----
+0.00035 Float64
+
+statement ok
+drop table t;
+
+# median decimal with nulls
+statement ok
+create table t(c decimal(10, 4)) as values (0.0001), (null), (0.0003), (0.0004), (0.0005);
+
+query RT
+select median(c), arrow_typeof(median(c)) from t;
+----
+0.0003 Decimal128(10, 4)
+
+statement ok
+drop table t;
+
+# median decimal with all nulls
+statement ok
+create table t(c decimal(10, 4)) as values (null), (null), (null);
+
+query RT
+select median(c), arrow_typeof(median(c)) from t;
+----
+NULL Decimal128(10, 4)
+
+statement ok
+drop table t;
+
+# median odd
+statement ok
+create table t(c int) as values (1), (2), (3), (4), (5);
+
+query I
+select median(c) from t;
+----
+3
+
+statement ok
+drop table t;
+
+# median even
+statement ok
+create table t(c int) as values (1), (2), (3), (4), (5), (6);
+
+query I
+select median(c) from t;
+----
+3
+
+statement ok
+drop table t;
+
+# median with nulls
+statement ok
+create table t(c int) as values (1), (null), (3), (4), (5);
+
+query I
+select median(c) from t;
+----
+3
+
+statement ok
+drop table t;
+
+# median with all nulls
+statement ok
+create table t(c int) as values (null), (null), (null);
+
+query I
+select median(c) from t;
+----
+NULL
+
+statement ok
+drop table t;
+
+# median u32
+statement ok
+create table t(c int unsigned) as values (1), (2), (3), (4), (5);
+
+query I
+select median(c) from t;
+----
+3
+
+statement ok
+drop table t;
+
+# median f32
+statement ok
+create table t(c float) as values (1.1), (2.2), (3.3), (4.4), (5.5);
+
+query R
+select median(c) from t;
+----
+3.3
+
+statement ok
+drop table t;
+
+# median distinct decimal
+statement ok
+create table t(c decimal(10, 4)) as values (0.0001), (0.0001), (0.0001), (0.0001), (0.0002), (0.0002), (0.0003), (0.0003);
+
+query R
+select median(distinct c) from t;
+----
+0.0002
+
+statement ok
+drop table t;
+
+# median distinct decimal with nulls
+statement ok
+create table t(c decimal(10, 4)) as values (0.0001), (0.0001), (0.0001), (null), (null), (0.0002), (0.0003), (0.0003);
+
+query R
+select median(distinct c) from t;
+----
+0.0002
+
+statement ok
+drop table t;
+
+# distinct median i32 odd
+statement ok
+create table t(c int) as values (2), (1), (1), (2), (1), (3);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median i32 even
+statement ok
+create table t(c int) as values (1), (1), (3), (1), (1);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median i32 with nulls
+statement ok
+create table t(c int) as values (1), (null), (1), (1), (3);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median u32 odd
+statement ok
+create table t(c int unsigned) as values (1), (1), (2), (1), (3);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median u32 even
+statement ok
+create table t(c int unsigned) as values (1), (1), (1), (1), (3), (3);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median f32 odd
+statement ok
+create table t(c float) as values (3), (2), (1), (1), (1);
+
+query R
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median f32 even
+statement ok
+create table t(c float) as values (1), (1), (1), (1), (2);
+
+query R
+select median(distinct c) from t;
+----
+1.5
+
+statement ok
+drop table t;
+
+# distinct median f64 odd
+statement ok
+create table t(c double) as values (1), (1), (1), (2), (3);
+
+query R
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# distinct median f64 even
+statement ok
+create table t(c double) as values (1), (1), (1), (1), (2);
+
+query R
+select median(distinct c) from t;
+----
+1.5
+
+statement ok
+drop table t;
+
+# distinct median i32
+statement ok
+create table t(c int) as values (1), (1), (1), (1), (2), (2), (3), (3);
+
+query I
+select median(distinct c) from t;
+----
+2
+
+statement ok
+drop table t;
+
+# optimize distinct median to group by
+statement ok
+create table t(c int) as values (1), (1), (1), (1), (2), (2), (3), (3);
+
+query TT
+explain select median(distinct c) from t;
+----
+logical_plan
+01)Projection: median(alias1) AS median(DISTINCT t.c)
+02)--Aggregate: groupBy=[[]], aggr=[[median(alias1)]]
+03)----Aggregate: groupBy=[[t.c AS alias1]], aggr=[[]]
+04)------TableScan: t projection=[c]
+physical_plan
+01)ProjectionExec: expr=[median(alias1)@0 as median(DISTINCT t.c)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[median(alias1)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=4
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
+10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table t;
+
 # median_multi
-# test case for https://github.com/apache/arrow-datafusion/issues/3105
+# test case for https://github.com/apache/datafusion/issues/3105
 # has an intermediate grouping
 statement ok
 create table cpu (host string, usage float) as select * from (values
@@ -647,7 +1041,7 @@ SELECT COUNT(2) FROM aggregate_test_100
 100
 
 # csv_query_approx_count
-# FIX: https://github.com/apache/arrow-datafusion/issues/3353
+# FIX: https://github.com/apache/datafusion/issues/3353
 # query II
 # SELECT approx_distinct(c9) AS count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 # ----
@@ -1134,154 +1528,154 @@ e e 1323
 query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY CUBE (a.c1, b.c1) ORDER BY a.c1, b.c1
 ----
-a    a    1260
-a    b    1140
-a    c    1260
-a    d    1080
-a    e    1260
-a    NULL 6000
-b    a    1302
-b    b    1178
-b    c    1302
-b    d    1116
-b    e    1302
-b    NULL 6200
-c    a    1176
-c    b    1064
-c    c    1176
-c    d    1008
-c    e    1176
-c    NULL 5600
-d    a    924
-d    b    836
-d    c    924
-d    d    792
-d    e    924
-d    NULL 4400
-e    a    1323
-e    b    1197
-e    c    1323
-e    d    1134
-e    e    1323
-e    NULL 6300
-NULL a    5985
-NULL b    5415
-NULL c    5985
-NULL d    5130
-NULL e    5985
+a a 1260
+a b 1140
+a c 1260
+a d 1080
+a e 1260
+a NULL 6000
+b a 1302
+b b 1178
+b c 1302
+b d 1116
+b e 1302
+b NULL 6200
+c a 1176
+c b 1064
+c c 1176
+c d 1008
+c e 1176
+c NULL 5600
+d a 924
+d b 836
+d c 924
+d d 792
+d e 924
+d NULL 4400
+e a 1323
+e b 1197
+e c 1323
+e d 1134
+e e 1323
+e NULL 6300
+NULL a 5985
+NULL b 5415
+NULL c 5985
+NULL d 5130
+NULL e 5985
 NULL NULL 28500
 
 # csv_query_cube_distinct_count
 query TII
 SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY CUBE (c1,c2) ORDER BY c1,c2
 ----
-a    1    5
-a    2    3
-a    3    5
-a    4    4
-a    5    3
-a    NULL 19
-b    1    3
-b    2    4
-b    3    2
-b    4    5
-b    5    5
-b    NULL 17
-c    1    4
-c    2    7
-c    3    4
-c    4    4
-c    5    2
-c    NULL 21
-d    1    7
-d    2    3
-d    3    3
-d    4    3
-d    5    2
-d    NULL 18
-e    1    3
-e    2    4
-e    3    4
-e    4    7
-e    5    2
-e    NULL 18
-NULL 1    22
-NULL 2    20
-NULL 3    17
-NULL 4    23
-NULL 5    14
+a 1 5
+a 2 3
+a 3 5
+a 4 4
+a 5 3
+a NULL 19
+b 1 3
+b 2 4
+b 3 2
+b 4 5
+b 5 5
+b NULL 17
+c 1 4
+c 2 7
+c 3 4
+c 4 4
+c 5 2
+c NULL 21
+d 1 7
+d 2 3
+d 3 3
+d 4 3
+d 5 2
+d NULL 18
+e 1 3
+e 2 4
+e 3 4
+e 4 7
+e 5 2
+e NULL 18
+NULL 1 22
+NULL 2 20
+NULL 3 17
+NULL 4 23
+NULL 5 14
 NULL NULL 80
 
 # csv_query_rollup_distinct_count
 query TII
 SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY ROLLUP (c1,c2) ORDER BY c1,c2
 ----
-a    1    5
-a    2    3
-a    3    5
-a    4    4
-a    5    3
-a    NULL 19
-b    1    3
-b    2    4
-b    3    2
-b    4    5
-b    5    5
-b    NULL 17
-c    1    4
-c    2    7
-c    3    4
-c    4    4
-c    5    2
-c    NULL 21
-d    1    7
-d    2    3
-d    3    3
-d    4    3
-d    5    2
-d    NULL 18
-e    1    3
-e    2    4
-e    3    4
-e    4    7
-e    5    2
-e    NULL 18
+a 1 5
+a 2 3
+a 3 5
+a 4 4
+a 5 3
+a NULL 19
+b 1 3
+b 2 4
+b 3 2
+b 4 5
+b 5 5
+b NULL 17
+c 1 4
+c 2 7
+c 3 4
+c 4 4
+c 5 2
+c NULL 21
+d 1 7
+d 2 3
+d 3 3
+d 4 3
+d 5 2
+d NULL 18
+e 1 3
+e 2 4
+e 3 4
+e 4 7
+e 5 2
+e NULL 18
 NULL NULL 80
 
 # csv_query_rollup_sum_crossjoin
 query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY ROLLUP (a.c1, b.c1) ORDER BY a.c1, b.c1
 ----
-a    a    1260
-a    b    1140
-a    c    1260
-a    d    1080
-a    e    1260
-a    NULL 6000
-b    a    1302
-b    b    1178
-b    c    1302
-b    d    1116
-b    e    1302
-b    NULL 6200
-c    a    1176
-c    b    1064
-c    c    1176
-c    d    1008
-c    e    1176
-c    NULL 5600
-d    a    924
-d    b    836
-d    c    924
-d    d    792
-d    e    924
-d    NULL 4400
-e    a    1323
-e    b    1197
-e    c    1323
-e    d    1134
-e    e    1323
-e    NULL 6300
+a a 1260
+a b 1140
+a c 1260
+a d 1080
+a e 1260
+a NULL 6000
+b a 1302
+b b 1178
+b c 1302
+b d 1116
+b e 1302
+b NULL 6200
+c a 1176
+c b 1064
+c c 1176
+c d 1008
+c e 1176
+c NULL 5600
+d a 924
+d b 836
+d c 924
+d d 792
+d e 924
+d NULL 4400
+e a 1323
+e b 1197
+e c 1323
+e d 1134
+e e 1323
+e NULL 6300
 NULL NULL 28500
 
 # query_count_without_from
@@ -1300,7 +1694,7 @@ SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 
 query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
 ----
-[]
+NULL
 
 # csv_query_array_agg_one
 query ?
@@ -1359,31 +1753,12 @@ NULL 4 29 1.260869565217 123 -117 23
 NULL 5 -194 -13.857142857143 118 -101 14
 NULL NULL 781 7.81 125 -117 100
 
-# TODO: array_agg_distinct output is non-determinisitic -- rewrite with array_sort(list_sort)
-#       unnest is also not available, so manually unnesting via CROSS JOIN
-# additional count(1) forces array_agg_distinct instead of array_agg over aggregated by c2 data
-#
+# select with count to forces array_agg_distinct function, since single distinct expression is converted to group by by optimizer
 # csv_query_array_agg_distinct
-query III
-WITH indices AS (
-  SELECT 1 AS idx UNION ALL
-  SELECT 2 AS idx UNION ALL
-  SELECT 3 AS idx UNION ALL
-  SELECT 4 AS idx UNION ALL
-  SELECT 5 AS idx
-)
-SELECT data.arr[indices.idx] as element, array_length(data.arr) as array_len, dummy
-FROM (
-  SELECT array_agg(distinct c2) as arr, count(1) as dummy FROM aggregate_test_100
-) data
-  CROSS JOIN indices
-ORDER BY 1
+query ?I
+SELECT array_sort(array_agg(distinct c2)), count(1) FROM aggregate_test_100
 ----
-1 5 100
-2 5 100
-3 5 100
-4 5 100
-5 5 100
+[1, 2, 3, 4, 5] 100
 
 # aggregate_time_min_and_max
 query TT
@@ -1391,30 +1766,39 @@ select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' unio
 ----
 00:00:00 00:00:02
 
-# aggregate_decimal_min
-query RT
-select min(c1), arrow_typeof(min(c1)) from d_table
+# aggregate Interval(MonthDayNano) min/max
+query T??
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (interval '1 month'),
+  (interval '2 months'),
+  (interval '2 month 15 days'),
+  (interval '-2 month')
 ----
--100.009 Decimal128(10, 3)
+Interval(MonthDayNano) 0 years -2 mons 0 days 0 hours 0 mins 0.000000000 secs 0 years 2 mons 15 days 0 hours 0 mins 0.000000000 secs
 
-# aggregate_decimal_max
-query RT
-select max(c1), arrow_typeof(max(c1)) from d_table
+# aggregate Interval(DayTime) min/max
+query T??
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (arrow_cast('60 minutes', 'Interval(DayTime)')),
+  (arrow_cast('-3 minutes', 'Interval(DayTime)')),
+  (arrow_cast('30 minutes', 'Interval(DayTime)'));
 ----
-110.009 Decimal128(10, 3)
+Interval(DayTime) 0 years 0 mons 0 days 0 hours -3 mins 0.000 secs 0 years 0 mons 0 days 1 hours 0 mins 0.000 secs
 
-# aggregate_decimal_sum
-query RT
-select sum(c1), arrow_typeof(sum(c1)) from d_table
+# aggregate Interval(YearMonth) min/max
+query T??
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (arrow_cast('-1 year', 'Interval(YearMonth)')),
+  (arrow_cast('13 months', 'Interval(YearMonth)')),
+  (arrow_cast('1 year', 'Interval(YearMonth)'));
 ----
-100 Decimal128(20, 3)
-
-# aggregate_decimal_avg
-query RT
-select avg(c1), arrow_typeof(avg(c1)) from d_table
-----
-5 Decimal128(14, 7)
-
+Interval(YearMonth) -1 years 0 mons 0 days 0 hours 0 mins 0.00 secs 1 years 1 mons 0 days 0 hours 0 mins 0.00 secs
 
 # aggregate
 query II
@@ -1533,6 +1917,91 @@ SELECT max(c1) FROM test;
 
 
 # count_basic
+statement ok
+create table t (c int) as values (1), (2), (null), (3), (null), (4), (5);
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+5 Int64
+
+statement ok
+drop table t;
+
+# test count with all nulls
+statement ok
+create table t (c int) as values (null), (null), (null), (null), (null);
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+0 Int64
+
+statement ok
+drop table t;
+
+# test with empty
+statement ok
+create table t (c int);
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+0 Int64
+
+statement ok
+drop table t;
+
+# test count with string
+statement ok
+create table t (c string) as values ('a'), ('b'), (null), ('c'), (null), ('d'), ('e');
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+5 Int64
+
+statement ok
+drop table t;
+
+# test count with largeutf8
+statement ok
+create table t (c string) as values 
+  (arrow_cast('a', 'LargeUtf8')),
+  (arrow_cast('b', 'LargeUtf8')),
+  (arrow_cast(null, 'LargeUtf8')),
+  (arrow_cast('c', 'LargeUtf8'))
+;
+
+query T
+select arrow_typeof(c) from t;
+----
+Utf8
+Utf8
+Utf8
+Utf8
+
+query IT
+select count(c), arrow_typeof(count(c)) from t;
+----
+3 Int64
+
+statement ok
+drop table t;
+
+# test count with multiple columns
+statement ok
+create table t (c1 int, c2 int) as values (1, 1), (2, null), (null, 2), (null, null), (3, 3), (null, 4);
+
+query IT
+select count(c1, c2), arrow_typeof(count(c1, c2)) from t;
+----
+2 Int64
+
+statement ok
+drop table t;
+
+
 query II
 SELECT COUNT(c1), COUNT(c2) FROM test
 ----
@@ -1549,6 +2018,10 @@ query I
 SELECT count(c1, c2) FROM test
 ----
 3
+
+# count(distinct) with multiple arguments
+query error DataFusion error: This feature is not implemented: COUNT DISTINCT with multiple arguments
+SELECT count(distinct c1, c2) FROM test
 
 # count_null
 query III
@@ -1590,13 +2063,635 @@ select avg(c1) from test
 ----
 1.75
 
+# avg_decimal
+statement ok
+create table t (c1 decimal(10, 0)) as values (1), (2), (3), (4), (5), (6);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3.5 Decimal128(14, 4)
+
+statement ok
+drop table t;
+
+# avg_decimal_with_nulls
+statement ok
+create table t (c1 decimal(10, 0)) as values (1), (NULL), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3.25 Decimal128(14, 4)
+
+statement ok
+drop table t;
+
+# avg_decimal_all_nulls
+statement ok
+create table t (c1 decimal(10, 0)) as values (NULL), (NULL), (NULL), (NULL), (NULL), (NULL);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+NULL Decimal128(14, 4)
+
+statement ok
+drop table t;
+
+# avg_i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# avg_i32_with_nulls
+statement ok
+create table t (c1 int) as values (1), (NULL), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3.25 Float64
+
+statement ok
+drop table t;
+
+# avg_i32_all_nulls
+statement ok
+create table t (c1 int) as values (NULL), (NULL);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# avg_u32
+statement ok
+create table t (c1 int unsigned) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# avg_f32
+statement ok
+create table t (c1 float) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# avg_f64
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t;
+----
+3 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_1
+statement ok
+create table t (c1 double, c2 double) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_2
+statement ok
+create table t (c1 double, c2 double) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+1 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_4
+statement ok
+create table t (c1 double, c2 double) as values (1.1, 4.1), (2.0, 5.0), (3.0, 6.0);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+0.903333333333 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_5
+statement ok
+create table t (c1 double, c2 double) as values (1.1, 4.1), (2.0, 5.0), (3.0, 6.0);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.602222222222 Float64
+
+statement ok
+drop table t;
+
+# covariance_f64_6
+statement ok
+create table t (c1 double, c2 double) as values (1.0, 4.0), (2.0, 5.0), (3.0, 6.0), (1.1, 4.4), (2.2, 5.5), (3.3, 6.6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.761666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_u32
+statement ok
+create table t (c1 int unsigned, c2 int unsigned) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_f32
+statement ok
+create table t (c1 float, c2 float) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_with_nulls_1
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (null, null), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+1 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_with_nulls_2
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (null, 9), (2, 5), (null, 8), (3, 6), (null, null);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0.666666666667 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_with_nulls_3
+statement ok
+create table t (c1 int, c2 int) as values (1, 4), (null, 9), (2, 5), (null, 8), (3, 6), (null, null);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+1 Float64
+
+statement ok
+drop table t;
+
+# covariance_i32_all_nulls
+statement ok
+create table t (c1 int, c2 int) as values (null, null), (null, null);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# covariance_pop_i32_all_nulls
+statement ok
+create table t (c1 int, c2 int) as values (null, null), (null, null);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# covariance_1_input
+statement ok
+create table t (c1 double, c2 double) as values (1, 2);
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# covariance_pop_1_input
+statement ok
+create table t (c1 double, c2 double) as values (1, 2);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t;
+----
+0 Float64
+
+statement ok
+drop table t;
+
+# variance_f64_1
+statement ok
+create table t (c double) as values (1), (2), (3), (4), (5);
+
+query RT
+select var(c), arrow_typeof(var(c)) from t;
+----
+2.5 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev f64_1
+statement ok
+create table t (c1 double) as values (1), (2);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+0.5 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev f64_2
+statement ok
+create table t (c1 double) as values (1.1), (2), (3);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+0.776029781788 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev f64_3
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+1.414213562373 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev f64_4
+statement ok
+create table t (c1 double) as values (1.1), (2), (3);
+
+query RT
+select stddev(c1), arrow_typeof(stddev(c1)) from t;
+----
+0.950438495292 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+1.414213562373 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev u32
+statement ok
+create table t (c1 int unsigned) as values (1), (2), (3), (4), (5);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+1.414213562373 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev f32
+statement ok
+create table t (c1 float) as values (1), (2), (3), (4), (5);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+1.414213562373 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev single_input
+statement ok
+create table t (c1 double) as values (1);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+0 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev with_nulls
+statement ok
+create table t (c1 int) as values (1), (null), (3), (4), (5);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+1.479019945775 Float64
+
+statement ok
+drop table t;
+
+# aggregate stddev all_nulls
+statement ok
+create table t (c1 int) as values (null), (null);
+
+query RT
+select stddev_pop(c1), arrow_typeof(stddev_pop(c1)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f64_1
+statement ok
+create table t (c1 double) as values (1), (2);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+0.25 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f64_2
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f64_3
+statement ok
+create table t (c1 double) as values (1), (2), (3), (4), (5);
+
+query RT
+select var(c1), arrow_typeof(var(c1)) from t;
+----
+2.5 Float64
+
+statement ok
+drop table t;
+
+# variance_f64_2
+statement ok
+create table t (c double) as values (1.1), (2), (3);
+
+query RT
+select var(c), arrow_typeof(var(c)) from t;
+----
+0.903333333333 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f64_4
+statement ok
+create table t (c1 double) as values (1.1), (2), (3);
+
+query RT
+select var(c1), arrow_typeof(var(c1)) from t;
+----
+0.903333333333 Float64
+
+statement ok
+drop table t;
+
+# variance_1_input
+statement ok
+create table t (a double not null) as values (1);
+
+query RT
+select var(a), arrow_typeof(var(a)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# variance_i32_all_nulls
+statement ok
+create table t (a int) as values (null), (null);
+
+query RT
+select var(a), arrow_typeof(var(a)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
+# aggregate variance i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance u32
+statement ok
+create table t (c1 int unsigned) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate variance f32
+statement ok
+create table t (c1 float) as values (1), (2), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2 Float64
+
+statement ok
+drop table t;
+
+# aggregate single input
+statement ok
+create table t (c1 double) as values (1);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+0 Float64
+
+statement ok
+drop table t;
+
+# aggregate i32 with nulls
+statement ok
+create table t (c1 int) as values (1), (null), (3), (4), (5);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+2.1875 Float64
+
+statement ok
+drop table t;
+
+# aggregate i32 all nulls
+statement ok
+create table t (c1 int) as values (null), (null);
+
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from t;
+----
+NULL Float64
+
+statement ok
+drop table t;
+
 # simple_mean
 query R
 select mean(c1) from test
 ----
 1.75
 
+# aggregate sum distinct, coerced result from i32 to i64
+statement ok
+create table t (c int) as values (1), (2), (1), (3), (null), (null), (-3), (-3);
 
+query IT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+3 Int64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct, coerced result from u32 to u64
+statement ok
+create table t (c int unsigned) as values (1), (2), (1), (3), (null), (null), (3);
+
+query IT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+6 UInt64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct, coerced result from f32 to f64
+statement ok
+create table t (c float) as values (1.0), (2.2), (1.0), (3.3), (null), (null), (3.3), (-2.0);
+
+query RT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+4.5 Float64
+
+statement ok
+drop table t;
+
+# aggregate sum distinct with decimal
+statement ok
+create table t (c decimal(35, 0)) as values (1), (2), (1), (3), (null), (null), (3), (-2);
+
+query RT
+select sum(distinct c), arrow_typeof(sum(distinct c)) from t;
+----
+4 Decimal128(38, 0)
+
+statement ok
+drop table t;
 
 # query_sum_distinct - 2 different aggregate functions: avg and sum(distinct)
 query RI
@@ -1622,6 +2717,16 @@ SELECT COUNT(DISTINCT c1) FROM test
 
 # TODO: aggregate_with_alias
 
+# test_approx_percentile_cont_decimal_support
+query TI
+SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 4
+b 5
+c 4
+d 4
+e 4
+
 # array_agg_zero
 query ?
 SELECT ARRAY_AGG([])
@@ -1634,28 +2739,138 @@ SELECT ARRAY_AGG([1])
 ----
 [[1]]
 
-# test_approx_percentile_cont_decimal_support
-query TI
-SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
-----
-a 4
-b 5
-c 4
-d 4
-e 4
+# test array_agg with no row qualified
+statement ok
+create table t(a int, b float, c bigint) as values (1, 1.2, 2);
 
-
-# array_agg_zero
+# returns NULL, follows DuckDB's behaviour
 query ?
-SELECT ARRAY_AGG([]);
+select array_agg(a) from t where a > 2;
 ----
-[[]]
+NULL
 
-# array_agg_one
 query ?
-SELECT ARRAY_AGG([1]);
+select array_agg(b) from t where b > 3.1;
 ----
-[[1]]
+NULL
+
+query ?
+select array_agg(c) from t where c > 3;
+----
+NULL
+
+query ?I
+select array_agg(c), count(1) from t where c > 3;
+----
+NULL 0
+
+# returns 0 rows if group by is applied, follows DuckDB's behaviour
+query ?
+select array_agg(a) from t where a > 3 group by a;
+----
+
+query ?I
+select array_agg(a), count(1) from t where a > 3 group by a;
+----
+
+# returns NULL, follows DuckDB's behaviour
+query ?
+select array_agg(distinct a) from t where a > 3;
+----
+NULL
+
+query ?I
+select array_agg(distinct a), count(1) from t where a > 3;
+----
+NULL 0
+
+# returns 0 rows if group by is applied, follows DuckDB's behaviour
+query ?
+select array_agg(distinct a) from t where a > 3 group by a;
+----
+
+query ?I
+select array_agg(distinct a), count(1) from t where a > 3 group by a;
+----
+
+# test order sensitive array agg
+query ?
+select array_agg(a order by a) from t where a > 3;
+----
+NULL
+
+query ?
+select array_agg(a order by a) from t where a > 3 group by a;
+----
+
+query ?I
+select array_agg(a order by a), count(1) from t where a > 3 group by a;
+----
+
+statement ok
+drop table t;
+
+# test with no values
+statement ok
+create table t(a int, b float, c bigint);
+
+query ?
+select array_agg(a) from t;
+----
+NULL
+
+query ?
+select array_agg(b) from t;
+----
+NULL
+
+query ?
+select array_agg(c) from t;
+----
+NULL
+
+query ?I
+select array_agg(distinct a), count(1) from t;
+----
+NULL 0
+
+query ?I
+select array_agg(distinct b), count(1) from t;
+----
+NULL 0
+
+query ?I
+select array_agg(distinct b), count(1) from t;
+----
+NULL 0
+
+statement ok
+drop table t;
+
+
+# array_agg_i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query ?
+select array_agg(c1) from t;
+----
+[1, 2, 3, 4, 5]
+
+statement ok
+drop table t;
+
+# array_agg_nested
+statement ok
+create table t as values (make_array([1, 2, 3], [4, 5])), (make_array([6], [7, 8])), (make_array([9]));
+
+query ?
+select array_agg(column1) from t;
+----
+[[[1, 2, 3], [4, 5]], [[6], [7, 8]], [[9]]]
+
+statement ok
+drop table t;
 
 # variance_single_value
 query RRRR
@@ -1813,6 +3028,612 @@ ORDER BY tag
 33 11 NULL 33 11 NULL 33 11 NULL B
 
 
+# bit_and_i32
+statement ok
+create table t (c int) as values (4), (7), (15);
+
+query IT
+Select bit_and(c), arrow_typeof(bit_and(c))  from t;
+----
+4 Int32
+
+statement ok
+drop table t;
+
+# bit_and_i32_with_nulls
+statement ok
+create table t (c int) as values (1), (NULL), (3), (5);
+
+query IT
+Select bit_and(c), arrow_typeof(bit_and(c)) from t;
+----
+1 Int32
+
+statement ok
+drop table t;
+
+# bit_and_i32_all_nulls
+statement ok
+create table t (c int) as values (NULL), (NULL);
+
+query IT
+Select bit_and(c), arrow_typeof(bit_and(c)) from t;
+----
+NULL Int32
+
+statement ok
+drop table t;
+
+# bit_and_u32
+statement ok
+create table t (c int unsigned) as values (4), (7), (15);
+
+query IT
+Select bit_and(c), arrow_typeof(bit_and(c)) from t;
+----
+4 UInt32
+
+statement ok
+drop table t;
+
+# bit_or_i32
+statement ok
+create table t (c int) as values (4), (7), (15);
+
+query IT
+Select bit_or(c), arrow_typeof(bit_or(c))  from t;
+----
+15 Int32
+
+statement ok
+drop table t;
+
+# bit_or_i32_with_nulls
+statement ok
+create table t (c int) as values (1), (NULL), (3), (5);
+
+query IT
+Select bit_or(c), arrow_typeof(bit_or(c))  from t;
+----
+7 Int32
+
+statement ok
+drop table t;
+
+#bit_or_i32_all_nulls
+statement ok
+create table t (c int) as values (NULL), (NULL);
+
+query IT
+Select bit_or(c), arrow_typeof(bit_or(c))  from t;
+----
+NULL Int32
+
+statement ok
+drop table t;
+
+
+#bit_or_u32
+statement ok
+create table t (c int unsigned) as values (4), (7), (15);
+
+query IT
+Select bit_or(c), arrow_typeof(bit_or(c))  from t;
+----
+15 UInt32
+
+statement ok
+drop table t;
+
+#bit_xor_i32
+statement ok
+create table t (c int) as values (4), (7), (4), (7), (15);
+
+query IT
+Select bit_xor(c), arrow_typeof(bit_xor(c))  from t;
+----
+15 Int32
+
+statement ok
+drop table t;
+
+# bit_xor_i32_with_nulls
+statement ok
+create table t (c int) as values (1), (1), (NULL), (3), (5);
+
+query IT
+Select bit_xor(c), arrow_typeof(bit_xor(c))  from t;
+----
+6 Int32
+
+statement ok
+drop table t;
+
+# bit_xor_i32_all_nulls
+statement ok
+create table t (c int) as values (NULL), (NULL);
+
+query IT
+Select bit_xor(c), arrow_typeof(bit_xor(c))  from t;
+----
+NULL Int32
+
+statement ok
+drop table t;
+
+# bit_xor_u32
+statement ok
+create table t (c int unsigned) as values (4), (7), (4), (7), (15);
+
+query IT
+Select bit_xor(c), arrow_typeof(bit_xor(c))  from t;
+----
+15 UInt32
+
+statement ok
+drop table t;
+
+# bit_xor_distinct_i32
+statement ok
+create table t (c int) as values (4), (7), (4), (7), (15);
+
+query IT
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
+----
+12 Int32
+
+statement ok
+drop table t;
+
+# bit_xor_distinct_i32_with_nulls
+statement ok
+create table t (c int) as values (1), (1), (NULL), (3), (5);
+
+query IT
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
+----
+7 Int32
+
+
+statement ok
+drop table t;
+
+# bit_xor_distinct_i32_all_nulls
+statement ok
+create table t (c int ) as values (NULL), (NULL);
+
+query IT
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
+----
+NULL Int32
+
+
+statement ok
+drop table t;
+
+# bit_xor_distinct_u32
+statement ok
+create table t (c int unsigned) as values (4), (7), (4), (7), (15);
+
+query IT
+Select bit_xor(DISTINCT c), arrow_typeof(bit_xor(DISTINCT c))  from t;
+----
+12 UInt32
+
+statement ok
+drop table t;
+
+#################
+# Min_Max Begin #
+#################
+# min_decimal, max_decimal
+statement ok
+CREATE TABLE decimals (value DECIMAL(10, 2));
+
+statement ok
+INSERT INTO decimals VALUES (123.0001), (124.00);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals;
+----
+123 124
+
+statement ok
+DROP TABLE decimals;
+
+statement ok
+CREATE TABLE decimals_batch (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_batch VALUES (1), (2), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_batch;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_batch;
+
+statement ok
+CREATE TABLE decimals_empty (value DECIMAL(10, 0));
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_empty;
+----
+NULL NULL
+
+statement ok
+DROP TABLE decimals_empty;
+
+# min_decimal_all_nulls, max_decimal_all_nulls
+statement ok
+CREATE TABLE decimals_all_nulls (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_all_nulls VALUES (NULL), (NULL), (NULL), (NULL), (NULL), (NULL);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_all_nulls;
+----
+NULL NULL
+
+statement ok
+DROP TABLE decimals_all_nulls;
+
+# min_decimal_with_nulls, max_decimal_with_nulls
+statement ok
+CREATE TABLE decimals_with_nulls (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_with_nulls VALUES (1), (NULL), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_with_nulls;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_with_nulls;
+
+statement ok
+CREATE TABLE decimals_error (value DECIMAL(10, 2));
+
+statement ok
+INSERT INTO decimals_error VALUES (123.00), (arrow_cast(124.001, 'Decimal128(10, 3)'));
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_error;
+----
+123 124
+
+statement ok
+DROP TABLE decimals_error;
+
+statement ok
+CREATE TABLE decimals_agg (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_agg VALUES (1), (2), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_agg;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_agg;
+
+# min_i32, max_i32
+statement ok
+CREATE TABLE integers (value INT);
+
+statement ok
+INSERT INTO integers VALUES (1), (2), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers
+----
+1 5
+
+statement ok
+DROP TABLE integers;
+
+# min_utf8, max_utf8
+statement ok
+CREATE TABLE strings (value TEXT);
+
+statement ok
+INSERT INTO strings VALUES ('d'), ('a'), ('c'), ('b');
+
+query TT
+SELECT MIN(value), MAX(value) FROM strings
+----
+a d
+
+statement ok
+DROP TABLE strings;
+
+# min_i32_with_nulls, max_i32_with_nulls
+statement ok
+CREATE TABLE integers_with_nulls (value INT);
+
+statement ok
+INSERT INTO integers_with_nulls VALUES (1), (NULL), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers_with_nulls
+----
+1 5
+
+statement ok
+DROP TABLE integers_with_nulls;
+
+# min_i32_all_nulls, max_i32_all_nulls
+statement ok
+CREATE TABLE integers_all_nulls (value INT);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers_all_nulls
+----
+NULL NULL
+
+statement ok
+DROP TABLE integers_all_nulls;
+
+# min_u32, max_u32
+statement ok
+CREATE TABLE uintegers (value INT UNSIGNED);
+
+statement ok
+INSERT INTO uintegers VALUES (1), (2), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM uintegers
+----
+1 5
+
+statement ok
+DROP TABLE uintegers;
+
+# min_f32, max_f32
+statement ok
+CREATE TABLE floats (value FLOAT);
+
+statement ok
+INSERT INTO floats VALUES (1.0), (2.0), (3.0), (4.0), (5.0);
+
+query RR
+SELECT MIN(value), MAX(value) FROM floats
+----
+1 5
+
+statement ok
+DROP TABLE floats;
+
+# min_f64, max_f64
+statement ok
+CREATE TABLE doubles (value DOUBLE);
+
+statement ok
+INSERT INTO doubles VALUES (1.0), (2.0), (3.0), (4.0), (5.0);
+
+query RR
+SELECT MIN(value), MAX(value) FROM doubles
+----
+1 5
+
+statement ok
+DROP TABLE doubles;
+
+# min_date, max_date
+statement ok
+CREATE TABLE dates (value DATE);
+
+statement ok
+INSERT INTO dates VALUES ('1970-01-02'), ('1970-01-03'), ('1970-01-04'), ('1970-01-05'), ('1970-01-06');
+
+query DD
+SELECT MIN(value), MAX(value) FROM dates
+----
+1970-01-02 1970-01-06
+
+statement ok
+DROP TABLE dates;
+
+# min_seconds, max_seconds
+statement ok
+CREATE TABLE times (value TIME);
+
+statement ok
+INSERT INTO times VALUES ('00:00:01'), ('00:00:02'), ('00:00:03'), ('00:00:04'), ('00:00:05');
+
+query DD
+SELECT MIN(value), MAX(value) FROM times
+----
+00:00:01 00:00:05
+
+statement ok
+DROP TABLE times;
+
+# min_milliseconds, max_milliseconds
+statement ok
+CREATE TABLE time32millisecond (value TIME);
+
+statement ok
+INSERT INTO time32millisecond VALUES ('00:00:00.001'), ('00:00:00.002'), ('00:00:00.003'), ('00:00:00.004'), ('00:00:00.005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time32millisecond
+----
+00:00:00.001 00:00:00.005
+
+statement ok
+DROP TABLE time32millisecond;
+
+# min_microseconds, max_microseconds
+statement ok
+CREATE TABLE time64microsecond (value TIME);
+
+statement ok
+INSERT INTO time64microsecond VALUES ('00:00:00.000001'), ('00:00:00.000002'), ('00:00:00.000003'), ('00:00:00.000004'), ('00:00:00.000005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time64microsecond
+----
+00:00:00.000001 00:00:00.000005
+
+statement ok
+DROP TABLE time64microsecond;
+
+# min_nanoseconds, max_nanoseconds
+statement ok
+CREATE TABLE time64nanosecond (value TIME);
+
+statement ok
+INSERT INTO time64nanosecond VALUES ('00:00:00.000000001'), ('00:00:00.000000002'), ('00:00:00.000000003'), ('00:00:00.000000004'), ('00:00:00.000000005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time64nanosecond
+----
+00:00:00.000000001 00:00:00.000000005
+
+statement ok
+DROP TABLE time64nanosecond;
+
+# min_timestamp, max_timestamp
+statement ok
+CREATE TABLE timestampmicrosecond (value TIMESTAMP);
+
+statement ok
+INSERT INTO timestampmicrosecond VALUES ('1970-01-01 00:00:00.000001'), ('1970-01-01 00:00:00.000002'), ('1970-01-01 00:00:00.000003'), ('1970-01-01 00:00:00.000004'), ('1970-01-01 00:00:00.000005');
+
+query PP
+SELECT MIN(value), MAX(value) FROM timestampmicrosecond
+----
+1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000005
+
+statement ok
+DROP TABLE timestampmicrosecond;
+
+# max_bool
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (false), (false);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+false
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (true), (true);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (false), (true), (false);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (true), (false), (true);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+# min_bool
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (false), (false);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (true), (true);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+true
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (false), (true), (false);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (true), (false), (true);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+#################
+# Min_Max End #
+#################
+
 statement ok
 create table bool_aggregate_functions (
   c1 boolean not null,
@@ -1822,7 +3643,7 @@ create table bool_aggregate_functions (
   c5 boolean,
   c6 boolean,
   c7 boolean,
-  c8 boolean,
+  c8 boolean
 )
 as values
   (true, true, false, false, true, true, null, null),
@@ -1876,25 +3697,29 @@ select
   arrow_cast(column1, 'Timestamp(Microsecond, None)') as micros,
   arrow_cast(column1, 'Timestamp(Millisecond, None)') as millis,
   arrow_cast(column1, 'Timestamp(Second, None)') as secs,
+  arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))') as nanos_utc,
+  arrow_cast(column1, 'Timestamp(Microsecond, Some("UTC"))') as micros_utc,
+  arrow_cast(column1, 'Timestamp(Millisecond, Some("UTC"))') as millis_utc,
+  arrow_cast(column1, 'Timestamp(Second, Some("UTC"))') as secs_utc,
   column2 as names,
   column3 as tag
 from t_source;
 
-# Demonstate the contents
-query PPPPTT
+# Demonstrate the contents
+query PPPPPPPPTT
 select * from t;
 ----
-2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0 X
-2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1 X
-NULL NULL NULL NULL Row 2 Y
-2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3 Y
+2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 2018-11-13T17:11:10.011375885Z 2018-11-13T17:11:10.011375Z 2018-11-13T17:11:10.011Z 2018-11-13T17:11:10Z Row 0 X
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 2011-12-13T11:13:10.123450Z 2011-12-13T11:13:10.123450Z 2011-12-13T11:13:10.123Z 2011-12-13T11:13:10Z Row 1 X
+NULL NULL NULL NULL NULL NULL NULL NULL Row 2 Y
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 2021-01-01T05:11:10.432Z 2021-01-01T05:11:10.432Z 2021-01-01T05:11:10.432Z 2021-01-01T05:11:10Z Row 3 Y
 
 
 # aggregate_timestamps_sum
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t;
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag;
 
 # aggregate_timestamps_count
@@ -1933,14 +3758,31 @@ SELECT tag, max(nanos), max(micros), max(millis), max(secs) FROM t GROUP BY tag 
 X 2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10
 Y 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
 
+# aggregate_timestamps_count_distinct_with_tz
+query IIII
+SELECT count(DISTINCT nanos_utc), count(DISTINCT micros_utc), count(DISTINCT millis_utc), count(DISTINCT secs_utc) FROM t;
+----
+3 3 3 3
+
+query TIIII
+SELECT tag, count(DISTINCT nanos_utc), count(DISTINCT micros_utc), count(DISTINCT millis_utc), count(DISTINCT secs_utc) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2 2 2 2
+Y 1 1 1 1
 
 # aggregate_timestamps_avg
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
 
+# aggregate_duration_array_agg
+query T?
+SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(Millisecond, None)')) FROM t GROUP BY tag ORDER BY tag;
+----
+X [0 days 0 hours 0 mins 0.011 secs, 0 days 0 hours 0 mins 0.123 secs]
+Y [, 0 days 0 hours 0 mins 0.432 secs]
 
 statement ok
 drop table t_source;
@@ -1974,7 +3816,7 @@ select
   column3 as tag
 from t_source;
 
-# Demonstate the contents
+# Demonstrate the contents
 query DDTT
 select * from t;
 ----
@@ -1985,10 +3827,10 @@ NULL NULL Row 2 Y
 
 
 # aggregate_timestamps_sum
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Date32\)'\. You might need to add explicit type casts\.
+query error
 SELECT sum(date32), sum(date64) FROM t;
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Date32\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, sum(date32), sum(date64) FROM t GROUP BY tag ORDER BY tag;
 
 # aggregate_timestamps_count
@@ -2029,10 +3871,10 @@ Y 2021-01-01 2021-01-01T00:00:00
 
 
 # aggregate_timestamps_avg
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
+query error
 SELECT avg(date32), avg(date64) FROM t
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, avg(date32), avg(date64) FROM t GROUP BY tag ORDER BY tag;
 
 
@@ -2072,7 +3914,7 @@ select
   column3 as tag
 from t_source;
 
-# Demonstate the contents
+# Demonstrate the contents
 query DDDDTT
 select * from t;
 ----
@@ -2082,10 +3924,10 @@ select * from t;
 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28 Row 3 B
 
 # aggregate_times_sum
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag
 
 # aggregate_times_count
@@ -2127,10 +3969,10 @@ B 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28
 
 
 # aggregate_times_avg
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
+query error
 SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
 
 statement ok
@@ -2255,15 +4097,91 @@ select median(a) from (select 1 as a where 1=0);
 ----
 NULL
 
-query error DataFusion error: Execution error: aggregate function needs at least one non-null element
+query I
 select approx_median(a) from (select 1 as a where 1=0);
-
+----
+NULL
 
 # aggregate_decimal_sum
 query RT
 select sum(c1), arrow_typeof(sum(c1)) from d_table;
 ----
 100 Decimal128(20, 3)
+
+# aggregate sum with decimal
+statement ok
+create table t (c decimal(35, 3)) as values (10), (null), (20);
+
+query RT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+30 Decimal128(38, 3)
+
+statement ok
+drop table t;
+
+# aggregate sum with i32, sum coerced result to i64
+statement ok
+create table t (c int) as values (1), (-1), (10), (null), (-11);
+
+query IT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+-1 Int64
+
+statement ok
+drop table t;
+
+# aggregate sum with all nulls
+statement ok
+create table t (c1 decimal(10, 0), c2 int) as values (null, null), (null, null), (null, null);
+
+query RTIT
+select 
+  sum(c1), arrow_typeof(sum(c1)),
+  sum(c2), arrow_typeof(sum(c2))
+from t;
+----
+NULL Decimal128(20, 0) NULL Int64
+
+statement ok
+drop table t;
+
+# aggregate sum with u32, sum coerced result to u64
+statement ok
+create table t (c int unsigned) as values (1), (0), (10), (null), (4);
+
+query IT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+15 UInt64
+
+statement ok
+drop table t;
+
+# aggregate sum with f32, sum coerced result to f64
+statement ok
+create table t (c float) as values (1.2), (0.2), (-1.2), (null), (-1.0);
+
+query RT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+-0.79999999702 Float64
+
+statement ok
+drop table t;
+
+# aggregate sum with f64
+statement ok
+create table t (c double) as values (1.2), (0.2), (-1.2), (null), (-1.0);
+
+query RT
+select sum(c), arrow_typeof(sum(c)) from t;
+----
+-0.8 Float64
+
+statement ok
+drop table t;
 
 query TRT
 select c2, sum(c1), arrow_typeof(sum(c1)) from d_table GROUP BY c2 ORDER BY c2;
@@ -2283,6 +4201,18 @@ select c2, avg(c1), arrow_typeof(avg(c1)) from d_table GROUP BY c2 ORDER BY c2
 ----
 A 110.0045 Decimal128(14, 7)
 B -100.0045 Decimal128(14, 7)
+
+# aggregate_decimal_count_distinct
+query I
+select count(DISTINCT cast(c1 AS DECIMAL(10, 2))) from d_table
+----
+4
+
+query TI
+select c2, count(DISTINCT cast(c1 AS DECIMAL(10, 2))) from d_table GROUP BY c2 ORDER BY c2
+----
+A 2
+B 2
 
 # Use PostgresSQL dialect
 statement ok
@@ -2401,12 +4331,12 @@ statement ok
 INSERT INTO test_decimal_table VALUES (1, 10.10, 100.1, NULL), (1, 20.20, 200.2, NULL), (2, 10.10, 700.1, NULL), (2, 20.20, 700.1, NULL), (3, 10.1, 100.1, NULL), (3, 10.1, NULL, NULL)
 
 # aggregate_decimal_with_group_by
-query IIRRRRIIR rowsort
-select c1, count(c2), avg(c2), sum(c2), min(c2), max(c2), count(c3), count(c4), sum(c4) from test_decimal_table group by c1
+query IIRRRRIIRR rowsort
+select c1, count(c2), avg(c2), sum(c2), min(c2), max(c2), count(c3), count(c4), sum(c4), avg(c4) from test_decimal_table group by c1
 ----
-1 2 15.15 30.3 10.1 20.2 2 0 NULL
-2 2 15.15 30.3 10.1 20.2 2 0 NULL
-3 2 10.1 20.2 10.1 10.1 1 0 NULL
+1 2 15.15 30.3 10.1 20.2 2 0 NULL NULL
+2 2 15.15 30.3 10.1 20.2 2 0 NULL NULL
+3 2 10.1 20.2 10.1 10.1 1 0 NULL NULL
 
 # aggregate_decimal_with_group_by_decimal
 query RIRRRRIR rowsort
@@ -2469,6 +4399,15 @@ query R
 select avg(x_dict) from value_dict;
 ----
 2.625
+
+# distinct_average
+query R
+select avg(distinct x_dict) from value_dict;
+----
+3
+
+query error
+select avg(x_dict), avg(distinct x_dict) from value_dict;
 
 query I
 select min(x_dict) from value_dict;
@@ -2583,21 +4522,21 @@ query TT
 EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
 ----
 logical_plan
-Limit: skip=0, fetch=5
---Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
-----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
-------TableScan: aggregate_test_100 projection=[c3]
+01)Limit: skip=0, fetch=5
+02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+04)------TableScan: aggregate_test_100 projection=[c3]
 physical_plan
-GlobalLimitExec: skip=0, fetch=5
---AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
-------------CoalescePartitionsExec
---------------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
-----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
+01)GlobalLimitExec: skip=0, fetch=5
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
+07)------------CoalescePartitionsExec
+08)--------------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
 
 query I
 SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
@@ -2612,16 +4551,16 @@ query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
 ----
 logical_plan
-Limit: skip=4, fetch=5
---Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
-----TableScan: aggregate_test_100 projection=[c2, c3]
+01)Limit: skip=4, fetch=5
+02)--Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+03)----TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
-GlobalLimitExec: skip=4, fetch=5
---AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+01)GlobalLimitExec: skip=4, fetch=5
+02)--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
@@ -2637,26 +4576,26 @@ query TT
 EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
 ----
 logical_plan
-Limit: skip=0, fetch=4
---Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
-----Projection: aggregate_test_100.c3
-------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
---------Filter: aggregate_test_100.c3 >= Int16(10) AND aggregate_test_100.c3 <= Int16(20)
-----------TableScan: aggregate_test_100 projection=[c2, c3], partial_filters=[aggregate_test_100.c3 >= Int16(10), aggregate_test_100.c3 <= Int16(20)]
+01)Limit: skip=0, fetch=4
+02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+03)----Projection: aggregate_test_100.c3
+04)------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+05)--------Filter: aggregate_test_100.c3 >= Int16(10) AND aggregate_test_100.c3 <= Int16(20)
+06)----------TableScan: aggregate_test_100 projection=[c2, c3], partial_filters=[aggregate_test_100.c3 >= Int16(10), aggregate_test_100.c3 <= Int16(20)]
 physical_plan
-GlobalLimitExec: skip=0, fetch=4
---AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[4]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[4]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------ProjectionExec: expr=[c3@1 as c3]
-------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
---------------CoalescePartitionsExec
-----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
-------------------CoalesceBatchesExec: target_batch_size=8192
---------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
-----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+01)GlobalLimitExec: skip=0, fetch=4
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[4]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[4]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------ProjectionExec: expr=[c3@1 as c3]
+07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+08)--------------CoalescePartitionsExec
+09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+10)------------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
+12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query I
 SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
@@ -2671,18 +4610,18 @@ query TT
 EXPLAIN SELECT max(c1), c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5;
 ----
 logical_plan
-Projection: MAX(aggregate_test_100.c1), aggregate_test_100.c2, aggregate_test_100.c3
---Limit: skip=0, fetch=5
-----Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[MAX(aggregate_test_100.c1)]]
-------TableScan: aggregate_test_100 projection=[c1, c2, c3]
+01)Projection: MAX(aggregate_test_100.c1), aggregate_test_100.c2, aggregate_test_100.c3
+02)--Limit: skip=0, fetch=5
+03)----Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[MAX(aggregate_test_100.c1)]]
+04)------TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
-ProjectionExec: expr=[MAX(aggregate_test_100.c1)@2 as MAX(aggregate_test_100.c1), c2@0 as c2, c3@1 as c3]
---GlobalLimitExec: skip=0, fetch=5
-----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[MAX(aggregate_test_100.c1)]
-------CoalescePartitionsExec
---------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[MAX(aggregate_test_100.c1)]
-----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
+01)ProjectionExec: expr=[MAX(aggregate_test_100.c1)@2 as MAX(aggregate_test_100.c1), c2@0 as c2, c3@1 as c3]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[MAX(aggregate_test_100.c1)]
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[MAX(aggregate_test_100.c1)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 # TODO(msirek): Extend checking in LimitedDistinctAggregation equal groupings to ignore the order of columns
 # in the group-by column lists, so the limit could be pushed to the lowest AggregateExec in this case
@@ -2690,23 +4629,23 @@ query TT
 EXPLAIN SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
 ----
 logical_plan
-Limit: skip=10, fetch=3
---Aggregate: groupBy=[[aggregate_test_100.c3, aggregate_test_100.c2]], aggr=[[]]
-----Projection: aggregate_test_100.c3, aggregate_test_100.c2
-------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
---------TableScan: aggregate_test_100 projection=[c2, c3]
+01)Limit: skip=10, fetch=3
+02)--Aggregate: groupBy=[[aggregate_test_100.c3, aggregate_test_100.c2]], aggr=[[]]
+03)----Projection: aggregate_test_100.c3, aggregate_test_100.c2
+04)------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+05)--------TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
-GlobalLimitExec: skip=10, fetch=3
---AggregateExec: mode=Final, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------ProjectionExec: expr=[c3@1 as c3, c2@0 as c2]
-------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
---------------CoalescePartitionsExec
-----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
-------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+01)GlobalLimitExec: skip=10, fetch=3
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------ProjectionExec: expr=[c3@1 as c3, c2@0 as c2]
+07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+08)--------------CoalescePartitionsExec
+09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)--------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
 SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
@@ -2719,16 +4658,16 @@ query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
 ----
 logical_plan
-Limit: skip=0, fetch=3
---Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
-----TableScan: aggregate_test_100 projection=[c2, c3]
+01)Limit: skip=0, fetch=3
+02)--Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
+03)----TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
-GlobalLimitExec: skip=0, fetch=3
---AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[3]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+01)GlobalLimitExec: skip=0, fetch=3
+02)--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[3]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
@@ -2746,21 +4685,21 @@ query TT
 EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
 ----
 logical_plan
-Limit: skip=0, fetch=5
---Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
-----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
-------TableScan: aggregate_test_100 projection=[c3]
+01)Limit: skip=0, fetch=5
+02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+04)------TableScan: aggregate_test_100 projection=[c3]
 physical_plan
-GlobalLimitExec: skip=0, fetch=5
---AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
-----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
-------------CoalescePartitionsExec
---------------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
-----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
+01)GlobalLimitExec: skip=0, fetch=5
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
+07)------------CoalescePartitionsExec
+08)--------------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
 
 statement ok
 set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;
@@ -3067,7 +5006,7 @@ SELECT STRING_AGG(column1, '|') FROM (values (''), (null), (''));
 statement ok
 CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
 
-query ITT
+query I
 INSERT INTO strings VALUES (1,'a','/'), (1,'b','-'), (2,'i','/'), (2,NULL,'-'), (2,'j','+'), (3,'p','/'), (4,'x','/'), (4,'y','-'), (4,'z','+')
 ----
 9
@@ -3110,6 +5049,57 @@ FROM my_data
 GROUP BY dummy
 ----
 text1, text1, text1
+
+# Tests for aggregating with NaN values
+statement ok
+CREATE TABLE float_table (
+    col_f32 FLOAT,
+    col_f32_nan FLOAT,
+    col_f64 DOUBLE,
+    col_f64_nan DOUBLE
+) as VALUES
+( -128.2,  -128.2,                      -128.2,  -128.2 ),
+( 32768.3, arrow_cast('NAN','Float32'), 32768.3, 32768.3 ),
+( 27.3,    27.3,                        27.3,    arrow_cast('NAN','Float64') );
+
+# Test string_agg with largeutf8
+statement ok
+create table string_agg_large_utf8 (c string) as values 
+  (arrow_cast('a', 'LargeUtf8')),
+  (arrow_cast('b', 'LargeUtf8')),
+  (arrow_cast('c', 'LargeUtf8'))
+;
+
+query T
+SELECT STRING_AGG(c, ',') FROM string_agg_large_utf8;
+----
+a,b,c
+
+statement ok
+drop table string_agg_large_utf8;
+
+query RRRRI
+select min(col_f32), max(col_f32), avg(col_f32), sum(col_f32), count(col_f32) from float_table;
+----
+-128.2 32768.3 10889.13359451294 32667.40078353882 3
+
+query RRRRI
+select min(col_f32_nan), max(col_f32_nan), avg(col_f32_nan), sum(col_f32_nan), count(col_f32_nan) from float_table;
+----
+-128.2 NaN NaN NaN 3
+
+query RRRRI
+select min(col_f64), max(col_f64), avg(col_f64), sum(col_f64), count(col_f64) from float_table;
+----
+-128.2 32768.3 10889.133333333333 32667.4 3
+
+query RRRRI
+select min(col_f64_nan), max(col_f64_nan), avg(col_f64_nan), sum(col_f64_nan), count(col_f64_nan) from float_table;
+----
+-128.2 NaN NaN NaN 3
+
+statement ok
+drop table float_table
 
 
 # Queries with nested count(*)
@@ -3260,21 +5250,21 @@ query TT
 EXPLAIN SELECT MIN(col0) FROM empty;
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[MIN(empty.col0)]]
---TableScan: empty projection=[col0]
+01)Aggregate: groupBy=[[]], aggr=[[MIN(empty.col0)]]
+02)--TableScan: empty projection=[col0]
 physical_plan
-ProjectionExec: expr=[NULL as MIN(empty.col0)]
---PlaceholderRowExec
+01)ProjectionExec: expr=[NULL as MIN(empty.col0)]
+02)--PlaceholderRowExec
 
 query TT
 EXPLAIN SELECT MAX(col0) FROM empty;
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[MAX(empty.col0)]]
---TableScan: empty projection=[col0]
+01)Aggregate: groupBy=[[]], aggr=[[MAX(empty.col0)]]
+02)--TableScan: empty projection=[col0]
 physical_plan
-ProjectionExec: expr=[NULL as MAX(empty.col0)]
---PlaceholderRowExec
+01)ProjectionExec: expr=[NULL as MAX(empty.col0)]
+02)--PlaceholderRowExec
 
 statement ok
 DROP TABLE empty;
@@ -3313,7 +5303,7 @@ query I
 SELECT 0 AS "t.a" FROM t HAVING MAX(t.a) = 0;
 ----
 
-# Test issue: https://github.com/apache/arrow-datafusion/issues/9161
+# Test issue: https://github.com/apache/datafusion/issues/9161
 query I rowsort
 SELECT CAST(a AS INT) FROM t GROUP BY t.a;
 ----
@@ -3323,3 +5313,208 @@ SELECT CAST(a AS INT) FROM t GROUP BY t.a;
 
 statement ok
 DROP TABLE t;
+
+# Test for ignore null in FIRST_VALUE
+statement ok
+CREATE TABLE t AS VALUES (null::bigint), (3), (4);
+
+query I
+SELECT FIRST_VALUE(column1) FROM t;
+----
+NULL
+
+query I
+SELECT FIRST_VALUE(column1) RESPECT NULLS FROM t;
+----
+NULL
+
+query I
+SELECT FIRST_VALUE(column1) IGNORE NULLS FROM t;
+----
+3
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore null with ORDER BY in FIRST_VALUE
+statement ok
+CREATE TABLE t AS VALUES  (3, 4), (4, 3), (null::bigint, 1), (null::bigint, 1);
+
+query I
+SELECT column1 FROM t ORDER BY column2;
+----
+NULL
+NULL
+4
+3
+
+query I
+SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
+----
+NULL
+
+query I
+SELECT FIRST_VALUE(column1 ORDER BY column2) RESPECT NULLS FROM t;
+----
+NULL
+
+query I
+SELECT FIRST_VALUE(column1 ORDER BY column2) IGNORE NULLS FROM t;
+----
+4
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore null in LAST_VALUE
+statement ok
+CREATE TABLE t AS VALUES (3), (4), (null::bigint);
+
+query I
+SELECT LAST_VALUE(column1) FROM t;
+----
+NULL
+
+query I
+SELECT LAST_VALUE(column1) RESPECT NULLS FROM t;
+----
+NULL
+
+query I
+SELECT LAST_VALUE(column1) IGNORE NULLS FROM t;
+----
+4
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore null with ORDER BY in LAST_VALUE
+statement ok
+CREATE TABLE t AS VALUES  (3, 3), (4, 4), (null::bigint, 1), (null::bigint, 2);
+
+query I
+SELECT column1 FROM t ORDER BY column2 DESC;
+----
+4
+3
+NULL
+NULL
+
+query I
+SELECT LAST_VALUE(column1 ORDER BY column2 DESC) FROM t;
+----
+NULL
+
+query I
+SELECT LAST_VALUE(column1 ORDER BY column2 DESC) RESPECT NULLS FROM t;
+----
+NULL
+
+query I
+SELECT LAST_VALUE(column1 ORDER BY column2 DESC) IGNORE NULLS FROM t;
+----
+3
+
+statement ok
+DROP TABLE t;
+
+# Test for CASE with NULL in aggregate function
+statement ok
+CREATE TABLE example(data double precision);
+
+statement ok
+INSERT INTO example VALUES (1), (2), (NULL), (4);
+
+query RR
+SELECT
+    sum(CASE WHEN data is NULL THEN NULL ELSE data+1 END) as then_null,
+    sum(CASE WHEN data is NULL THEN data+1 ELSE NULL END) as else_null
+FROM example;
+----
+10 NULL
+
+query R
+SELECT
+   CASE data WHEN 1 THEN NULL WHEN 2 THEN 3.3 ELSE NULL END as case_null
+FROM example;
+----
+NULL
+3.3
+NULL
+NULL
+
+statement ok
+drop table example;
+
+# Test Convert FirstLast optimizer rule
+statement ok
+CREATE EXTERNAL TABLE convert_first_last_table (
+c1 INT NOT NULL,
+c2 INT NOT NULL,
+c3 INT NOT NULL
+)
+STORED AS CSV
+WITH ORDER (c1 ASC)
+WITH ORDER (c2 DESC)
+WITH ORDER (c3 ASC)
+LOCATION '../core/tests/data/convert_first_last.csv'
+OPTIONS ('format.has_header' 'true');
+
+# test first to last, the result does not show difference, we need to check the conversion by `explain`
+query TT
+explain select first_value(c1 order by c3 desc) from convert_first_last_table;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c3 DESC NULLS FIRST]]]
+02)--TableScan: convert_first_last_table projection=[c1, c3]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c3 DESC NULLS FIRST]]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[last_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c3 ASC NULLS LAST]]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c3], output_orderings=[[c1@0 ASC NULLS LAST], [c3@1 ASC NULLS LAST]], has_header=true
+
+# test last to first
+query TT
+explain select last_value(c1 order by c2 asc) from convert_first_last_table;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[last_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 ASC NULLS LAST]]]
+02)--TableScan: convert_first_last_table projection=[c1, c2]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[last_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 ASC NULLS LAST]]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 DESC NULLS FIRST]]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c2], output_orderings=[[c1@0 ASC NULLS LAST], [c2@1 DESC]], has_header=true
+
+# test building plan with aggreagte sum
+
+statement ok
+create table employee_csv(id int, first_name string, last_name varchar, state varchar, salary bigint) as values (1, 'jenson', 'huang', 'unemployed', 10);
+
+query TI
+select state, sum(salary) total_salary from employee_csv group by state;
+----
+unemployed 10
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+explain select state, sum(salary) as total_salary from employee_csv group by state;
+----
+logical_plan
+01)Projection: employee_csv.state, sum(employee_csv.salary) AS total_salary
+02)--Aggregate: groupBy=[[employee_csv.state]], aggr=[[sum(employee_csv.salary)]]
+03)----TableScan: employee_csv projection=[state, salary]
+
+# fail if there is duplicate name
+query error DataFusion error: Schema error: Schema contains qualified field name employee_csv\.state and unqualified field name state which would be ambiguous
+select state, sum(salary) as state from employee_csv group by state;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+drop table employee_csv;

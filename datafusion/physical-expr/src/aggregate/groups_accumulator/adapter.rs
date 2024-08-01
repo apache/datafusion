@@ -69,7 +69,7 @@ impl AccumulatorState {
         }
     }
 
-    /// Returns the amount of memory taken by this structre and its accumulator
+    /// Returns the amount of memory taken by this structure and its accumulator
     fn size(&self) -> usize {
         self.accumulator.size()
             + std::mem::size_of_val(self)

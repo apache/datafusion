@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -25,26 +25,29 @@ use arrow::util::pretty::pretty_format_batches;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
-    create_window_expr, BoundedWindowAggExec, WindowAggExec,
+    create_window_expr, schema_add_window_field, BoundedWindowAggExec, WindowAggExec,
 };
-use datafusion::physical_plan::{collect, ExecutionPlan, InputOrderMode};
+use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
+use datafusion::physical_plan::{collect, InputOrderMode};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_expr::type_coercion::aggregates::coerce_types;
+use datafusion_expr::type_coercion::functions::data_types_with_aggregate_udf;
 use datafusion_expr::{
     AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
     WindowFrameUnits, WindowFunctionDefinition,
 };
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
 use hashbrown::HashMap;
+use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-
-use datafusion_physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn window_bounded_window_random_comparison() -> Result<()> {
@@ -164,7 +167,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
             // its name
             "COUNT",
             // window function argument
@@ -250,6 +253,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
 
     let partitionby_exprs = vec![];
     let orderby_exprs = vec![];
+    let logical_exprs = vec![];
     // Window frame starts with "UNBOUNDED PRECEDING":
     let start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
 
@@ -274,14 +278,18 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     window_frame.is_causal()
                 };
 
+                let extended_schema =
+                    schema_add_window_field(&args, &schema, &window_fn, fn_name)?;
+
                 let window_expr = create_window_expr(
                     &window_fn,
                     fn_name.to_string(),
                     &args,
+                    &logical_exprs,
                     &partitionby_exprs,
                     &orderby_exprs,
                     Arc::new(window_frame),
-                    schema.as_ref(),
+                    &extended_schema,
                     false,
                 )?;
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
@@ -339,14 +347,14 @@ fn get_random_function(
     window_fn_map.insert(
         "sum",
         (
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "count",
         (
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![arg.clone()],
         ),
     );
@@ -466,6 +474,14 @@ fn get_random_function(
             let coerced = coerce_types(f, &[dt], &sig).unwrap();
             args[0] = cast(a, schema, coerced[0].clone()).unwrap();
         }
+    } else if let WindowFunctionDefinition::AggregateUDF(udf) = window_fn {
+        if !args.is_empty() {
+            // Do type coercion first argument
+            let a = args[0].clone();
+            let dt = a.data_type(schema.as_ref()).unwrap();
+            let coerced = data_types_with_aggregate_udf(&[dt], udf).unwrap();
+            args[0] = cast(a, schema, coerced[0].clone()).unwrap();
+        }
     }
 
     (window_fn.clone(), args, fn_name.to_string())
@@ -515,7 +531,8 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
     } else {
         WindowFrameUnits::Groups
     };
-    match units {
+
+    let mut window_frame = match units {
         // In range queries window frame boundaries should match column type
         WindowFrameUnits::Range => {
             let start_bound = if start_bound.is_preceding {
@@ -566,6 +583,28 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             // should work only with WindowAggExec
             window_frame
         }
+    };
+    convert_bound_to_current_row_if_applicable(rng, &mut window_frame.start_bound);
+    convert_bound_to_current_row_if_applicable(rng, &mut window_frame.end_bound);
+    window_frame
+}
+
+/// This utility converts `PRECEDING(0)` or `FOLLOWING(0)` specifiers in window
+/// frame bounds to `CURRENT ROW` with 50% probability. This enables us to test
+/// behaviour of the system in the `CURRENT ROW` mode.
+fn convert_bound_to_current_row_if_applicable(
+    rng: &mut StdRng,
+    bound: &mut WindowFrameBound,
+) {
+    match bound {
+        WindowFrameBound::Preceding(value) | WindowFrameBound::Following(value) => {
+            if let Ok(zero) = ScalarValue::new_zero(&value.data_type()) {
+                if value == &zero && rng.gen_range(0..2) == 0 {
+                    *bound = WindowFrameBound::CurrentRow;
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -588,13 +627,16 @@ async fn run_window_test(
     let mut orderby_exprs = vec![];
     for column in &orderby_columns {
         orderby_exprs.push(PhysicalSortExpr {
-            expr: col(column, &schema).unwrap(),
+            expr: col(column, &schema)?,
             options: SortOptions::default(),
         })
     }
+    if orderby_exprs.len() > 1 && !window_frame.can_accept_multi_orderby() {
+        orderby_exprs = orderby_exprs[0..1].to_vec();
+    }
     let mut partitionby_exprs = vec![];
     for column in &partition_by_columns {
-        partitionby_exprs.push(col(column, &schema).unwrap());
+        partitionby_exprs.push(col(column, &schema)?);
     }
     let mut sort_keys = vec![];
     for partition_by_expr in &partitionby_exprs {
@@ -609,7 +651,7 @@ async fn run_window_test(
         }
     }
 
-    let concat_input_record = concat_batches(&schema, &input1).unwrap();
+    let concat_input_record = concat_batches(&schema, &input1)?;
     let source_sort_keys = vec![
         PhysicalSortExpr {
             expr: col("a", &schema)?,
@@ -624,73 +666,82 @@ async fn run_window_test(
             options: Default::default(),
         },
     ];
-    let memory_exec =
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap();
-    let memory_exec = memory_exec.with_sort_information(vec![source_sort_keys.clone()]);
-    let mut exec1 = Arc::new(memory_exec) as Arc<dyn ExecutionPlan>;
+    let mut exec1 = Arc::new(
+        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None)?
+            .with_sort_information(vec![source_sort_keys.clone()]),
+    ) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
-        exec1 = Arc::new(SortExec::new(sort_keys.clone(), exec1)) as _;
+        exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
     }
 
-    let usual_window_exec = Arc::new(
-        WindowAggExec::try_new(
-            vec![create_window_expr(
-                &window_fn,
-                fn_name.clone(),
-                &args,
-                &partitionby_exprs,
-                &orderby_exprs,
-                Arc::new(window_frame.clone()),
-                schema.as_ref(),
-                false,
-            )
-            .unwrap()],
-            exec1,
-            vec![],
-        )
-        .unwrap(),
-    ) as _;
+    let extended_schema = schema_add_window_field(&args, &schema, &window_fn, &fn_name)?;
+
+    let usual_window_exec = Arc::new(WindowAggExec::try_new(
+        vec![create_window_expr(
+            &window_fn,
+            fn_name.clone(),
+            &args,
+            &[],
+            &partitionby_exprs,
+            &orderby_exprs,
+            Arc::new(window_frame.clone()),
+            &extended_schema,
+            false,
+        )?],
+        exec1,
+        vec![],
+    )?) as _;
     let exec2 = Arc::new(
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
-            .unwrap()
+        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)?
             .with_sort_information(vec![source_sort_keys.clone()]),
     );
-    let running_window_exec = Arc::new(
-        BoundedWindowAggExec::try_new(
-            vec![create_window_expr(
-                &window_fn,
-                fn_name,
-                &args,
-                &partitionby_exprs,
-                &orderby_exprs,
-                Arc::new(window_frame.clone()),
-                schema.as_ref(),
-                false,
-            )
-            .unwrap()],
-            exec2,
-            vec![],
-            search_mode,
-        )
-        .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+    let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
+        vec![create_window_expr(
+            &window_fn,
+            fn_name,
+            &args,
+            &[],
+            &partitionby_exprs,
+            &orderby_exprs,
+            Arc::new(window_frame.clone()),
+            &extended_schema,
+            false,
+        )?],
+        exec2,
+        vec![],
+        search_mode.clone(),
+    )?) as _;
     let task_ctx = ctx.task_ctx();
-    let collected_usual = collect(usual_window_exec, task_ctx.clone()).await.unwrap();
-
-    let collected_running = collect(running_window_exec, task_ctx.clone())
-        .await
-        .unwrap();
+    let collected_usual = collect(usual_window_exec, task_ctx.clone()).await?;
+    let collected_running = collect(running_window_exec, task_ctx)
+        .await?
+        .into_iter()
+        .filter(|b| b.num_rows() > 0)
+        .collect::<Vec<_>>();
 
     // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
     // Otherwise it means that we cannot generate result in running mode.
-    assert!(collected_running.len() > collected_usual.len());
+    let err_msg = format!("Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, random_seed: {random_seed:?}, search_mode: {search_mode:?}, partition_by_columns:{partition_by_columns:?}, orderby_columns: {orderby_columns:?}");
+    // Below check makes sure that, streaming execution generates more chunks than the bulk execution.
+    // Since algorithms and operators works on sliding windows in the streaming execution.
+    // However, in the current test setup for some random generated window frame clauses: It is not guaranteed
+    // for streaming execution to generate more chunk than its non-streaming counter part in the Linear mode.
+    // As an example window frame `OVER(PARTITION BY d ORDER BY a RANGE BETWEEN CURRENT ROW AND 9 FOLLOWING)`
+    // needs to receive a=10 to generate result for the rows where a=0. If the input data generated is between the range [0, 9].
+    // even in streaming mode, generated result will be single bulk as in the non-streaming version.
+    if search_mode != Linear {
+        assert!(
+            collected_running.len() > collected_usual.len(),
+            "{}",
+            err_msg
+        );
+    }
+
     // compare
-    let usual_formatted = pretty_format_batches(&collected_usual).unwrap().to_string();
-    let running_formatted = pretty_format_batches(&collected_running)
-        .unwrap()
-        .to_string();
+    let usual_formatted = pretty_format_batches(&collected_usual)?.to_string();
+    let running_formatted = pretty_format_batches(&collected_running)?.to_string();
 
     let mut usual_formatted_sorted: Vec<&str> = usual_formatted.trim().lines().collect();
     usual_formatted_sorted.sort_unstable();
@@ -703,19 +754,31 @@ async fn run_window_test(
         .zip(&running_formatted_sorted)
         .enumerate()
     {
-        assert_eq!(
-            (i, usual_line),
-            (i, running_line),
-            "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}"
-        );
+        if !usual_line.eq(running_line) {
+            println!("Inconsistent result for window_frame at line:{i:?}: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}");
+            println!("--------usual_formatted_sorted----------------running_formatted_sorted--------");
+            for (line1, line2) in
+                usual_formatted_sorted.iter().zip(running_formatted_sorted)
+            {
+                println!("{:?}   ---   {:?}", line1, line2);
+            }
+            unreachable!();
+        }
     }
     Ok(())
+}
+
+fn generate_random_string(rng: &mut StdRng, length: usize) -> String {
+    rng.sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
 }
 
 /// Return randomly sized record batches with:
 /// three sorted int32 columns 'a', 'b', 'c' ranged from 0..DISTINCT as columns
 /// one random int32 column x
-fn make_staggered_batches<const STREAM: bool>(
+pub(crate) fn make_staggered_batches<const STREAM: bool>(
     len: usize,
     n_distinct: usize,
     random_seed: u64,
@@ -724,6 +787,7 @@ fn make_staggered_batches<const STREAM: bool>(
     let mut rng = StdRng::seed_from_u64(random_seed);
     let mut input123: Vec<(i32, i32, i32)> = vec![(0, 0, 0); len];
     let mut input4: Vec<i32> = vec![0; len];
+    let mut input5: Vec<String> = vec!["".to_string(); len];
     input123.iter_mut().for_each(|v| {
         *v = (
             rng.gen_range(0..n_distinct) as i32,
@@ -733,10 +797,15 @@ fn make_staggered_batches<const STREAM: bool>(
     });
     input123.sort();
     rng.fill(&mut input4[..]);
+    input5.iter_mut().for_each(|v| {
+        *v = generate_random_string(&mut rng, 1);
+    });
+    input5.sort();
     let input1 = Int32Array::from_iter_values(input123.iter().map(|k| k.0));
     let input2 = Int32Array::from_iter_values(input123.iter().map(|k| k.1));
     let input3 = Int32Array::from_iter_values(input123.iter().map(|k| k.2));
     let input4 = Int32Array::from_iter_values(input4);
+    let input5 = StringArray::from_iter_values(input5);
 
     // split into several record batches
     let mut remainder = RecordBatch::try_from_iter(vec![
@@ -744,6 +813,7 @@ fn make_staggered_batches<const STREAM: bool>(
         ("b", Arc::new(input2) as ArrayRef),
         ("c", Arc::new(input3) as ArrayRef),
         ("x", Arc::new(input4) as ArrayRef),
+        ("string_field", Arc::new(input5) as ArrayRef),
     ])
     .unwrap();
 
@@ -752,6 +822,7 @@ fn make_staggered_batches<const STREAM: bool>(
         while remainder.num_rows() > 0 {
             let batch_size = rng.gen_range(0..50);
             if remainder.num_rows() < batch_size {
+                batches.push(remainder);
                 break;
             }
             batches.push(remainder.slice(0, batch_size));

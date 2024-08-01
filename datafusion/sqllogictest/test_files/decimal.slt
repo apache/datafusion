@@ -44,8 +44,8 @@ c4 BOOLEAN NOT NULL,
 c5 DECIMAL(12,7) NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../core/tests/data/decimal_data.csv';
+LOCATION '../core/tests/data/decimal_data.csv'
+OPTIONS ('format.has_header' 'true');
 
 
 query TT
@@ -639,8 +639,8 @@ c4 BOOLEAN NOT NULL,
 c5 DECIMAL(52,7) NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION '../core/tests/data/decimal_data.csv';
+LOCATION '../core/tests/data/decimal_data.csv'
+OPTIONS ('format.has_header' 'true');
 
 query TT
 select arrow_typeof(c1), arrow_typeof(c5) from decimal256_simple limit 1;
@@ -719,6 +719,17 @@ select count(*),c1 from decimal256_simple group by c1 order by c1;
 3 0.00003
 4 0.00004
 5 0.00005
+
+query I
+select count(DISTINCT cast(c1 AS DECIMAL(42, 4))) from decimal256_simple;
+----
+2
+
+query BI
+select c4, count(DISTINCT cast(c1 AS DECIMAL(42, 4))) from decimal256_simple GROUP BY c4 ORDER BY c4;
+----
+false 2
+true 2
 
 statement ok
 drop table decimal256_simple;

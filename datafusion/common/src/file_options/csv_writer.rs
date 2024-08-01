@@ -17,17 +17,11 @@
 
 //! Options related to how csv files should be written
 
-use std::str::FromStr;
+use crate::config::CsvOptions;
+use crate::error::{DataFusionError, Result};
+use crate::parsers::CompressionTypeVariant;
 
 use arrow::csv::WriterBuilder;
-
-use crate::{
-    config::ConfigOptions,
-    error::{DataFusionError, Result},
-    parsers::CompressionTypeVariant,
-};
-
-use super::StatementOptions;
 
 /// Options for writing CSV files
 #[derive(Clone, Debug)]
@@ -51,58 +45,42 @@ impl CsvWriterOptions {
     }
 }
 
-impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {
+impl TryFrom<&CsvOptions> for CsvWriterOptions {
     type Error = DataFusionError;
 
-    fn try_from(value: (&ConfigOptions, &StatementOptions)) -> Result<Self> {
-        let _configs = value.0;
-        let statement_options = value.1;
-        let mut builder = WriterBuilder::default();
-        let mut compression = CompressionTypeVariant::UNCOMPRESSED;
-        for (option, value) in &statement_options.options {
-            builder = match option.to_lowercase().as_str(){
-                "header" => {
-                    let has_header = value.parse()
-                        .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?;
-                    builder.with_header(has_header)
-                },
-                "date_format" => builder.with_date_format(value.to_owned()),
-                "datetime_format" => builder.with_datetime_format(value.to_owned()),
-                "timestamp_format" => builder.with_timestamp_format(value.to_owned()),
-                "time_format" => builder.with_time_format(value.to_owned()),
-                "rfc3339" => builder, // No-op
-                "null_value" => builder.with_null(value.to_owned()),
-                "compression" => {
-                    compression = CompressionTypeVariant::from_str(value.replace('\'', "").as_str())?;
-                    builder
-                },
-                "delimiter" => {
-                    // Ignore string literal single quotes passed from sql parsing
-                    let value = value.replace('\'', "");
-                    let chars: Vec<char> = value.chars().collect();
-                    if chars.len()>1{
-                        return Err(DataFusionError::Configuration(format!(
-                            "CSV Delimiter Option must be a single char, got: {}", value
-                        )))
-                    }
-                    builder.with_delimiter(chars[0].try_into().map_err(|_| {
-                        DataFusionError::Internal(
-                            "Unable to convert CSV delimiter into u8".into(),
-                        )
-                    })?)
-            },
-                "quote" | "escape" => {
-                    // https://github.com/apache/arrow-rs/issues/5146
-                    // These two attributes are only available when reading csv files.
-                    // To avoid error
-                    builder
-                },
-                _ => return Err(DataFusionError::Configuration(format!("Found unsupported option {option} with value {value} for CSV format!")))
-            }
+    fn try_from(value: &CsvOptions) -> Result<Self> {
+        let mut builder = WriterBuilder::default()
+            .with_header(value.has_header.unwrap_or(false))
+            .with_quote(value.quote)
+            .with_delimiter(value.delimiter);
+
+        if let Some(v) = &value.date_format {
+            builder = builder.with_date_format(v.into())
+        }
+        if let Some(v) = &value.datetime_format {
+            builder = builder.with_datetime_format(v.into())
+        }
+        if let Some(v) = &value.timestamp_format {
+            builder = builder.with_timestamp_format(v.into())
+        }
+        if let Some(v) = &value.timestamp_tz_format {
+            builder = builder.with_timestamp_tz_format(v.into())
+        }
+        if let Some(v) = &value.time_format {
+            builder = builder.with_time_format(v.into())
+        }
+        if let Some(v) = &value.null_value {
+            builder = builder.with_null(v.into())
+        }
+        if let Some(v) = &value.escape {
+            builder = builder.with_escape(*v)
+        }
+        if let Some(v) = &value.double_quote {
+            builder = builder.with_double_quote(*v)
         }
         Ok(CsvWriterOptions {
             writer_options: builder,
-            compression,
+            compression: value.compression,
         })
     }
 }

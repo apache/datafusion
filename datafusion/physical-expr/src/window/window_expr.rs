@@ -20,18 +20,19 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::{PhysicalExpr, PhysicalSortExpr};
+use crate::{LexOrderingRef, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::compare_rows;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_state::{
-    PartitionBatchState, WindowAggState, WindowFrameContext,
+    PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
 };
-use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame};
+use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame, WindowFrameBound};
 
 use indexmap::IndexMap;
 
@@ -127,6 +128,45 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// Get the reverse expression of this [WindowExpr].
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
+
+    /// Returns all expressions used in the [`WindowExpr`].
+    /// These expressions are (1) function arguments, (2) partition by expressions, (3) order by expressions.
+    fn all_expressions(&self) -> WindowPhysicalExpressions {
+        let args = self.expressions();
+        let partition_by_exprs = self.partition_by().to_vec();
+        let order_by_exprs = self
+            .order_by()
+            .iter()
+            .map(|sort_expr| Arc::clone(&sort_expr.expr))
+            .collect::<Vec<_>>();
+        WindowPhysicalExpressions {
+            args,
+            partition_by_exprs,
+            order_by_exprs,
+        }
+    }
+
+    /// Rewrites [`WindowExpr`], with new expressions given. The argument should be consistent
+    /// with the return value of the [`WindowExpr::all_expressions`] method.
+    /// Returns `Some(Arc<dyn WindowExpr>)` if re-write is supported, otherwise returns `None`.
+    fn with_new_expressions(
+        &self,
+        _args: Vec<Arc<dyn PhysicalExpr>>,
+        _partition_bys: Vec<Arc<dyn PhysicalExpr>>,
+        _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Option<Arc<dyn WindowExpr>> {
+        None
+    }
+}
+
+/// Stores the physical expressions used inside the `WindowExpr`.
+pub struct WindowPhysicalExpressions {
+    /// Window function arguments
+    pub args: Vec<Arc<dyn PhysicalExpr>>,
+    /// PARTITION BY expressions
+    pub partition_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    /// ORDER BY expressions
+    pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
 /// Extension trait that adds common functionality to [`AggregateWindowExpr`]s
@@ -153,10 +193,11 @@ pub trait AggregateWindowExpr: WindowExpr {
         let sort_options: Vec<SortOptions> =
             self.order_by().iter().map(|o| o.options).collect();
         let mut window_frame_ctx =
-            WindowFrameContext::new(self.get_window_frame().clone(), sort_options);
+            WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options);
         self.get_result_column(
             &mut accumulator,
             batch,
+            None,
             &mut last_range,
             &mut window_frame_ctx,
             0,
@@ -194,16 +235,18 @@ pub trait AggregateWindowExpr: WindowExpr {
             };
             let state = &mut window_state.state;
             let record_batch = &partition_batch_state.record_batch;
+            let most_recent_row = partition_batch_state.most_recent_row.as_ref();
 
             // If there is no window state context, initialize it.
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
                 let sort_options: Vec<SortOptions> =
                     self.order_by().iter().map(|o| o.options).collect();
-                WindowFrameContext::new(self.get_window_frame().clone(), sort_options)
+                WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options)
             });
             let out_col = self.get_result_column(
                 accumulator,
                 record_batch,
+                most_recent_row,
                 // Start search from the last range
                 &mut state.window_frame_range,
                 window_frame_ctx,
@@ -217,10 +260,12 @@ pub trait AggregateWindowExpr: WindowExpr {
 
     /// Calculates the window expression result for the given record batch.
     /// Assumes that `record_batch` belongs to a single partition.
+    #[allow(clippy::too_many_arguments)]
     fn get_result_column(
         &self,
         accumulator: &mut Box<dyn Accumulator>,
         record_batch: &RecordBatch,
+        most_recent_row: Option<&RecordBatch>,
         last_range: &mut Range<usize>,
         window_frame_ctx: &mut WindowFrameContext,
         mut idx: usize,
@@ -228,6 +273,12 @@ pub trait AggregateWindowExpr: WindowExpr {
     ) -> Result<ArrayRef> {
         let values = self.evaluate_args(record_batch)?;
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
+
+        let most_recent_row_order_bys = most_recent_row
+            .map(|batch| self.order_by_columns(batch))
+            .transpose()?
+            .map(get_orderby_values);
+
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
@@ -237,7 +288,17 @@ pub trait AggregateWindowExpr: WindowExpr {
             let cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
             // Exit if the range is non-causal and extends all the way:
-            if cur_range.end == length && !is_causal && not_end {
+            if cur_range.end == length
+                && !is_causal
+                && not_end
+                && !is_end_bound_safe(
+                    window_frame_ctx,
+                    &order_bys,
+                    most_recent_row_order_bys.as_deref(),
+                    self.order_by(),
+                    idx,
+                )?
+            {
                 break;
             }
             let value = self.get_aggregate_result_inside_range(
@@ -251,6 +312,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             row_wise_results.push(value);
             idx += 1;
         }
+
         if row_wise_results.is_empty() {
             let field = self.field()?;
             let out_type = field.data_type();
@@ -260,6 +322,203 @@ pub trait AggregateWindowExpr: WindowExpr {
         }
     }
 }
+
+/// Determines whether the end bound calculation for a window frame context is
+/// safe, meaning that the end bound stays the same, regardless of future data,
+/// based on the current sort expressions and ORDER BY columns. This function
+/// delegates work to specific functions for each frame type.
+///
+/// # Parameters
+///
+/// * `window_frame_ctx`: The context of the window frame being evaluated.
+/// * `order_bys`: A slice of `ArrayRef` representing the ORDER BY columns.
+/// * `most_recent_order_bys`: An optional reference to the most recent ORDER BY
+///   columns.
+/// * `sort_exprs`: Defines the lexicographical ordering in question.
+/// * `idx`: The current index in the window frame.
+///
+/// # Returns
+///
+/// A `Result` which is `Ok(true)` if the end bound is safe, `Ok(false)` otherwise.
+pub(crate) fn is_end_bound_safe(
+    window_frame_ctx: &WindowFrameContext,
+    order_bys: &[ArrayRef],
+    most_recent_order_bys: Option<&[ArrayRef]>,
+    sort_exprs: LexOrderingRef,
+    idx: usize,
+) -> Result<bool> {
+    if sort_exprs.is_empty() {
+        // Early return if no sort expressions are present:
+        return Ok(false);
+    }
+
+    match window_frame_ctx {
+        WindowFrameContext::Rows(window_frame) => {
+            is_end_bound_safe_for_rows(&window_frame.end_bound)
+        }
+        WindowFrameContext::Range { window_frame, .. } => is_end_bound_safe_for_range(
+            &window_frame.end_bound,
+            &order_bys[0],
+            most_recent_order_bys.map(|items| &items[0]),
+            &sort_exprs[0].options,
+            idx,
+        ),
+        WindowFrameContext::Groups {
+            window_frame,
+            state,
+        } => is_end_bound_safe_for_groups(
+            &window_frame.end_bound,
+            state,
+            &order_bys[0],
+            most_recent_order_bys.map(|items| &items[0]),
+            &sort_exprs[0].options,
+        ),
+    }
+}
+
+/// For row-based window frames, determines whether the end bound calculation
+/// is safe, which is trivially the case for `Preceding` and `CurrentRow` bounds.
+/// For 'Following' bounds, it compares the bound value to zero to ensure that
+/// it doesn't extend beyond the current row.
+///
+/// # Parameters
+///
+/// * `end_bound`: Reference to the window frame bound in question.
+///
+/// # Returns
+///
+/// A `Result` indicating whether the end bound is safe for row-based window frames.
+fn is_end_bound_safe_for_rows(end_bound: &WindowFrameBound) -> Result<bool> {
+    if let WindowFrameBound::Following(value) = end_bound {
+        let zero = ScalarValue::new_zero(&value.data_type());
+        Ok(zero.map(|zero| value.eq(&zero)).unwrap_or(false))
+    } else {
+        Ok(true)
+    }
+}
+
+/// For row-based window frames, determines whether the end bound calculation
+/// is safe by comparing it against specific values (zero, current row). It uses
+/// the `is_row_ahead` helper function to determine if the current row is ahead
+/// of the most recent row based on the ORDER BY column and sorting options.
+///
+/// # Parameters
+///
+/// * `end_bound`: Reference to the window frame bound in question.
+/// * `orderby_col`: Reference to the column used for ordering.
+/// * `most_recent_ob_col`: Optional reference to the most recent order-by column.
+/// * `sort_options`: The sorting options used in the window frame.
+/// * `idx`: The current index in the window frame.
+///
+/// # Returns
+///
+/// A `Result` indicating whether the end bound is safe for range-based window frames.
+fn is_end_bound_safe_for_range(
+    end_bound: &WindowFrameBound,
+    orderby_col: &ArrayRef,
+    most_recent_ob_col: Option<&ArrayRef>,
+    sort_options: &SortOptions,
+    idx: usize,
+) -> Result<bool> {
+    match end_bound {
+        WindowFrameBound::Preceding(value) => {
+            let zero = ScalarValue::new_zero(&value.data_type())?;
+            if value.eq(&zero) {
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+            } else {
+                Ok(true)
+            }
+        }
+        WindowFrameBound::CurrentRow => {
+            is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+        }
+        WindowFrameBound::Following(delta) => {
+            let Some(most_recent_ob_col) = most_recent_ob_col else {
+                return Ok(false);
+            };
+            let most_recent_row_value =
+                ScalarValue::try_from_array(most_recent_ob_col, 0)?;
+            let current_row_value = ScalarValue::try_from_array(orderby_col, idx)?;
+
+            if sort_options.descending {
+                current_row_value
+                    .sub(delta)
+                    .map(|value| value > most_recent_row_value)
+            } else {
+                current_row_value
+                    .add(delta)
+                    .map(|value| most_recent_row_value > value)
+            }
+        }
+    }
+}
+
+/// For group-based window frames, determines whether the end bound calculation
+/// is safe by considering the group offset and whether the current row is ahead
+/// of the most recent row in terms of sorting. It checks if the end bound is
+/// within the bounds of the current group based on group end indices.
+///
+/// # Parameters
+///
+/// * `end_bound`: Reference to the window frame bound in question.
+/// * `state`: The state of the window frame for group calculations.
+/// * `orderby_col`: Reference to the column used for ordering.
+/// * `most_recent_ob_col`: Optional reference to the most recent order-by column.
+/// * `sort_options`: The sorting options used in the window frame.
+///
+/// # Returns
+///
+/// A `Result` indicating whether the end bound is safe for group-based window frames.
+fn is_end_bound_safe_for_groups(
+    end_bound: &WindowFrameBound,
+    state: &WindowFrameStateGroups,
+    orderby_col: &ArrayRef,
+    most_recent_ob_col: Option<&ArrayRef>,
+    sort_options: &SortOptions,
+) -> Result<bool> {
+    match end_bound {
+        WindowFrameBound::Preceding(value) => {
+            let zero = ScalarValue::new_zero(&value.data_type())?;
+            if value.eq(&zero) {
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+            } else {
+                Ok(true)
+            }
+        }
+        WindowFrameBound::CurrentRow => {
+            is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+        }
+        WindowFrameBound::Following(ScalarValue::UInt64(Some(offset))) => {
+            let delta = state.group_end_indices.len() - state.current_group_idx;
+            if delta == (*offset as usize) + 1 {
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
+            } else {
+                Ok(false)
+            }
+        }
+        _ => Ok(false),
+    }
+}
+
+/// This utility function checks whether `current_cols` is ahead of the `old_cols`
+/// in terms of `sort_options`.
+fn is_row_ahead(
+    old_col: &ArrayRef,
+    current_col: Option<&ArrayRef>,
+    sort_options: &SortOptions,
+) -> Result<bool> {
+    let Some(current_col) = current_col else {
+        return Ok(false);
+    };
+    if old_col.is_empty() || current_col.is_empty() {
+        return Ok(false);
+    }
+    let last_value = ScalarValue::try_from_array(old_col, old_col.len() - 1)?;
+    let current_value = ScalarValue::try_from_array(current_col, 0)?;
+    let cmp = compare_rows(&[current_value], &[last_value], &[*sort_options])?;
+    Ok(cmp.is_gt())
+}
+
 /// Get order by expression results inside `order_by_columns`.
 pub(crate) fn get_orderby_values(order_by_columns: Vec<SortColumn>) -> Vec<ArrayRef> {
     order_by_columns.into_iter().map(|s| s.values).collect()
@@ -300,7 +559,6 @@ pub enum NthValueKind {
 
 #[derive(Debug, Clone)]
 pub struct NthValueState {
-    pub range: Range<usize>,
     // In certain cases, we can finalize the result early. Consider this usage:
     // ```
     //  FIRST_VALUE(increasing_col) OVER window AS my_first_value
@@ -328,3 +586,42 @@ pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
 pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::window::window_expr::is_row_ahead;
+
+    use arrow_array::{ArrayRef, Float64Array};
+    use arrow_schema::SortOptions;
+    use datafusion_common::Result;
+
+    #[test]
+    fn test_is_row_ahead() -> Result<()> {
+        let old_values: ArrayRef =
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.]));
+
+        let new_values1: ArrayRef = Arc::new(Float64Array::from(vec![11.0]));
+        let new_values2: ArrayRef = Arc::new(Float64Array::from(vec![10.0]));
+
+        assert!(is_row_ahead(
+            &old_values,
+            Some(&new_values1),
+            &SortOptions {
+                descending: false,
+                nulls_first: false
+            }
+        )?);
+        assert!(!is_row_ahead(
+            &old_values,
+            Some(&new_values2),
+            &SortOptions {
+                descending: false,
+                nulls_first: false
+            }
+        )?);
+
+        Ok(())
+    }
+}

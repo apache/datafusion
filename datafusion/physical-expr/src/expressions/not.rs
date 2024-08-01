@@ -89,15 +89,15 @@ impl PhysicalExpr for NotExpr {
         }
     }
 
-    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.arg.clone()]
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.arg]
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(NotExpr::new(children[0].clone())))
+        Ok(Arc::new(NotExpr::new(Arc::clone(&children[0]))))
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {
@@ -125,7 +125,6 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::{array::BooleanArray, datatypes::*};
-    use datafusion_common::Result;
 
     #[test]
     fn neg_op() -> Result<()> {

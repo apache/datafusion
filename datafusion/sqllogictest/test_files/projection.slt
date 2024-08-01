@@ -37,8 +37,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE aggregate_simple (
@@ -47,8 +47,8 @@ CREATE EXTERNAL TABLE aggregate_simple (
   c3 BOOLEAN NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
 
 statement ok
 CREATE TABLE memory_table(a INT NOT NULL, b INT NOT NULL, c INT NOT NULL) AS VALUES
@@ -233,3 +233,20 @@ DROP TABLE test;
 
 statement ok
 DROP TABLE test_simple;
+
+## projection push down with Struct
+statement ok
+create table t as values (struct(1));
+
+query TT
+explain select column1.c0 from t;
+----
+logical_plan
+01)Projection: get_field(t.column1, Utf8("c0"))
+02)--TableScan: t projection=[column1]
+physical_plan
+01)ProjectionExec: expr=[get_field(column1@0, c0) as t.column1[c0]]
+02)--MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table t;

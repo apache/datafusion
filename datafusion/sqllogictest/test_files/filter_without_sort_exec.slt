@@ -1,0 +1,153 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# prepare table
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE data (
+    "date"   DATE, 
+    "ticker" VARCHAR, 
+    "time"   TIMESTAMP,
+) STORED AS CSV
+WITH ORDER ("date", "ticker", "time")
+LOCATION './a.parquet';
+
+
+# query
+query TT
+explain SELECT * FROM data 
+WHERE ticker = 'A' 
+ORDER BY "date", "time";
+----
+logical_plan
+01)Sort: data.date ASC NULLS LAST, data.time ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A")
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)SortPreservingMergeExec: [date@0 ASC NULLS LAST,time@2 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: ticker@1 = A
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+
+# constant ticker, CAST(time AS DATE) = time, order by time
+query TT
+explain SELECT * FROM data
+WHERE ticker = 'A' AND CAST(time AS DATE) = date
+ORDER BY "time"
+----
+logical_plan
+01)Sort: data.time ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)SortPreservingMergeExec: [time@2 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+
+# same thing but order by date
+query TT
+explain SELECT * FROM data
+WHERE ticker = 'A' AND CAST(time AS DATE) = date
+ORDER BY "date"
+----
+logical_plan
+01)Sort: data.date ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)SortPreservingMergeExec: [date@0 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+
+# same thing but order by ticker
+query TT
+explain SELECT * FROM data
+WHERE ticker = 'A' AND CAST(time AS DATE) = date
+ORDER BY "ticker"
+----
+logical_plan
+01)Sort: data.ticker ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)CoalescePartitionsExec
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+
+# same thing but order by time, date
+query TT
+explain SELECT * FROM data 
+WHERE ticker = 'A' AND CAST(time AS DATE) = date
+ORDER BY "time", "date";
+----
+logical_plan
+01)Sort: data.time ASC NULLS LAST, data.date ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)SortPreservingMergeExec: [time@2 ASC NULLS LAST,date@0 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+
+# CAST(time AS DATE) <> date (should require a sort)
+# no physical plan due to sort breaking pipeline
+query TT
+explain SELECT * FROM data
+WHERE ticker = 'A' AND CAST(time AS DATE) <> date
+ORDER BY "time"
+----
+logical_plan
+01)Sort: data.time ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) != data.date
+03)----TableScan: data projection=[date, ticker, time]
+
+# no relation between time & date
+# should also be pipeline breaking
+query TT
+explain SELECT * FROM data
+WHERE ticker = 'A'
+ORDER BY "time"
+----
+logical_plan
+01)Sort: data.time ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A")
+03)----TableScan: data projection=[date, ticker, time]
+
+# query
+query TT
+explain SELECT * FROM data 
+WHERE date = '2006-01-02' 
+ORDER BY "ticker", "time";
+----
+logical_plan
+01)Sort: data.ticker ASC NULLS LAST, data.time ASC NULLS LAST
+02)--Filter: data.date = Date32("2006-01-02")
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)SortPreservingMergeExec: [ticker@1 ASC NULLS LAST,time@2 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: date@0 = 2006-01-02
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]

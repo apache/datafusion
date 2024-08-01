@@ -87,6 +87,22 @@ f3 Utf8 YES
 f4 Float64 YES
 time Timestamp(Nanosecond, None) YES
 
+# in list with dictionary input
+query BBB
+SELECT
+    tag_id in ('1000'), '1000' in (tag_id, null), arrow_cast('999','Dictionary(Int32, Utf8)') in (tag_id, null)
+FROM m1
+----
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
+true true NULL
 
 # Table m2 with a tag columns `tag_id` and `type`, a field column `f5`, and `time`
 statement ok
@@ -165,9 +181,32 @@ order by date_bin('30 minutes', time) DESC
 3 400 600 500 2023-12-04T00:30:00
 3 100 300 200 2023-12-04T00:00:00
 
+# query with in list
+query BBBBBBBB
+SELECT
+    type in ('active', 'passive')
+    , 'active' in (type)
+    , 'active' in (type, null)
+    , arrow_cast('passive','Dictionary(Int8, Utf8)') in (type, null)
+    , tag_id in ('1000', '2000')
+    , tag_id in ('999')
+    , '1000' in (tag_id, null)
+    , arrow_cast('999','Dictionary(Int16, Utf8)') in (tag_id, null)
+FROM m2
+----
+true true true NULL true false true NULL
+true true true NULL true false true NULL
+true true true NULL true false true NULL
+true true true NULL true false true NULL
+true true true NULL true false true NULL
+true true true NULL true false true NULL
+true false NULL true true false true NULL
+true false NULL true true false true NULL
+true false NULL true true false true NULL
+true false NULL true true false true NULL
 
 
-# Reproducer for https://github.com/apache/arrow-datafusion/issues/8738
+# Reproducer for https://github.com/apache/datafusion/issues/8738
 # This query should work correctly
 query P?TT rowsort
 SELECT
@@ -280,3 +319,128 @@ ORDER BY
 2023-12-20T01:20:00 1000 f2 foo
 2023-12-20T01:30:00 1000 f1 32.0
 2023-12-20T01:30:00 1000 f2 foo
+
+# Cleanup
+statement ok
+drop view m1;
+
+statement ok
+drop view m2;
+
+######
+# Create a table using UNION ALL to get 2 partitions (very important)
+######
+statement ok
+create table m3_source as
+    select * from (values('foo', 'bar', 1))
+    UNION ALL
+    select * from (values('foo', 'baz', 1));
+
+######
+# Now, create a table with the same data, but column2 has type `Dictionary(Int32)` to trigger the fallback code
+######
+statement ok
+create table m3 as
+  select
+    column1,
+    arrow_cast(column2, 'Dictionary(Int32, Utf8)') as "column2",
+    column3
+from m3_source;
+
+# there are two values in column2
+query T?I rowsort
+SELECT *
+FROM m3;
+----
+foo bar 1
+foo baz 1
+
+# There is 1 distinct value in column1
+query I
+SELECT count(distinct column1)
+FROM m3
+GROUP BY column3;
+----
+1
+
+# There are 2 distinct values in column2
+query I
+SELECT count(distinct column2)
+FROM m3
+GROUP BY column3;
+----
+2
+
+# Should still get the same results when querying in the same query
+query II
+SELECT count(distinct column1), count(distinct column2)
+FROM m3
+GROUP BY column3;
+----
+1 2
+
+
+# Cleanup
+statement ok
+drop table m3;
+
+statement ok
+drop table m3_source;
+
+
+## Test that filtering on dictionary columns coerces the filter value to the dictionary type
+statement ok
+create table test as values
+  ('row1', arrow_cast('1', 'Dictionary(Int32, Utf8)')),
+  ('row2', arrow_cast('2', 'Dictionary(Int32, Utf8)')),
+  ('row3', arrow_cast('3', 'Dictionary(Int32, Utf8)'))
+;
+
+# query using an string '1' which must be coerced into a dictionary string
+query T?
+SELECT * from test where column2 = '1';
+----
+row1 1
+
+# filter should not have a cast on column2
+query TT
+explain SELECT * from test where column2 = '1';
+----
+logical_plan
+01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+02)--TableScan: test projection=[column1, column2]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: column2@1 = 1
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+
+# try literal = col to verify order doesn't matter
+# filter should not cast column2
+query TT
+explain SELECT * from test where '1' = column2
+----
+logical_plan
+01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+02)--TableScan: test projection=[column1, column2]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: column2@1 = 1
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+
+
+# Now query using an integer which must be coerced into a dictionary string
+query T?
+SELECT * from test where column2 = 1;
+----
+row1 1
+
+query TT
+explain SELECT * from test where column2 = 1;
+----
+logical_plan
+01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+02)--TableScan: test projection=[column1, column2]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: column2@1 = 1
+03)----MemoryExec: partitions=1, partition_sizes=[1]

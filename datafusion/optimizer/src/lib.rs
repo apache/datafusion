@@ -14,7 +14,22 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
+//! # DataFusion Optimizer
+//!
+//! Contains rules for rewriting [`LogicalPlan`]s
+//!
+//! 1. [`Analyzer`] applies [`AnalyzerRule`]s to transform `LogicalPlan`s
+//!    to make the plan valid prior to the rest of the DataFusion optimization
+//!    process (for example, [`TypeCoercion`]).
+//!
+//! 2. [`Optimizer`] applies [`OptimizerRule`]s to transform `LogicalPlan`s
+//!    into equivalent, but more efficient plans.
+//!
+//! [`LogicalPlan`]: datafusion_expr::LogicalPlan
+//! [`TypeCoercion`]: analyzer::type_coercion::TypeCoercion
 pub mod analyzer;
 pub mod common_subexpr_eliminate;
 pub mod decorrelate;
@@ -22,6 +37,7 @@ pub mod decorrelate_predicate_subquery;
 pub mod eliminate_cross_join;
 pub mod eliminate_duplicated_expr;
 pub mod eliminate_filter;
+pub mod eliminate_group_by_constant;
 pub mod eliminate_aggregate;
 pub mod eliminate_join;
 pub mod eliminate_limit;
@@ -35,7 +51,6 @@ pub mod optimizer;
 pub mod propagate_empty_relation;
 pub mod push_down_filter;
 pub mod push_down_limit;
-pub mod push_down_projection;
 pub mod replace_distinct_aggregate;
 pub mod rewrite_disjunctive_predicate;
 pub mod scalar_subquery_to_join;
@@ -47,9 +62,12 @@ pub mod utils;
 #[cfg(test)]
 pub mod test;
 
-pub use optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
+pub use analyzer::{Analyzer, AnalyzerRule};
+pub use optimizer::{Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule};
+#[allow(deprecated)]
 pub use utils::optimize_children;
 
+pub(crate) mod join_key_set;
 mod plan_signature;
 
 #[cfg(test)]

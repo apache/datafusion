@@ -17,17 +17,18 @@
 
 extern crate criterion;
 
-use std::sync::Arc;
-
-use arrow_array::builder::StringBuilder;
-use arrow_array::{ArrayRef, StringArray};
+use arrow::array::builder::StringBuilder;
+use arrow::array::{ArrayRef, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
+use datafusion_functions::regex::regexpreplace::regexp_replace;
 use rand::distributions::Alphanumeric;
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
+use std::iter;
+use std::sync::Arc;
 fn data(rng: &mut ThreadRng) -> StringArray {
     let mut data: Vec<String> = vec![];
     for _ in 0..1000 {
@@ -43,7 +44,7 @@ fn data(rng: &mut ThreadRng) -> StringArray {
 }
 
 fn regex(rng: &mut ThreadRng) -> StringArray {
-    let samples = vec![
+    let samples = [
         ".*([A-Z]{1}).*".to_string(),
         "^(A).*".to_string(),
         r#"[\p{Letter}-]+"#.to_string(),
@@ -59,7 +60,7 @@ fn regex(rng: &mut ThreadRng) -> StringArray {
 }
 
 fn flags(rng: &mut ThreadRng) -> StringArray {
-    let samples = vec![Some("i".to_string()), Some("im".to_string()), None];
+    let samples = [Some("i".to_string()), Some("im".to_string()), None];
     let mut sb = StringBuilder::new();
     for _ in 0..1000 {
         let sample = samples.choose(rng).unwrap();
@@ -82,8 +83,12 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_like::<i32>(&[data.clone(), regex.clone(), flags.clone()])
-                    .expect("regexp_like should work on valid values"),
+                regexp_like::<i32>(&[
+                    Arc::clone(&data),
+                    Arc::clone(&regex),
+                    Arc::clone(&flags),
+                ])
+                .expect("regexp_like should work on valid values"),
             )
         })
     });
@@ -96,8 +101,34 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_match::<i32>(&[data.clone(), regex.clone(), flags.clone()])
-                    .expect("regexp_match should work on valid values"),
+                regexp_match::<i32>(&[
+                    Arc::clone(&data),
+                    Arc::clone(&regex),
+                    Arc::clone(&flags),
+                ])
+                .expect("regexp_match should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("regexp_replace_1000", |b| {
+        let mut rng = rand::thread_rng();
+        let data = Arc::new(data(&mut rng)) as ArrayRef;
+        let regex = Arc::new(regex(&mut rng)) as ArrayRef;
+        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
+        let replacement =
+            Arc::new(StringArray::from_iter_values(iter::repeat("XX").take(1000)))
+                as ArrayRef;
+
+        b.iter(|| {
+            black_box(
+                regexp_replace::<i32>(&[
+                    Arc::clone(&data),
+                    Arc::clone(&regex),
+                    Arc::clone(&replacement),
+                    Arc::clone(&flags),
+                ])
+                .expect("regexp_replace should work on valid values"),
             )
         })
     });

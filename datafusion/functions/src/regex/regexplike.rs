@@ -32,9 +32,15 @@ use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub(super) struct RegexpLikeFunc {
+pub struct RegexpLikeFunc {
     signature: Signature,
 }
+impl Default for RegexpLikeFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RegexpLikeFunc {
     pub fn new() -> Self {
         use DataType::*;
@@ -188,7 +194,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::BooleanBuilder;
-    use arrow_array::StringArray;
+    use arrow::array::StringArray;
 
     use crate::regex::regexplike::regexp_like;
 

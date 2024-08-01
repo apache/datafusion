@@ -18,25 +18,26 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    DataType, Date32Type, Date64Type, IntervalUnit, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType,
 };
 use arrow::{
     array::{
         ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
-        LargeStringArray, StringArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+        LargeBinaryArray, LargeStringArray, StringArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::Field,
 };
@@ -161,7 +162,7 @@ impl AggregateExpr for Max {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        vec![Arc::clone(&self.expr)]
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -248,7 +249,7 @@ impl AggregateExpr for Max {
             }
 
             // It would be nice to have a fast implementation for Strings as well
-            // https://github.com/apache/arrow-datafusion/issues/6906
+            // https://github.com/apache/datafusion/issues/6906
 
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!(
@@ -264,6 +265,10 @@ impl AggregateExpr for Max {
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(SlidingMaxAccumulator::try_new(&self.data_type)?))
+    }
+
+    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        Some((self.field().ok()?, true))
     }
 }
 
@@ -291,7 +296,7 @@ macro_rules! typed_min_max_batch_string {
     }};
 }
 
-// Statically-typed version of min/max(array) -> ScalarValue for binay types.
+// Statically-typed version of min/max(array) -> ScalarValue for binary types.
 macro_rules! typed_min_max_batch_binary {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
@@ -409,6 +414,25 @@ macro_rules! min_max_batch {
                     $OP
                 )
             }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    IntervalYearMonthArray,
+                    IntervalYearMonth,
+                    $OP
+                )
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                typed_min_max_batch!($VALUES, IntervalDayTimeArray, IntervalDayTime, $OP)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    IntervalMonthDayNanoArray,
+                    IntervalMonthDayNano,
+                    $OP
+                )
+            }
             other => {
                 // This should have been handled before
                 return internal_err!(
@@ -489,6 +513,20 @@ macro_rules! typed_min_max {
     }};
 }
 
+macro_rules! typed_min_max_float {
+    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
+        ScalarValue::$SCALAR(match ($VALUE, $DELTA) {
+            (None, None) => None,
+            (Some(a), None) => Some(*a),
+            (None, Some(b)) => Some(*b),
+            (Some(a), Some(b)) => match a.total_cmp(b) {
+                choose_min_max!($OP) => Some(*b),
+                _ => Some(*a),
+            },
+        })
+    }};
+}
+
 // min/max of two scalar string values.
 macro_rules! typed_min_max_string {
     ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
@@ -501,7 +539,7 @@ macro_rules! typed_min_max_string {
     }};
 }
 
-macro_rules! interval_choose_min_max {
+macro_rules! choose_min_max {
     (min) => {
         std::cmp::Ordering::Greater
     };
@@ -513,7 +551,7 @@ macro_rules! interval_choose_min_max {
 macro_rules! interval_min_max {
     ($OP:tt, $LHS:expr, $RHS:expr) => {{
         match $LHS.partial_cmp(&$RHS) {
-            Some(interval_choose_min_max!($OP)) => $RHS.clone(),
+            Some(choose_min_max!($OP)) => $RHS.clone(),
             Some(_) => $LHS.clone(),
             None => {
                 return internal_err!("Comparison error while computing interval min/max")
@@ -556,10 +594,10 @@ macro_rules! min_max {
                 typed_min_max!(lhs, rhs, Boolean, $OP)
             }
             (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
-                typed_min_max!(lhs, rhs, Float64, $OP)
+                typed_min_max_float!(lhs, rhs, Float64, $OP)
             }
             (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
-                typed_min_max!(lhs, rhs, Float32, $OP)
+                typed_min_max_float!(lhs, rhs, Float32, $OP)
             }
             (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
                 typed_min_max!(lhs, rhs, UInt64, $OP)
@@ -889,7 +927,7 @@ impl AggregateExpr for Min {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        vec![Arc::clone(&self.expr)]
     }
 
     fn name(&self) -> &str {
@@ -983,6 +1021,10 @@ impl AggregateExpr for Min {
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(SlidingMinAccumulator::try_new(&self.data_type)?))
+    }
+
+    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        Some((self.field().ok()?, false))
     }
 }
 
@@ -1108,507 +1150,139 @@ impl Accumulator for SlidingMinAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
-    use crate::expressions::tests::{aggregate, aggregate_new};
-    use crate::{generic_test_op, generic_test_op_new};
-    use arrow::datatypes::*;
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
-    use datafusion_common::ScalarValue;
-    use datafusion_common::ScalarValue::Decimal128;
+    use arrow::datatypes::{
+        IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
+    };
 
     #[test]
-    fn min_decimal() -> Result<()> {
-        // min
-        let left = ScalarValue::Decimal128(Some(123), 10, 2);
-        let right = ScalarValue::Decimal128(Some(124), 10, 2);
-        let result = min(&left, &right)?;
-        assert_eq!(result, left);
+    fn interval_min_max() {
+        // IntervalYearMonth
+        let b = IntervalYearMonthArray::from(vec![
+            IntervalYearMonthType::make_value(0, 1),
+            IntervalYearMonthType::make_value(5, 34),
+            IntervalYearMonthType::make_value(-2, 4),
+            IntervalYearMonthType::make_value(7, -4),
+            IntervalYearMonthType::make_value(0, 1),
+        ]);
+        let b: ArrayRef = Arc::new(b);
 
-        // min batch
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(Some)
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
+        let mut min =
+            MinAccumulator::try_new(&DataType::Interval(IntervalUnit::YearMonth))
+                .unwrap();
+        min.update_batch(&[Arc::clone(&b)]).unwrap();
+        let min_res = min.evaluate().unwrap();
+        assert_eq!(
+            min_res,
+            ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                -2, 4
+            )))
         );
 
-        let result = min_batch(&array)?;
-        assert_eq!(result, ScalarValue::Decimal128(Some(1), 10, 0));
-
-        // min batch without values
-        let array: ArrayRef = Arc::new(
-            std::iter::repeat::<Option<i128>>(None)
-                .take(0)
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
-        );
-        let result = min_batch(&array)?;
-        assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
-
-        // min batch with agg
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(Some)
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
-        );
-        generic_test_op!(
-            array,
-            DataType::Decimal128(10, 0),
-            Min,
-            ScalarValue::Decimal128(Some(1), 10, 0)
-        )
-    }
-
-    #[test]
-    fn min_decimal_all_nulls() -> Result<()> {
-        // min batch all nulls
-        let array: ArrayRef = Arc::new(
-            std::iter::repeat::<Option<i128>>(None)
-                .take(6)
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
-        );
-        generic_test_op!(
-            array,
-            DataType::Decimal128(10, 0),
-            Min,
-            ScalarValue::Decimal128(None, 10, 0)
-        )
-    }
-
-    #[test]
-    fn min_decimal_with_nulls() -> Result<()> {
-        // min batch with nulls
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(|i| if i == 2 { None } else { Some(i) })
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
+        let mut max =
+            MaxAccumulator::try_new(&DataType::Interval(IntervalUnit::YearMonth))
+                .unwrap();
+        max.update_batch(&[Arc::clone(&b)]).unwrap();
+        let max_res = max.evaluate().unwrap();
+        assert_eq!(
+            max_res,
+            ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                5, 34
+            )))
         );
 
-        generic_test_op!(
-            array,
-            DataType::Decimal128(10, 0),
-            Min,
-            ScalarValue::Decimal128(Some(1), 10, 0)
-        )
-    }
+        // IntervalDayTime
+        let b = IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(0, 0),
+            IntervalDayTimeType::make_value(5, 454000),
+            IntervalDayTimeType::make_value(-34, 0),
+            IntervalDayTimeType::make_value(7, -4000),
+            IntervalDayTimeType::make_value(1, 0),
+        ]);
+        let b: ArrayRef = Arc::new(b);
 
-    #[test]
-    fn max_decimal() -> Result<()> {
-        // max
-        let left = ScalarValue::Decimal128(Some(123), 10, 2);
-        let right = ScalarValue::Decimal128(Some(124), 10, 2);
-        let result = max(&left, &right)?;
-        assert_eq!(result, right);
-
-        let right = ScalarValue::Decimal128(Some(124), 10, 3);
-        let result = max(&left, &right);
-        let err_msg = format!(
-            "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
-            (Decimal128(Some(123), 10, 2), Decimal128(Some(124), 10, 3))
+        let mut min =
+            MinAccumulator::try_new(&DataType::Interval(IntervalUnit::DayTime)).unwrap();
+        min.update_batch(&[Arc::clone(&b)]).unwrap();
+        let min_res = min.evaluate().unwrap();
+        assert_eq!(
+            min_res,
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(-34, 0)))
         );
-        let expect = DataFusionError::Internal(err_msg);
-        assert!(expect
-            .strip_backtrace()
-            .starts_with(&result.unwrap_err().strip_backtrace()));
 
-        // max batch
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(Some)
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 5)?,
+        let mut max =
+            MaxAccumulator::try_new(&DataType::Interval(IntervalUnit::DayTime)).unwrap();
+        max.update_batch(&[Arc::clone(&b)]).unwrap();
+        let max_res = max.evaluate().unwrap();
+        assert_eq!(
+            max_res,
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(7, -4000)))
         );
-        let result = max_batch(&array)?;
-        assert_eq!(result, ScalarValue::Decimal128(Some(5), 10, 5));
 
-        // max batch without values
-        let array: ArrayRef = Arc::new(
-            std::iter::repeat::<Option<i128>>(None)
-                .take(0)
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
+        // IntervalMonthDayNano
+        let b = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(1, 0, 0),
+            IntervalMonthDayNanoType::make_value(344, 34, -43_000_000_000),
+            IntervalMonthDayNanoType::make_value(-593, -33, 13_000_000_000),
+            IntervalMonthDayNanoType::make_value(5, 2, 493_000_000_000),
+            IntervalMonthDayNanoType::make_value(1, 0, 0),
+        ]);
+        let b: ArrayRef = Arc::new(b);
+
+        let mut min =
+            MinAccumulator::try_new(&DataType::Interval(IntervalUnit::MonthDayNano))
+                .unwrap();
+        min.update_batch(&[Arc::clone(&b)]).unwrap();
+        let min_res = min.evaluate().unwrap();
+        assert_eq!(
+            min_res,
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(-593, -33, 13_000_000_000)
+            ))
         );
-        let result = max_batch(&array)?;
-        assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
-        // max batch with agg
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(Some)
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
+        let mut max =
+            MaxAccumulator::try_new(&DataType::Interval(IntervalUnit::MonthDayNano))
+                .unwrap();
+        max.update_batch(&[Arc::clone(&b)]).unwrap();
+        let max_res = max.evaluate().unwrap();
+        assert_eq!(
+            max_res,
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(344, 34, -43_000_000_000)
+            ))
         );
-        generic_test_op!(
-            array,
-            DataType::Decimal128(10, 0),
-            Max,
-            ScalarValue::Decimal128(Some(5), 10, 0)
-        )
     }
 
     #[test]
-    fn max_decimal_with_nulls() -> Result<()> {
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(|i| if i == 2 { None } else { Some(i) })
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
-        );
-        generic_test_op!(
-            array,
-            DataType::Decimal128(10, 0),
-            Max,
-            ScalarValue::Decimal128(Some(5), 10, 0)
-        )
-    }
+    fn float_min_max_with_nans() {
+        let pos_nan = f32::NAN;
+        let zero = 0_f32;
+        let neg_inf = f32::NEG_INFINITY;
 
-    #[test]
-    fn max_decimal_all_nulls() -> Result<()> {
-        let array: ArrayRef = Arc::new(
-            std::iter::repeat::<Option<i128>>(None)
-                .take(6)
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
-        );
-        generic_test_op!(
-            array,
-            DataType::Decimal128(10, 0),
-            Min,
-            ScalarValue::Decimal128(None, 10, 0)
-        )
-    }
+        let check = |acc: &mut dyn Accumulator, values: &[&[f32]], expected: f32| {
+            for batch in values.iter() {
+                let batch =
+                    Arc::new(Float32Array::from_iter_values(batch.iter().copied()));
+                acc.update_batch(&[batch]).unwrap();
+            }
+            let result = acc.evaluate().unwrap();
+            assert_eq!(result, ScalarValue::Float32(Some(expected)));
+        };
 
-    #[test]
-    fn max_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(a, DataType::Int32, Max, ScalarValue::from(5i32))
-    }
+        // This test checks both comparison between batches (which uses the min_max macro
+        // defined above) and within a batch (which uses the arrow min/max compute function
+        // and verifies both respect the total order comparison for floats)
 
-    #[test]
-    fn min_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(a, DataType::Int32, Min, ScalarValue::from(1i32))
-    }
+        let min = || MinAccumulator::try_new(&DataType::Float32).unwrap();
+        let max = || MaxAccumulator::try_new(&DataType::Float32).unwrap();
 
-    #[test]
-    fn max_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
-        generic_test_op!(a, DataType::Utf8, Max, ScalarValue::from("d"))
-    }
-
-    #[test]
-    fn max_large_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "a", "c", "b"]));
-        generic_test_op!(
-            a,
-            DataType::LargeUtf8,
-            Max,
-            ScalarValue::LargeUtf8(Some("d".to_string()))
-        )
-    }
-
-    #[test]
-    fn min_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
-        generic_test_op!(a, DataType::Utf8, Min, ScalarValue::from("a"))
-    }
-
-    #[test]
-    fn min_large_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "a", "c", "b"]));
-        generic_test_op!(
-            a,
-            DataType::LargeUtf8,
-            Min,
-            ScalarValue::LargeUtf8(Some("a".to_string()))
-        )
-    }
-
-    #[test]
-    fn max_i32_with_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(1),
-            None,
-            Some(3),
-            Some(4),
-            Some(5),
-        ]));
-        generic_test_op!(a, DataType::Int32, Max, ScalarValue::from(5i32))
-    }
-
-    #[test]
-    fn min_i32_with_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(1),
-            None,
-            Some(3),
-            Some(4),
-            Some(5),
-        ]));
-        generic_test_op!(a, DataType::Int32, Min, ScalarValue::from(1i32))
-    }
-
-    #[test]
-    fn max_i32_all_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        generic_test_op!(a, DataType::Int32, Max, ScalarValue::Int32(None))
-    }
-
-    #[test]
-    fn min_i32_all_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        generic_test_op!(a, DataType::Int32, Min, ScalarValue::Int32(None))
-    }
-
-    #[test]
-    fn max_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        generic_test_op!(a, DataType::UInt32, Max, ScalarValue::from(5_u32))
-    }
-
-    #[test]
-    fn min_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        generic_test_op!(a, DataType::UInt32, Min, ScalarValue::from(1u32))
-    }
-
-    #[test]
-    fn max_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        generic_test_op!(a, DataType::Float32, Max, ScalarValue::from(5_f32))
-    }
-
-    #[test]
-    fn min_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        generic_test_op!(a, DataType::Float32, Min, ScalarValue::from(1_f32))
-    }
-
-    #[test]
-    fn max_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        generic_test_op!(a, DataType::Float64, Max, ScalarValue::from(5_f64))
-    }
-
-    #[test]
-    fn min_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        generic_test_op!(a, DataType::Float64, Min, ScalarValue::from(1_f64))
-    }
-
-    #[test]
-    fn min_date32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Date32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(a, DataType::Date32, Min, ScalarValue::Date32(Some(1)))
-    }
-
-    #[test]
-    fn min_date64() -> Result<()> {
-        let a: ArrayRef = Arc::new(Date64Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(a, DataType::Date64, Min, ScalarValue::Date64(Some(1)))
-    }
-
-    #[test]
-    fn max_date32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Date32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(a, DataType::Date32, Max, ScalarValue::Date32(Some(5)))
-    }
-
-    #[test]
-    fn max_date64() -> Result<()> {
-        let a: ArrayRef = Arc::new(Date64Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(a, DataType::Date64, Max, ScalarValue::Date64(Some(5)))
-    }
-
-    #[test]
-    fn min_time32second() -> Result<()> {
-        let a: ArrayRef = Arc::new(Time32SecondArray::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Time32(TimeUnit::Second),
-            Min,
-            ScalarValue::Time32Second(Some(1))
-        )
-    }
-
-    #[test]
-    fn max_time32second() -> Result<()> {
-        let a: ArrayRef = Arc::new(Time32SecondArray::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Time32(TimeUnit::Second),
-            Max,
-            ScalarValue::Time32Second(Some(5))
-        )
-    }
-
-    #[test]
-    fn min_time32millisecond() -> Result<()> {
-        let a: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Time32(TimeUnit::Millisecond),
-            Min,
-            ScalarValue::Time32Millisecond(Some(1))
-        )
-    }
-
-    #[test]
-    fn max_time32millisecond() -> Result<()> {
-        let a: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Time32(TimeUnit::Millisecond),
-            Max,
-            ScalarValue::Time32Millisecond(Some(5))
-        )
-    }
-
-    #[test]
-    fn min_time64microsecond() -> Result<()> {
-        let a: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Time64(TimeUnit::Microsecond),
-            Min,
-            ScalarValue::Time64Microsecond(Some(1))
-        )
-    }
-
-    #[test]
-    fn max_time64microsecond() -> Result<()> {
-        let a: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Time64(TimeUnit::Microsecond),
-            Max,
-            ScalarValue::Time64Microsecond(Some(5))
-        )
-    }
-
-    #[test]
-    fn min_time64nanosecond() -> Result<()> {
-        let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Time64(TimeUnit::Nanosecond),
-            Min,
-            ScalarValue::Time64Nanosecond(Some(1))
-        )
-    }
-
-    #[test]
-    fn max_time64nanosecond() -> Result<()> {
-        let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Time64(TimeUnit::Nanosecond),
-            Max,
-            ScalarValue::Time64Nanosecond(Some(5))
-        )
-    }
-
-    #[test]
-    fn max_new_timestamp_micro() -> Result<()> {
-        let dt = DataType::Timestamp(TimeUnit::Microsecond, None);
-        let actual = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5])
-            .with_data_type(dt.clone());
-        let expected: ArrayRef =
-            Arc::new(TimestampMicrosecondArray::from(vec![5]).with_data_type(dt.clone()));
-        generic_test_op_new!(Arc::new(actual), dt.clone(), Max, &expected)
-    }
-
-    #[test]
-    fn max_new_timestamp_micro_with_tz() -> Result<()> {
-        let dt = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
-        let actual = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5])
-            .with_data_type(dt.clone());
-        let expected: ArrayRef =
-            Arc::new(TimestampMicrosecondArray::from(vec![5]).with_data_type(dt.clone()));
-        generic_test_op_new!(Arc::new(actual), dt.clone(), Max, &expected)
-    }
-
-    #[test]
-    fn max_bool() -> Result<()> {
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, false]));
-        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(false))?;
-
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, true]));
-        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
-
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, true, false]));
-        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
-
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
-        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
-
-        let a: ArrayRef = Arc::new(BooleanArray::from(Vec::<bool>::new()));
-        generic_test_op!(
-            a,
-            DataType::Boolean,
-            Max,
-            ScalarValue::from(None as Option<bool>)
-        )?;
-
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![None as Option<bool>]));
-        generic_test_op!(
-            a,
-            DataType::Boolean,
-            Max,
-            ScalarValue::from(None as Option<bool>)
-        )?;
-
-        let a: ArrayRef =
-            Arc::new(BooleanArray::from(vec![None, Some(true), Some(false)]));
-        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn min_bool() -> Result<()> {
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, false]));
-        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
-
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, true]));
-        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(true))?;
-
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, true, false]));
-        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
-
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
-        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
-
-        let a: ArrayRef = Arc::new(BooleanArray::from(Vec::<bool>::new()));
-        generic_test_op!(
-            a,
-            DataType::Boolean,
-            Min,
-            ScalarValue::from(None as Option<bool>)
-        )?;
-
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![None as Option<bool>]));
-        generic_test_op!(
-            a,
-            DataType::Boolean,
-            Min,
-            ScalarValue::from(None as Option<bool>)
-        )?;
-
-        let a: ArrayRef =
-            Arc::new(BooleanArray::from(vec![None, Some(true), Some(false)]));
-        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
-
-        Ok(())
+        check(&mut min(), &[&[zero], &[pos_nan]], zero);
+        check(&mut min(), &[&[zero, pos_nan]], zero);
+        check(&mut min(), &[&[zero], &[neg_inf]], neg_inf);
+        check(&mut min(), &[&[zero, neg_inf]], neg_inf);
+        check(&mut max(), &[&[zero], &[pos_nan]], pos_nan);
+        check(&mut max(), &[&[zero, pos_nan]], pos_nan);
+        check(&mut max(), &[&[zero], &[neg_inf]], zero);
+        check(&mut max(), &[&[zero, neg_inf]], zero);
     }
 }

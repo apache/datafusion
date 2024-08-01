@@ -17,17 +17,23 @@
 
 use std::any::Any;
 
+use arrow::array::types::Date32Type;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
-use arrow_array::types::Date32Type;
 
 use crate::datetime::common::*;
 use datafusion_common::{exec_err, internal_datafusion_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct ToDateFunc {
+pub struct ToDateFunc {
     signature: Signature,
+}
+
+impl Default for ToDateFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ToDateFunc {
@@ -95,9 +101,7 @@ impl ScalarUDFImpl for ToDateFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_date") {
-                return value;
-            }
+            validate_data_types(args, "to_date")?;
         }
 
         match args[0].data_type() {

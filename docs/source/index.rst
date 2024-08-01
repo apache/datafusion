@@ -18,18 +18,18 @@
 .. image:: _static/images/2x_bgwhite_original.png
   :alt: DataFusion Logo
 
-=======================
-Apache Arrow DataFusion
-=======================
+=================
+Apache DataFusion
+=================
 
 .. Code from https://buttons.github.io/
 .. raw:: html
 
   <p>
     <!-- Place this tag where you want the button to render. -->
-    <a class="github-button" href="https://github.com/apache/arrow-datafusion" data-size="large" data-show-count="true" aria-label="Star apache/arrow-datafusion on GitHub">Star</a>
+    <a class="github-button" href="https://github.com/apache/datafusion" data-size="large" data-show-count="true" aria-label="Star apache/datafusion on GitHub">Star</a>
     <!-- Place this tag where you want the button to render. -->
-     <a class="github-button" href="https://github.com/apache/arrow-datafusion/fork" data-size="large" data-show-count="true" aria-label="Fork apache/arrow-datafusion on GitHub">Fork</a>
+     <a class="github-button" href="https://github.com/apache/datafusion/fork" data-size="large" data-show-count="true" aria-label="Fork apache/datafusion on GitHub">Fork</a>
   </p>
 
 DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
@@ -41,24 +41,40 @@ DataFusion offers SQL and Dataframe APIs, excellent
 CSV, Parquet, JSON, and Avro, extensive customization, and a great
 community.
 
-The `example usage`_ section in the user guide and the `datafusion-examples`_ code in the crate contain information on using DataFusion.
+To get started, see
 
-Please see the `developer’s guide`_ for contributing and `communication`_ for getting in touch with us.
+* The `example usage`_ section of the user guide and the `datafusion-examples`_ directory.
+* The `library user guide`_ for examples of using DataFusion's extension APIs
+* The `developer’s guide`_ for contributing and `communication`_ for getting in touch with us.
 
 .. _example usage: user-guide/example-usage.html
-.. _datafusion-examples: https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples
+.. _datafusion-examples: https://github.com/apache/datafusion/tree/main/datafusion-examples
 .. _developer’s guide: contributor-guide/index.html#developer-s-guide
+.. _library user guide: library-user-guide/index.html
 .. _communication: contributor-guide/communication.html
+
+.. _toc.asf-links:
+.. toctree::
+   :maxdepth: 1
+   :caption: ASF Links
+
+   Apache Software Foundation <https://apache.org>
+   License <https://www.apache.org/licenses/>
+   Donate <https://www.apache.org/foundation/sponsorship.html>
+   Thanks <https://www.apache.org/foundation/thanks.html>
+   Security <https://www.apache.org/security/>
 
 .. _toc.links:
 .. toctree::
    :maxdepth: 1
    :caption: Links
 
-   Github and Issue Tracker <https://github.com/apache/arrow-datafusion>
+   GitHub and Issue Tracker <https://github.com/apache/datafusion>
    crates.io <https://crates.io/crates/datafusion>
    API Docs <https://docs.rs/datafusion/latest/datafusion/>
-   Code of conduct <https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md>
+   Blog <https://datafusion.apache.org/blog/>
+   Code of conduct <https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md>
+   Download <download>
 
 .. _toc.guide:
 .. toctree::
@@ -67,7 +83,8 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
 
    user-guide/introduction
    user-guide/example-usage
-   user-guide/cli
+   user-guide/crate-configuration
+   user-guide/cli/index
    user-guide/dataframe
    user-guide/expressions
    user-guide/sql/index
@@ -79,7 +96,7 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
 .. toctree::
    :maxdepth: 1
    :caption: Library User Guide
-
+   
    library-user-guide/index
    library-user-guide/using-the-sql-api
    library-user-guide/working-with-exprs
@@ -89,7 +106,8 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    library-user-guide/adding-udfs
    library-user-guide/custom-table-providers
    library-user-guide/extending-operators
-
+   library-user-guide/profiling
+   library-user-guide/query-optimizer
 .. _toc.contributor-guide:
 
 .. toctree::
@@ -98,7 +116,21 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
 
    contributor-guide/index
    contributor-guide/communication
+   contributor-guide/getting_started
    contributor-guide/architecture
+   contributor-guide/testing
+   contributor-guide/howtos
    contributor-guide/roadmap
-   contributor-guide/quarterly_roadmap
+   contributor-guide/governance
+   contributor-guide/inviting
    contributor-guide/specification/index
+
+.. _toc.subprojects:
+
+.. toctree::
+   :maxdepth: 1
+   :caption: DataFusion Subprojects
+
+   DataFusion Ballista <https://arrow.apache.org/ballista/>
+   DataFusion Comet <https://datafusion.apache.org/comet/>
+   DataFusion Python <https://datafusion.apache.org/python/>

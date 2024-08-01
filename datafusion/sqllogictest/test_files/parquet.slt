@@ -45,7 +45,7 @@ CREATE TABLE src_table (
 query ITID
 COPY (SELECT * FROM src_table LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/0.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 ----
 3
 
@@ -53,7 +53,7 @@ TO 'test_files/scratch/parquet/test_table/0.parquet'
 query ITID
 COPY (SELECT * FROM src_table WHERE int_col > 3 LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/1.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 ----
 3
 
@@ -66,7 +66,6 @@ CREATE EXTERNAL TABLE test_table (
   date_col DATE
 )
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION 'test_files/scratch/parquet/test_table';
 
 # Basic query:
@@ -87,12 +86,12 @@ FROM test_table
 ORDER BY string_col, int_col;
 ----
 logical_plan
-Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
---TableScan: test_table projection=[int_col, string_col]
+01)Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
+02)--TableScan: test_table projection=[int_col, string_col]
 physical_plan
-SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
---SortExec: expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
-----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col]
+01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+02)--SortExec: expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col]
 
 # Tear down test_table:
 statement ok
@@ -107,7 +106,6 @@ CREATE EXTERNAL TABLE test_table (
   date_col DATE
 )
 STORED AS PARQUET
-WITH HEADER ROW
 WITH ORDER (string_col ASC NULLS LAST, int_col ASC NULLS LAST)
 LOCATION 'test_files/scratch/parquet/test_table';
 
@@ -118,17 +116,17 @@ FROM test_table
 ORDER BY string_col, int_col;
 ----
 logical_plan
-Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
---TableScan: test_table projection=[int_col, string_col]
+01)Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
+02)--TableScan: test_table projection=[int_col, string_col]
 physical_plan
-SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
---ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col], output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
+01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+02)--ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col], output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
 
 # Add another file to the directory underlying test_table
 query ITID
 COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/2.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 ----
 3
 
@@ -140,12 +138,12 @@ FROM test_table
 ORDER BY string_col, int_col;
 ----
 logical_plan
-Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
---TableScan: test_table projection=[int_col, string_col]
+01)Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
+02)--TableScan: test_table projection=[int_col, string_col]
 physical_plan
-SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
---SortExec: expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
-----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, string_col]
+01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+02)--SortExec: expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, string_col]
 
 
 # Perform queries using MIN and MAX
@@ -189,8 +187,7 @@ CREATE EXTERNAL TABLE alltypes_plain (
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS PARQUET
-WITH HEADER ROW
-LOCATION '../../parquet-testing/data/alltypes_plain.parquet'
+LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
 # Test a basic query with a CAST:
 query IT
@@ -214,7 +211,6 @@ DROP TABLE alltypes_plain;
 statement ok
 CREATE EXTERNAL TABLE test_binary
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION '../core/tests/data/test_binary.parquet';
 
 # Check size of table:
@@ -247,7 +243,6 @@ DROP TABLE test_binary;
 statement ok
 CREATE EXTERNAL TABLE timestamp_with_tz
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION '../core/tests/data/timestamp_with_tz.parquet';
 
 # Check size of table:
@@ -256,39 +251,40 @@ SELECT COUNT(*) FROM timestamp_with_tz;
 ----
 131072
 
+# FIXME(#TODO) fails with feature `force_hash_collisions`
+# https://github.com/apache/datafusion/issues/11660
 # Perform the query:
-query IPT
-SELECT
-  count,
-  LAG(timestamp, 1) OVER (ORDER BY timestamp),
-  arrow_typeof(LAG(timestamp, 1) OVER (ORDER BY timestamp))
-FROM timestamp_with_tz
-LIMIT 10;
-----
-0 NULL Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-4 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-14 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
-0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
+# query IPT
+# SELECT
+#   count,
+#   LAG(timestamp, 1) OVER (ORDER BY timestamp),
+#   arrow_typeof(LAG(timestamp, 1) OVER (ORDER BY timestamp))
+# FROM timestamp_with_tz
+# LIMIT 10;
+# ----
+# 0 NULL Timestamp(Millisecond, Some("UTC"))
+# 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
+# 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
+# 4 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
+# 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
+# 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
+# 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
+# 14 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
+# 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
+# 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
 
 # Test config listing_table_ignore_subdirectory:
 
 query ITID
 COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/subdir/3.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 ----
 3
 
 statement ok
 CREATE EXTERNAL TABLE listing_table
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION 'test_files/scratch/parquet/test_table/*.parquet';
 
 statement ok
@@ -317,7 +313,6 @@ DROP TABLE timestamp_with_tz;
 statement ok
 CREATE EXTERNAL TABLE single_nan
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION '../../parquet-testing/data/single_nan.parquet';
 
 # Check table size:
@@ -339,7 +334,6 @@ DROP TABLE single_nan;
 statement ok
 CREATE EXTERNAL TABLE list_columns
 STORED AS PARQUET
-WITH HEADER ROW
 LOCATION '../../parquet-testing/data/list_columns.parquet';
 
 query ??

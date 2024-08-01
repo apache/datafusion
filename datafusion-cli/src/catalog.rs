@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::object_storage::get_object_store;
-use async_trait::async_trait;
-use datafusion::catalog::schema::SchemaProvider;
-use datafusion::catalog::{CatalogProvider, CatalogProviderList};
+use std::any::Any;
+use std::sync::{Arc, Weak};
+
+use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
+
+use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableUrl,
@@ -26,12 +28,11 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+use datafusion::execution::session_state::SessionStateBuilder;
+
+use async_trait::async_trait;
 use dirs::home_dir;
 use parking_lot::RwLock;
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::{Arc, Weak};
-use url::Url;
 
 /// Wraps another catalog, automatically creating table providers
 /// for local files if needed
@@ -155,15 +156,17 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 
         // if the inner schema provider didn't have a table by
         // that name, try to treat it as a listing table
-        let state = self
+        let mut state = self
             .state
             .upgrade()
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
             .read()
             .clone();
+        let mut builder = SessionStateBuilder::from(state.clone());
         let optimized_name = substitute_tilde(name.to_owned());
         let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
-        let url: &Url = table_url.as_ref();
+        let scheme = table_url.scheme();
+        let url = table_url.as_ref();
 
         // If the store is already registered for this URL then `get_store`
         // will return `Ok` which means we don't need to register it again. However,
@@ -174,10 +177,27 @@ impl SchemaProvider for DynamicFileSchemaProvider {
             Err(_) => {
                 // Register the store for this URL. Here we don't have access
                 // to any command options so the only choice is to use an empty collection
-                let mut options = HashMap::new();
-                let store =
-                    get_object_store(&state, &mut options, table_url.scheme(), url)
-                        .await?;
+                match scheme {
+                    "s3" | "oss" | "cos" => {
+                        if let Some(table_options) = builder.table_options() {
+                            table_options.extensions.insert(AwsOptions::default())
+                        }
+                    }
+                    "gs" | "gcs" => {
+                        if let Some(table_options) = builder.table_options() {
+                            table_options.extensions.insert(GcpOptions::default())
+                        }
+                    }
+                    _ => {}
+                };
+                state = builder.build();
+                let store = get_object_store(
+                    &state,
+                    table_url.scheme(),
+                    url,
+                    &state.default_table_options(),
+                )
+                .await?;
                 state.runtime_env().register_object_store(url, store);
             }
         }
@@ -215,19 +235,21 @@ fn substitute_tilde(cur: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::catalog::schema::SchemaProvider;
+
+    use datafusion::catalog::SchemaProvider;
     use datafusion::prelude::SessionContext;
 
     fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
         let mut ctx = SessionContext::new();
         ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
-            ctx.state().catalog_list(),
+            ctx.state().catalog_list().clone(),
             ctx.state_weak_ref(),
         )));
 
-        let provider =
-            &DynamicFileCatalog::new(ctx.state().catalog_list(), ctx.state_weak_ref())
-                as &dyn CatalogProviderList;
+        let provider = &DynamicFileCatalog::new(
+            ctx.state().catalog_list().clone(),
+            ctx.state_weak_ref(),
+        ) as &dyn CatalogProviderList;
         let catalog = provider
             .catalog(provider.catalog_names().first().unwrap())
             .unwrap();
@@ -330,10 +352,9 @@ mod tests {
             if cfg!(windows) { "USERPROFILE" } else { "HOME" },
             test_home_path,
         );
-        let input =
-            "~/Code/arrow-datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
+        let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
         let expected = format!(
-            "{}{}Code{}arrow-datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
+            "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
             test_home_path,
             MAIN_SEPARATOR,
             MAIN_SEPARATOR,

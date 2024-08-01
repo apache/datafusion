@@ -122,6 +122,10 @@ impl DisplayAs for ArrowExec {
 }
 
 impl ExecutionPlan for ArrowExec {
+    fn name(&self) -> &'static str {
+        "ArrowExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -130,7 +134,7 @@ impl ExecutionPlan for ArrowExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
     }
 
@@ -190,6 +194,19 @@ impl ExecutionPlan for ArrowExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.projected_statistics.clone())
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let new_config = self.base_config.clone().with_limit(limit);
+
+        Some(Arc::new(Self {
+            base_config: new_config,
+            projected_statistics: self.projected_statistics.clone(),
+            projected_schema: self.projected_schema.clone(),
+            projected_output_ordering: self.projected_output_ordering.clone(),
+            metrics: self.metrics.clone(),
+            cache: self.cache.clone(),
+        }))
     }
 }
 

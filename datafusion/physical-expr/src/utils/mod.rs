@@ -24,10 +24,9 @@ use std::sync::Arc;
 
 use crate::expressions::{BinaryExpr, Column};
 use crate::tree_node::ExprContext;
-use crate::{PhysicalExpr, PhysicalSortExpr};
+use crate::PhysicalExpr;
+use crate::PhysicalSortExpr;
 
-use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
-use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
@@ -112,7 +111,7 @@ pub fn convert_to_expr<T: Borrow<PhysicalSortExpr>>(
 ) -> Vec<Arc<dyn PhysicalExpr>> {
     sequence
         .into_iter()
-        .map(|elem| elem.borrow().expr.clone())
+        .map(|elem| Arc::clone(&elem.borrow().expr))
         .collect()
 }
 
@@ -167,7 +166,7 @@ impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>>
                 for expr_node in node.children.iter() {
                     self.graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
                 }
-                self.visited_plans.push((expr.clone(), node_idx));
+                self.visited_plans.push((Arc::clone(expr), node_idx));
                 node_idx
             }
         };
@@ -195,9 +194,7 @@ where
         constructor,
     };
     // Use the builder to transform the expression tree node into a DAG.
-    let root = init
-        .transform_up_mut(&mut |node| builder.mutate(node))
-        .data()?;
+    let root = init.transform_up(|node| builder.mutate(node)).data()?;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
 }
@@ -205,7 +202,7 @@ where
 /// Recursively extract referenced [`Column`]s within a [`PhysicalExpr`].
 pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
-    expr.apply(&mut |expr| {
+    expr.apply(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             if !columns.iter().any(|c| c.eq(column)) {
                 columns.insert(column.clone());
@@ -225,7 +222,7 @@ pub fn reassign_predicate_columns(
     schema: &SchemaRef,
     ignore_not_found: bool,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    pred.transform_down(&|expr| {
+    pred.transform_down(|expr| {
         let expr_any = expr.as_any();
 
         if let Some(column) = expr_any.downcast_ref::<Column>() {
@@ -244,62 +241,6 @@ pub fn reassign_predicate_columns(
     .data()
 }
 
-/// Reverses the ORDER BY expression, which is useful during equivalent window
-/// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
-/// 'ORDER BY a DESC, NULLS FIRST'.
-pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
-    order_bys
-        .iter()
-        .map(|e| PhysicalSortExpr {
-            expr: e.expr.clone(),
-            options: !e.options,
-        })
-        .collect()
-}
-
-/// Scatter `truthy` array by boolean mask. When the mask evaluates `true`, next values of `truthy`
-/// are taken, when the mask evaluates `false` values null values are filled.
-///
-/// # Arguments
-/// * `mask` - Boolean values used to determine where to put the `truthy` values
-/// * `truthy` - All values of this array are to scatter according to `mask` into final result.
-pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
-    let truthy = truthy.to_data();
-
-    // update the mask so that any null values become false
-    // (SlicesIterator doesn't respect nulls)
-    let mask = and_kleene(mask, &is_not_null(mask)?)?;
-
-    let mut mutable = MutableArrayData::new(vec![&truthy], true, mask.len());
-
-    // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
-    // fill with falsy values
-
-    // keep track of how much is filled
-    let mut filled = 0;
-    // keep track of current position we have in truthy array
-    let mut true_pos = 0;
-
-    SlicesIterator::new(&mask).for_each(|(start, end)| {
-        // the gap needs to be filled with nulls
-        if start > filled {
-            mutable.extend_nulls(start - filled);
-        }
-        // fill with truthy values
-        let len = end - start;
-        mutable.extend(0, true_pos, true_pos + len);
-        true_pos += len;
-        filled = end;
-    });
-    // the remaining part is falsy
-    if filled < mask.len() {
-        mutable.extend_nulls(mask.len() - filled);
-    }
-
-    let data = mutable.freeze();
-    Ok(make_array(data))
-}
-
 /// Merge left and right sort expressions, checking for duplicates.
 pub fn merge_vectors(
     left: &[PhysicalSortExpr],
@@ -313,20 +254,110 @@ pub fn merge_vectors(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::any::Any;
     use std::fmt::{Display, Formatter};
-    use std::sync::Arc;
 
     use super::*;
-    use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
-    use crate::PhysicalSortExpr;
+    use crate::expressions::{binary, cast, col, in_list, lit, Literal};
 
-    use arrow_array::Int32Array;
+    use arrow_array::{ArrayRef, Float32Array, Float64Array};
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::cast::{as_boolean_array, as_int32_array};
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{exec_err, DataFusionError, ScalarValue};
+    use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
     use petgraph::visit::Bfs;
+
+    #[derive(Debug, Clone)]
+    pub struct TestScalarUDF {
+        pub(crate) signature: Signature,
+    }
+
+    impl TestScalarUDF {
+        pub fn new() -> Self {
+            use DataType::*;
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![Float64, Float32],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestScalarUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "test-scalar-udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            let arg_type = &arg_types[0];
+
+            match arg_type {
+                DataType::Float32 => Ok(DataType::Float32),
+                _ => Ok(DataType::Float64),
+            }
+        }
+
+        fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+            Ok(input[0].sort_properties)
+        }
+
+        fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            let args = ColumnarValue::values_to_arrays(args)?;
+
+            let arr: ArrayRef = match args[0].data_type() {
+                DataType::Float64 => Arc::new({
+                    let arg = &args[0]
+                        .as_any()
+                        .downcast_ref::<Float64Array>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "could not cast {} to {}",
+                                self.name(),
+                                std::any::type_name::<Float64Array>()
+                            ))
+                        })?;
+
+                    arg.iter()
+                        .map(|a| a.map(f64::floor))
+                        .collect::<Float64Array>()
+                }),
+                DataType::Float32 => Arc::new({
+                    let arg = &args[0]
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "could not cast {} to {}",
+                                self.name(),
+                                std::any::type_name::<Float32Array>()
+                            ))
+                        })?;
+
+                    arg.iter()
+                        .map(|a| a.map(f32::floor))
+                        .collect::<Float32Array>()
+                }),
+                other => {
+                    return exec_err!(
+                        "Unsupported data type {other:?} for function {}",
+                        self.name()
+                    );
+                }
+            };
+            Ok(ColumnarValue::Array(arr))
+        }
+    }
 
     #[derive(Clone)]
     struct DummyProperty {
@@ -348,7 +379,7 @@ mod tests {
     }
 
     fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> Result<PhysicalExprDummyNode> {
-        let expr = node.expr.clone();
+        let expr = Arc::clone(&node.expr);
         let dummy_property = if expr.as_any().is::<BinaryExpr>() {
             "Binary"
         } else if expr.as_any().is::<Column>() {
@@ -515,72 +546,6 @@ mod tests {
         expected.insert(Column::new("col1", 2));
         expected.insert(Column::new("col2", 5));
         assert_eq!(collect_columns(&expr3), expected);
-        Ok(())
-    }
-
-    #[test]
-    fn scatter_int() -> Result<()> {
-        let truthy = Arc::new(Int32Array::from(vec![1, 10, 11, 100]));
-        let mask = BooleanArray::from(vec![true, true, false, false, true]);
-
-        // the output array is expected to be the same length as the mask array
-        let expected =
-            Int32Array::from_iter(vec![Some(1), Some(10), None, None, Some(11)]);
-        let result = scatter(&mask, truthy.as_ref())?;
-        let result = as_int32_array(&result)?;
-
-        assert_eq!(&expected, result);
-        Ok(())
-    }
-
-    #[test]
-    fn scatter_int_end_with_false() -> Result<()> {
-        let truthy = Arc::new(Int32Array::from(vec![1, 10, 11, 100]));
-        let mask = BooleanArray::from(vec![true, false, true, false, false, false]);
-
-        // output should be same length as mask
-        let expected =
-            Int32Array::from_iter(vec![Some(1), None, Some(10), None, None, None]);
-        let result = scatter(&mask, truthy.as_ref())?;
-        let result = as_int32_array(&result)?;
-
-        assert_eq!(&expected, result);
-        Ok(())
-    }
-
-    #[test]
-    fn scatter_with_null_mask() -> Result<()> {
-        let truthy = Arc::new(Int32Array::from(vec![1, 10, 11]));
-        let mask: BooleanArray = vec![Some(false), None, Some(true), Some(true), None]
-            .into_iter()
-            .collect();
-
-        // output should treat nulls as though they are false
-        let expected = Int32Array::from_iter(vec![None, None, Some(1), Some(10), None]);
-        let result = scatter(&mask, truthy.as_ref())?;
-        let result = as_int32_array(&result)?;
-
-        assert_eq!(&expected, result);
-        Ok(())
-    }
-
-    #[test]
-    fn scatter_boolean() -> Result<()> {
-        let truthy = Arc::new(BooleanArray::from(vec![false, false, false, true]));
-        let mask = BooleanArray::from(vec![true, true, false, false, true]);
-
-        // the output array is expected to be the same length as the mask array
-        let expected = BooleanArray::from_iter(vec![
-            Some(false),
-            Some(false),
-            None,
-            None,
-            Some(false),
-        ]);
-        let result = scatter(&mask, truthy.as_ref())?;
-        let result = as_boolean_array(&result)?;
-
-        assert_eq!(&expected, result);
         Ok(())
     }
 }

@@ -29,16 +29,34 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProp
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_datafusion_err, internal_err, Result};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+
+/// A vector of record batches with a memory reservation.
+#[derive(Debug)]
+pub(super) struct ReservedBatches {
+    batches: Vec<RecordBatch>,
+    #[allow(dead_code)]
+    reservation: MemoryReservation,
+}
+
+impl ReservedBatches {
+    pub(super) fn new(batches: Vec<RecordBatch>, reservation: MemoryReservation) -> Self {
+        ReservedBatches {
+            batches,
+            reservation,
+        }
+    }
+}
 
 /// The name is from PostgreSQL's terminology.
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
 /// This table serves as a mirror or buffer between each iteration of a recursive query.
 #[derive(Debug)]
 pub(super) struct WorkTable {
-    batches: Mutex<Option<Vec<RecordBatch>>>,
+    batches: Mutex<Option<ReservedBatches>>,
 }
 
 impl WorkTable {
@@ -51,14 +69,17 @@ impl WorkTable {
 
     /// Take the previously written batches from the work table.
     /// This will be called by the [`WorkTableExec`] when it is executed.
-    fn take(&self) -> Vec<RecordBatch> {
-        let batches = self.batches.lock().unwrap().take().unwrap_or_default();
-        batches
+    fn take(&self) -> Result<ReservedBatches> {
+        self.batches
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or_else(|| internal_datafusion_err!("Unexpected empty work table"))
     }
 
-    /// Write the results of a recursive query iteration to the work table.
-    pub(super) fn write(&self, input: Vec<RecordBatch>) {
-        self.batches.lock().unwrap().replace(input);
+    /// Update the results of a recursive query iteration to the work table.
+    pub(super) fn update(&self, batches: ReservedBatches) {
+        self.batches.lock().unwrap().replace(batches);
     }
 }
 
@@ -89,7 +110,7 @@ pub struct WorkTableExec {
 impl WorkTableExec {
     /// Create a new execution plan for a worktable exec.
     pub fn new(name: String, schema: SchemaRef) -> Self {
-        let cache = Self::compute_properties(schema.clone());
+        let cache = Self::compute_properties(Arc::clone(&schema));
         Self {
             name,
             schema,
@@ -102,7 +123,7 @@ impl WorkTableExec {
     pub(super) fn with_work_table(&self, work_table: Arc<WorkTable>) -> Self {
         Self {
             name: self.name.clone(),
-            schema: self.schema.clone(),
+            schema: Arc::clone(&self.schema),
             metrics: ExecutionPlanMetricsSet::new(),
             work_table,
             cache: self.cache.clone(),
@@ -136,6 +157,10 @@ impl DisplayAs for WorkTableExec {
 }
 
 impl ExecutionPlan for WorkTableExec {
+    fn name(&self) -> &'static str {
+        "WorkTableExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -144,7 +169,7 @@ impl ExecutionPlan for WorkTableExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 
@@ -160,7 +185,7 @@ impl ExecutionPlan for WorkTableExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self.clone())
+        Ok(Arc::clone(&self) as Arc<dyn ExecutionPlan>)
     }
 
     /// Stream the batches that were written to the work table.
@@ -175,13 +200,11 @@ impl ExecutionPlan for WorkTableExec {
                 "WorkTableExec got an invalid partition {partition} (expected 0)"
             );
         }
-
-        let batches = self.work_table.take();
-        Ok(Box::pin(MemoryStream::try_new(
-            batches,
-            self.schema.clone(),
-            None,
-        )?))
+        let batch = self.work_table.take()?;
+        Ok(Box::pin(
+            MemoryStream::try_new(batch.batches, Arc::clone(&self.schema), None)?
+                .with_reservation(batch.reservation),
+        ))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -194,4 +217,40 @@ impl ExecutionPlan for WorkTableExec {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use arrow_array::{ArrayRef, Int32Array};
+    use datafusion_execution::memory_pool::{MemoryConsumer, UnboundedMemoryPool};
+
+    #[test]
+    fn test_work_table() {
+        let work_table = WorkTable::new();
+        // can't take from empty work_table
+        assert!(work_table.take().is_err());
+
+        let pool = Arc::new(UnboundedMemoryPool::default()) as _;
+        let mut reservation = MemoryConsumer::new("test_work_table").register(&pool);
+
+        // update batch to work_table
+        let array: ArrayRef = Arc::new((0..5).collect::<Int32Array>());
+        let batch = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
+        reservation.try_grow(100).unwrap();
+        work_table.update(ReservedBatches::new(vec![batch.clone()], reservation));
+        // take from work_table
+        let reserved_batches = work_table.take().unwrap();
+        assert_eq!(reserved_batches.batches, vec![batch.clone()]);
+
+        // consume the batch by the MemoryStream
+        let memory_stream =
+            MemoryStream::try_new(reserved_batches.batches, batch.schema(), None)
+                .unwrap()
+                .with_reservation(reserved_batches.reservation);
+
+        // should still be reserved
+        assert_eq!(pool.reserved(), 100);
+
+        // the reservation should be freed after drop the memory_stream
+        drop(memory_stream);
+        assert_eq!(pool.reserved(), 0);
+    }
+}

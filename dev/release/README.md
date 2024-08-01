@@ -25,26 +25,31 @@ Patch releases are made on an adhoc basis, but we try and avoid them given the f
 
 ## Branching Policy
 
-- When we prepare a new release, we create a release branch, such as `branch-18` in the Apache repository (not in a fork)
+- When we prepare a new release, we create a release branch, such as `branch-37` in the Apache repository (not in a fork)
 - We update the crate version and generate the changelog in this branch and create a PR against the main branch
 - Once the PR is approved and merged, we tag the rc in the release branch, and release from the release branch
 - Bug fixes can be merged to the release branch and patch releases can be created from the release branch
 
 #### How to add changes to `branch-*` branch?
 
-If you would like to propose your change for inclusion in a release branch
+If you would like to propose your change for inclusion in a release branch for a
+patch release:
 
-1. follow normal workflow to create PR to `main` branch and wait for its approval and merges.
-2. after PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-18`), cherry-pick the commit and create a PR to release branch.
+1. Find (or create) the issue for the incremental release ([example release issue]) and discuss the proposed change there with the maintainers.
+1. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
+1. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
 
-## Prerequisite
+[example release issue]: https://github.com/apache/datafusion/issues/9904
+[example backport pr]: https://github.com/apache/datafusion/pull/10123
 
-- Have upstream git repo `git@github.com:apache/arrow-datafusion.git` add as git remote `apache`.
+## Release Prerequisite
+
+- Have upstream git repo `git@github.com:apache/datafusion.git` add as git remote `apache`.
 - Created a personal access token in GitHub for changelog automation script.
   - Github PAT should be created with `repo` access
 - Make sure your signing key is added to the following files in SVN:
-  - https://dist.apache.org/repos/dist/dev/arrow/KEYS
-  - https://dist.apache.org/repos/dist/release/arrow/KEYS
+  - https://dist.apache.org/repos/dist/dev/datafusion/KEYS
+  - https://dist.apache.org/repos/dist/release/datafusion/KEYS
 
 ### How to add signing key
 
@@ -52,16 +57,16 @@ See instructions at https://infra.apache.org/release-signing.html#generate for g
 
 Committers can add signing keys in Subversion client with their ASF account. e.g.:
 
-```bash
-$ svn co https://dist.apache.org/repos/dist/dev/arrow
-$ cd arrow
+```shell
+$ svn co https://dist.apache.org/repos/dist/dev/datafusion
+$ cd datafusion
 $ editor KEYS
 $ svn ci KEYS
 ```
 
 Follow the instructions in the header of the KEYS file to append your key. Here is an example:
 
-```bash
+```shell
 (gpg --list-sigs "John Doe" && gpg --armor --export "John Doe") >> KEYS
 svn commit KEYS -m "Add key for John Doe"
 ```
@@ -84,36 +89,26 @@ to generate one if you do not already have one.
 
 The changelog is generated using a Python script. There is a dependency on `PyGitHub`, which can be installed using pip:
 
-```bash
+```shell
 pip3 install PyGitHub
 ```
 
-Run the following command to generate the changelog content.
+To generate the changelog, set the `GITHUB_TOKEN` environment variable to a valid token and then run the script
+providing two commit ids or tags followed by the version number of the release being created. The following
+example generates a change log of all changes between the first commit and the current HEAD revision.
 
-```bash
-$ GITHUB_TOKEN=<TOKEN> ./dev/release/generate-changelog.py apache/arrow-datafusion 24.0.0 HEAD > dev/changelog/25.0.0.md
+```shell
+export GITHUB_TOKEN=<your-token-here>
+./dev/release/generate-changelog.py 24.0.0 HEAD 25.0.0 > dev/changelog/25.0.0.md
 ```
 
 This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for
-titles starting with `feat:`, `fix:`, or `docs:` . The script will produce output similar to:
+titles starting with `feat:`, `fix:`, or `docs:`.
 
-```
-Fetching list of commits between 24.0.0 and HEAD
-Fetching pull requests
-Categorizing pull requests
-Generating changelog content
-```
+Once the change log is generated, run `prettier` to format the document:
 
-This process is not fully automated, so there are some additional manual steps:
-
-- Add the ASF header to the generated file
-- Add a link to this changelog from the top-level `/datafusion/CHANGELOG.md`
-- Add the following content (copy from the previous version's changelog and update as appropriate:
-
-```
-## [24.0.0](https://github.com/apache/arrow-datafusion/tree/24.0.0) (2023-05-06)
-
-[Full Changelog](https://github.com/apache/arrow-datafusion/compare/23.0.0...24.0.0)
+```shell
+prettier -w dev/changelog/25.0.0md
 ```
 
 ## Prepare release commits and PR
@@ -121,9 +116,9 @@ This process is not fully automated, so there are some additional manual steps:
 Prepare a PR to update `CHANGELOG.md` and versions to reflect the planned
 release.
 
-See [#801](https://github.com/apache/arrow-datafusion/pull/801) for an example.
+See [#9697](https://github.com/apache/datafusion/pull/9697) for an example.
 
-Here are the commands that could be used to prepare the `5.1.0` release:
+Here are the commands that could be used to prepare the `38.0.0` release:
 
 ### Update Version
 
@@ -134,10 +129,10 @@ git fetch apache
 git checkout apache/main
 ```
 
-Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`:
+Update datafusion version in `datafusion/Cargo.toml` to `38.0.0`:
 
 ```
-./dev/update_datafusion_versions.py 5.1.0
+./dev/update_datafusion_versions.py 38.0.0
 ```
 
 Lastly commit the version change:
@@ -162,7 +157,7 @@ Pick numbers in sequential order, with `0` for `rc0`, `1` for `rc1`, etc.
 While the official release artifacts are signed tarballs and zip files, we also
 tag the commit it was created for convenience and code archaeology.
 
-Using a string such as `5.1.0` as the `<version>`, create and push the tag by running these commands:
+Using a string such as `38.0.0` as the `<version>`, create and push the tag by running these commands:
 
 ```shell
 git fetch apache
@@ -176,52 +171,21 @@ git push apache <version>
 Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps:
 
 ```shell
-GH_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 5.1.0 0
+GH_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 38.0.0 0
 ```
 
 The `create-tarball.sh` script
 
-1. creates and uploads all release candidate artifacts to the [arrow
-   dev](https://dist.apache.org/repos/dist/dev/arrow) location on the
+1. creates and uploads all release candidate artifacts to the [datafusion
+   dev](https://dist.apache.org/repos/dist/dev/datafusion) location on the
    apache distribution svn server
 
 2. provide you an email template to
-   send to dev@arrow.apache.org for release voting.
+   send to dev@datafusion.apache.org for release voting.
 
 ### Vote on Release Candidate artifacts
 
-Send the email output from the script to dev@arrow.apache.org. The email should look like
-
-```
-To: dev@arrow.apache.org
-Subject: [VOTE][DataFusion] Release Apache Arrow DataFusion 5.1.0 RC0
-
-Hi,
-
-I would like to propose a release of Apache Arrow DataFusion Implementation,
-version 5.1.0.
-
-This release candidate is based on commit: a5dd428f57e62db20a945e8b1895de91405958c4 [1]
-The proposed release artifacts and signatures are hosted at [2].
-The changelog is located at [3].
-
-Please download, verify checksums and signatures, run the unit tests,
-and vote on the release.
-
-The vote will be open for at least 72 hours.
-
-[ ] +1 Release this as Apache Arrow DataFusion 5.1.0
-[ ] +0
-[ ] -1 Do not release this as Apache Arrow DataFusion 5.1.0 because...
-
-Here is my vote:
-
-+1
-
-[1]: https://github.com/apache/arrow-datafusion/tree/a5dd428f57e62db20a945e8b1895de91405958c4
-[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-5.1.0
-[3]: https://github.com/apache/arrow-datafusion/blob/a5dd428f57e62db20a945e8b1895de91405958c4/CHANGELOG.md
-```
+Send the email output from the script to dev@datafusion.apache.org.
 
 For the release to become "official" it needs at least three PMC members to vote +1 on it.
 
@@ -230,7 +194,7 @@ For the release to become "official" it needs at least three PMC members to vote
 The `dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like:
 
 ```
-./dev/release/verify-release-candidate.sh 5.1.0 0
+./dev/release/verify-release-candidate.sh 38.0.0 0
 ```
 
 #### If the release is not approved
@@ -245,11 +209,11 @@ NOTE: steps in this section can only be done by PMC members.
 ### After the release is approved
 
 Move artifacts to the release location in SVN, e.g.
-https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-5.1.0/, using
+https://dist.apache.org/repos/dist/release/datafusion/datafusion-38.0.0/, using
 the `release-tarball.sh` script:
 
 ```shell
-./dev/release/release-tarball.sh 5.1.0 0
+./dev/release/release-tarball.sh 38.0.0 0
 ```
 
 Congratulations! The release is now official!
@@ -259,9 +223,9 @@ Congratulations! The release is now official!
 Tag the same release candidate commit with the final release tag
 
 ```
-git co apache/5.1.0-rc0
-git tag 5.1.0
-git push apache 5.1.0
+git co apache/38.0.0-rc0
+git tag 38.0.0
+git push apache 38.0.0
 ```
 
 ### Publish on Crates.io
@@ -276,24 +240,12 @@ been made to crates.io using the following instructions.
 Follow [these
 instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
 create an account and login to crates.io before asking to be added as an owner
-of the following crates:
-
-- [datafusion](https://crates.io/crates/datafusion)
-- [datafusion-cli](https://crates.io/crates/datafusion-cli)
-- [datafusion-common](https://crates.io/crates/datafusion-common)
-- [datafusion-expr](https://crates.io/crates/datafusion-expr)
-- [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
-- [datafusion-proto](https://crates.io/crates/datafusion-proto)
-- [datafusion-execution](https://crates.io/crates/datafusion-execution)
-- [datafusion-physical-plan](https://crates.io/crates/datafusion-physical-plan)
-- [datafusion-sql](https://crates.io/crates/datafusion-sql)
-- [datafusion-optimizer](https://crates.io/crates/datafusion-optimizer)
-- [datafusion-substrait](https://crates.io/crates/datafusion-substrait)
+to all of the DataFusion crates.
 
 Download and unpack the official release tarball
 
 Verify that the Cargo.toml in the tarball contains the correct version
-(e.g. `version = "5.1.0"`) and then publish the crates by running the script `release-crates.sh`
+(e.g. `version = "38.0.0"`) and then publish the crates by running the script `release-crates.sh`
 in a directory extracted from the source tarball that was voted on. Note that this script doesn't
 work if run in a Git repo.
 
@@ -304,19 +256,25 @@ published in the correct order as shown in this diagram.
 
 _To update this diagram, manually edit the dependencies in [crate-deps.dot](crate-deps.dot) and then run:_
 
-```bash
+```shell
 dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 ```
 
 ```shell
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
-(cd datafusion/sql && cargo publish)
-(cd datafusion/physical-expr && cargo publish)
-(cd datafusion/optimizer && cargo publish)
 (cd datafusion/execution && cargo publish)
+(cd datafusion/physical-expr-common && cargo publish)
+(cd datafusion/functions-aggregate && cargo publish)
+(cd datafusion/physical-expr && cargo publish)
+(cd datafusion/functions && cargo publish)
+(cd datafusion/functions-nested && cargo publish)
+(cd datafusion/sql && cargo publish)
+(cd datafusion/optimizer && cargo publish)
+(cd datafusion/common-runtime && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
 (cd datafusion/core && cargo publish)
+(cd datafusion/proto-common && cargo publish)
 (cd datafusion/proto && cargo publish)
 (cd datafusion/substrait && cargo publish)
 ```
@@ -344,7 +302,7 @@ Please visit https://brew.sh/ to obtain Homebrew. In addition to that please che
 Before running the script make sure that you can run the following command in your bash to make sure
 that `brew` has been installed and configured properly:
 
-```bash
+```shell
 brew --version
 ```
 
@@ -359,7 +317,7 @@ To create a Github Personal Access Token, please visit https://docs.github.com/e
 
 After all of the above is complete execute the following command:
 
-```bash
+```shell
 dev/release/publish_homebrew.sh <version> <github-user> <github-token> <homebrew-default-branch-name>
 ```
 
@@ -384,29 +342,11 @@ The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
 with the release verification.
 ```
 
-You can include mention crates.io and PyPI version URLs in the email if applicable.
-
-```
-We have published new versions of DataFusion to crates.io:
-
-https://crates.io/crates/datafusion/28.0.0
-https://crates.io/crates/datafusion-cli/28.0.0
-https://crates.io/crates/datafusion-common/28.0.0
-https://crates.io/crates/datafusion-expr/28.0.0
-https://crates.io/crates/datafusion-optimizer/28.0.0
-https://crates.io/crates/datafusion-physical-expr/28.0.0
-https://crates.io/crates/datafusion-proto/28.0.0
-https://crates.io/crates/datafusion-sql/28.0.0
-https://crates.io/crates/datafusion-execution/28.0.0
-https://crates.io/crates/datafusion-substrait/28.0.0
-```
-
 ### Add the release to Apache Reporter
 
-Add the release to https://reporter.apache.org/addrelease.html?arrow with a version name prefixed with `RS-DATAFUSION-`,
-for example `RS-DATAFUSION-14.0.0`.
+Add the release to https://reporter.apache.org/addrelease.html?datafusion using the version number e.g. 38.0.0.
 
-The release information is used to generate a template for a board report (see example
+The release information is used to generate a template for a board report (see example from Apache Arrow project
 [here](https://github.com/apache/arrow/pull/14357)).
 
 ### Delete old RCs and Releases
@@ -420,14 +360,14 @@ Release candidates should be deleted once the release is published.
 
 Get a list of DataFusion release candidates:
 
-```bash
-svn ls https://dist.apache.org/repos/dist/dev/arrow | grep datafusion
+```shell
+svn ls https://dist.apache.org/repos/dist/dev/datafusion
 ```
 
 Delete a release candidate:
 
-```bash
-svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-7.1.0-rc1/
+```shell
+svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-38.0.0-rc1/
 ```
 
 #### Deleting old releases from `release` svn
@@ -436,36 +376,26 @@ Only the latest release should be available. Delete old releases after publishin
 
 Get a list of DataFusion releases:
 
-```bash
-svn ls https://dist.apache.org/repos/dist/release/arrow | grep datafusion
+```shell
+svn ls https://dist.apache.org/repos/dist/release/datafusion
 ```
 
 Delete a release:
 
-```bash
-svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-7.0.0
+```shell
+svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/datafusion/datafusion-37.0.0
 ```
-
-### Publish the User Guide to the Arrow Site
-
-- Run the `build.sh` in the `docs` directory from the release tarball.
-- Clone the [arrow-site](https://github.com/apache/arrow-site) repository
-- Checkout the `asf-site` branch
-- Copy content from `docs/build/html/*` to the `datafusion` directory in arrow-site
-- Create a PR against the `asf-site` branch ([example](https://github.com/apache/arrow-site/pull/237))
-- Once the PR is merged, the content will be published to https://arrow.apache.org/datafusion/ by GitHub Pages (this
-  can take some time).
 
 ### Optional: Write a blog post announcing the release
 
-We typically crowdsource release announcements by collaborating on a Google document, usually starting
+We typically crowd source release announcements by collaborating on a Google document, usually starting
 with a copy of the previous release announcement.
 
 Run the following commands to get the number of commits and number of unique contributors for inclusion in the blog post.
 
-```bash
-git log --pretty=oneline 10.0.0..11.0.0 datafusion datafusion-cli datafusion-examples | wc -l
-git shortlog -sn 10.0.0..11.0.0 datafusion datafusion-cli datafusion-examples | wc -l
+```shell
+git log --pretty=oneline 37.0.0..38.0.0 datafusion datafusion-cli datafusion-examples | wc -l
+git shortlog -sn 37.0.0..38.0.0 datafusion datafusion-cli datafusion-examples | wc -l
 ```
 
 Once there is consensus on the contents of the post, create a PR to add a blog post to the

@@ -26,14 +26,14 @@ use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::insert::{DataSink, FileSinkExec};
+use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, SendableRecordBatchStream,
 };
-use crate::physical_planner::create_physical_sort_expr;
+use crate::physical_planner::create_physical_sort_exprs;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -42,6 +42,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
@@ -206,7 +207,7 @@ impl TableProvider for MemTable {
 
     async fn scan(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
@@ -216,8 +217,12 @@ impl TableProvider for MemTable {
             let inner_vec = arc_inner_vec.read().await;
             partitions.push(inner_vec.clone())
         }
+
         let mut exec =
             MemoryExec::try_new(&partitions, self.schema(), projection.cloned())?;
+
+        let show_sizes = state.config_options().explain.show_sizes;
+        exec = exec.with_show_sizes(show_sizes);
 
         // add sort information if present
         let sort_order = self.sort_order.lock();
@@ -227,16 +232,11 @@ impl TableProvider for MemTable {
             let file_sort_order = sort_order
                 .iter()
                 .map(|sort_exprs| {
-                    sort_exprs
-                        .iter()
-                        .map(|expr| {
-                            create_physical_sort_expr(
-                                expr,
-                                &df_schema,
-                                state.execution_props(),
-                            )
-                        })
-                        .collect::<Result<Vec<_>>>()
+                    create_physical_sort_exprs(
+                        sort_exprs,
+                        &df_schema,
+                        state.execution_props(),
+                    )
                 })
                 .collect::<Result<Vec<_>>>()?;
             exec = exec.with_sort_information(file_sort_order);
@@ -259,7 +259,7 @@ impl TableProvider for MemTable {
     /// * A plan that returns the number of rows written.
     async fn insert_into(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
         overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -280,7 +280,7 @@ impl TableProvider for MemTable {
             return not_impl_err!("Overwrite not implemented for MemoryTable yet");
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
-        Ok(Arc::new(FileSinkExec::new(
+        Ok(Arc::new(DataSinkExec::new(
             input,
             sink,
             self.schema.clone(),
@@ -364,7 +364,6 @@ impl DataSink for MemSink {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use super::*;
     use crate::datasource::provider_as_source;
@@ -376,8 +375,6 @@ mod tests {
     use arrow::error::ArrowError;
     use datafusion_common::DataFusionError;
     use datafusion_expr::LogicalPlanBuilder;
-
-    use futures::StreamExt;
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {
@@ -648,7 +645,7 @@ mod tests {
         Ok(partitions)
     }
 
-    /// Returns the value of results. For example, returns 6 given the follwing
+    /// Returns the value of results. For example, returns 6 given the following
     ///
     /// ```text
     /// +-------+,

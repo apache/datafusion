@@ -16,11 +16,12 @@
 // under the License.
 
 //! Interval parsing logic
-use sqlparser::parser::ParserError;
-use std::fmt::Display;
 
+use std::fmt::Display;
 use std::result;
 use std::str::FromStr;
+
+use sqlparser::parser::ParserError;
 
 /// Readable file compression type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

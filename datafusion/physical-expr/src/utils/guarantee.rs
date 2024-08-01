@@ -62,14 +62,14 @@ use std::sync::Arc;
 /// A guarantee can be one of two forms:
 ///
 /// 1. The column must be one the values for the predicate to be `true`. If the
-/// column takes on any other value, the predicate can not evaluate to `true`.
-/// For example,
-/// `(a = 1)`, `(a = 1 OR a = 2) or `a IN (1, 2, 3)`
+///    column takes on any other value, the predicate can not evaluate to `true`.
+///    For example,
+///    `(a = 1)`, `(a = 1 OR a = 2)` or `a IN (1, 2, 3)`
 ///
 /// 2. The column must NOT be one of the values for the predicate to be `true`.
-/// If the column can ONLY take one of these values, the predicate can not
-/// evaluate to `true`. For example,
-/// `(a != 1)`, `(a != 1 AND a != 2)` or `a NOT IN (1, 2, 3)`
+///    If the column can ONLY take one of these values, the predicate can not
+///    evaluate to `true`. For example,
+///    `(a != 1)`, `(a != 1 AND a != 2)` or `a NOT IN (1, 2, 3)`
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiteralGuarantee {
     pub column: Column,
@@ -283,7 +283,7 @@ impl<'a> GuaranteeBuilder<'a> {
         )
     }
 
-    /// Aggregates a new single column, multi literal term to ths builder
+    /// Aggregates a new single column, multi literal term to this builder
     /// combining with previously known guarantees if possible.
     ///
     /// # Examples
@@ -374,6 +374,7 @@ impl<'a> ColOpLit<'a> {
     /// 1. `col <op> literal`
     /// 2. `literal <op> col`
     /// 3. operator is `=` or `!=`
+    ///
     /// Returns None otherwise
     fn try_new(expr: &'a Arc<dyn PhysicalExpr>) -> Option<Self> {
         let binary_expr = expr
@@ -419,15 +420,16 @@ impl<'a> ColOpLit<'a> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::OnceLock;
+
     use super::*;
-    use crate::create_physical_expr;
-    use crate::execution_props::ExecutionProps;
+    use crate::planner::logical2physical;
+
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::ToDFSchema;
     use datafusion_expr::expr_fn::*;
     use datafusion_expr::{lit, Expr};
+
     use itertools::Itertools;
-    use std::sync::OnceLock;
 
     #[test]
     fn test_literal() {
@@ -867,23 +869,14 @@ mod test {
         LiteralGuarantee::try_new(column, Guarantee::NotIn, literals.iter()).unwrap()
     }
 
-    /// Convert a logical expression to a physical expression (without any simplification, etc)
-    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-        let df_schema = schema.clone().to_dfschema().unwrap();
-        let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
-    }
-
     // Schema for testing
     fn schema() -> SchemaRef {
-        SCHEMA
-            .get_or_init(|| {
-                Arc::new(Schema::new(vec![
-                    Field::new("a", DataType::Utf8, false),
-                    Field::new("b", DataType::Int32, false),
-                ]))
-            })
-            .clone()
+        Arc::clone(SCHEMA.get_or_init(|| {
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Int32, false),
+            ]))
+        }))
     }
 
     static SCHEMA: OnceLock<SchemaRef> = OnceLock::new();

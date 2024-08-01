@@ -22,7 +22,6 @@ use arrow::{
     datatypes::Float64Type,
 };
 use arrow_schema::DataType;
-use datafusion::datasource::file_format::options::CsvReadOptions;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -119,12 +118,12 @@ async fn main() -> Result<()> {
     df.show().await?;
 
     // Now, run the function using the DataFrame API:
-    let window_expr = smooth_it.call(
-        vec![col("speed")],                 // smooth_it(speed)
-        vec![col("car")],                   // PARTITION BY car
-        vec![col("time").sort(true, true)], // ORDER BY time ASC
-        WindowFrame::new(None),
-    );
+    let window_expr = smooth_it
+        .call(vec![col("speed")]) // smooth_it(speed)
+        .partition_by(vec![col("car")]) // PARTITION BY car
+        .order_by(vec![col("time").sort(true, true)]) // ORDER BY time ASC
+        .window_frame(WindowFrame::new(None))
+        .build()?;
     let df = ctx.table("cars").await?.window(vec![window_expr])?;
 
     // print the results
@@ -133,7 +132,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Create a `PartitionEvalutor` to evaluate this function on a new
+/// Create a `PartitionEvaluator` to evaluate this function on a new
 /// partition.
 fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
     Ok(Box::new(MyPartitionEvaluator::new()))

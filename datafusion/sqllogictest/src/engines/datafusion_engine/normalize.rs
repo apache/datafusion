@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::DFField;
 use datafusion_common::DataFusionError;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -96,14 +96,18 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
         // form new rows with each additional line
         let new_lines: Vec<_> = lines
             .into_iter()
-            .map(|l| {
+            .enumerate()
+            .map(|(idx, l)| {
                 // replace any leading spaces with '-' as
                 // `sqllogictest` ignores whitespace differences
                 //
-                // See https://github.com/apache/arrow-datafusion/issues/6328
+                // See https://github.com/apache/datafusion/issues/6328
                 let content = l.trim_start();
                 let new_prefix = "-".repeat(l.len() - content.len());
-                vec![format!("{new_prefix}{content}")]
+                // maintain for each line a number, so
+                // reviewing explain result changes is easier
+                let line_num = idx + 1;
+                vec![format!("{line_num:02}){new_prefix}{content}")]
             })
             .collect();
 
@@ -138,21 +142,21 @@ fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
 fn workspace_root() -> &'static object_store::path::Path {
     static WORKSPACE_ROOT_LOCK: OnceLock<object_store::path::Path> = OnceLock::new();
     WORKSPACE_ROOT_LOCK.get_or_init(|| {
-        // e.g. /Software/arrow-datafusion/datafusion/core
+        // e.g. /Software/datafusion/datafusion/core
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-        // e.g. /Software/arrow-datafusion/datafusion
+        // e.g. /Software/datafusion/datafusion
         let workspace_root = dir
             .parent()
             .expect("Can not find parent of datafusion/core")
-            // e.g. /Software/arrow-datafusion
+            // e.g. /Software/datafusion
             .parent()
             .expect("parent of datafusion")
             .to_string_lossy();
 
         let sanitized_workplace_root = if cfg!(windows) {
-            // Object store paths are delimited with `/`, e.g. `D:/a/arrow-datafusion/arrow-datafusion/testing/data/csv/aggregate_test_100.csv`.
-            // The default windows delimiter is `\`, so the workplace path is `D:\a\arrow-datafusion\arrow-datafusion`.
+            // Object store paths are delimited with `/`, e.g. `/datafusion/datafusion/testing/data/csv/aggregate_test_100.csv`.
+            // The default windows delimiter is `\`, so the workplace path is `datafusion\datafusion`.
             workspace_root
                 .replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
         } else {
@@ -239,7 +243,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
 }
 
 /// Converts columns to a result as expected by sqllogicteset.
-pub(crate) fn convert_schema_to_types(columns: &[DFField]) -> Vec<DFColumnType> {
+pub(crate) fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
     columns
         .iter()
         .map(|f| f.data_type())

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_schema::{Field, Schema};
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use datafusion_physical_expr::NullState;
 use std::{any::Any, sync::Arc};
@@ -30,6 +31,7 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{cast::as_float64_array, ScalarValue};
 use datafusion_expr::{
+    function::{AccumulatorArgs, StateFieldsArgs},
     Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
 };
 
@@ -85,22 +87,28 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     /// is supported, DataFusion will use this row oriented
     /// accumulator when the aggregate function is used as a window function
     /// or when there are only aggregates (no GROUP BY columns) in the plan.
-    fn accumulator(&self, _arg: &DataType) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(GeometricMean::new()))
     }
 
     /// This is the description of the state. accumulator's state() must match the types here.
-    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
-        Ok(vec![DataType::Float64, DataType::UInt32])
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        Ok(vec![
+            Field::new("prod", args.return_type.clone(), true),
+            Field::new("n", DataType::UInt32, true),
+        ])
     }
 
     /// Tell DataFusion that this aggregate supports the more performant `GroupsAccumulator`
     /// which is used for cases when there are grouping columns in the query
-    fn groups_accumulator_supported(&self) -> bool {
+    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         true
     }
 
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(GeometricMeanGroupsAccumulator::new()))
     }
 }
@@ -191,7 +199,6 @@ impl Accumulator for GeometricMean {
 
 // create local session context with an in-memory table
 fn create_context() -> Result<SessionContext> {
-    use datafusion::arrow::datatypes::{Field, Schema};
     use datafusion::datasource::MemTable;
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
@@ -332,7 +339,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         Ok(())
     }
 
-    /// Generate output, as specififed by `emit_to` and update the intermediate state
+    /// Generate output, as specified by `emit_to` and update the intermediate state
     fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
         let counts = emit_to.take_needed(&mut self.counts);
         let prods = emit_to.take_needed(&mut self.prods);

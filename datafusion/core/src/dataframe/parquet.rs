@@ -15,15 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::file_options::parquet_writer::{
-    default_builder, ParquetWriterOptions,
+use std::sync::Arc;
+
+use crate::datasource::file_format::{
+    format_as_file_type, parquet::ParquetFormatFactory,
 };
-use parquet::file::properties::WriterProperties;
 
 use super::{
-    CompressionTypeVariant, CopyOptions, DataFrame, DataFrameWriteOptions,
-    DataFusionError, FileType, FileTypeWriterOptions, LogicalPlanBuilder, RecordBatch,
+    DataFrame, DataFrameWriteOptions, DataFusionError, LogicalPlanBuilder, RecordBatch,
 };
+
+use datafusion_common::config::TableParquetOptions;
 
 impl DataFrame {
     /// Execute the `DataFrame` and write the results to Parquet file(s).
@@ -53,55 +55,59 @@ impl DataFrame {
         self,
         path: &str,
         options: DataFrameWriteOptions,
-        writer_properties: Option<WriterProperties>,
+        writer_options: Option<TableParquetOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.overwrite {
             return Err(DataFusionError::NotImplemented(
                 "Overwrites are not implemented for DataFrame::write_parquet.".to_owned(),
             ));
         }
-        match options.compression{
-            CompressionTypeVariant::UNCOMPRESSED => (),
-            _ => return Err(DataFusionError::Configuration("DataFrame::write_parquet method does not support compression set via DataFrameWriteOptions. Set parquet compression via writer_properties instead.".to_owned()))
-        }
-        let props = match writer_properties {
-            Some(props) => props,
-            None => default_builder(self.session_state.config_options())?.build(),
+
+        let format = if let Some(parquet_opts) = writer_options {
+            Arc::new(ParquetFormatFactory::new_with_options(parquet_opts))
+        } else {
+            Arc::new(ParquetFormatFactory::new())
         };
-        let file_type_writer_options =
-            FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(props));
-        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
+
+        let file_type = format_as_file_type(format);
+
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FileType::PARQUET,
+            file_type,
+            Default::default(),
             options.partition_by,
-            copy_options,
         )?
         .build()?;
-        DataFrame::new(self.session_state, plan).collect().await
+        DataFrame {
+            session_state: self.session_state,
+            plan,
+        }
+        .collect()
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
-
-    use object_store::local::LocalFileSystem;
-    use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
-    use parquet::file::reader::FileReader;
-    use tempfile::TempDir;
-    use url::Url;
-
-    use datafusion_expr::{col, lit};
-
-    use crate::arrow::util::pretty;
-    use crate::execution::context::SessionContext;
-    use crate::execution::options::ParquetReadOptions;
-    use crate::test_util;
 
     use super::super::Result;
     use super::*;
+    use crate::arrow::util::pretty;
+    use crate::execution::context::SessionContext;
+    use crate::execution::options::ParquetReadOptions;
+    use crate::test_util::{self, register_aggregate_csv};
+
+    use datafusion_common::file_options::parquet_writer::parse_compression_string;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_expr::{col, lit};
+
+    use object_store::local::LocalFileSystem;
+    use parquet::file::reader::FileReader;
+    use tempfile::TempDir;
+    use url::Url;
 
     #[tokio::test]
     async fn filter_pushdown_dataframe() -> Result<()> {
@@ -136,15 +142,14 @@ mod tests {
     #[tokio::test]
     async fn write_parquet_with_compression() -> Result<()> {
         let test_df = test_util::test_table().await?;
-
         let output_path = "file://local/test.parquet";
         let test_compressions = vec![
-            parquet::basic::Compression::SNAPPY,
-            parquet::basic::Compression::LZ4,
-            parquet::basic::Compression::LZ4_RAW,
-            parquet::basic::Compression::GZIP(GzipLevel::default()),
-            parquet::basic::Compression::BROTLI(BrotliLevel::default()),
-            parquet::basic::Compression::ZSTD(ZstdLevel::default()),
+            "snappy",
+            "brotli(1)",
+            "lz4",
+            "lz4_raw",
+            "gzip(6)",
+            "zstd(1)",
         ];
         for compression in test_compressions.into_iter() {
             let df = test_df.clone();
@@ -153,19 +158,17 @@ mod tests {
             let local_url = Url::parse("file://local").unwrap();
             let ctx = &test_df.session_state;
             ctx.runtime_env().register_object_store(&local_url, local);
+            let mut options = TableParquetOptions::default();
+            options.global.compression = Some(compression.to_string());
             df.write_parquet(
                 output_path,
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(compression)
-                        .build(),
-                ),
+                Some(options),
             )
             .await?;
 
             // Check that file actually used the specified compression
-            let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
+            let file = std::fs::File::open(tmp_dir.path().join("test.parquet"))?;
 
             let reader =
                 parquet::file::serialized_reader::SerializedFileReader::new(file)
@@ -176,7 +179,57 @@ mod tests {
             let written_compression =
                 parquet_metadata.row_group(0).column(0).compression();
 
-            assert_eq!(written_compression, compression);
+            assert_eq!(written_compression, parse_compression_string(compression)?);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_parquet_with_small_rg_size() -> Result<()> {
+        // This test verifies writing a parquet file with small rg size
+        // relative to datafusion.execution.batch_size does not panic
+        let mut ctx = SessionContext::new_with_config(
+            SessionConfig::from_string_hash_map(HashMap::from_iter(
+                [("datafusion.execution.batch_size", "10")]
+                    .iter()
+                    .map(|(s1, s2)| (s1.to_string(), s2.to_string())),
+            ))?,
+        );
+        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
+        let test_df = ctx.table("aggregate_test_100").await?;
+
+        let output_path = "file://local/test.parquet";
+
+        for rg_size in 1..10 {
+            let df = test_df.clone();
+            let tmp_dir = TempDir::new()?;
+            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+            let local_url = Url::parse("file://local").unwrap();
+            let ctx = &test_df.session_state;
+            ctx.runtime_env().register_object_store(&local_url, local);
+            let mut options = TableParquetOptions::default();
+            options.global.max_row_group_size = rg_size;
+            options.global.allow_single_file_parallelism = true;
+            df.write_parquet(
+                output_path,
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(options),
+            )
+            .await?;
+
+            // Check that file actually used the correct rg size
+            let file = std::fs::File::open(tmp_dir.path().join("test.parquet"))?;
+
+            let reader =
+                parquet::file::serialized_reader::SerializedFileReader::new(file)
+                    .unwrap();
+
+            let parquet_metadata = reader.metadata();
+
+            let written_rows = parquet_metadata.row_group(0).num_rows();
+
+            assert_eq!(written_rows as usize, rg_size);
         }
 
         Ok(())

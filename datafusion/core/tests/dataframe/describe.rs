@@ -39,7 +39,7 @@ async fn describe() -> Result<()> {
         "| describe   | id                | bool_col | tinyint_col        | smallint_col       | int_col            | bigint_col         | float_col          | double_col         | date_string_col | string_col | timestamp_col           | year               | month             |",
         "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
         "| count      | 7300.0            | 7300     | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300            | 7300       | 7300                    | 7300.0             | 7300.0            |",
-        "| null_count | 7300.0            | 7300     | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300            | 7300       | 7300                    | 7300.0             | 7300.0            |",
+        "| null_count | 0.0               | 0        | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 0               | 0          | 0                       | 0.0                | 0.0               |",
         "| mean       | 3649.5            | null     | 4.5                | 4.5                | 4.5                | 45.0               | 4.949999964237213  | 45.45              | null            | null       | null                    | 2009.5             | 6.526027397260274 |",
         "| std        | 2107.472815166704 | null     | 2.8724780750809518 | 2.8724780750809518 | 2.8724780750809518 | 28.724780750809533 | 3.1597258182544645 | 29.012028558317645 | null            | null       | null                    | 0.5000342500942125 | 3.44808750051728  |",
         "| min        | 0.0               | null     | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 01/01/09        | 0          | 2008-12-31T23:00:00     | 2009.0             | 1.0               |",
@@ -69,11 +69,41 @@ async fn describe_boolean_binary() -> Result<()> {
         "| describe   | a    | b    |",
         "+------------+------+------+",
         "| count      | 1    | 1    |",
-        "| null_count | 1    | 1    |",
+        "| null_count | 0    | 0    |",
         "| mean       | null | null |",
         "| std        | null | null |",
         "| min        | a    | null |",
         "| max        | a    | null |",
+        "| median     | null | null |",
+        "+------------+------+------+"
+    ];
+    assert_batches_eq!(expected, &result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn describe_null() -> Result<()> {
+    let ctx = parquet_context().await;
+
+    //add test case for only boolean boolean/binary column
+    let result = ctx
+        .sql("select 'a' as a, null as b")
+        .await?
+        .describe()
+        .await?
+        .collect()
+        .await?;
+    #[rustfmt::skip]
+    let expected = [
+        "+------------+------+------+",
+        "| describe   | a    | b    |",
+        "+------------+------+------+",
+        "| count      | 1    | 0    |",
+        "| null_count | 0    | 1    |",
+        "| mean       | null | null |",
+        "| std        | null | null |",
+        "| min        | null | null |",
+        "| max        | null | null |",
         "| median     | null | null |",
         "+------------+------+------+"
     ];

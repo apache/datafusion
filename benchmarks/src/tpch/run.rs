@@ -15,8 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::get_query_sql;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use super::{
+    get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES,
+};
 use crate::{BenchmarkRun, CommonOpt};
+
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
 use datafusion::datasource::file_format::csv::CsvFormat;
@@ -26,20 +32,18 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::{MemTable, TableProvider};
+use datafusion::error::Result;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
-use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
-use log::info;
-
-use datafusion_common::instant::Instant;
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_common::instant::Instant;
+use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
+
+use log::info;
 use structopt::StructOpt;
 
-use super::{get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES};
+// hack to avoid `default_value is meaningless for bool` errors
+type BoolDefaultTrue = bool;
 
 /// Run the tpch benchmark.
 ///
@@ -80,6 +84,11 @@ pub struct RunOpt {
     /// Whether to disable collection of statistics (and cost based optimizations) or not.
     #[structopt(short = "S", long = "disable-statistics")]
     disable_statistics: bool,
+
+    /// If true then hash join used, if false then sort merge join
+    /// True by default.
+    #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
+    prefer_hash_join: BoolDefaultTrue,
 }
 
 const TPCH_QUERY_START_ID: usize = 1;
@@ -106,10 +115,11 @@ impl RunOpt {
     }
 
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
-        let config = self
+        let mut config = self
             .common
             .config()
             .with_collect_statistics(!self.disable_statistics);
+        config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
         let ctx = SessionContext::new_with_config(config);
 
         // register tables
@@ -253,7 +263,7 @@ impl RunOpt {
                 }
                 "parquet" => {
                     let path = format!("{path}/{table}");
-                    let format = ParquetFormat::default().with_enable_pruning(Some(true));
+                    let format = ParquetFormat::default().with_enable_pruning(true);
 
                     (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
                 }
@@ -298,11 +308,12 @@ struct QueryResult {
 // Only run with "ci" mode when we have the data
 #[cfg(feature = "ci")]
 mod tests {
-    use super::*;
-    use datafusion::common::exec_err;
-    use datafusion::error::{DataFusionError, Result};
     use std::path::Path;
 
+    use super::*;
+
+    use datafusion::common::exec_err;
+    use datafusion::error::Result;
     use datafusion_proto::bytes::{
         logical_plan_from_bytes, logical_plan_to_bytes, physical_plan_from_bytes,
         physical_plan_to_bytes,
@@ -337,6 +348,7 @@ mod tests {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
+            prefer_hash_join: true,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;
@@ -369,6 +381,7 @@ mod tests {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
+            prefer_hash_join: true,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;

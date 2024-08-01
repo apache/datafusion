@@ -17,4 +17,4 @@
 
 //! Variable provider for `@name` and `@@name` style runtime values.
 
-pub use datafusion_physical_expr::var_provider::{VarProvider, VarType};
+pub use datafusion_expr::var_provider::{VarProvider, VarType};

@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fs;
-
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::context::SessionState;
 use datafusion_common::{DataFusionError, Result};
@@ -55,7 +53,7 @@ impl ListingTableUrl {
     /// subdirectories.
     ///
     /// Similarly `s3://BUCKET/blob.csv` refers to `blob.csv` in the S3 bucket `BUCKET`,
-    /// wherease `s3://BUCKET/foo/` refers to all objects with the prefix `foo/` in the
+    /// whereas `s3://BUCKET/foo/` refers to all objects with the prefix `foo/` in the
     /// S3 bucket `BUCKET`
     ///
     /// # URL Encoding
@@ -114,37 +112,6 @@ impl ListingTableUrl {
             #[cfg(not(target_arch = "wasm32"))]
             Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
             Err(e) => Err(DataFusionError::External(Box::new(e))),
-        }
-    }
-
-    /// Get object store for specified input_url
-    /// if input_url is actually not a url, we assume it is a local file path
-    /// if we have a local path, create it if not exists so ListingTableUrl::parse works
-    #[deprecated(note = "Use parse")]
-    pub fn parse_create_local_if_not_exists(
-        s: impl AsRef<str>,
-        is_directory: bool,
-    ) -> Result<Self> {
-        let s = s.as_ref();
-        let is_valid_url = Url::parse(s).is_ok();
-
-        match is_valid_url {
-            true => ListingTableUrl::parse(s),
-            false => {
-                let path = std::path::PathBuf::from(s);
-                if !path.exists() {
-                    if is_directory {
-                        fs::create_dir_all(path)?;
-                    } else {
-                        // ensure parent directory exists
-                        if let Some(parent) = path.parent() {
-                            fs::create_dir_all(parent)?;
-                        }
-                        fs::File::create(path)?;
-                    }
-                }
-                ListingTableUrl::parse(s)
-            }
         }
     }
 
@@ -220,7 +187,7 @@ impl ListingTableUrl {
 
     /// Returns `true` if `path` refers to a collection of objects
     pub fn is_collection(&self) -> bool {
-        self.url.as_str().ends_with(DELIMITER)
+        self.url.path().ends_with(DELIMITER)
     }
 
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
@@ -490,10 +457,40 @@ mod tests {
         test("/a/b*.txt", Some(("/a/", "b*.txt")));
         test("/a/b/**/c*.txt", Some(("/a/b/", "**/c*.txt")));
 
-        // https://github.com/apache/arrow-datafusion/issues/2465
+        // https://github.com/apache/datafusion/issues/2465
         test(
             "/a/b/c//alltypes_plain*.parquet",
             Some(("/a/b/c//", "alltypes_plain*.parquet")),
+        );
+    }
+
+    #[test]
+    fn test_is_collection() {
+        fn test(input: &str, expected: bool, message: &str) {
+            let url = ListingTableUrl::parse(input).unwrap();
+            assert_eq!(url.is_collection(), expected, "{message}");
+        }
+
+        test("https://a.b.c/path/", true, "path ends with / - collection");
+        test(
+            "https://a.b.c/path/?a=b",
+            true,
+            "path ends with / - with query args - collection",
+        );
+        test(
+            "https://a.b.c/path?a=b/",
+            false,
+            "path not ends with / - query ends with / - not collection",
+        );
+        test(
+            "https://a.b.c/path/#a=b",
+            true,
+            "path ends with / - with fragment - collection",
+        );
+        test(
+            "https://a.b.c/path#a=b/",
+            false,
+            "path not ends with / - fragment ends with / - not collection",
         );
     }
 }

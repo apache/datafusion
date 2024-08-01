@@ -85,8 +85,8 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
         c13 VARCHAR NOT NULL
     )
     STORED AS CSV
-    WITH HEADER ROW
     LOCATION '{testdata}/csv/aggregate_test_100.csv'
+    OPTIONS ('format.has_header' 'true')
     "
         ))
         .await

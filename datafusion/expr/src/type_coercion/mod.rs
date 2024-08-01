@@ -19,7 +19,7 @@
 //!
 //! Coercion is performed automatically by DataFusion when the types
 //! of arguments passed to a function or needed by operators do not
-//! exacty match the types required by that function / operator. In
+//! exactly match the types required by that function / operator. In
 //! this case, DataFusion will attempt to *coerce* the arguments to
 //! types accepted by the function by inserting CAST operations.
 //!

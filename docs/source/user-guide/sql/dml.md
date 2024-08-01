@@ -25,14 +25,33 @@ and modifying data in tables.
 ## COPY
 
 Copies the contents of a table or query to file(s). Supported file
-formats are `parquet`, `csv`, and `json` and can be inferred based on
-filename if writing to a single file.
+formats are `parquet`, `csv`, `json`, and `arrow`.
 
 <pre>
-COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
+COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } 
+TO '<i><b>file_name</i></b>'
+[ STORED AS <i><b>format</i></b> ]
+[ PARTITIONED BY <i><b>column_name</i></b> [, ...] ]
+[ OPTIONS( <i><b>option</i></b> [, ... ] ) ]
 </pre>
 
+`STORED AS` specifies the file format the `COPY` command will write. If this
+clause is not specified, it will be inferred from the file extension if possible.
+
+`PARTITIONED BY` specifies the columns to use for partitioning the output files into
+separate hive-style directories. By default, columns used in `PARTITIONED BY` will be removed
+from the output format. If you want to keep the columns, you should provide the option
+`execution.keep_partition_by_columns true`. `execution.keep_partition_by_columns` flag can also
+be enabled through `ExecutionOptions` within `SessionConfig`.
+
+The output format is determined by the first match of the following rules:
+
+1. Value of `STORED AS`
+2. Filename extension (e.g. `foo.parquet` implies `PARQUET` format)
+
 For a detailed list of valid OPTIONS, see [Write Options](write_options).
+
+### Examples
 
 Copy the contents of `source_table` to `file_name.json` in JSON format:
 
@@ -49,7 +68,7 @@ Copy the contents of `source_table` to one or more Parquet formatted
 files in the `dir_name` directory:
 
 ```sql
-> COPY source_table TO 'dir_name' (FORMAT parquet);
+> COPY source_table TO 'dir_name' STORED AS PARQUET;
 +-------+
 | count |
 +-------+
@@ -61,7 +80,7 @@ Copy the contents of `source_table` to multiple directories
 of hive-style partitioned parquet files:
 
 ```sql
-> COPY source_table TO 'dir_name' (FORMAT parquet, partition_by 'column1, column2');
+> COPY source_table TO 'dir_name' STORED AS parquet, PARTITIONED BY (column1, column2);
 +-------+
 | count |
 +-------+
@@ -69,12 +88,29 @@ of hive-style partitioned parquet files:
 +-------+
 ```
 
+If the the data contains values of `x` and `y` in column1 and only `a` in
+column2, output files will appear in the following directory structure:
+
+```
+dir_name/
+  column1=x/
+    column2=a/
+      <file>.parquet
+      <file>.parquet
+      ...
+  column1=y/
+    column2=a/
+      <file>.parquet
+      <file>.parquet
+      ...
+```
+
 Run the query `SELECT * from source ORDER BY time` and write the
 results (maintaining the order) to a parquet file named
 `output.parquet` with a maximum parquet row group size of 10MB:
 
 ```sql
-> COPY (SELECT * from source ORDER BY time) TO 'output.parquet' (ROW_GROUP_LIMIT_BYTES 10000000);
+> COPY (SELECT * from source ORDER BY time) TO 'output.parquet' OPTIONS (MAX_ROW_GROUP_SIZE 10000000);
 +-------+
 | count |
 +-------+
@@ -83,6 +119,8 @@ results (maintaining the order) to a parquet file named
 ```
 
 ## INSERT
+
+### Examples
 
 Insert values into a table.
 

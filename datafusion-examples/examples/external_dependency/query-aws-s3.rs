@@ -48,8 +48,7 @@ async fn main() -> Result<()> {
 
     let path = format!("s3://{bucket_name}");
     let s3_url = Url::parse(&path).unwrap();
-    ctx.runtime_env()
-        .register_object_store(&s3_url, Arc::new(s3));
+    ctx.register_object_store(&s3_url, Arc::new(s3));
 
     // cannot query the parquet files from this bucket because the path contains a whitespace
     // and we don't support that yet

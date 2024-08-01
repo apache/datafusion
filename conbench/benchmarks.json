@@ -1,8 +1,0 @@
-[
-  {
-    "command": "datafusion",
-    "flags": {
-      "language": "Rust"
-    }
-  }
-]

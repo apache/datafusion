@@ -19,16 +19,53 @@
 
 pub mod regexplike;
 pub mod regexpmatch;
-
+pub mod regexpreplace;
 // create UDFs
 make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
 make_udf_function!(regexplike::RegexpLikeFunc, REGEXP_LIKE, regexp_like);
-export_functions!((
-    regexp_match,
-    input_arg1 input_arg2,
-    "returns a list of regular expression matches in a string. "
-),(
-    regexp_like,
-    input_arg1 input_arg2,
-    "Returns true if a has at least one match in a string,false otherwise."
-));
+make_udf_function!(
+    regexpreplace::RegexpReplaceFunc,
+    REGEXP_REPLACE,
+    regexp_replace
+);
+
+pub mod expr_fn {
+    use datafusion_expr::Expr;
+
+    /// Returns a list of regular expression matches in a string.
+    pub fn regexp_match(values: Expr, regex: Expr, flags: Option<Expr>) -> Expr {
+        let mut args = vec![values, regex];
+        if let Some(flags) = flags {
+            args.push(flags);
+        };
+        super::regexp_match().call(args)
+    }
+
+    /// Returns true if a has at least one match in a string, false otherwise.
+    pub fn regexp_like(values: Expr, regex: Expr, flags: Option<Expr>) -> Expr {
+        let mut args = vec![values, regex];
+        if let Some(flags) = flags {
+            args.push(flags);
+        };
+        super::regexp_like().call(args)
+    }
+
+    /// Replaces substrings in a string that match.
+    pub fn regexp_replace(
+        string: Expr,
+        pattern: Expr,
+        replacement: Expr,
+        flags: Option<Expr>,
+    ) -> Expr {
+        let mut args = vec![string, pattern, replacement];
+        if let Some(flags) = flags {
+            args.push(flags);
+        };
+        super::regexp_replace().call(args)
+    }
+}
+
+#[doc = r" Return a list of all functions in this package"]
+pub fn functions() -> Vec<std::sync::Arc<datafusion_expr::ScalarUDF>> {
+    vec![regexp_match(), regexp_like(), regexp_replace()]
+}

@@ -17,13 +17,14 @@
 
 use std::sync::Arc;
 
-use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use arrow::datatypes::DataType;
-use arrow_array::{
+use arrow::array::{
     Array, ArrowPrimitiveType, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
+use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
+use arrow::datatypes::DataType;
+use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::LocalResult::Single;
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use itertools::Either;
 
 use datafusion_common::cast::as_generic_string_array;
@@ -38,26 +39,27 @@ pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
     string_to_timestamp_nanos(s).map_err(|e| e.into())
 }
 
-pub(crate) fn validate_data_types(
-    args: &[ColumnarValue],
-    name: &str,
-) -> Option<Result<ColumnarValue>> {
+/// Checks that all the arguments from the second are of type [Utf8] or [LargeUtf8]
+///
+/// [Utf8]: DataType::Utf8
+/// [LargeUtf8]: DataType::LargeUtf8
+pub(crate) fn validate_data_types(args: &[ColumnarValue], name: &str) -> Result<()> {
     for (idx, a) in args.iter().skip(1).enumerate() {
         match a.data_type() {
             DataType::Utf8 | DataType::LargeUtf8 => {
                 // all good
             }
             _ => {
-                return Some(exec_err!(
+                return exec_err!(
                     "{name} function unsupported data type at index {}: {}",
                     idx + 1,
                     a.data_type()
-                ));
+                );
             }
         }
     }
 
-    None
+    Ok(())
 }
 
 /// Accepts a string and parses it using the [`chrono::format::strftime`] specifiers
@@ -83,12 +85,17 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
         ))
     };
 
+    let mut parsed = Parsed::new();
+    parse(&mut parsed, s, StrftimeItems::new(format)).map_err(|e| err(&e.to_string()))?;
+
     // attempt to parse the string assuming it has a timezone
-    let dt = DateTime::parse_from_str(s, format);
+    let dt = parsed.to_datetime();
 
     if let Err(e) = &dt {
         // no timezone or other failure, try without a timezone
-        let ndt = NaiveDateTime::parse_from_str(s, format);
+        let ndt = parsed
+            .to_naive_datetime_with_offset(0)
+            .or_else(|_| parsed.to_naive_date().map(|nd| nd.into()));
         if let Err(e) = &ndt {
             return Err(err(&e.to_string()));
         }
@@ -137,6 +144,7 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
 ) -> Result<i64, DataFusionError> {
     string_to_datetime_formatted(&Utc, s, format)?
         .naive_utc()
+        .and_utc()
         .timestamp_nanos_opt()
         .ok_or_else(|| {
             DataFusionError::Execution(ERR_NANOSECONDS_NOT_SUPPORTED.to_string())

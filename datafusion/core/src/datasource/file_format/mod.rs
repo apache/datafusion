@@ -32,7 +32,8 @@ pub mod parquet;
 pub mod write;
 
 use std::any::Any;
-use std::fmt;
+use std::collections::HashMap;
+use std::fmt::{self, Display};
 use std::sync::Arc;
 
 use crate::arrow::datatypes::SchemaRef;
@@ -41,22 +42,52 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use datafusion_common::{not_impl_err, FileType};
+use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use async_trait::async_trait;
+use file_compression_type::FileCompressionType;
 use object_store::{ObjectMeta, ObjectStore};
+use std::fmt::Debug;
+/// Factory for creating [`FileFormat`] instances based on session and command level options
+///
+/// Users can provide their own `FileFormatFactory` to support arbitrary file formats
+pub trait FileFormatFactory: Sync + Send + GetExt + Debug {
+    /// Initialize a [FileFormat] and configure based on session and command level options
+    fn create(
+        &self,
+        state: &SessionState,
+        format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>>;
+
+    /// Initialize a [FileFormat] with all options set to default values
+    fn default(&self) -> Arc<dyn FileFormat>;
+
+    /// Returns the table source as [`Any`] so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+}
 
 /// This trait abstracts all the file format specific implementations
 /// from the [`TableProvider`]. This helps code re-utilization across
-/// providers that support the the same file formats.
+/// providers that support the same file formats.
 ///
-/// [`TableProvider`]: crate::datasource::provider::TableProvider
+/// [`TableProvider`]: crate::catalog::TableProvider
 #[async_trait]
 pub trait FileFormat: Send + Sync + fmt::Debug {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
+
+    /// Returns the extension for this FileFormat, e.g. "file.csv" -> csv
+    fn get_ext(&self) -> String;
+
+    /// Returns the extension for this FileFormat when compressed, e.g. "file.csv.gz" -> csv
+    fn get_ext_with_compression(
+        &self,
+        _file_compression_type: &FileCompressionType,
+    ) -> Result<String>;
 
     /// Infer the common schema of the provided objects. The objects will usually
     /// be analysed up to a given number of records or files (as specified in the
@@ -104,9 +135,73 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }
+}
 
-    /// Returns the FileType corresponding to this FileFormat
-    fn file_type(&self) -> FileType;
+/// A container of [FileFormatFactory] which also implements [FileType].
+/// This enables converting a dyn FileFormat to a dyn FileType.
+/// The former trait is a superset of the latter trait, which includes execution time
+/// relevant methods. [FileType] is only used in logical planning and only implements
+/// the subset of methods required during logical planning.
+#[derive(Debug)]
+pub struct DefaultFileType {
+    file_format_factory: Arc<dyn FileFormatFactory>,
+}
+
+impl DefaultFileType {
+    /// Constructs a [DefaultFileType] wrapper from a [FileFormatFactory]
+    pub fn new(file_format_factory: Arc<dyn FileFormatFactory>) -> Self {
+        Self {
+            file_format_factory,
+        }
+    }
+
+    /// get a reference to the inner [FileFormatFactory] struct
+    pub fn as_format_factory(&self) -> &Arc<dyn FileFormatFactory> {
+        &self.file_format_factory
+    }
+}
+
+impl FileType for DefaultFileType {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl Display for DefaultFileType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.file_format_factory)
+    }
+}
+
+impl GetExt for DefaultFileType {
+    fn get_ext(&self) -> String {
+        self.file_format_factory.get_ext()
+    }
+}
+
+/// Converts a [FileFormatFactory] to a [FileType]
+pub fn format_as_file_type(
+    file_format_factory: Arc<dyn FileFormatFactory>,
+) -> Arc<dyn FileType> {
+    Arc::new(DefaultFileType {
+        file_format_factory,
+    })
+}
+
+/// Converts a [FileType] to a [FileFormatFactory].
+/// Returns an error if the [FileType] cannot be
+/// downcasted to a [DefaultFileType].
+pub fn file_type_to_format(
+    file_type: &Arc<dyn FileType>,
+) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
+    match file_type
+        .as_ref()
+        .as_any()
+        .downcast_ref::<DefaultFileType>()
+    {
+        Some(source) => Ok(source.file_format_factory.clone()),
+        _ => internal_err!("FileType was not DefaultFileType"),
+    }
 }
 
 #[cfg(test)]
@@ -124,10 +219,9 @@ pub(crate) mod test_util {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
-        GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, PutOptions,
-        PutResult,
+        Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
+        PutMultipartOpts, PutOptions, PutPayload, PutResult,
     };
-    use tokio::io::AsyncWrite;
 
     pub async fn scan_format(
         state: &SessionState,
@@ -150,22 +244,18 @@ pub(crate) mod test_util {
             object_meta: meta,
             partition_values: vec![],
             range: None,
+            statistics: None,
             extensions: None,
         }]];
 
         let exec = format
             .create_physical_plan(
                 state,
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_schema,
-                    file_groups,
-                    statistics,
-                    projection,
-                    limit,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                },
+                FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                    .with_file_groups(file_groups)
+                    .with_statistics(statistics)
+                    .with_projection(projection)
+                    .with_limit(limit),
                 None,
             )
             .await?;
@@ -192,25 +282,17 @@ pub(crate) mod test_util {
         async fn put_opts(
             &self,
             _location: &Path,
-            _bytes: Bytes,
+            _payload: PutPayload,
             _opts: PutOptions,
         ) -> object_store::Result<PutResult> {
             unimplemented!()
         }
 
-        async fn put_multipart(
+        async fn put_multipart_opts(
             &self,
             _location: &Path,
-        ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>
-        {
-            unimplemented!()
-        }
-
-        async fn abort_multipart(
-            &self,
-            _location: &Path,
-            _multipart_id: &MultipartId,
-        ) -> object_store::Result<()> {
+            _opts: PutMultipartOpts,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
             unimplemented!()
         }
 
@@ -236,6 +318,7 @@ pub(crate) mod test_util {
                     version: None,
                 },
                 range: Default::default(),
+                attributes: Attributes::default(),
             })
         }
 

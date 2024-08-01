@@ -71,7 +71,7 @@ pub enum BuiltInWindowFunction {
 }
 
 impl BuiltInWindowFunction {
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         use BuiltInWindowFunction::*;
         match self {
             RowNumber => "ROW_NUMBER",
@@ -82,8 +82,8 @@ impl BuiltInWindowFunction {
             Ntile => "NTILE",
             Lag => "LAG",
             Lead => "LEAD",
-            FirstValue => "FIRST_VALUE",
-            LastValue => "LAST_VALUE",
+            FirstValue => "first_value",
+            LastValue => "last_value",
             NthValue => "NTH_VALUE",
         }
     }
@@ -196,7 +196,7 @@ mod tests {
     // For each variant in BuiltInWindowFunction, it converts the variant to a string
     // and then back to a variant. The test asserts that the original variant and
     // the reconstructed variant are the same. This assertion is also necessary for
-    // function suggestion. See https://github.com/apache/arrow-datafusion/issues/8082
+    // function suggestion. See https://github.com/apache/datafusion/issues/8082
     fn test_display_and_from_str() {
         for func_original in BuiltInWindowFunction::iter() {
             let func_name = func_original.to_string();

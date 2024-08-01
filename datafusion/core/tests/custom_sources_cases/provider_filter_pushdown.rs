@@ -21,10 +21,11 @@ use std::sync::Arc;
 use arrow::array::{Int32Builder, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion::datasource::provider::{TableProvider, TableType};
+use datafusion::catalog::TableProvider;
+use datafusion::datasource::provider::TableType;
 use datafusion::error::Result;
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
+use datafusion::execution::context::TaskContext;
+use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
@@ -35,9 +36,11 @@ use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{internal_err, not_impl_err};
 use datafusion_expr::expr::{BinaryExpr, Cast};
+use datafusion_functions_aggregate::expr_fn::count;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 
 fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
     let mut builder = Int32Builder::with_capacity(num_rows);
@@ -93,6 +96,10 @@ impl DisplayAs for CustomPlan {
 }
 
 impl ExecutionPlan for CustomPlan {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -101,7 +108,7 @@ impl ExecutionPlan for CustomPlan {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 
@@ -157,7 +164,7 @@ impl TableProvider for CustomProvider {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         _: Option<usize>,
@@ -214,8 +221,11 @@ impl TableProvider for CustomProvider {
         }
     }
 
-    fn supports_filter_pushdown(&self, _: &Expr) -> Result<TableProviderFilterPushDown> {
-        Ok(TableProviderFilterPushDown::Exact)
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 }
 

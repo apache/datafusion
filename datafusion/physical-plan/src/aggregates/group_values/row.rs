@@ -59,8 +59,11 @@ pub struct GroupValuesRows {
     /// [`Row`]: arrow::row::Row
     group_values: Option<Rows>,
 
-    // buffer to be reused to store hashes
+    /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
+
+    /// reused buffer to store rows
+    rows_buffer: Rows,
 
     /// Random state for creating hashes
     random_state: RandomState,
@@ -78,6 +81,10 @@ impl GroupValuesRows {
 
         let map = RawTable::with_capacity(0);
 
+        let starting_rows_capacity = 1000;
+        let starting_data_capacity = 64 * starting_rows_capacity;
+        let rows_buffer =
+            row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
         Ok(Self {
             schema,
             row_converter,
@@ -85,6 +92,7 @@ impl GroupValuesRows {
             map_size: 0,
             group_values: None,
             hashes_buffer: Default::default(),
+            rows_buffer,
             random_state: Default::default(),
         })
     }
@@ -93,8 +101,9 @@ impl GroupValuesRows {
 impl GroupValues for GroupValuesRows {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         // Convert the group keys into the row format
-        // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
-        let group_rows = self.row_converter.convert_columns(cols)?;
+        let group_rows = &mut self.rows_buffer;
+        group_rows.clear();
+        self.row_converter.append(group_rows, cols)?;
         let n_rows = group_rows.num_rows();
 
         let mut group_values = match self.group_values.take() {
@@ -150,6 +159,7 @@ impl GroupValues for GroupValuesRows {
         self.row_converter.size()
             + group_values_size
             + self.map_size
+            + self.rows_buffer.size()
             + self.hashes_buffer.allocated_size()
     }
 
@@ -180,7 +190,7 @@ impl GroupValues for GroupValuesRows {
                 let groups_rows = group_values.iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
                 // Clear out first n group keys by copying them to a new Rows.
-                // TODO file some ticket in arrow-rs to make this more efficent?
+                // TODO file some ticket in arrow-rs to make this more efficient?
                 let mut new_group_values = self.row_converter.empty_rows(0, 0);
                 for row in group_values.iter().skip(n) {
                     new_group_values.push(row);

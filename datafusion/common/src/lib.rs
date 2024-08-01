@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 mod column;
 mod dfschema;
@@ -46,16 +48,17 @@ pub mod utils;
 /// Reexport arrow crate
 pub use arrow;
 pub use column::Column;
-pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema};
+pub use dfschema::{
+    qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
+};
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
 };
 pub use file_options::file_type::{
-    FileType, GetExt, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION,
-    DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
+    GetExt, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
+    DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
 };
-pub use file_options::FileTypeWriterOptions;
 pub use functional_dependencies::{
     aggregate_functional_dependencies, get_required_group_by_exprs_indices,
     get_target_functional_dependencies, Constraint, Constraints, Dependency,
@@ -64,9 +67,9 @@ pub use functional_dependencies::{
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use param_value::ParamValues;
 pub use scalar::{ScalarType, ScalarValue};
-pub use schema_reference::{OwnedSchemaReference, SchemaReference};
+pub use schema_reference::SchemaReference;
 pub use stats::{ColumnStatistics, Statistics};
-pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};
+pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::UnnestOptions;
 pub use utils::project_schema;
 

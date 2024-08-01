@@ -21,19 +21,19 @@ CREATE EXTERNAL TABLE csv_with_quote (
 c1 VARCHAR,
 c2 VARCHAR
 ) STORED AS CSV
-WITH HEADER ROW
-DELIMITER ','
-OPTIONS ('quote' '~')
-LOCATION '../core/tests/data/quote.csv';
+LOCATION '../core/tests/data/quote.csv'
+OPTIONS ('format.quote' '~',
+         'format.delimiter' ',',
+         'format.has_header' 'true');
 
 statement ok
 CREATE EXTERNAL TABLE csv_with_escape (
 c1 VARCHAR,
 c2 VARCHAR
 ) STORED AS CSV
-WITH HEADER ROW
-DELIMITER ','
-OPTIONS ('escape' '\"')
+OPTIONS ('format.escape' '\',
+         'format.delimiter' ',',
+         'format.has_header' 'true')
 LOCATION '../core/tests/data/escape.csv';
 
 query TT
@@ -64,6 +64,31 @@ id7 value"7
 id8 value"8
 id9 value"9
 
+statement ok
+CREATE EXTERNAL TABLE csv_with_escape_2 (
+c1 VARCHAR,
+c2 VARCHAR
+) STORED AS CSV
+OPTIONS ('format.escape' '"',
+        'format.delimiter' ',',
+        'format.has_header' 'true')
+LOCATION '../core/tests/data/escape.csv';
+
+# TODO: Validate this with better data.
+query TT
+select * from csv_with_escape_2;
+----
+id0 value\0"
+id1 value\1"
+id2 value\2"
+id3 value\3"
+id4 value\4"
+id5 value\5"
+id6 value\6"
+id7 value\7"
+id8 value\8"
+id9 value\9"
+
 
 # Read partitioned csv
 statement ok
@@ -92,14 +117,14 @@ CREATE TABLE src_table_2 (
 
 query ITII
 COPY  src_table_1 TO 'test_files/scratch/csv_files/csv_partitions/1.csv'
-(FORMAT CSV);
+STORED AS CSV;
 ----
 4
 
 
 query ITII
 COPY  src_table_2 TO 'test_files/scratch/csv_files/csv_partitions/2.csv'
-(FORMAT CSV);
+STORED AS CSV;
 ----
 4
 
@@ -111,8 +136,8 @@ CREATE EXTERNAL TABLE partitioned_table (
   partition_col INT
 )
 STORED AS CSV
-WITH HEADER ROW
-LOCATION 'test_files/scratch/csv_files/csv_partitions';
+LOCATION 'test_files/scratch/csv_files/csv_partitions'
+OPTIONS ('format.has_header' 'false');
 
 query ITII
 SELECT * FROM partitioned_table ORDER BY int_col;
@@ -130,9 +155,183 @@ query TT
 EXPLAIN SELECT * FROM partitioned_table ORDER BY int_col;
 ----
 logical_plan
-Sort: partitioned_table.int_col ASC NULLS LAST
---TableScan: partitioned_table projection=[int_col, string_col, bigint_col, partition_col]
+01)Sort: partitioned_table.int_col ASC NULLS LAST
+02)--TableScan: partitioned_table projection=[int_col, string_col, bigint_col, partition_col]
 physical_plan
-SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
---SortExec: expr=[int_col@0 ASC NULLS LAST]
-----CsvExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/2.csv]]}, projection=[int_col, string_col, bigint_col, partition_col], has_header=true
+01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
+02)--SortExec: expr=[int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----CsvExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/2.csv]]}, projection=[int_col, string_col, bigint_col, partition_col], has_header=false
+
+
+# ensure that correct quote character is used when writing to csv
+statement ok
+CREATE TABLE table_with_necessary_quoting (
+  int_col INT,
+  string_col TEXT
+) AS VALUES
+(1, 'e|e|e'),
+(2, 'f|f|f'),
+(3, 'g|g|g'),
+(4, 'h|h|h');
+
+# quote is required because `|` is delimiter and part of the data
+query IT
+COPY table_with_necessary_quoting TO 'test_files/scratch/csv_files/table_with_necessary_quoting.csv'
+STORED AS csv
+OPTIONS ('format.quote' '~',
+         'format.delimiter' '|',
+         'format.has_header' 'true');
+----
+4
+
+# read the stored csv file with quote character
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_necessary_quoting (
+c1 VARCHAR,
+c2 VARCHAR
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/table_with_necessary_quoting.csv'
+OPTIONS ('format.quote' '~',
+         'format.delimiter' '|',
+         'format.has_header' 'true');
+
+query TT
+select * from stored_table_with_necessary_quoting;
+----
+1 e|e|e
+2 f|f|f
+3 g|g|g
+4 h|h|h
+
+# Read CSV file with comments
+statement ok
+COPY (VALUES
+  ('column1,column2'),
+  ('#second line is a comment'),
+  ('2,3'))
+TO 'test_files/scratch/csv_files/file_with_comments.csv'
+OPTIONS ('format.delimiter' '|');
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_comments (
+  c1 VARCHAR,
+  c2 VARCHAR
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/file_with_comments.csv'
+OPTIONS ('format.comment' '#',
+         'format.delimiter' ',');
+
+query TT
+SELECT * from stored_table_with_comments;
+----
+column1 column2
+2 3
+
+# read csv with double quote
+statement ok
+CREATE EXTERNAL TABLE csv_with_double_quote (
+c1 VARCHAR,
+c2 VARCHAR
+) STORED AS CSV
+OPTIONS ('format.delimiter' ',',
+         'format.has_header' 'true',
+         'format.double_quote' 'true')
+LOCATION '../core/tests/data/double_quote.csv';
+
+query TT
+select * from csv_with_double_quote
+----
+id0 "value0"
+id1 "value1"
+id2 "value2"
+id3 "value3"
+
+# ensure that double quote option is used when writing to csv
+query TT
+COPY csv_with_double_quote TO 'test_files/scratch/csv_files/table_with_double_quotes.csv'
+STORED AS csv
+OPTIONS ('format.double_quote' 'true');
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_double_quotes (
+col1 TEXT,
+col2 TEXT
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/table_with_double_quotes.csv'
+OPTIONS ('format.double_quote' 'true');
+
+query TT
+select * from stored_table_with_double_quotes;
+----
+id0 "value0"
+id1 "value1"
+id2 "value2"
+id3 "value3"
+
+# ensure when double quote option is disabled that quotes are escaped instead
+query TT
+COPY csv_with_double_quote TO 'test_files/scratch/csv_files/table_with_escaped_quotes.csv'
+STORED AS csv
+OPTIONS ('format.double_quote' 'false', 'format.escape' '#');
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_escaped_quotes (
+col1 TEXT,
+col2 TEXT
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/table_with_escaped_quotes.csv'
+OPTIONS ('format.double_quote' 'false', 'format.escape' '#');
+
+query TT
+select * from stored_table_with_escaped_quotes;
+----
+id0 "value0"
+id1 "value1"
+id2 "value2"
+id3 "value3"
+
+# Handling of newlines in values
+
+statement ok
+SET datafusion.optimizer.repartition_file_min_size = 1;
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_newlines_in_values_unsafe (
+col1 TEXT,
+col2 TEXT
+) STORED AS CSV
+LOCATION '../core/tests/data/newlines_in_values.csv';
+
+statement error incorrect number of fields
+select * from stored_table_with_newlines_in_values_unsafe;
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_newlines_in_values_safe (
+col1 TEXT,
+col2 TEXT
+) STORED AS CSV
+LOCATION '../core/tests/data/newlines_in_values.csv'
+OPTIONS ('format.newlines_in_values' 'true');
+
+query TT
+select * from stored_table_with_newlines_in_values_safe;
+----
+id message
+1
+01)hello
+02)world
+2
+01)something
+02)else
+3
+01)
+02)many
+03)lines
+04)make
+05)good test
+4 unquoted
+value end

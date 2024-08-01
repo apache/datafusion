@@ -224,6 +224,12 @@ fn default_field_name(dt: &DataType) -> &str {
         DataType::RunEndEncoded(_, _) => {
             unimplemented!("RunEndEncoded support not implemented")
         }
+        DataType::Utf8View
+        | DataType::BinaryView
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => {
+            unimplemented!("View support not implemented")
+        }
         DataType::Decimal128(_, _) => "decimal",
         DataType::Decimal256(_, _) => "decimal",
     }

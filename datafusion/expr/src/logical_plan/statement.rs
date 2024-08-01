@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{self, Display};
-
 use datafusion_common::DFSchemaRef;
+use std::fmt::{self, Display};
 
 /// Various types of Statements.
 ///

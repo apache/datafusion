@@ -19,10 +19,7 @@
 use async_trait::async_trait;
 use datafusion::{
     arrow::util::pretty,
-    catalog::{
-        schema::SchemaProvider,
-        {CatalogProvider, CatalogProviderList},
-    },
+    catalog::{CatalogProvider, CatalogProviderList, SchemaProvider},
     datasource::{
         file_format::{csv::CsvFormat, FileFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
@@ -83,7 +80,7 @@ async fn main() -> Result<()> {
     // register our catalog in the context
     ctx.register_catalog("dircat", Arc::new(catalog));
     {
-        // catalog was passed down into our custom catalog list since we overide the ctx's default
+        // catalog was passed down into our custom catalog list since we override the ctx's default
         let catalogs = catlist.catalogs.read().unwrap();
         assert!(catalogs.contains_key("dircat"));
     };

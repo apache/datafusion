@@ -22,7 +22,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::common::transpose;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
@@ -41,7 +40,7 @@ use arrow::datatypes::{Schema, SchemaBuilder, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::utils::evaluate_partition_ranges;
+use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortRequirement;
@@ -80,7 +79,7 @@ impl WindowAggExec {
 
         let ordered_partition_by_indices =
             get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
-        let cache = Self::compute_properties(schema.clone(), &input, &window_expr);
+        let cache = Self::compute_properties(Arc::clone(&schema), &input, &window_expr);
         Ok(Self {
             input,
             window_expr,
@@ -127,7 +126,7 @@ impl WindowAggExec {
 
         // Get output partitioning:
         // Because we can have repartitioning using the partition keys this
-        // would be either 1 or more than 1 depending on the presense of repartitioning.
+        // would be either 1 or more than 1 depending on the presence of repartitioning.
         let output_partitioning = input.output_partitioning().clone();
 
         // Determine execution mode:
@@ -172,6 +171,10 @@ impl DisplayAs for WindowAggExec {
 }
 
 impl ExecutionPlan for WindowAggExec {
+    fn name(&self) -> &'static str {
+        "WindowAggExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -181,8 +184,8 @@ impl ExecutionPlan for WindowAggExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -217,7 +220,7 @@ impl ExecutionPlan for WindowAggExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(WindowAggExec::try_new(
             self.window_expr.clone(),
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.partition_keys.clone(),
         )?))
     }
@@ -229,7 +232,7 @@ impl ExecutionPlan for WindowAggExec {
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
         let stream = Box::pin(WindowAggStream::new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             self.window_expr.clone(),
             input,
             BaselineMetrics::new(&self.metrics, partition),
@@ -330,7 +333,7 @@ impl WindowAggStream {
         let _timer = self.baseline_metrics.elapsed_compute().timer();
         let batch = concat_batches(&self.input.schema(), &self.batches)?;
         if batch.num_rows() == 0 {
-            return Ok(RecordBatch::new_empty(self.schema.clone()));
+            return Ok(RecordBatch::new_empty(Arc::clone(&self.schema)));
         }
 
         let partition_by_sort_keys = self
@@ -363,7 +366,10 @@ impl WindowAggStream {
         let mut batch_columns = batch.columns().to_vec();
         // calculate window cols
         batch_columns.extend_from_slice(&columns);
-        Ok(RecordBatch::try_new(self.schema.clone(), batch_columns)?)
+        Ok(RecordBatch::try_new(
+            Arc::clone(&self.schema),
+            batch_columns,
+        )?)
     }
 }
 
@@ -409,6 +415,6 @@ impl WindowAggStream {
 impl RecordBatchStream for WindowAggStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }

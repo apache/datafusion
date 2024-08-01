@@ -26,16 +26,17 @@ mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
-pub use file_groups::FileGroupPartitioner;
+mod statistics;
 
 pub(crate) use self::csv::plan_to_csv;
-pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
 pub(crate) use self::json::plan_to_json;
 #[cfg(feature = "parquet")]
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
+pub use csv::{CsvConfig, CsvExec, CsvOpener};
+pub use file_groups::FileGroupPartitioner;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
@@ -60,13 +61,7 @@ use crate::{
     physical_plan::display::{display_orderings, ProjectSchemaDisplay},
 };
 
-use arrow::{
-    array::new_null_array,
-    compute::{can_cast_types, cast},
-    datatypes::{DataType, Schema, SchemaRef},
-    record_batch::{RecordBatch, RecordBatchOptions},
-};
-use datafusion_common::{file_options::FileTypeWriterOptions, plan_err};
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -90,8 +85,8 @@ pub struct FileSinkConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
-    /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size
-    pub file_type_writer_options: FileTypeWriterOptions,
+    /// Controls whether partition columns are kept for the file
+    pub keep_partition_by_columns: bool,
 }
 
 impl FileSinkConfig {
@@ -242,125 +237,6 @@ where
     Ok(())
 }
 
-/// A utility which can adapt file-level record batches to a table schema which may have a schema
-/// obtained from merging multiple file-level schemas.
-///
-/// This is useful for enabling schema evolution in partitioned datasets.
-///
-/// This has to be done in two stages.
-///
-/// 1. Before reading the file, we have to map projected column indexes from the table schema to
-///    the file schema.
-///
-/// 2. After reading a record batch we need to map the read columns back to the expected columns
-///    indexes and insert null-valued columns wherever the file schema was missing a colum present
-///    in the table schema.
-#[derive(Clone, Debug)]
-pub(crate) struct SchemaAdapter {
-    /// Schema for the table
-    table_schema: SchemaRef,
-}
-
-impl SchemaAdapter {
-    pub(crate) fn new(table_schema: SchemaRef) -> SchemaAdapter {
-        Self { table_schema }
-    }
-
-    /// Map a column index in the table schema to a column index in a particular
-    /// file schema
-    ///
-    /// Panics if index is not in range for the table schema
-    pub(crate) fn map_column_index(
-        &self,
-        index: usize,
-        file_schema: &Schema,
-    ) -> Option<usize> {
-        let field = self.table_schema.field(index);
-        Some(file_schema.fields.find(field.name())?.0)
-    }
-
-    /// Creates a `SchemaMapping` that can be used to cast or map the columns from the file schema to the table schema.
-    ///
-    /// If the provided `file_schema` contains columns of a different type to the expected
-    /// `table_schema`, the method will attempt to cast the array data from the file schema
-    /// to the table schema where possible.
-    ///
-    /// Returns a [`SchemaMapping`] that can be applied to the output batch
-    /// along with an ordered list of columns to project from the file
-    pub fn map_schema(
-        &self,
-        file_schema: &Schema,
-    ) -> Result<(SchemaMapping, Vec<usize>)> {
-        let mut projection = Vec::with_capacity(file_schema.fields().len());
-        let mut field_mappings = vec![None; self.table_schema.fields().len()];
-
-        for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
-            if let Some((table_idx, table_field)) =
-                self.table_schema.fields().find(file_field.name())
-            {
-                match can_cast_types(file_field.data_type(), table_field.data_type()) {
-                    true => {
-                        field_mappings[table_idx] = Some(projection.len());
-                        projection.push(file_idx);
-                    }
-                    false => {
-                        return plan_err!(
-                            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
-                            file_field.name(),
-                            file_field.data_type(),
-                            table_field.data_type()
-                        )
-                    }
-                }
-            }
-        }
-
-        Ok((
-            SchemaMapping {
-                table_schema: self.table_schema.clone(),
-                field_mappings,
-            },
-            projection,
-        ))
-    }
-}
-
-/// The SchemaMapping struct holds a mapping from the file schema to the table schema
-/// and any necessary type conversions that need to be applied.
-#[derive(Debug)]
-pub struct SchemaMapping {
-    /// The schema of the table. This is the expected schema after conversion and it should match the schema of the query result.
-    table_schema: SchemaRef,
-    /// Mapping from field index in `table_schema` to index in projected file_schema
-    field_mappings: Vec<Option<usize>>,
-}
-
-impl SchemaMapping {
-    /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
-    fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let batch_rows = batch.num_rows();
-        let batch_cols = batch.columns().to_vec();
-
-        let cols = self
-            .table_schema
-            .fields()
-            .iter()
-            .zip(&self.field_mappings)
-            .map(|(field, file_idx)| match file_idx {
-                Some(batch_idx) => cast(&batch_cols[*batch_idx], field.data_type()),
-                None => Ok(new_null_array(field.data_type(), batch_rows)),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        // Necessary to handle empty batches
-        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-
-        let schema = self.table_schema.clone();
-        let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
-        Ok(record_batch)
-    }
-}
-
 /// A single file or part of a file that should be read, along with its schema, statistics
 pub struct FileMeta {
     /// Path for the file (e.g. URL, filesystem path, etc)
@@ -453,11 +329,6 @@ fn get_projected_output_ordering(
 ) -> Vec<Vec<PhysicalSortExpr>> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        if base_config.file_groups.iter().any(|group| group.len() > 1) {
-            debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
-            base_config.output_ordering[0], base_config.file_groups);
-            return vec![];
-        }
         let mut new_ordering = vec![];
         for PhysicalSortExpr { expr, options } in output_ordering {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
@@ -475,11 +346,45 @@ fn get_projected_output_ordering(
             // since rest of the orderings are violated
             break;
         }
+
         // do not push empty entries
         // otherwise we may have `Some(vec![])` at the output ordering.
-        if !new_ordering.is_empty() {
-            all_orderings.push(new_ordering);
+        if new_ordering.is_empty() {
+            continue;
         }
+
+        // Check if any file groups are not sorted
+        if base_config.file_groups.iter().any(|group| {
+            if group.len() <= 1 {
+                // File groups with <= 1 files are always sorted
+                return false;
+            }
+
+            let statistics = match statistics::MinMaxStatistics::new_from_files(
+                &new_ordering,
+                projected_schema,
+                base_config.projection.as_deref(),
+                group,
+            ) {
+                Ok(statistics) => statistics,
+                Err(e) => {
+                    log::trace!("Error fetching statistics for file group: {e}");
+                    // we can't prove that it's ordered, so we have to reject it
+                    return true;
+                }
+            };
+
+            !statistics.is_sorted()
+        }) {
+            debug!(
+                "Skipping specified output ordering {:?}. \
+                Some file groups couldn't be determined to be sorted: {:?}",
+                base_config.output_ordering[0], base_config.file_groups
+            );
+            continue;
+        }
+
+        all_orderings.push(new_ordering);
     }
     all_orderings
 }
@@ -593,11 +498,14 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Float32Type, Float64Type, UInt32Type};
     use arrow_array::{
-        BinaryArray, BooleanArray, Float32Array, Int32Array, Int64Array, StringArray,
-        UInt64Array,
+        BinaryArray, BooleanArray, Float32Array, Int32Array, Int64Array, RecordBatch,
+        StringArray, UInt64Array,
     };
-    use arrow_schema::Field;
+    use arrow_schema::{Field, Schema};
 
+    use crate::datasource::schema_adapter::{
+        DefaultSchemaAdapterFactory, SchemaAdapterFactory,
+    };
     use chrono::Utc;
 
     #[test]
@@ -608,7 +516,7 @@ mod tests {
             Field::new("c3", DataType::Float64, true),
         ]));
 
-        let adapter = SchemaAdapter::new(table_schema.clone());
+        let adapter = DefaultSchemaAdapterFactory::default().create(table_schema.clone());
 
         let file_schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
@@ -665,7 +573,7 @@ mod tests {
 
         let indices = vec![1, 2, 4];
         let schema = SchemaRef::from(table_schema.project(&indices).unwrap());
-        let adapter = SchemaAdapter::new(schema);
+        let adapter = DefaultSchemaAdapterFactory::default().create(schema);
         let (mapping, projection) = adapter.map_schema(&file_schema).unwrap();
 
         let id = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
@@ -863,6 +771,7 @@ mod tests {
             object_meta,
             partition_values: vec![],
             range: None,
+            statistics: None,
             extensions: None,
         }
     }

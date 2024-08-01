@@ -16,6 +16,7 @@
 // under the License.
 
 use std::ops::Deref;
+use std::sync::Arc;
 
 use crate::analyzer::check_plan;
 use crate::utils::collect_subquery_cols;
@@ -34,8 +35,8 @@ use datafusion_expr::{
 ///    the allowed while list: [Projection, Filter, Window, Aggregate, Join].
 /// 2) Check whether the inner plan is in the allowed inner plans list to use correlated(outer) expressions.
 /// 3) Check and validate unsupported cases to use the correlated(outer) expressions inside the subquery(inner) plans/inner expressions.
-/// For example, we do not want to support to use correlated expressions as the Join conditions in the subquery plan when the Join
-/// is a Full Out Join
+///    For example, we do not want to support to use correlated expressions as the Join conditions in the subquery plan when the Join
+///    is a Full Out Join
 pub fn check_subquery_expr(
     outer_plan: &LogicalPlan,
     inner_plan: &LogicalPlan,
@@ -140,13 +141,13 @@ fn check_inner_plan(
     is_aggregate: bool,
     can_contain_outer_ref: bool,
 ) -> Result<()> {
-    if !can_contain_outer_ref && contains_outer_reference(inner_plan) {
+    if !can_contain_outer_ref && inner_plan.contains_outer_reference() {
         return plan_err!("Accessing outer reference columns is not allowed in the plan");
     }
     // We want to support as many operators as possible inside the correlated subquery
     match inner_plan {
         LogicalPlan::Aggregate(_) => {
-            inner_plan.apply_children(&mut |plan| {
+            inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, is_scalar, true, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
@@ -158,11 +159,11 @@ fn check_inner_plan(
             let (correlated, _): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()
                 .partition(|e| e.contains_outer());
-            let maybe_unsupport = correlated
+            let maybe_unsupported = correlated
                 .into_iter()
                 .filter(|expr| !can_pullup_over_aggregation(expr))
                 .collect::<Vec<_>>();
-            if is_aggregate && is_scalar && !maybe_unsupport.is_empty() {
+            if is_aggregate && is_scalar && !maybe_unsupported.is_empty() {
                 return plan_err!(
                     "Correlated column is not allowed in predicate: {predicate}"
                 );
@@ -171,7 +172,7 @@ fn check_inner_plan(
         }
         LogicalPlan::Window(window) => {
             check_mixed_out_refer_in_window(window)?;
-            inner_plan.apply_children(&mut |plan| {
+            inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
@@ -188,7 +189,7 @@ fn check_inner_plan(
         | LogicalPlan::Values(_)
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_) => {
-            inner_plan.apply_children(&mut |plan| {
+            inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
@@ -201,7 +202,7 @@ fn check_inner_plan(
             ..
         }) => match join_type {
             JoinType::Inner => {
-                inner_plan.apply_children(&mut |plan| {
+                inner_plan.apply_children(|plan| {
                     check_inner_plan(
                         plan,
                         is_scalar,
@@ -221,7 +222,7 @@ fn check_inner_plan(
                 check_inner_plan(right, is_scalar, is_aggregate, can_contain_outer_ref)
             }
             JoinType::Full => {
-                inner_plan.apply_children(&mut |plan| {
+                inner_plan.apply_children(|plan| {
                     check_inner_plan(plan, is_scalar, is_aggregate, false)?;
                     Ok(TreeNodeRecursion::Continue)
                 })?;
@@ -231,13 +232,6 @@ fn check_inner_plan(
         LogicalPlan::Extension(_) => Ok(()),
         _ => plan_err!("Unsupported operator in the subquery plan."),
     }
-}
-
-fn contains_outer_reference(inner_plan: &LogicalPlan) -> bool {
-    inner_plan
-        .expressions()
-        .iter()
-        .any(|expr| expr.contains_outer())
 }
 
 fn check_aggregation_in_scalar_subquery(
@@ -252,11 +246,11 @@ fn check_aggregation_in_scalar_subquery(
     if !agg.group_expr.is_empty() {
         let correlated_exprs = get_correlated_expressions(inner_plan)?;
         let inner_subquery_cols =
-            collect_subquery_cols(&correlated_exprs, agg.input.schema().clone())?;
+            collect_subquery_cols(&correlated_exprs, Arc::clone(agg.input.schema()))?;
         let mut group_columns = agg
             .group_expr
             .iter()
-            .map(|group| Ok(group.to_columns()?.into_iter().collect::<Vec<_>>()))
+            .map(|group| Ok(group.column_refs().into_iter().cloned().collect::<Vec<_>>()))
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten();
@@ -283,7 +277,7 @@ fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {
 
 fn get_correlated_expressions(inner_plan: &LogicalPlan) -> Result<Vec<Expr>> {
     let mut exprs = vec![];
-    inner_plan.apply(&mut |plan| {
+    inner_plan.apply_with_subqueries(|plan| {
         if let LogicalPlan::Filter(Filter { predicate, .. }) = plan {
             let (correlated, _): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()
@@ -307,19 +301,17 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     }) = expr
     {
         match (left.deref(), right.deref()) {
-            (Expr::Column(_), right) if right.to_columns().unwrap().is_empty() => true,
-            (left, Expr::Column(_)) if left.to_columns().unwrap().is_empty() => true,
+            (Expr::Column(_), right) => !right.any_column_refs(),
+            (left, Expr::Column(_)) => !left.any_column_refs(),
             (Expr::Cast(Cast { expr, .. }), right)
-                if matches!(expr.deref(), Expr::Column(_))
-                    && right.to_columns().unwrap().is_empty() =>
+                if matches!(expr.deref(), Expr::Column(_)) =>
             {
-                true
+                !right.any_column_refs()
             }
             (left, Expr::Cast(Cast { expr, .. }))
-                if matches!(expr.deref(), Expr::Column(_))
-                    && left.to_columns().unwrap().is_empty() =>
+                if matches!(expr.deref(), Expr::Column(_)) =>
             {
-                true
+                !left.any_column_refs()
             }
             (_, _) => false,
         }
@@ -330,9 +322,10 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
 
 /// Check whether the window expressions contain a mixture of out reference columns and inner columns
 fn check_mixed_out_refer_in_window(window: &Window) -> Result<()> {
-    let mixed = window.window_expr.iter().any(|win_expr| {
-        win_expr.contains_outer() && !win_expr.to_columns().unwrap().is_empty()
-    });
+    let mixed = window
+        .window_expr
+        .iter()
+        .any(|win_expr| win_expr.contains_outer() && win_expr.any_column_refs());
     if mixed {
         plan_err!(
             "Window expressions should not contain a mixed of outer references and inner columns"
@@ -377,10 +370,14 @@ mod test {
             write!(f, "MockUserDefinedLogicalPlan")
         }
 
-        fn from_template(&self, _exprs: &[Expr], _inputs: &[LogicalPlan]) -> Self {
-            Self {
-                empty_schema: self.empty_schema.clone(),
-            }
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<Expr>,
+            _inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
+                empty_schema: Arc::clone(&self.empty_schema),
+            })
         }
     }
 

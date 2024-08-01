@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`PullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
+
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
+use std::sync::Arc;
 
-use crate::simplify_expressions::{ExprSimplifier, SimplifyContext};
+use crate::simplify_expressions::ExprSimplifier;
 use crate::utils::collect_subquery_cols;
 
 use datafusion_common::tree_node::{
@@ -26,34 +29,86 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionDefinition, Alias};
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
-/// This struct rewrite the sub query plan by pull up the correlated expressions(contains outer reference columns) from the inner subquery's 'Filter'.
-/// It adds the inner reference columns to the 'Projection' or 'Aggregate' of the subquery if they are missing, so that they can be evaluated by the parent operator as the join condition.
+/// This struct rewrite the sub query plan by pull up the correlated
+/// expressions(contains outer reference columns) from the inner subquery's
+/// 'Filter'. It adds the inner reference columns to the 'Projection' or
+/// 'Aggregate' of the subquery if they are missing, so that they can be
+/// evaluated by the parent operator as the join condition.
+#[derive(Debug)]
 pub struct PullUpCorrelatedExpr {
     pub join_filters: Vec<Expr>,
-    // mapping from the plan to its holding correlated columns
+    /// mapping from the plan to its holding correlated columns
     pub correlated_subquery_cols_map: HashMap<LogicalPlan, BTreeSet<Column>>,
     pub in_predicate_opt: Option<Expr>,
-    // indicate whether it is Exists(Not Exists) SubQuery
+    /// Is this an Exists(Not Exists) SubQuery. Defaults to **FALSE**
     pub exists_sub_query: bool,
-    // indicate whether the correlated expressions can pull up or not
+    /// Can the correlated expressions be pulled up. Defaults to **TRUE**
     pub can_pull_up: bool,
-    // indicate whether need to handle the Count bug during the pull up process
+    /// Do we need to handle [the Count bug] during the pull up process
+    ///
+    /// [the Count bug]: https://github.com/apache/datafusion/pull/10500
     pub need_handle_count_bug: bool,
-    // mapping from the plan to its expressions' evaluation result on empty batch
+    /// mapping from the plan to its expressions' evaluation result on empty batch
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
-    // pull up having expr, which must be evaluated after the Join
+    /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
 }
 
+impl Default for PullUpCorrelatedExpr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PullUpCorrelatedExpr {
+    pub fn new() -> Self {
+        Self {
+            join_filters: vec![],
+            correlated_subquery_cols_map: HashMap::new(),
+            in_predicate_opt: None,
+            exists_sub_query: false,
+            can_pull_up: true,
+            need_handle_count_bug: false,
+            collected_count_expr_map: HashMap::new(),
+            pull_up_having_expr: None,
+        }
+    }
+
+    /// Set if we need to handle [the Count bug] during the pull up process
+    ///
+    /// [the Count bug]: https://github.com/apache/datafusion/pull/10500
+    pub fn with_need_handle_count_bug(mut self, need_handle_count_bug: bool) -> Self {
+        self.need_handle_count_bug = need_handle_count_bug;
+        self
+    }
+
+    /// Set the in_predicate_opt
+    pub fn with_in_predicate_opt(mut self, in_predicate_opt: Option<Expr>) -> Self {
+        self.in_predicate_opt = in_predicate_opt;
+        self
+    }
+
+    /// Set if this is an Exists(Not Exists) SubQuery
+    pub fn with_exists_sub_query(mut self, exists_sub_query: bool) -> Self {
+        self.exists_sub_query = exists_sub_query;
+        self
+    }
+}
+
 /// Used to indicate the unmatched rows from the inner(subquery) table after the left out Join
-/// This is used to handle the Count bug
+/// This is used to handle [the Count bug]
+///
+/// [the Count bug]: https://github.com/apache/datafusion/pull/10500
 pub const UN_MATCHED_ROW_INDICATOR: &str = "__always_true";
 
-/// Mapping from expr display name to its evaluation result on empty record batch (for example: 'count(*)' is 'ScalarValue(0)', 'count(*) + 2' is 'ScalarValue(2)')
+/// Mapping from expr display name to its evaluation result on empty record
+/// batch (for example: 'count(*)' is 'ScalarValue(0)', 'count(*) + 2' is
+/// 'ScalarValue(2)')
 pub type ExprResultMap = HashMap<String, Expr>;
 
 impl TreeNodeRewriter for PullUpCorrelatedExpr {
@@ -83,7 +138,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     _ => Ok(Transformed::no(plan)),
                 }
             }
-            _ if plan.expressions().iter().any(|expr| expr.contains_outer()) => {
+            _ if plan.contains_outer_reference() => {
                 // the unsupported cases, the plan expressions contain out reference columns(like window expressions)
                 self.can_pull_up = false;
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
@@ -93,7 +148,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     }
 
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        let subquery_schema = plan.schema().clone();
+        let subquery_schema = Arc::clone(plan.schema());
         match &plan {
             LogicalPlan::Filter(plan_filter) => {
                 let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
@@ -118,7 +173,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     if let Some(expr) = conjunction(subquery_filters.clone()) {
                         filter_exprs_evaluation_result_on_empty_batch(
                             &expr,
-                            plan_filter.input.schema().clone(),
+                            Arc::clone(plan_filter.input.schema()),
                             expr_result_map,
                             &mut expr_result_map_for_count_bug,
                         )?
@@ -176,7 +231,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 {
                     proj_exprs_evaluation_result_on_empty_batch(
                         &projection.expr,
-                        projection.input.schema().clone(),
+                        Arc::clone(projection.input.schema()),
                         expr_result_map,
                         &mut expr_result_map_for_count_bug,
                     )?;
@@ -222,7 +277,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 {
                     agg_exprs_evaluation_result_on_empty_batch(
                         &aggregate.aggr_expr,
-                        aggregate.input.schema().clone(),
+                        Arc::clone(aggregate.input.schema()),
                         &mut expr_result_map_for_count_bug,
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
@@ -278,7 +333,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         if limit.fetch.filter(|limit_row| *limit_row == 0).is_some() {
                             LogicalPlan::EmptyRelation(EmptyRelation {
                                 produce_one_row: false,
-                                schema: limit.input.schema().clone(),
+                                schema: Arc::clone(limit.input.schema()),
                             })
                         } else {
                             LogicalPlanBuilder::from((*limit.input).clone()).build()?
@@ -316,11 +371,14 @@ impl PullUpCorrelatedExpr {
             }
         }
         if let Some(pull_up_having) = &self.pull_up_having_expr {
-            let filter_apply_columns = pull_up_having.to_columns()?;
+            let filter_apply_columns = pull_up_having.column_refs();
             for col in filter_apply_columns {
-                let col_expr = Expr::Column(col);
-                if !missing_exprs.contains(&col_expr) {
-                    missing_exprs.push(col_expr)
+                // add to missing_exprs if not already there
+                let contains = missing_exprs
+                    .iter()
+                    .any(|expr| matches!(expr, Expr::Column(c) if c == col));
+                if !contains {
+                    missing_exprs.push(Expr::Column(col.clone()))
                 }
             }
         }
@@ -373,25 +431,22 @@ fn agg_exprs_evaluation_result_on_empty_batch(
     for e in agg_expr.iter() {
         let result_expr = e
             .clone()
-            .transform_up(&|expr| {
+            .transform_up(|expr| {
                 let new_expr = match expr {
                     Expr::AggregateFunction(expr::AggregateFunction {
                         func_def, ..
                     }) => match func_def {
-                        AggregateFunctionDefinition::BuiltIn(fun) => {
-                            if matches!(fun, datafusion_expr::AggregateFunction::Count) {
+                        AggregateFunctionDefinition::BuiltIn(_fun) => {
+                            Transformed::yes(Expr::Literal(ScalarValue::Null))
+                        }
+                        AggregateFunctionDefinition::UDF(fun) => {
+                            if fun.name() == "count" {
                                 Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(
                                     0,
                                 ))))
                             } else {
                                 Transformed::yes(Expr::Literal(ScalarValue::Null))
                             }
-                        }
-                        AggregateFunctionDefinition::UDF { .. } => {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null))
-                        }
-                        AggregateFunctionDefinition::Name(_) => {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null))
                         }
                     },
                     _ => Transformed::no(expr),
@@ -402,7 +457,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
 
         let result_expr = result_expr.unalias();
         let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(schema.clone());
+        let info = SimplifyContext::new(&props).with_schema(Arc::clone(&schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
@@ -421,7 +476,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
     for expr in proj_expr.iter() {
         let result_expr = expr
             .clone()
-            .transform_up(&|expr| {
+            .transform_up(|expr| {
                 if let Expr::Column(Column { name, .. }) = &expr {
                     if let Some(result_expr) =
                         input_expr_result_map_for_count_bug.get(name)
@@ -438,7 +493,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
 
         if result_expr.ne(expr) {
             let props = ExecutionProps::new();
-            let info = SimplifyContext::new(&props).with_schema(schema.clone());
+            let info = SimplifyContext::new(&props).with_schema(Arc::clone(&schema));
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
@@ -460,7 +515,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
 ) -> Result<Option<Expr>> {
     let result_expr = filter_expr
         .clone()
-        .transform_up(&|expr| {
+        .transform_up(|expr| {
             if let Expr::Column(Column { name, .. }) = &expr {
                 if let Some(result_expr) = input_expr_result_map_for_count_bug.get(name) {
                     Ok(Transformed::yes(result_expr.clone()))

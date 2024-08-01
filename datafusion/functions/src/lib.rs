@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 //! Function packages for [DataFusion].
 //!
@@ -74,15 +76,21 @@
 //! 3. Add a new feature to `Cargo.toml`, with any optional dependencies
 //!
 //! 4. Use the `make_package!` macro to expose the module when the
-//! feature is enabled.
+//!    feature is enabled.
 //!
 //! [`ScalarUDF`]: datafusion_expr::ScalarUDF
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
+use datafusion_expr::ScalarUDF;
 use log::debug;
+use std::sync::Arc;
 
 #[macro_use]
 pub mod macros;
+
+#[cfg(feature = "string_expressions")]
+pub mod string;
+make_stub_package!(string, "string_expressions");
 
 /// Core datafusion expressions
 /// Enabled via feature flag `core_expressions`
@@ -116,10 +124,25 @@ make_stub_package!(math, "math_expressions");
 pub mod regex;
 make_stub_package!(regex, "regex_expressions");
 
+#[cfg(feature = "crypto_expressions")]
+pub mod crypto;
+make_stub_package!(crypto, "crypto_expressions");
+
+#[cfg(feature = "unicode_expressions")]
+pub mod unicode;
+make_stub_package!(unicode, "unicode_expressions");
+
+#[cfg(any(feature = "datetime_expressions", feature = "unicode_expressions"))]
+pub mod planner;
+
+mod utils;
+
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     #[cfg(feature = "core_expressions")]
     pub use super::core::expr_fn::*;
+    #[cfg(feature = "crypto_expressions")]
+    pub use super::crypto::expr_fn::*;
     #[cfg(feature = "datetime_expressions")]
     pub use super::datetime::expr_fn::*;
     #[cfg(feature = "encoding_expressions")]
@@ -128,18 +151,31 @@ pub mod expr_fn {
     pub use super::math::expr_fn::*;
     #[cfg(feature = "regex_expressions")]
     pub use super::regex::expr_fn::*;
+    #[cfg(feature = "string_expressions")]
+    pub use super::string::expr_fn::*;
+    #[cfg(feature = "unicode_expressions")]
+    pub use super::unicode::expr_fn::*;
 }
 
-/// Registers all enabled packages with a [`FunctionRegistry`]
-pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let mut all_functions = core::functions()
+/// Return all default functions
+pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
+    core::functions()
         .into_iter()
         .chain(datetime::functions())
         .chain(encoding::functions())
         .chain(math::functions())
-        .chain(regex::functions());
+        .chain(regex::functions())
+        .chain(crypto::functions())
+        .chain(unicode::functions())
+        .chain(string::functions())
+        .collect::<Vec<_>>()
+}
 
-    all_functions.try_for_each(|udf| {
+/// Registers all enabled packages with a [`FunctionRegistry`]
+pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
+    let all_functions = all_default_functions();
+
+    all_functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
         if let Some(existing_udf) = existing_udf {
             debug!("Overwrite existing UDF: {}", existing_udf.name());
@@ -147,4 +183,31 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         Ok(()) as Result<()>
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::all_default_functions;
+    use datafusion_common::Result;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_no_duplicate_name() -> Result<()> {
+        let mut names = HashSet::new();
+        for func in all_default_functions() {
+            assert!(
+                names.insert(func.name().to_string().to_lowercase()),
+                "duplicate function name: {}",
+                func.name()
+            );
+            for alias in func.aliases() {
+                assert!(
+                    names.insert(alias.to_string().to_lowercase()),
+                    "duplicate function name: {}",
+                    alias
+                );
+            }
+        }
+        Ok(())
+    }
 }

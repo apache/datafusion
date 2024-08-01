@@ -51,6 +51,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
             BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
+            BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
+            BinaryOperator::AtArrow => Ok(Operator::AtArrow),
             _ => not_impl_err!("Unsupported SQL binary operator {op:?}"),
         }
     }

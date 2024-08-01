@@ -17,9 +17,10 @@
 extern crate wasm_bindgen;
 
 use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::lit;
-use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
-use datafusion_physical_expr::execution_props::ExecutionProps;
+use datafusion_expr::simplify::SimplifyContext;
+use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use std::sync::Arc;

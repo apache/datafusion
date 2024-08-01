@@ -39,8 +39,8 @@ else # Fallback
   num_processing_units=1
 fi
 
-url="https://www.apache.org/dyn/closer.lua?path=arrow/arrow-datafusion-${version}/apache-arrow-datafusion-${version}.tar.gz"
-sha256="$(curl https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-${version}/apache-arrow-datafusion-${version}.tar.gz.sha256 | cut -d' ' -f1)"
+url="https://www.apache.org/dyn/closer.lua?path=datafusion/datafusion-${version}/apache-datafusion-${version}.tar.gz"
+sha256="$(curl https://dist.apache.org/repos/dist/release/datafusion/datafusion-${version}/apache-datafusion-${version}.tar.gz.sha256 | cut -d' ' -f1)"
 
 pushd "$(brew --repository homebrew/core)"
 
@@ -52,7 +52,7 @@ fi
 echo "Updating working copy"
 git fetch --all --prune --tags --force -j$num_processing_units
 
-branch=apache-arrow-datafusion-${version}
+branch=apache-datafusion-${version}
 echo "Creating branch: ${branch}"
 git branch -D ${branch} || :
 git checkout -b ${branch} origin/master

@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use rstest::rstest;
 
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -80,7 +81,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "ProjectionExec: expr=[COUNT(*)",
+        "ProjectionExec: expr=[count(*)",
         "metrics=[output_rows=1, elapsed_compute="
     );
     assert_metrics!(
@@ -351,7 +352,7 @@ async fn csv_explain_verbose() {
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
 
-    // Don't actually test the contents of the debuging output (as
+    // Don't actually test the contents of the debugging output (as
     // that may change and keeping this test updated will be a
     // pain). Instead just check for a few key pieces.
     assert_contains!(&actual, "logical_plan");
@@ -566,27 +567,28 @@ async fn csv_explain_verbose_plans() {
     assert_contains!(actual, "ProjectionExec: expr=[c1@0 as c1]");
 }
 
+#[rstest]
 #[tokio::test]
-async fn explain_analyze_runs_optimizers() {
-    // repro for https://github.com/apache/arrow-datafusion/issues/917
+async fn explain_analyze_runs_optimizers(#[values("*", "1")] count_expr: &str) {
+    // repro for https://github.com/apache/datafusion/issues/917
     // where EXPLAIN ANALYZE was not correctly running optiimizer
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
 
-    // This happens as an optimization pass where count(*) can be
+    // This happens as an optimization pass where count(*)/count(1) can be
     // answered using statistics only.
     let expected = "PlaceholderRowExec";
 
-    let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
-    let actual = execute_to_batches(&ctx, sql).await;
+    let sql = format!("EXPLAIN SELECT count({count_expr}) from alltypes_plain");
+    let actual = execute_to_batches(&ctx, &sql).await;
     let actual = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
         .to_string();
     assert_contains!(actual, expected);
 
     // EXPLAIN ANALYZE should work the same
-    let sql = "EXPLAIN  ANALYZE SELECT count(*) from alltypes_plain";
-    let actual = execute_to_batches(&ctx, sql).await;
+    let sql = format!("EXPLAIN ANALYZE SELECT count({count_expr}) from alltypes_plain");
+    let actual = execute_to_batches(&ctx, &sql).await;
     let actual = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
         .to_string();
@@ -612,7 +614,7 @@ async fn test_physical_plan_display_indent() {
     let expected = vec![
         "GlobalLimitExec: skip=0, fetch=10",
         "  SortPreservingMergeExec: [the_min@2 DESC], fetch=10",
-        "    SortExec: TopK(fetch=10), expr=[the_min@2 DESC]",
+        "    SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",
@@ -656,18 +658,17 @@ async fn test_physical_plan_display_indent_multi_children() {
     let dataframe = ctx.sql(sql).await.unwrap();
     let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
-        "ProjectionExec: expr=[c1@0 as c1]",
-        "  CoalesceBatchesExec: target_batch_size=4096",
-        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)]",
-        "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
-        "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "            CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
-        "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000",
-        "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "            ProjectionExec: expr=[c1@0 as c2]",
-        "              CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
+		"CoalesceBatchesExec: target_batch_size=4096",
+    	"  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0]",
+    	"    CoalesceBatchesExec: target_batch_size=4096",
+    	"      RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
+    	"        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+    	"          CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
+    	"    CoalesceBatchesExec: target_batch_size=4096",
+    	"      RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000",
+    	"        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+    	"          ProjectionExec: expr=[c1@0 as c2]",
+    	"            CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -699,7 +700,7 @@ async fn csv_explain_analyze() {
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
     // in greater depth
-    let needle = "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(*)], metrics=[output_rows=5";
+    let needle = "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[count(*)], metrics=[output_rows=5";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";
@@ -718,9 +719,9 @@ async fn csv_explain_analyze_order_by() {
         .to_string();
 
     // Ensure that the ordering is not optimized away from the plan
-    // https://github.com/apache/arrow-datafusion/issues/6379
+    // https://github.com/apache/datafusion/issues/6379
     let needle =
-        "SortExec: expr=[c1@0 ASC NULLS LAST], metrics=[output_rows=100, elapsed_compute";
+        "SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=100, elapsed_compute";
     assert_contains!(&formatted, needle);
 }
 
@@ -738,7 +739,9 @@ async fn parquet_explain_analyze() {
 
     // should contain aggregated stats
     assert_contains!(&formatted, "output_rows=8");
+    assert_contains!(&formatted, "row_groups_matched_bloom_filter=0");
     assert_contains!(&formatted, "row_groups_pruned_bloom_filter=0");
+    assert_contains!(&formatted, "row_groups_matched_statistics=1");
     assert_contains!(&formatted, "row_groups_pruned_statistics=0");
 }
 
@@ -755,7 +758,9 @@ async fn parquet_explain_analyze_verbose() {
         .to_string();
 
     // should contain the raw per file stats (with the label)
+    assert_contains!(&formatted, "row_groups_matched_bloom_filter{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_bloom_filter{partition=0");
+    assert_contains!(&formatted, "row_groups_matched_statistics{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_statistics{partition=0");
 }
 
@@ -788,7 +793,7 @@ async fn explain_logical_plan_only() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]\
+            "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
             \n  SubqueryAlias: t\
             \n    Projection: \
             \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"
@@ -807,7 +812,7 @@ async fn explain_physical_plan_only() {
 
     let expected = vec![vec![
         "physical_plan",
-        "ProjectionExec: expr=[2 as COUNT(*)]\
+        "ProjectionExec: expr=[2 as count(*)]\
         \n  PlaceholderRowExec\
         \n",
     ]];

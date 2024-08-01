@@ -16,11 +16,15 @@
 // under the License.
 
 //! Runtime configuration, via [`ConfigOptions`]
-use crate::error::_internal_err;
-use crate::{DataFusionError, Result};
+
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::Display;
+use std::fmt::{self, Display};
+use std::str::FromStr;
+
+use crate::error::_config_err;
+use crate::parsers::CompressionTypeVariant;
+use crate::{DataFusionError, Result};
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -98,6 +102,7 @@ use std::fmt::Display;
 ///
 /// NB: Misplaced commas may result in nonsensical errors
 ///
+#[macro_export]
 macro_rules! config_namespace {
     (
      $(#[doc = $struct_d:tt])*
@@ -110,8 +115,7 @@ macro_rules! config_namespace {
     ) => {
 
         $(#[doc = $struct_d])*
-        #[derive(Debug, Clone)]
-        #[non_exhaustive]
+        #[derive(Debug, Clone, PartialEq)]
         $vis struct $struct_name{
             $(
             $(#[doc = $d])*
@@ -126,7 +130,7 @@ macro_rules! config_namespace {
                     $(
                        stringify!($field_name) => self.$field_name.set(rem, value),
                     )*
-                    _ => _internal_err!(
+                    _ => return _config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
                     )
                 }
@@ -177,8 +181,19 @@ config_namespace! {
         /// Type of `TableProvider` to use when loading `default` schema
         pub format: Option<String>, default = None
 
-        /// If the file has a header
+        /// Default value for `format.has_header` for `CREATE EXTERNAL TABLE`
+        /// if not specified explicitly in the statement.
         pub has_header: bool, default = false
+
+        /// Specifies whether newlines in (quoted) CSV values are supported.
+        ///
+        /// This is the default value for `format.newlines_in_values` for `CREATE EXTERNAL TABLE`
+        /// if not specified explicitly in the statement.
+        ///
+        /// Parsing newlines in quoted values may be affected by execution behaviour such as
+        /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+        /// parsed successfully, which may reduce performance.
+        pub newlines_in_values: bool, default = false
     }
 }
 
@@ -195,10 +210,18 @@ config_namespace! {
         /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
 
+        /// When set to true, SQL parser will normalize options value (convert value to lowercase)
+        pub enable_options_value_normalization: bool, default = true
+
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
         pub dialect: String, default = "generic".to_string()
 
+        /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
+        /// ignore the length. If false, error if a `VARCHAR` with a length is
+        /// specified. The Arrow type system does not have a notion of maximum
+        /// string length and thus DataFusion can not enforce such limits.
+        pub support_varchar_with_length: bool, default = true
     }
 }
 
@@ -292,100 +315,112 @@ config_namespace! {
         pub listing_table_ignore_subdirectory: bool, default = true
 
         /// Should DataFusion support recursive CTEs
-        /// Defaults to false since this feature is a work in progress and may not
-        /// behave as expected
-        pub enable_recursive_ctes: bool, default = false
+        pub enable_recursive_ctes: bool, default = true
+
+        /// Attempt to eliminate sorts by packing & sorting files with non-overlapping
+        /// statistics into the same file groups.
+        /// Currently experimental
+        pub split_file_groups_by_statistics: bool, default = false
+
+        /// Should DataFusion keep the columns used for partition_by in the output RecordBatches
+        pub keep_partition_by_columns: bool, default = false
     }
 }
 
 config_namespace! {
-    /// Options related to parquet files
+    /// Options for reading and writing parquet files
     ///
     /// See also: [`SessionConfig`]
     ///
     /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct ParquetOptions {
-        /// If true, reads the Parquet data page level metadata (the
+        // The following options affect reading parquet files
+
+        /// (reading) If true, reads the Parquet data page level metadata (the
         /// Page Index), if present, to reduce the I/O and number of
         /// rows decoded.
         pub enable_page_index: bool, default = true
 
-        /// If true, the parquet reader attempts to skip entire row groups based
+        /// (reading) If true, the parquet reader attempts to skip entire row groups based
         /// on the predicate in the query and the metadata (min/max values) stored in
         /// the parquet file
         pub pruning: bool, default = true
 
-        /// If true, the parquet reader skip the optional embedded metadata that may be in
+        /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
         /// the file Schema. This setting can help avoid schema conflicts when querying
         /// multiple parquet files with schemas containing compatible types but different metadata
         pub skip_metadata: bool, default = true
 
-        /// If specified, the parquet reader will try and fetch the last `size_hint`
+        /// (reading) If specified, the parquet reader will try and fetch the last `size_hint`
         /// bytes of the parquet file optimistically. If not specified, two reads are required:
         /// One read to fetch the 8-byte parquet footer and
         /// another to fetch the metadata length encoded in the footer
         pub metadata_size_hint: Option<usize>, default = None
 
-        /// If true, filter expressions are be applied during the parquet decoding operation to
+        /// (reading) If true, filter expressions are be applied during the parquet decoding operation to
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
         pub pushdown_filters: bool, default = false
 
-        /// If true, filter expressions evaluated during the parquet decoding operation
+        /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
 
-        // The following map to parquet::file::properties::WriterProperties
+        // The following options affect writing to parquet files
+        // and map to parquet::file::properties::WriterProperties
 
-        /// Sets best effort maximum size of data page in bytes
+        /// (writing) Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = 1024 * 1024
 
-        /// Sets write_batch_size in bytes
+        /// (writing) Sets write_batch_size in bytes
         pub write_batch_size: usize, default = 1024
 
-        /// Sets parquet writer version
+        /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
-        pub writer_version: String, default = "1.0".into()
+        pub writer_version: String, default = "1.0".to_string()
 
-        /// Sets default parquet compression codec
+        /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
+        ///
+        /// Note that this default setting is not the same as
+        /// the default parquet writer setting.
         pub compression: Option<String>, default = Some("zstd(3)".into())
 
-        /// Sets if dictionary encoding is enabled. If NULL, uses
+        /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
-        pub dictionary_enabled: Option<bool>, default = None
+        pub dictionary_enabled: Option<bool>, default = Some(true)
 
-        /// Sets best effort maximum dictionary page size, in bytes
+        /// (writing) Sets best effort maximum dictionary page size, in bytes
         pub dictionary_page_size_limit: usize, default = 1024 * 1024
 
-        /// Sets if statistics are enabled for any column
+        /// (writing) Sets if statistics are enabled for any column
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub statistics_enabled: Option<String>, default = None
+        pub statistics_enabled: Option<String>, default = Some("page".into())
 
-        /// Sets max statistics size for any column. If NULL, uses
+        /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
-        pub max_statistics_size: Option<usize>, default = None
+        pub max_statistics_size: Option<usize>, default = Some(4096)
 
-        /// Target maximum number of rows in each row group (defaults to 1M
+        /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
         /// can get better compression and be faster to read.
-        pub max_row_group_size: usize, default = 1024 * 1024
+        pub max_row_group_size: usize, default =  1024 * 1024
 
-        /// Sets "created by" property
+        /// (writing) Sets "created by" property
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
 
-        /// Sets column index truncate length
-        pub column_index_truncate_length: Option<usize>, default = None
+        /// (writing) Sets column index truncate length
+        pub column_index_truncate_length: Option<usize>, default = Some(64)
 
-        /// Sets best effort maximum number of rows in data page
-        pub data_page_row_count_limit: usize, default = usize::MAX
+        /// (writing) Sets best effort maximum number of rows in data page
+        pub data_page_row_count_limit: usize, default = 20_000
 
-        /// Sets default encoding for any column
+        /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
@@ -393,24 +428,27 @@ config_namespace! {
         /// default parquet writer setting
         pub encoding: Option<String>, default = None
 
-        /// Sets if bloom filter is enabled for any column
-        pub bloom_filter_enabled: bool, default = false
+        /// (writing) Use any available bloom filters when reading parquet files
+        pub bloom_filter_on_read: bool, default = true
 
-        /// Sets bloom filter false positive probability. If NULL, uses
+        /// (writing) Write bloom filters for all columns when creating parquet files
+        pub bloom_filter_on_write: bool, default = false
+
+        /// (writing) Sets bloom filter false positive probability. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_fpp: Option<f64>, default = None
 
-        /// Sets bloom filter number of distinct values. If NULL, uses
+        /// (writing) Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
 
-        /// Controls whether DataFusion will attempt to speed up writing
+        /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
         /// in each row group in each output file are serialized in parallel
         /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
         pub allow_single_file_parallelism: bool, default = true
 
-        /// By default parallel parquet writer is tuned for minimum
+        /// (writing) By default parallel parquet writer is tuned for minimum
         /// memory usage in a streaming execution plan. You may see
         /// a performance benefit when writing large parquet files
         /// by increasing maximum_parallel_row_group_writers and
@@ -421,7 +459,7 @@ config_namespace! {
         /// data frame.
         pub maximum_parallel_row_group_writers: usize, default = 1
 
-        /// By default parallel parquet writer is tuned for minimum
+        /// (writing) By default parallel parquet writer is tuned for minimum
         /// memory usage in a streaming execution plan. You may see
         /// a performance benefit when writing large parquet files
         /// by increasing maximum_parallel_row_group_writers and
@@ -431,7 +469,6 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
-
     }
 }
 
@@ -569,6 +606,9 @@ config_namespace! {
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
         pub default_filter_selectivity: u8, default = 20
+
+        /// When set to true, the optimizer will not attempt to convert Union to Interleave
+        pub prefer_existing_union: bool, default = false
     }
 }
 
@@ -588,6 +628,12 @@ config_namespace! {
         /// When set to true, the explain statement will print operator statistics
         /// for physical plans
         pub show_statistics: bool, default = false
+
+        /// When set to true, the explain statement will print the partition sizes
+        pub show_sizes: bool, default = true
+
+        /// When set to true, the explain statement will print schema information
+        pub show_schema: bool, default = false
     }
 }
 
@@ -632,7 +678,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
-            _ => _internal_err!("Config value \"{key}\" not found on ConfigOptions"),
+            _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
 
@@ -659,22 +705,17 @@ impl ConfigOptions {
 
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let (prefix, key) = key.split_once('.').ok_or_else(|| {
-            DataFusionError::External(
-                format!("could not find config namespace for key \"{key}\"",).into(),
-            )
-        })?;
+        let Some((prefix, key)) = key.split_once('.') else {
+            return _config_err!("could not find config namespace for key \"{key}\"");
+        };
 
         if prefix == "datafusion" {
             return ConfigField::set(self, key, value);
         }
 
-        let e = self.extensions.0.get_mut(prefix);
-        let e = e.ok_or_else(|| {
-            DataFusionError::External(
-                format!("Could not find config namespace \"{prefix}\"",).into(),
-            )
-        })?;
+        let Some(e) = self.extensions.0.get_mut(prefix) else {
+            return _config_err!("Could not find config namespace \"{prefix}\"");
+        };
         e.0.set(key, value)
     }
 
@@ -883,7 +924,7 @@ impl Clone for ExtensionBox {
 
 /// A trait implemented by `config_namespace` and for field types that provides
 /// the ability to walk and mutate the configuration tree
-trait ConfigField {
+pub trait ConfigField {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str);
 
     fn set(&mut self, key: &str, value: &str) -> Result<()>;
@@ -902,6 +943,7 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
     }
 }
 
+#[macro_export]
 macro_rules! config_field {
     ($t:ty) => {
         impl ConfigField for $t {
@@ -926,11 +968,52 @@ config_field!(String);
 config_field!(bool);
 config_field!(usize);
 config_field!(f64);
-config_field!(u8);
 config_field!(u64);
 
+impl ConfigField for u8 {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if value.is_empty() {
+            return Err(DataFusionError::Configuration(format!(
+                "Input string for {} key is empty",
+                key
+            )));
+        }
+        // Check if the string is a valid number
+        if let Ok(num) = value.parse::<u8>() {
+            // TODO: Let's decide how we treat the numerical strings.
+            *self = num;
+        } else {
+            let bytes = value.as_bytes();
+            // Check if the first character is ASCII (single byte)
+            if bytes.len() > 1 || !value.chars().next().unwrap().is_ascii() {
+                return Err(DataFusionError::Configuration(format!(
+                    "Error parsing {} as u8. Non-ASCII string provided",
+                    value
+                )));
+            }
+            *self = bytes[0];
+        }
+        Ok(())
+    }
+}
+
+impl ConfigField for CompressionTypeVariant {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = CompressionTypeVariant::from_str(value)?;
+        Ok(())
+    }
+}
+
 /// An implementation trait used to recursively walk configuration
-trait Visit {
+pub trait Visit {
     fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str);
 
     fn none(&mut self, key: &str, description: &'static str);
@@ -1041,7 +1124,7 @@ macro_rules! extensions_options {
                         Ok(())
                        }
                     )*
-                    _ => Err($crate::DataFusionError::Internal(
+                    _ => Err($crate::DataFusionError::Configuration(
                         format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
                     ))
                 }
@@ -1059,5 +1142,777 @@ macro_rules! extensions_options {
                 ]
             }
         }
+    }
+}
+
+/// These file types have special built in behavior for configuration.
+/// Use TableOptions::Extensions for configuring other file types.
+#[derive(Debug, Clone)]
+pub enum ConfigFileType {
+    CSV,
+    #[cfg(feature = "parquet")]
+    PARQUET,
+    JSON,
+}
+
+/// Represents the configuration options available for handling different table formats within a data processing application.
+/// This struct encompasses options for various file formats including CSV, Parquet, and JSON, allowing for flexible configuration
+/// of parsing and writing behaviors specific to each format. Additionally, it supports extending functionality through custom extensions.
+#[derive(Debug, Clone, Default)]
+pub struct TableOptions {
+    /// Configuration options for CSV file handling. This includes settings like the delimiter,
+    /// quote character, and whether the first row is considered as headers.
+    pub csv: CsvOptions,
+
+    /// Configuration options for Parquet file handling. This includes settings for compression,
+    /// encoding, and other Parquet-specific file characteristics.
+    pub parquet: TableParquetOptions,
+
+    /// Configuration options for JSON file handling.
+    pub json: JsonOptions,
+
+    /// The current file format that the table operations should assume. This option allows
+    /// for dynamic switching between the supported file types (e.g., CSV, Parquet, JSON).
+    pub current_format: Option<ConfigFileType>,
+
+    /// Optional extensions that can be used to extend or customize the behavior of the table
+    /// options. Extensions can be registered using `Extensions::insert` and might include
+    /// custom file handling logic, additional configuration parameters, or other enhancements.
+    pub extensions: Extensions,
+}
+
+impl ConfigField for TableOptions {
+    /// Visits configuration settings for the current file format, or all formats if none is selected.
+    ///
+    /// This method adapts the behavior based on whether a file format is currently selected in `current_format`.
+    /// If a format is selected, it visits only the settings relevant to that format. Otherwise,
+    /// it visits all available format settings.
+    fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
+        if let Some(file_type) = &self.current_format {
+            match file_type {
+                #[cfg(feature = "parquet")]
+                ConfigFileType::PARQUET => self.parquet.visit(v, "format", ""),
+                ConfigFileType::CSV => self.csv.visit(v, "format", ""),
+                ConfigFileType::JSON => self.json.visit(v, "format", ""),
+            }
+        } else {
+            self.csv.visit(v, "csv", "");
+            self.parquet.visit(v, "parquet", "");
+            self.json.visit(v, "json", "");
+        }
+    }
+
+    /// Sets a configuration value for a specific key within `TableOptions`.
+    ///
+    /// This method delegates setting configuration values to the specific file format configurations,
+    /// based on the current format selected. If no format is selected, it returns an error.
+    ///
+    /// # Parameters
+    ///
+    /// * `key`: The configuration key specifying which setting to adjust, prefixed with the format (e.g., "format.delimiter")
+    ///   for CSV format.
+    /// * `value`: The value to set for the specified configuration key.
+    ///
+    /// # Returns
+    ///
+    /// A result indicating success or an error if the key is not recognized, if a format is not specified,
+    /// or if setting the configuration value fails for the specific format.
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        // Extensions are handled in the public `ConfigOptions::set`
+        let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+        let Some(format) = &self.current_format else {
+            return _config_err!("Specify a format for TableOptions");
+        };
+        match key {
+            "format" => match format {
+                #[cfg(feature = "parquet")]
+                ConfigFileType::PARQUET => self.parquet.set(rem, value),
+                ConfigFileType::CSV => self.csv.set(rem, value),
+                ConfigFileType::JSON => self.json.set(rem, value),
+            },
+            _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
+        }
+    }
+}
+
+impl TableOptions {
+    /// Constructs a new instance of `TableOptions` with default settings.
+    ///
+    /// # Returns
+    ///
+    /// A new `TableOptions` instance with default configuration values.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a new `TableOptions` instance initialized with settings from a given session config.
+    ///
+    /// # Parameters
+    ///
+    /// * `config`: A reference to the session `ConfigOptions` from which to derive initial settings.
+    ///
+    /// # Returns
+    ///
+    /// A new `TableOptions` instance with settings applied from the session config.
+    pub fn default_from_session_config(config: &ConfigOptions) -> Self {
+        let initial = TableOptions::default();
+        initial.combine_with_session_config(config);
+        initial
+    }
+
+    /// Updates the current `TableOptions` with settings from a given session config.
+    ///
+    /// # Parameters
+    ///
+    /// * `config`: A reference to the session `ConfigOptions` whose settings are to be applied.
+    ///
+    /// # Returns
+    ///
+    /// A new `TableOptions` instance with updated settings from the session config.
+    pub fn combine_with_session_config(&self, config: &ConfigOptions) -> Self {
+        let mut clone = self.clone();
+        clone.parquet.global = config.execution.parquet.clone();
+        clone
+    }
+
+    /// Sets the file format for the table.
+    ///
+    /// # Parameters
+    ///
+    /// * `format`: The file format to use (e.g., CSV, Parquet).
+    pub fn set_config_format(&mut self, format: ConfigFileType) {
+        self.current_format = Some(format);
+    }
+
+    /// Sets the extensions for this `TableOptions` instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `extensions`: The `Extensions` instance to set.
+    ///
+    /// # Returns
+    ///
+    /// A new `TableOptions` instance with the specified extensions applied.
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+
+    /// Sets a specific configuration option.
+    ///
+    /// # Parameters
+    ///
+    /// * `key`: The configuration key (e.g., "format.delimiter").
+    /// * `value`: The value to set for the specified key.
+    ///
+    /// # Returns
+    ///
+    /// A result indicating success or failure in setting the configuration option.
+    pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let Some((prefix, _)) = key.split_once('.') else {
+            return _config_err!("could not find config namespace for key \"{key}\"");
+        };
+
+        if prefix == "format" {
+            return ConfigField::set(self, key, value);
+        }
+
+        if prefix == "execution" {
+            return Ok(());
+        }
+
+        let Some(e) = self.extensions.0.get_mut(prefix) else {
+            return _config_err!("Could not find config namespace \"{prefix}\"");
+        };
+        e.0.set(key, value)
+    }
+
+    /// Initializes a new `TableOptions` from a hash map of string settings.
+    ///
+    /// # Parameters
+    ///
+    /// * `settings`: A hash map where each key-value pair represents a configuration setting.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the new `TableOptions` instance or an error if any setting could not be applied.
+    pub fn from_string_hash_map(settings: &HashMap<String, String>) -> Result<Self> {
+        let mut ret = Self::default();
+        for (k, v) in settings {
+            ret.set(k, v)?;
+        }
+
+        Ok(ret)
+    }
+
+    /// Modifies the current `TableOptions` instance with settings from a hash map.
+    ///
+    /// # Parameters
+    ///
+    /// * `settings`: A hash map where each key-value pair represents a configuration setting.
+    ///
+    /// # Returns
+    ///
+    /// A result indicating success or failure in applying the settings.
+    pub fn alter_with_string_hash_map(
+        &mut self,
+        settings: &HashMap<String, String>,
+    ) -> Result<()> {
+        for (k, v) in settings {
+            self.set(k, v)?;
+        }
+        Ok(())
+    }
+
+    /// Retrieves all configuration entries from this `TableOptions`.
+    ///
+    /// # Returns
+    ///
+    /// A vector of `ConfigEntry` instances, representing all the configuration options within this `TableOptions`.
+    pub fn entries(&self) -> Vec<ConfigEntry> {
+        struct Visitor(Vec<ConfigEntry>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(
+                &mut self,
+                key: &str,
+                value: V,
+                description: &'static str,
+            ) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: Some(value.to_string()),
+                    description,
+                })
+            }
+
+            fn none(&mut self, key: &str, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: None,
+                    description,
+                })
+            }
+        }
+
+        let mut v = Visitor(vec![]);
+        self.visit(&mut v, "format", "");
+
+        v.0.extend(self.extensions.0.values().flat_map(|e| e.0.entries()));
+        v.0
+    }
+}
+
+/// Options that control how Parquet files are read, including global options
+/// that apply to all columns and optional column-specific overrides
+///
+/// Closely tied to [`ParquetWriterOptions`](crate::file_options::parquet_writer::ParquetWriterOptions).
+/// Properties not included in [`TableParquetOptions`] may not be configurable at the external API
+/// (e.g. sorting_columns).
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct TableParquetOptions {
+    /// Global Parquet options that propagates to all columns.
+    pub global: ParquetOptions,
+    /// Column specific options. Default usage is parquet.XX::column.
+    pub column_specific_options: HashMap<String, ColumnOptions>,
+    /// Additional file-level metadata to include. Inserted into the key_value_metadata
+    /// for the written [`FileMetaData`](https://docs.rs/parquet/latest/parquet/file/metadata/struct.FileMetaData.html).
+    ///
+    /// Multiple entries are permitted
+    /// ```sql
+    /// OPTIONS (
+    ///    'format.metadata::key1' '',
+    ///    'format.metadata::key2' 'value',
+    ///    'format.metadata::key3' 'value has spaces',
+    ///    'format.metadata::key4' 'value has special chars :: :',
+    ///    'format.metadata::key_dupe' 'original will be overwritten',
+    ///    'format.metadata::key_dupe' 'final'
+    /// )
+    /// ```
+    pub key_value_metadata: HashMap<String, Option<String>>,
+}
+
+impl TableParquetOptions {
+    /// Return new default TableParquetOptions
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl ConfigField for TableParquetOptions {
+    fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, description: &'static str) {
+        self.global.visit(v, key_prefix, description);
+        self.column_specific_options
+            .visit(v, key_prefix, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        // Determine if the key is a global, metadata, or column-specific setting
+        if key.starts_with("metadata::") {
+            let k = match key.split("::").collect::<Vec<_>>()[..] {
+                [_meta] | [_meta, ""] => {
+                    return _config_err!(
+                        "Invalid metadata key provided, missing key in metadata::<key>"
+                    )
+                }
+                [_meta, k] => k.into(),
+                _ => {
+                    return _config_err!(
+                        "Invalid metadata key provided, found too many '::' in \"{key}\""
+                    )
+                }
+            };
+            self.key_value_metadata.insert(k, Some(value.into()));
+            Ok(())
+        } else if key.contains("::") {
+            self.column_specific_options.set(key, value)
+        } else {
+            self.global.set(key, value)
+        }
+    }
+}
+
+macro_rules! config_namespace_with_hashmap {
+    (
+     $(#[doc = $struct_d:tt])*
+     $vis:vis struct $struct_name:ident {
+        $(
+        $(#[doc = $d:tt])*
+        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
+        )*$(,)*
+    }
+    ) => {
+
+        $(#[doc = $struct_d])*
+        #[derive(Debug, Clone, PartialEq)]
+        $vis struct $struct_name{
+            $(
+            $(#[doc = $d])*
+            $field_vis $field_name : $field_type,
+            )*
+        }
+
+        impl ConfigField for $struct_name {
+            fn set(&mut self, key: &str, value: &str) -> Result<()> {
+                let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+                match key {
+                    $(
+                       stringify!($field_name) => self.$field_name.set(rem, value),
+                    )*
+                    _ => _config_err!(
+                        "Config value \"{}\" not found on {}", key, stringify!($struct_name)
+                    )
+                }
+            }
+
+            fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+                $(
+                let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
+                let desc = concat!($($d),*).trim();
+                self.$field_name.visit(v, key.as_str(), desc);
+                )*
+            }
+        }
+
+        impl Default for $struct_name {
+            fn default() -> Self {
+                Self {
+                    $($field_name: $default),*
+                }
+            }
+        }
+
+        impl ConfigField for HashMap<String,$struct_name> {
+            fn set(&mut self, key: &str, value: &str) -> Result<()> {
+                let parts: Vec<&str> = key.splitn(2, "::").collect();
+                match parts.as_slice() {
+                    [inner_key, hashmap_key] => {
+                        // Get or create the ColumnOptions for the specified column
+                        let inner_value = self
+                            .entry((*hashmap_key).to_owned())
+                            .or_insert_with($struct_name::default);
+
+                        inner_value.set(inner_key, value)
+                    }
+                    _ => _config_err!("Unrecognized key '{key}'."),
+                }
+            }
+
+            fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+                for (column_name, col_options) in self {
+                    $(
+                    let key = format!("{}.{field}::{}", key_prefix, column_name, field = stringify!($field_name));
+                    let desc = concat!($($d),*).trim();
+                    col_options.$field_name.visit(v, key.as_str(), desc);
+                    )*
+                }
+            }
+        }
+    }
+}
+
+config_namespace_with_hashmap! {
+    /// Options controlling parquet format for individual columns.
+    ///
+    /// See [`ParquetOptions`] for more details
+    pub struct ColumnOptions {
+        /// Sets if bloom filter is enabled for the column path.
+        pub bloom_filter_enabled: Option<bool>, default = None
+
+        /// Sets encoding for the column path.
+        /// Valid values are: plain, plain_dictionary, rle,
+        /// bit_packed, delta_binary_packed, delta_length_byte_array,
+        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// These values are not case-sensitive. If NULL, uses
+        /// default parquet options
+        pub encoding: Option<String>, default = None
+
+        /// Sets if dictionary encoding is enabled for the column path. If NULL, uses
+        /// default parquet options
+        pub dictionary_enabled: Option<bool>, default = None
+
+        /// Sets default parquet compression codec for the column path.
+        /// Valid values are: uncompressed, snappy, gzip(level),
+        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// These values are not case-sensitive. If NULL, uses
+        /// default parquet options
+        pub compression: Option<String>, default = None
+
+        /// Sets if statistics are enabled for the column
+        /// Valid values are: "none", "chunk", and "page"
+        /// These values are not case sensitive. If NULL, uses
+        /// default parquet options
+        pub statistics_enabled: Option<String>, default = None
+
+        /// Sets bloom filter false positive probability for the column path. If NULL, uses
+        /// default parquet options
+        pub bloom_filter_fpp: Option<f64>, default = None
+
+        /// Sets bloom filter number of distinct values. If NULL, uses
+        /// default parquet options
+        pub bloom_filter_ndv: Option<u64>, default = None
+
+        /// Sets max statistics size for the column path. If NULL, uses
+        /// default parquet options
+        pub max_statistics_size: Option<usize>, default = None
+    }
+}
+
+config_namespace! {
+    /// Options controlling CSV format
+    pub struct CsvOptions {
+        /// Specifies whether there is a CSV header (i.e. the first line
+        /// consists of is column names). The value `None` indicates that
+        /// the configuration should be consulted.
+        pub has_header: Option<bool>, default = None
+        pub delimiter: u8, default = b','
+        pub quote: u8, default = b'"'
+        pub escape: Option<u8>, default = None
+        pub double_quote: Option<bool>, default = None
+        /// Specifies whether newlines in (quoted) values are supported.
+        ///
+        /// Parsing newlines in quoted values may be affected by execution behaviour such as
+        /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+        /// parsed successfully, which may reduce performance.
+        ///
+        /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
+        pub newlines_in_values: Option<bool>, default = None
+        pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        pub schema_infer_max_rec: usize, default = 100
+        pub date_format: Option<String>, default = None
+        pub datetime_format: Option<String>, default = None
+        pub timestamp_format: Option<String>, default = None
+        pub timestamp_tz_format: Option<String>, default = None
+        pub time_format: Option<String>, default = None
+        pub null_value: Option<String>, default = None
+        pub comment: Option<u8>, default = None
+    }
+}
+
+impl CsvOptions {
+    /// Set a limit in terms of records to scan to infer the schema
+    /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
+    pub fn with_compression(
+        mut self,
+        compression_type_variant: CompressionTypeVariant,
+    ) -> Self {
+        self.compression = compression_type_variant;
+        self
+    }
+
+    /// Set a limit in terms of records to scan to infer the schema
+    /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
+    pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
+        self.schema_infer_max_rec = max_rec;
+        self
+    }
+
+    /// Set true to indicate that the first line is a header.
+    /// - default to true
+    pub fn with_has_header(mut self, has_header: bool) -> Self {
+        self.has_header = Some(has_header);
+        self
+    }
+
+    /// Returns true if the first line is a header. If format options does not
+    /// specify whether there is a header, returns `None` (indicating that the
+    /// configuration should be consulted).
+    pub fn has_header(&self) -> Option<bool> {
+        self.has_header
+    }
+
+    /// The character separating values within a row.
+    /// - default to ','
+    pub fn with_delimiter(mut self, delimiter: u8) -> Self {
+        self.delimiter = delimiter;
+        self
+    }
+
+    /// The quote character in a row.
+    /// - default to '"'
+    pub fn with_quote(mut self, quote: u8) -> Self {
+        self.quote = quote;
+        self
+    }
+
+    /// The escape character in a row.
+    /// - default is None
+    pub fn with_escape(mut self, escape: Option<u8>) -> Self {
+        self.escape = escape;
+        self
+    }
+
+    /// Set true to indicate that the CSV quotes should be doubled.
+    /// - default to true
+    pub fn with_double_quote(mut self, double_quote: bool) -> Self {
+        self.double_quote = Some(double_quote);
+        self
+    }
+
+    /// Specifies whether newlines in (quoted) values are supported.
+    ///
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
+    pub fn with_newlines_in_values(mut self, newlines_in_values: bool) -> Self {
+        self.newlines_in_values = Some(newlines_in_values);
+        self
+    }
+
+    /// Set a `CompressionTypeVariant` of CSV
+    /// - defaults to `CompressionTypeVariant::UNCOMPRESSED`
+    pub fn with_file_compression_type(
+        mut self,
+        compression: CompressionTypeVariant,
+    ) -> Self {
+        self.compression = compression;
+        self
+    }
+
+    /// The delimiter character.
+    pub fn delimiter(&self) -> u8 {
+        self.delimiter
+    }
+
+    /// The quote character.
+    pub fn quote(&self) -> u8 {
+        self.quote
+    }
+
+    /// The escape character.
+    pub fn escape(&self) -> Option<u8> {
+        self.escape
+    }
+}
+
+config_namespace! {
+    /// Options controlling JSON format
+    pub struct JsonOptions {
+        pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        pub schema_infer_max_rec: usize, default = 100
+    }
+}
+
+pub trait FormatOptionsExt: Display {}
+
+#[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
+pub enum FormatOptions {
+    CSV(CsvOptions),
+    JSON(JsonOptions),
+    #[cfg(feature = "parquet")]
+    PARQUET(TableParquetOptions),
+    AVRO,
+    ARROW,
+}
+
+impl Display for FormatOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let out = match self {
+            FormatOptions::CSV(_) => "csv",
+            FormatOptions::JSON(_) => "json",
+            #[cfg(feature = "parquet")]
+            FormatOptions::PARQUET(_) => "parquet",
+            FormatOptions::AVRO => "avro",
+            FormatOptions::ARROW => "arrow",
+        };
+        write!(f, "{}", out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+    use std::collections::HashMap;
+
+    use crate::config::{
+        ConfigEntry, ConfigExtension, ConfigFileType, ExtensionOptions, Extensions,
+        TableOptions,
+    };
+
+    #[derive(Default, Debug, Clone)]
+    pub struct TestExtensionConfig {
+        /// Should "foo" be replaced by "bar"?
+        pub properties: HashMap<String, String>,
+    }
+
+    impl ExtensionOptions for TestExtensionConfig {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn cloned(&self) -> Box<dyn ExtensionOptions> {
+            Box::new(self.clone())
+        }
+
+        fn set(&mut self, key: &str, value: &str) -> crate::Result<()> {
+            let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+            assert_eq!(key, "test");
+            self.properties.insert(rem.to_owned(), value.to_owned());
+            Ok(())
+        }
+
+        fn entries(&self) -> Vec<ConfigEntry> {
+            self.properties
+                .iter()
+                .map(|(k, v)| ConfigEntry {
+                    key: k.into(),
+                    value: Some(v.into()),
+                    description: "",
+                })
+                .collect()
+        }
+    }
+
+    impl ConfigExtension for TestExtensionConfig {
+        const PREFIX: &'static str = "test";
+    }
+
+    #[test]
+    fn create_table_config() {
+        let mut extension = Extensions::new();
+        extension.insert(TestExtensionConfig::default());
+        let table_config = TableOptions::new().with_extensions(extension);
+        let kafka_config = table_config.extensions.get::<TestExtensionConfig>();
+        assert!(kafka_config.is_some())
+    }
+
+    #[test]
+    fn alter_test_extension_config() {
+        let mut extension = Extensions::new();
+        extension.insert(TestExtensionConfig::default());
+        let mut table_config = TableOptions::new().with_extensions(extension);
+        table_config.set_config_format(ConfigFileType::CSV);
+        table_config.set("format.delimiter", ";").unwrap();
+        assert_eq!(table_config.csv.delimiter, b';');
+        table_config.set("test.bootstrap.servers", "asd").unwrap();
+        let kafka_config = table_config
+            .extensions
+            .get::<TestExtensionConfig>()
+            .unwrap();
+        assert_eq!(
+            kafka_config.properties.get("bootstrap.servers").unwrap(),
+            "asd"
+        );
+    }
+
+    #[test]
+    fn csv_u8_table_options() {
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::CSV);
+        table_config.set("format.delimiter", ";").unwrap();
+        assert_eq!(table_config.csv.delimiter as char, ';');
+        table_config.set("format.escape", "\"").unwrap();
+        assert_eq!(table_config.csv.escape.unwrap() as char, '"');
+        table_config.set("format.escape", "\'").unwrap();
+        assert_eq!(table_config.csv.escape.unwrap() as char, '\'');
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_table_options() {
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::PARQUET);
+        table_config
+            .set("format.bloom_filter_enabled::col1", "true")
+            .unwrap();
+        assert_eq!(
+            table_config.parquet.column_specific_options["col1"].bloom_filter_enabled,
+            Some(true)
+        );
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_table_options_config_entry() {
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::PARQUET);
+        table_config
+            .set("format.bloom_filter_enabled::col1", "true")
+            .unwrap();
+        let entries = table_config.entries();
+        assert!(entries
+            .iter()
+            .any(|item| item.key == "format.bloom_filter_enabled::col1"))
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_table_options_config_metadata_entry() {
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::PARQUET);
+        table_config.set("format.metadata::key1", "").unwrap();
+        table_config.set("format.metadata::key2", "value2").unwrap();
+        table_config
+            .set("format.metadata::key3", "value with spaces ")
+            .unwrap();
+        table_config
+            .set("format.metadata::key4", "value with special chars :: :")
+            .unwrap();
+
+        let parsed_metadata = table_config.parquet.key_value_metadata.clone();
+        assert_eq!(parsed_metadata.get("should not exist1"), None);
+        assert_eq!(parsed_metadata.get("key1"), Some(&Some("".into())));
+        assert_eq!(parsed_metadata.get("key2"), Some(&Some("value2".into())));
+        assert_eq!(
+            parsed_metadata.get("key3"),
+            Some(&Some("value with spaces ".into()))
+        );
+        assert_eq!(
+            parsed_metadata.get("key4"),
+            Some(&Some("value with special chars :: :".into()))
+        );
+
+        // duplicate keys are overwritten
+        table_config.set("format.metadata::key_dupe", "A").unwrap();
+        table_config.set("format.metadata::key_dupe", "B").unwrap();
+        let parsed_metadata = table_config.parquet.key_value_metadata;
+        assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
     }
 }

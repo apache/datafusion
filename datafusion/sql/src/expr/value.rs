@@ -20,11 +20,10 @@ use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
-use datafusion_expr::BuiltinScalarFunction;
+use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
@@ -52,6 +51,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     plan_err!("Invalid HexStringLiteral '{s}'")
                 }
             }
+            Value::DollarQuotedString(s) => Ok(lit(s.value)),
             Value::EscapedStringLiteral(s) => Ok(lit(s)),
             _ => plan_err!("Unsupported Value '{value:?}'"),
         }
@@ -131,6 +131,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )))
     }
 
+    // IMPORTANT: Keep sql_array_literal's function body small to prevent stack overflow
+    // This function is recursively called, potentially leading to deep call stacks.
     pub(super) fn sql_array_literal(
         &self,
         elements: Vec<SQLExpr>,
@@ -143,10 +145,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::MakeArray,
-            values,
-        )))
+        self.try_plan_array_literal(values, schema)
+    }
+
+    fn try_plan_array_literal(
+        &self,
+        values: Vec<Expr>,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        let mut exprs = values;
+        for planner in self.context_provider.get_expr_planners() {
+            match planner.plan_array_literal(exprs, schema)? {
+                PlannerResult::Planned(expr) => {
+                    return Ok(expr);
+                }
+                PlannerResult::Original(values) => exprs = values,
+            }
+        }
+
+        internal_err!("Expected a simplified result, but none was found")
     }
 
     /// Convert a SQL interval expression to a DataFusion logical plan
@@ -214,13 +231,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         return not_impl_err!("Unsupported interval operator: {op:?}");
                     }
                 };
-                match (interval.leading_field, left.as_ref(), right.as_ref()) {
+                match (
+                    interval.leading_field.as_ref(),
+                    left.as_ref(),
+                    right.as_ref(),
+                ) {
                     (_, _, SQLExpr::Value(_)) => {
                         let left_expr = self.sql_interval_to_expr(
                             negative,
                             Interval {
                                 value: left,
-                                leading_field: interval.leading_field,
+                                leading_field: interval.leading_field.clone(),
                                 leading_precision: None,
                                 last_field: None,
                                 fractional_seconds_precision: None,

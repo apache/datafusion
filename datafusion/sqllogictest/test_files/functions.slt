@@ -483,23 +483,23 @@ statement error Did you mean 'arrow_typeof'?
 SELECT arrowtypeof(v1) from test;
 
 # Scalar function
-statement error Invalid function 'to_timestamps_second'
+statement error Did you mean 'to_timestamp_seconds'?
 SELECT to_TIMESTAMPS_second(v2) from test;
 
 # Aggregate function
-statement error Did you mean 'COUNT'?
+query error DataFusion error: Error during planning: Invalid function 'counter'
 SELECT counter(*) from test;
 
 # Aggregate function
-statement error Did you mean 'STDDEV'?
+statement error Did you mean 'stddev'?
 SELECT STDEV(v1) from test;
 
 # Aggregate function
-statement error Did you mean 'COVAR'?
+statement error DataFusion error: Error during planning: Invalid function 'covaria'.\nDid you mean 'covar'?
 SELECT COVARIA(1,1);
 
 # Window function
-statement error Did you mean 'SUM'?
+statement error
 SELECT v1, v2, SUMM(v2) OVER(ORDER BY v1) from test;
 
 # Window function
@@ -549,8 +549,8 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
   c13 VARCHAR NOT NULL
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
 
 
 # sqrt_f32_vs_f64
@@ -933,80 +933,139 @@ SELECT levenshtein(NULL, NULL)
 ----
 NULL
 
-query T
-SELECT substr_index('www.apache.org', '.', 1)
+# Test substring_index using '.' as delimiter
+# This query is compatible with MySQL(8.0.19 or later), convenient for comparing results
+query TIT
+SELECT str, n, substring_index(str, '.', n) AS c FROM
+  (VALUES
+    ROW('arrow.apache.org'),
+    ROW('.'),
+    ROW('...'),
+    ROW(NULL)
+  ) AS strings(str),
+  (VALUES
+    ROW(1),
+    ROW(2),
+    ROW(3),
+    ROW(100),
+    ROW(-1),
+    ROW(-2),
+    ROW(-3),
+    ROW(-100)
+  ) AS occurrences(n)
+ORDER BY str DESC, n;
 ----
-www
+NULL -100 NULL
+NULL -3 NULL
+NULL -2 NULL
+NULL -1 NULL
+NULL 1 NULL
+NULL 2 NULL
+NULL 3 NULL
+NULL 100 NULL
+arrow.apache.org -100 arrow.apache.org
+arrow.apache.org -3 arrow.apache.org
+arrow.apache.org -2 apache.org
+arrow.apache.org -1 org
+arrow.apache.org 1 arrow
+arrow.apache.org 2 arrow.apache
+arrow.apache.org 3 arrow.apache.org
+arrow.apache.org 100 arrow.apache.org
+... -100 ...
+... -3 ..
+... -2 .
+... -1 (empty)
+... 1 (empty)
+... 2 .
+... 3 ..
+... 100 ...
+. -100 .
+. -3 .
+. -2 .
+. -1 (empty)
+. 1 (empty)
+. 2 .
+. 3 .
+. 100 .
 
-query T
-SELECT substr_index('www.apache.org', '.', 2)
+# Test substring_index using 'ac' as delimiter
+query TIT
+SELECT str, n, substring_index(str, 'ac', n) AS c FROM
+  (VALUES
+    -- input string does not contain the delimiter
+    ROW('arrow'),
+    -- input string contains the delimiter
+    ROW('arrow.apache.org')
+  ) AS strings(str),
+  (VALUES
+    ROW(1),
+    ROW(2),
+    ROW(-1),
+    ROW(-2)
+  ) AS occurrences(n)
+ORDER BY str DESC, n;
 ----
-www.apache
+arrow.apache.org -2 arrow.apache.org
+arrow.apache.org -1 he.org
+arrow.apache.org 1 arrow.ap
+arrow.apache.org 2 arrow.apache.org
+arrow -2 arrow
+arrow -1 arrow
+arrow 1 arrow
+arrow 2 arrow
 
-query T
-SELECT substr_index('www.apache.org', '.', -1)
+# Test substring_index with NULL values
+query ?TT?
+SELECT
+  substring_index(NULL, '.', 1),
+  substring_index('arrow.apache.org', NULL, 1),
+  substring_index('arrow.apache.org', '.', NULL),
+  substring_index(NULL, NULL, NULL)
 ----
-org
+NULL NULL NULL NULL
 
-query T
-SELECT substr_index('www.apache.org', '.', -2)
+# Test substring_index with empty strings
+query TT
+SELECT
+  -- input string is empty
+  substring_index('', '.', 1),
+  -- delimiter is empty
+  substring_index('arrow.apache.org', '', 1)
 ----
-apache.org
+(empty) (empty)
 
+# Test substring_index with 0 occurrence
 query T
-SELECT substr_index('www.apache.org', 'ac', 1)
-----
-www.ap
-
-query T
-SELECT substr_index('www.apache.org', 'ac', -1)
-----
-he.org
-
-query T
-SELECT substr_index('www.apache.org', 'ac', 2)
-----
-www.apache.org
-
-query T
-SELECT substr_index('www.apache.org', 'ac', -2)
-----
-www.apache.org
-
-query ?
-SELECT substr_index(NULL, 'ac', 1)
-----
-NULL
-
-query T
-SELECT substr_index('www.apache.org', NULL, 1)
-----
-NULL
-
-query T
-SELECT substr_index('www.apache.org', 'ac', NULL)
-----
-NULL
-
-query T
-SELECT substr_index('', 'ac', 1)
+SELECT substring_index('arrow.apache.org', 'ac', 0)
 ----
 (empty)
 
-query T
-SELECT substr_index('www.apache.org', '', 1)
+# Test substring_index with large occurrences
+query TT
+SELECT
+  -- i64::MIN
+  substring_index('arrow.apache.org', '.', -9223372036854775808) as c1,
+  -- i64::MAX
+  substring_index('arrow.apache.org', '.', 9223372036854775807) as c2;
 ----
-(empty)
+arrow.apache.org arrow.apache.org
 
-query T
-SELECT substr_index('www.apache.org', 'ac', 0)
+# Test substring_index issue https://github.com/apache/datafusion/issues/9472
+query TTT
+SELECT
+  url,
+  substring_index(url, '.', 1) AS subdomain,
+  substring_index(url, '.', -1) AS tld
+FROM
+  (VALUES ROW('docs.apache.com'),
+          ROW('community.influxdata.com'),
+          ROW('arrow.apache.org')
+  ) data(url)
 ----
-(empty)
+docs.apache.com docs com
+community.influxdata.com community com
+arrow.apache.org arrow org
 
-query ?
-SELECT substr_index(NULL, NULL, NULL)
-----
-NULL
 
 query I
 SELECT find_in_set('b', 'a,b,c,d')
@@ -1056,3 +1115,64 @@ query B
 SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT random()+1 r1, random()+1 r2) WHERE r1 > 0 AND r2 > 0)
 ----
 false
+
+#######
+# verify that random() returns a different value for each row
+#######
+statement ok
+create table t as values (1), (2);
+
+statement ok
+create table rand_table as select random() as r from t;
+
+# should have 2 distinct values (not 1)
+query I
+select count(distinct r) from rand_table;
+----
+2
+
+statement ok
+drop table rand_table
+
+statement ok
+drop table t
+
+
+#######
+# verify that uuid() returns a different value for each row
+#######
+statement ok
+create table t as values (1), (2);
+
+statement ok
+create table uuid_table as select uuid() as u from t;
+
+# should have 2 distinct values (not 1)
+query I
+select count(distinct u) from uuid_table;
+----
+2
+
+statement ok
+drop table uuid_table
+
+statement ok
+drop table t
+
+
+# test for contains
+
+query B
+select contains('alphabet', 'pha');
+----
+true
+
+query B
+select contains('alphabet', 'dddd');
+----
+false
+
+query B
+select contains('', '');
+----
+true

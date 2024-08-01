@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::env;
+use std::sync::Arc;
+
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::{FileType, GetExt};
 
 use object_store::aws::AmazonS3Builder;
-use std::env;
-use std::sync::Arc;
 use url::Url;
 
 /// This example demonstrates querying data from AmazonS3 and writing
@@ -48,13 +49,12 @@ async fn main() -> Result<()> {
     let path = format!("s3://{bucket_name}");
     let s3_url = Url::parse(&path).unwrap();
     let arc_s3 = Arc::new(s3);
-    ctx.runtime_env()
-        .register_object_store(&s3_url, arc_s3.clone());
+    ctx.register_object_store(&s3_url, arc_s3.clone());
 
     let path = format!("s3://{bucket_name}/test_data/");
-    let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
+    let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions::new(Arc::new(file_format))
-        .with_file_extension(FileType::PARQUET.get_ext());
+        .with_file_extension(ParquetFormat::default().get_ext());
     ctx.register_listing_table("test", &path, listing_options, None, None)
         .await?;
 
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
     //write as JSON to s3
     let json_out = format!("s3://{bucket_name}/json_out");
     df.clone()
-        .write_json(&json_out, DataFrameWriteOptions::new())
+        .write_json(&json_out, DataFrameWriteOptions::new(), None)
         .await?;
 
     //write as csv to s3
@@ -77,9 +77,9 @@ async fn main() -> Result<()> {
     df.write_csv(&csv_out, DataFrameWriteOptions::new(), None)
         .await?;
 
-    let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
+    let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions::new(Arc::new(file_format))
-        .with_file_extension(FileType::PARQUET.get_ext());
+        .with_file_extension(ParquetFormat::default().get_ext());
     ctx.register_listing_table("test2", &out_path, listing_options, None, None)
         .await?;
 

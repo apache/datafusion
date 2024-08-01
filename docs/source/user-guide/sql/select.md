@@ -22,7 +22,7 @@
 The queries in DataFusion scan data from tables and return 0 or more rows.
 Please be aware that column names in queries are made lower-case, but not on the inferred schema. Accordingly, if you
 want to query against a capitalized field, make sure to use double quotes. Please see this
-[example](https://arrow.apache.org/datafusion/user-guide/example-usage.html) for clarification.
+[example](https://datafusion.apache.org/user-guide/example-usage.html) for clarification.
 In this documentation we describe the SQL syntax in DataFusion.
 
 DataFusion supports the following syntax for queries:

@@ -70,7 +70,7 @@ pub struct Metric {
     /// The value of the metric
     value: MetricValue,
 
-    /// arbitrary name=value pairs identifiying this metric
+    /// arbitrary name=value pairs identifying this metric
     labels: Vec<Label>,
 
     /// To which partition of an operators output did this metric
@@ -209,6 +209,13 @@ impl MetricsSet {
             .map(|v| v.as_usize())
     }
 
+    /// Convenience: return the total rows of spills, aggregated
+    /// across partitions or `None` if no metric is present
+    pub fn spilled_rows(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::SpilledRows(_)))
+            .map(|v| v.as_usize())
+    }
+
     /// Convenience: return the amount of elapsed CPU time spent,
     /// aggregated across partitions or `None` if no metric is present
     pub fn elapsed_compute(&self) -> Option<usize> {
@@ -251,6 +258,7 @@ impl MetricsSet {
             MetricValue::ElapsedCompute(_) => false,
             MetricValue::SpillCount(_) => false,
             MetricValue::SpilledBytes(_) => false,
+            MetricValue::SpilledRows(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
             MetricValue::Gauge { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,

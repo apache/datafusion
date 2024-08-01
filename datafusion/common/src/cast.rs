@@ -24,17 +24,18 @@ use crate::{downcast_value, DataFusionError, Result};
 use arrow::{
     array::{
         Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array,
-        Float64Array, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-        IntervalYearMonthArray, LargeListArray, ListArray, MapArray, NullArray,
-        OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray, UInt32Array, UInt64Array, UInt8Array, UnionArray,
+        Decimal256Array, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
+        Float32Array, Float64Array, GenericBinaryArray, GenericListArray,
+        GenericStringArray, Int32Array, Int64Array, IntervalDayTimeArray,
+        IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListArray, ListArray,
+        MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray, UInt32Array, UInt64Array,
+        UInt8Array, UnionArray,
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
-use arrow_array::Decimal256Array;
 
 // Downcast ArrayRef to Date32Array
 pub fn as_date32_array(array: &dyn Array) -> Result<&Date32Array> {
@@ -152,6 +153,26 @@ pub fn as_null_array(array: &dyn Array) -> Result<&NullArray> {
 // Downcast ArrayRef to NullArray
 pub fn as_union_array(array: &dyn Array) -> Result<&UnionArray> {
     Ok(downcast_value!(array, UnionArray))
+}
+
+// Downcast ArrayRef to Time32SecondArray
+pub fn as_time32_second_array(array: &dyn Array) -> Result<&Time32SecondArray> {
+    Ok(downcast_value!(array, Time32SecondArray))
+}
+
+// Downcast ArrayRef to Time32MillisecondArray
+pub fn as_time32_millisecond_array(array: &dyn Array) -> Result<&Time32MillisecondArray> {
+    Ok(downcast_value!(array, Time32MillisecondArray))
+}
+
+// Downcast ArrayRef to Time64MicrosecondArray
+pub fn as_time64_microsecond_array(array: &dyn Array) -> Result<&Time64MicrosecondArray> {
+    Ok(downcast_value!(array, Time64MicrosecondArray))
+}
+
+// Downcast ArrayRef to Time64NanosecondArray
+pub fn as_time64_nanosecond_array(array: &dyn Array) -> Result<&Time64NanosecondArray> {
+    Ok(downcast_value!(array, Time64NanosecondArray))
 }
 
 // Downcast ArrayRef to TimestampNanosecondArray

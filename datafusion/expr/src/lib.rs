@@ -14,8 +14,10 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
-//! [DataFusion](https://github.com/apache/arrow-datafusion)
+//! [DataFusion](https://github.com/apache/datafusion)
 //! is an extensible query execution framework that uses
 //! [Apache Arrow](https://arrow.apache.org) as its in-memory format.
 //!
@@ -26,7 +28,6 @@
 //! The [expr_fn] module contains functions for creating expressions.
 
 mod accumulator;
-mod built_in_function;
 mod built_in_window_function;
 mod columnar_value;
 mod literal;
@@ -40,29 +41,35 @@ mod udwf;
 
 pub mod aggregate_function;
 pub mod conditional_expressions;
+pub mod execution_props;
 pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
-pub mod field_util;
 pub mod function;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod logical_plan;
+pub mod planner;
+pub mod registry;
+pub mod simplify;
+pub mod sort_properties;
+pub mod test;
 pub mod tree_node;
 pub mod type_coercion;
 pub mod utils;
+pub mod var_provider;
 pub mod window_frame;
+pub mod window_function;
 pub mod window_state;
 
 pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;
-pub use built_in_function::BuiltinScalarFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
 pub use columnar_value::ColumnarValue;
 pub use expr::{
-    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
-    Like, ScalarFunctionDefinition, TryCast, WindowFunctionDefinition,
+    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GroupingSet, Like,
+    Sort as SortExpr, TryCast, WindowFunctionDefinition,
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
@@ -76,10 +83,11 @@ pub use logical_plan::*;
 pub use operator::Operator;
 pub use partition_evaluator::PartitionEvaluator;
 pub use signature::{
-    FuncMonotonicity, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
+    ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
 };
+pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use udaf::{AggregateUDF, AggregateUDFImpl};
+pub use udaf::{AggregateUDF, AggregateUDFImpl, ReversedUDAF};
 pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::{WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

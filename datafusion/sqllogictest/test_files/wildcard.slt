@@ -40,8 +40,8 @@ CREATE EXTERNAL TABLE aggregate_simple (
   c3  BOOLEAN NOT NULL,
 )
 STORED AS CSV
-WITH HEADER ROW
 LOCATION '../core/tests/data/aggregate_simple.csv'
+OPTIONS ('format.has_header' 'true');
 
 
 ##########

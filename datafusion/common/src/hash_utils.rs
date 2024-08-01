@@ -17,29 +17,36 @@
 
 //! Functionality used both on logical and physical plans
 
+#[cfg(not(feature = "force_hash_collisions"))]
 use std::sync::Arc;
 
 use ahash::RandomState;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::row::Rows;
+#[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use arrow_buffer::i256;
+use arrow_buffer::IntervalDayTime;
+use arrow_buffer::IntervalMonthDayNano;
 
+#[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
     as_boolean_array, as_fixed_size_list_array, as_generic_binary_array,
-    as_large_list_array, as_list_array, as_primitive_array, as_string_array,
-    as_struct_array,
+    as_large_list_array, as_list_array, as_map_array, as_primitive_array,
+    as_string_array, as_struct_array,
 };
-use crate::error::{Result, _internal_err};
+use crate::error::Result;
+#[cfg(not(feature = "force_hash_collisions"))]
+use crate::error::_internal_err;
 
 // Combines two hashes into one hash
 #[inline]
-fn combine_hashes(l: u64, r: u64) -> u64 {
+pub fn combine_hashes(l: u64, r: u64) -> u64 {
     let hash = (17 * 37u64).wrapping_add(l);
     hash.wrapping_mul(37).wrapping_add(r)
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: bool) {
     if mul_col {
         hashes_buffer.iter_mut().for_each(|hash| {
@@ -73,7 +80,7 @@ macro_rules! hash_value {
     };
 }
 hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64);
-hash_value!(bool, str, [u8]);
+hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! hash_float_value {
     ($(($t:ty, $i:ty)),+) => {
@@ -89,6 +96,7 @@ hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
 /// Builds hash values of PrimitiveArray and writes them into `hashes_buffer`
 /// If `rehash==true` this combines the previous hash value in the buffer
 /// with the new hash using `combine_hashes`
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
     random_state: &RandomState,
@@ -134,6 +142,7 @@ fn hash_array_primitive<T>(
 /// Hashes one array into the `hashes_buffer`
 /// If `rehash==true` this combines the previous hash value in the buffer
 /// with the new hash using `combine_hashes`
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array<T>(
     array: T,
     random_state: &RandomState,
@@ -179,6 +188,7 @@ fn hash_array<T>(
 }
 
 /// Hash the values in a dictionary array
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_dictionary<K: ArrowDictionaryKeyType>(
     array: &DictionaryArray<K>,
     random_state: &RandomState,
@@ -209,6 +219,7 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     Ok(())
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_struct_array(
     array: &StructArray,
     random_state: &RandomState,
@@ -235,6 +246,41 @@ fn hash_struct_array(
     Ok(())
 }
 
+fn hash_map_array(
+    array: &MapArray,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()> {
+    let nulls = array.nulls();
+    let offsets = array.offsets();
+
+    // Create hashes for each entry in each row
+    let mut values_hashes = vec![0u64; array.entries().len()];
+    create_hashes(array.entries().columns(), random_state, &mut values_hashes)?;
+
+    // Combine the hashes for entries on each row with each other and previous hash for that row
+    if let Some(nulls) = nulls {
+        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+            if nulls.is_valid(i) {
+                let hash = &mut hashes_buffer[i];
+                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                    *hash = combine_hashes(*hash, *values_hash);
+                }
+            }
+        }
+    } else {
+        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+            let hash = &mut hashes_buffer[i];
+            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                *hash = combine_hashes(*hash, *values_hash);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_list_array<OffsetSize>(
     array: &GenericListArray<OffsetSize>,
     random_state: &RandomState,
@@ -243,7 +289,7 @@ fn hash_list_array<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
-    let values = array.values().clone();
+    let values = Arc::clone(array.values());
     let offsets = array.value_offsets();
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
@@ -268,12 +314,13 @@ where
     Ok(())
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_fixed_list_array(
     array: &FixedSizeListArray,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
-    let values = array.values().clone();
+    let values = Arc::clone(array.values());
     let value_len = array.value_length();
     let offset_size = value_len as usize / array.len();
     let nulls = array.nulls();
@@ -399,6 +446,10 @@ pub fn create_hashes<'a>(
                 let array = as_large_list_array(array)?;
                 hash_list_array(array, random_state, hashes_buffer)?;
             }
+            DataType::Map(_, _) => {
+                let array = as_map_array(array)?;
+                hash_map_array(array, random_state, hashes_buffer)?;
+            }
             DataType::FixedSizeList(_,_) => {
                 let array = as_fixed_size_list_array(array)?;
                 hash_fixed_list_array(array, random_state, hashes_buffer)?;
@@ -449,8 +500,11 @@ pub fn create_row_hashes_v2<'a>(
 
 #[cfg(test)]
 mod tests {
-    use arrow::{array::*, datatypes::*};
     use std::sync::Arc;
+
+    use arrow::array::*;
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::datatypes::*;
 
     use super::*;
 
@@ -572,6 +626,7 @@ mod tests {
             Some(vec![Some(3), None, Some(5)]),
             None,
             Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![]),
         ];
         let list_array =
             Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
@@ -581,6 +636,7 @@ mod tests {
         assert_eq!(hashes[0], hashes[5]);
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
     }
 
     #[test]
@@ -622,19 +678,19 @@ mod tests {
             vec![
                 (
                     Arc::new(Field::new("bool", DataType::Boolean, false)),
-                    boolarr.clone() as ArrayRef,
+                    Arc::clone(&boolarr) as ArrayRef,
                 ),
                 (
                     Arc::new(Field::new("i32", DataType::Int32, false)),
-                    i32arr.clone() as ArrayRef,
+                    Arc::clone(&i32arr) as ArrayRef,
                 ),
                 (
                     Arc::new(Field::new("i32", DataType::Int32, false)),
-                    i32arr.clone() as ArrayRef,
+                    Arc::clone(&i32arr) as ArrayRef,
                 ),
                 (
                     Arc::new(Field::new("bool", DataType::Boolean, false)),
-                    boolarr.clone() as ArrayRef,
+                    Arc::clone(&boolarr) as ArrayRef,
                 ),
             ],
             Buffer::from(&[0b001011]),
@@ -695,6 +751,64 @@ mod tests {
     #[test]
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_map_arrays() {
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        // Row 0
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key2");
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+        // Row 1
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key2");
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+        // Row 2
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key2");
+        builder.values().append_value(1);
+        builder.values().append_value(3);
+        builder.append(true).unwrap();
+        // Row 3
+        builder.keys().append_value("key1");
+        builder.keys().append_value("key3");
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+        // Row 4
+        builder.keys().append_value("key1");
+        builder.values().append_value(1);
+        builder.append(true).unwrap();
+        // Row 5
+        builder.keys().append_value("key1");
+        builder.values().append_null();
+        builder.append(true).unwrap();
+        // Row 6
+        builder.append(true).unwrap();
+        // Row 7
+        builder.keys().append_value("key1");
+        builder.values().append_value(1);
+        builder.append(false).unwrap();
+
+        let array = Arc::new(builder.finish()) as ArrayRef;
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; array.len()];
+        create_hashes(&[array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1]); // same value
+        assert_ne!(hashes[0], hashes[2]); // different value
+        assert_ne!(hashes[0], hashes[3]); // different key
+        assert_ne!(hashes[0], hashes[4]); // missing an entry
+        assert_ne!(hashes[4], hashes[5]); // filled vs null value
+        assert_eq!(hashes[6], hashes[7]); // empty vs null map
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn create_multi_column_hash_for_dict_arrays() {
         let strings1 = [Some("foo"), None, Some("bar")];
         let strings2 = [Some("blarg"), Some("blah"), None];
@@ -710,7 +824,12 @@ mod tests {
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
         let mut one_col_hashes = vec![0; strings1.len()];
-        create_hashes(&[dict_array.clone()], &random_state, &mut one_col_hashes).unwrap();
+        create_hashes(
+            &[Arc::clone(&dict_array) as ArrayRef],
+            &random_state,
+            &mut one_col_hashes,
+        )
+        .unwrap();
 
         let mut two_col_hashes = vec![0; strings1.len()];
         create_hashes(

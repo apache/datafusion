@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encoding expressions
-
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
@@ -29,7 +27,7 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct NullIfFunc {
+pub struct NullIfFunc {
     signature: Signature,
 }
 
@@ -51,6 +49,12 @@ static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
     DataType::Utf8,
     DataType::LargeUtf8,
 ];
+
+impl Default for NullIfFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl NullIfFunc {
     pub fn new() -> Self {
@@ -140,7 +144,6 @@ mod tests {
     use arrow::array::*;
 
     use super::*;
-    use datafusion_common::{Result, ScalarValue};
 
     #[test]
     fn nullif_int32() -> Result<()> {
