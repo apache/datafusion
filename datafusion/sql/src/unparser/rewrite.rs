@@ -252,13 +252,10 @@ pub(super) fn subquery_alias_inner_query_and_columns(
 
 fn find_projection(logical_plan: &LogicalPlan) -> Option<&Projection> {
     match logical_plan {
-        LogicalPlan::Projection(p) => {
-            return Some(p);
-        }
+        LogicalPlan::Projection(p) => Some(p),
         LogicalPlan::Limit(p) => find_projection(p.input.as_ref()),
         LogicalPlan::Distinct(p) => find_projection(p.input().as_ref()),
         LogicalPlan::Sort(p) => find_projection(p.input.as_ref()),
-
         _ => None,
     }
 }
