@@ -279,7 +279,7 @@ impl BatchPartitioner {
                                 .append_value(index as u64);
                         }
                     } else {
-                        // Some queries do reparition first
+                        // Some queries do repartition first
                         let arrays = exprs
                             .iter()
                             .map(|expr| {

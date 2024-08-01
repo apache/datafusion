@@ -160,7 +160,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
 
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
-                // TODO: reuse hash value
+
                 self.intern(
                     &[remaining_group_values],
                     &mut group_indexes,
