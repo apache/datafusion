@@ -57,6 +57,8 @@ use datafusion_common::{
     TableReference, ToDFSchema, UnnestOptions,
 };
 
+use super::plan::{ColumnUnnestList, ColumnUnnestType};
+
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
@@ -1599,7 +1601,7 @@ pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
     let default_map = HashMap::from_iter(columns.iter().map(|c| {
         (
             *c,
-            vec![UnnestType::List(UnnestList {
+            vec![UnnestType::List(ColumnUnnestList {
                 output_column: c.clone(),
                 depth: 1,
             })],
@@ -1679,15 +1681,9 @@ pub fn get_unnested_columns(
     Ok(qualified_columns)
 }
 
-pub enum UnnestType {
-    List(UnnestList),
-    Struct,
-}
-
-pub struct UnnestList {
-    output_column: Column,
-    depth: usize,
-}
+// a list type column can be performed differently at the same time
+// e.g select unnest(col), unnest(unnest(col))
+// while unnest struct can only be performed once at a time
 
 /// Create a [`LogicalPlan::Unnest`] plan with options
 /// This function receive a map of columns to be unnested
@@ -1699,11 +1695,11 @@ pub struct UnnestList {
 /// will generate a new schema as col1: int| unnest_col2_depth1: []int| unnest_col2_depth2: int
 pub fn unnest_with_options(
     input: LogicalPlan,
-    columns: HashMap<Column, Vec<UnnestType>>,
+    columns: HashMap<Column, ColumnUnnestType>,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
-    let mut list_columns = Vec::with_capacity(columns.len());
-    let mut struct_columns = Vec::with_capacity(columns.len());
+    let mut list_columns = HashMap::default();
+    let mut struct_columns = HashSet::default();
     let column_by_original_index = columns
         .iter()
         .map(|(inner_col, outer_cols)| {
@@ -1725,39 +1721,38 @@ pub fn unnest_with_options(
                 Some(&column_to_unnest) => {
                     let unnests_on_column = columns.get(&column_to_unnest).unwrap();
                     let transformed_columns: Vec<(Column, Arc<Field>)> =
-                        unnests_on_column
-                            .iter()
-                            .map(|unnest_type| match unnest_type {
-                                UnnestType::Struct => get_unnested_columns(
+                        match unnests_on_column {
+                            ColumnUnnestType::Struct => {
+                                struct_columns.insert(index);
+                                get_unnested_columns(
                                     &column_to_unnest.name,
                                     original_field.data_type(),
                                     1,
-                                ),
-                                UnnestType::List(UnnestList {
-                                    output_column,
-                                    depth,
-                                }) => get_unnested_columns(
-                                    &output_column.name,
-                                    original_field.data_type(),
-                                    *depth,
-                                ),
-                            })
-                            .collect::<Result<Vec<_>>>()?
-                            .into_iter()
-                            .flatten()
-                            .collect();
-
-                    // match original_field.data_type() {
-                    //     DataType::List(_)
-                    //     | DataType::FixedSizeList(_, _)
-                    //     | DataType::LargeList(_) => list_columns.push(index),
-                    //     DataType::Struct(_) => struct_columns.push(index),
-                    //     _ => {
-                    //         panic!(
-                    //             "not reachable, should be caught by get_unnested_columns"
-                    //         )
-                    //     }
-                    // }
+                                )?
+                            }
+                            ColumnUnnestType::List(unnest_lists) => {
+                                list_columns.insert(index, unnest_lists.clone());
+                                unnest_lists
+                                    .iter()
+                                    .map(
+                                        |ColumnUnnestList {
+                                             output_column,
+                                             depth,
+                                         }| {
+                                            get_unnested_columns(
+                                                &output_column.name,
+                                                original_field.data_type(),
+                                                *depth,
+                                            )
+                                        },
+                                    )
+                                    // TODO: i'm messy
+                                    .collect::<Result<Vec<Vec<(Column, Arc<Field>)>>>>()?
+                                    .into_iter()
+                                    .flatten()
+                                    .collect::<Vec<_>>()
+                            }
+                        };
                     // new columns dependent on the same original index
                     dependency_indices
                         .extend(std::iter::repeat(index).take(transformed_columns.len()));

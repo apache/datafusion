@@ -42,6 +42,7 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
 };
 use datafusion_execution::TaskContext;
+use datafusion_expr::builder::UnnestList;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -63,10 +64,8 @@ pub struct UnnestExec {
     input: Arc<dyn ExecutionPlan>,
     /// The schema once the unnest is applied
     schema: SchemaRef,
-    /// which original columns are transformed into which columns
-    transformed_col: HashMap<Column, Vec<Column>>,
     /// indices of the list-typed columns in the input schema
-    list_column_indices: Vec<usize>,
+    list_column_indices: Vec<UnnestList>,
     /// indices of the struct-typed columns in the input schema
     struct_column_indices: Vec<usize>,
     /// Options
@@ -83,7 +82,6 @@ impl UnnestExec {
         input: Arc<dyn ExecutionPlan>,
         list_column_indices: Vec<usize>,
         struct_column_indices: Vec<usize>,
-        transformed_col: HashMap<Column, Vec<Column>>,
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
@@ -92,7 +90,6 @@ impl UnnestExec {
         UnnestExec {
             input,
             schema,
-            transformed_col,
             list_column_indices,
             struct_column_indices,
             options,
@@ -175,7 +172,6 @@ impl ExecutionPlan for UnnestExec {
 
         Ok(Box::pin(UnnestStream {
             input,
-            transformed_col: self.transformed_col,
             schema: Arc::clone(&self.schema),
             list_type_columns: self.list_column_indices.clone(),
             struct_column_indices: self.struct_column_indices.iter().copied().collect(),
@@ -233,12 +229,10 @@ struct UnnestStream {
     input: SendableRecordBatchStream,
     /// Unnested schema
     schema: Arc<Schema>,
-    /// Which original columns are transformed into which columns
-    transformed_col: HashMap<Column, Vec<Column>>,
     /// represents all unnest operations to be applied to the input (input index, depth)
     /// e.g unnest(col1),unnest(unnest(col1)) where col1 has index 1 in original input schema
     /// then list_type_columns = [(1,1),(1,2)]
-    list_type_columns: Vec<(usize, usize)>,
+    list_type_columns: Vec<ListUnnest>,
     struct_column_indices: HashSet<usize>,
     /// Options
     options: UnnestOptions,
@@ -350,7 +344,7 @@ fn flatten_struct_cols(
     Ok(RecordBatch::try_new(Arc::clone(schema), columns_expanded)?)
 }
 
-struct ListUnnest {
+pub struct ListUnnest {
     index_in_input_schema: usize,
     depth: usize,
 }

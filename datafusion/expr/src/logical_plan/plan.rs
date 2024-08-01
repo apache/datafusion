@@ -22,6 +22,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use super::builder::UnnestList;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
@@ -2877,6 +2878,16 @@ pub enum Partitioning {
     DistributeBy(Vec<Expr>),
 }
 
+pub enum ColumnUnnestType {
+    List(Vec<ColumnUnnestList>),
+    Struct,
+}
+
+pub struct ColumnUnnestList {
+    pub output_column: Column,
+    pub depth: usize,
+}
+
 /// Unnest a column that contains a nested list type. See
 /// [`UnnestOptions`] for more details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2884,13 +2895,13 @@ pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// Columns to run unnest on, can be a list of (List/Struct) columns
-    pub exec_columns: Vec<Column>,
+    pub exec_columns: HashMap<Column, ColumnUnnestType>,
     /// refer to the indices(in the input schema) of columns
     /// that have type list to run unnest on
-    pub list_type_columns: Vec<(usize, usize)>,
+    pub list_type_columns: HashSet<usize, Vec<ColumnUnnestList>>,
     /// refer to the indices (in the input schema) of columns
     /// that have type struct to run unnest on
-    pub struct_type_columns: Vec<usize>,
+    pub struct_type_columns: HashSet<usize>,
     /// Having items aligned with the output columns
     /// representing which column in the input schema each output column depends on
     pub dependency_indices: Vec<usize>,
