@@ -72,32 +72,30 @@ impl OptimizerRule for EliminateAggregate {
                     }
                 }
                 return Ok(None)
-
             },
-            LogicalPlan::Distinct(Distinct::On(plan)) => {
-                Ok(None)
+            LogicalPlan::Distinct(Distinct::On(distinct)) => {
+                let fields = distinct.schema.fields();
+                let all_fields = (0..fields.len()).collect::<Vec<_>>();
+                let func_deps = distinct.schema.functional_dependencies().clone();
+
+                for func_dep in func_deps.iter() {
+                    if func_dep.source_indices == all_fields {
+                        return Ok(Some(distinct.input.as_ref().clone()))
+                    }
+                }
+                return Ok(None)
             },
             LogicalPlan::Aggregate(Aggregate {
-               input,
                 ..
             }) => {
-                println!("Aggregate! -- Plan");
-                println!("{}", plan.display_indent_schema());
-                println!("Aggregate! -- Input");
-                println!("{}", input.display_indent_schema());
-                // self.clone().group_bys.push(plan.clone());
                 Ok(None)
             },
             LogicalPlan::Join(Join {
                ..
             }) => {
-                println!("Join!");
-                println!("{}", plan.display_indent_schema());
                 Ok(None)
             }
             _ => {
-                println!("Plan!");
-                println!("{}", plan.display_indent_schema());
                 Ok(None)
             },
         }
@@ -124,7 +122,7 @@ mod tests {
     use crate::test::*;
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq(Arc::new(EliminateAggregate::new()), plan, expected)
+        assert_optimized_plan_eq(Arc::new(EliminateAggregate::new()), plan.clone(), expected)
     }
 
     #[test]
