@@ -25,7 +25,7 @@ use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_schema::{DataType, Field, SchemaBuilder};
 
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::{exec_err, internal_err, ExprSchema, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
@@ -60,17 +60,16 @@ fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarV
         );
     }
 
-    match args[0] {
-        ColumnarValue::Scalar(_) => {
-            let can_evaluate_to_const = can_evaluate_to_const(args);
-            let key = get_first_array_ref(&args[0])?;
-            let value = get_first_array_ref(&args[1])?;
-            make_map_batch_internal(key, value, can_evaluate_to_const)
-        }
-        ColumnarValue::Array(_) => {
-            let key = get_first_array_ref(&args[0])?;
-            let value = get_first_array_ref(&args[1])?;
-            make_map_array_internal::<i32>(key, value)
+    let data_type = args[0].data_type();
+    let can_evaluate_to_const = can_evaluate_to_const(args);
+    let key = get_first_array_ref(&args[0])?;
+    let value = get_first_array_ref(&args[1])?;
+    if can_evaluate_to_const {
+        make_map_batch_internal(key, value, can_evaluate_to_const)
+    } else {
+        match data_type {
+            DataType::LargeList(..) => make_map_array_internal::<i64>(key, value),
+            _ => make_map_array_internal::<i32>(key, value),
         }
     }
 }
@@ -85,12 +84,7 @@ fn get_first_array_ref(
             ScalarValue::FixedSizeList(array) => Ok(array.value(0)),
             _ => exec_err!("Expected array, got {:?}", value),
         },
-        ColumnarValue::Array(array) => {
-            // return ListArray
-            // First element in array has all keys in first row,
-            // Same for values
-            Ok(array.to_owned())
-        }
+        ColumnarValue::Array(array) => Ok(array.to_owned()),
     }
 }
 
@@ -152,27 +146,28 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
 ) -> datafusion_common::Result<ColumnarValue> {
     let mut offset_buffer = vec![O::usize_as(0)];
     let mut running_offset = O::usize_as(0);
-    // FIXME: Can we use ColumnarValue::values_to_arrays() over here
+
     let keys = keys
         .as_list::<O>()
         .iter()
         .flatten()
         .map(|x| match x.data_type() {
+            // To handle [[1,2,3]]
             DataType::List(_) => x.as_list::<i32>().value(0),
+            DataType::LargeList(_) => x.as_list::<i64>().value(0),
             _ => x,
         })
         .collect::<Vec<_>>();
-    // each item is an array
     let values = values
         .as_list::<O>()
         .iter()
         .flatten()
         .map(|x| match x.data_type() {
             DataType::List(_) => x.as_list::<i32>().value(0),
+            DataType::LargeList(_) => x.as_list::<i64>().value(0),
             _ => x,
         })
         .collect::<Vec<_>>();
-    assert_eq!(keys.len(), values.len());
 
     let mut key_array_vec = vec![];
     let mut value_array_vec = vec![];
@@ -183,7 +178,7 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
         value_array_vec.push(v.as_ref());
     }
 
-    // concatenate all the arrays in t
+    // concatenate all the arrays
     let flattened_keys = arrow::compute::concat(key_array_vec.as_ref()).unwrap();
     let flattened_values = arrow::compute::concat(value_array_vec.as_ref()).unwrap();
 
@@ -195,15 +190,15 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
             true,
         )),
     ];
+
     let struct_data = ArrayData::builder(DataType::Struct(fields.into()))
         .len(flattened_keys.len())
         .add_child_data(flattened_keys.to_data())
         .add_child_data(flattened_values.to_data())
         .build()
         .unwrap();
-    // Data should be struct array
-    // offer should be partition of the struct array
-    let data = ArrayData::builder(DataType::Map(
+
+    let map_data = ArrayData::builder(DataType::Map(
         Arc::new(Field::new(
             "entries",
             struct_data.data_type().clone(),
@@ -216,7 +211,7 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()))
     .build()
     .unwrap();
-    Ok(ColumnarValue::Array(Arc::new(MapArray::from(data))))
+    Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
 }
 
 #[derive(Debug)]
@@ -251,7 +246,19 @@ impl ScalarUDFImpl for MapFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(
+        &self,
+        _arg_types: &[DataType],
+    ) -> datafusion_common::Result<DataType> {
+        internal_err!("map: return_type called instead of return_type_from_exprs")
+    }
+
+    fn return_type_from_exprs(
+        &self,
+        _args: &[Expr],
+        _schema: &dyn ExprSchema,
+        arg_types: &[DataType],
+    ) -> datafusion_common::Result<DataType> {
         if arg_types.len() % 2 != 0 {
             return exec_err!(
                 "map requires an even number of arguments, got {} instead",
@@ -261,12 +268,12 @@ impl ScalarUDFImpl for MapFunc {
         let mut builder = SchemaBuilder::new();
         builder.push(Field::new(
             "key",
-            get_element_type(&arg_types[0], 0)?.clone(),
+            get_element_type(&arg_types[0])?.clone(),
             false,
         ));
         builder.push(Field::new(
             "value",
-            get_element_type(&arg_types[1], 0)?.clone(),
+            get_element_type(&arg_types[1])?.clone(),
             true,
         ));
         let fields = builder.finish().fields;
@@ -280,28 +287,14 @@ impl ScalarUDFImpl for MapFunc {
         make_map_batch(args)
     }
 }
-
-fn get_element_type(
-    data_type: &DataType,
-    level: u8,
-) -> datafusion_common::Result<&DataType> {
+fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType> {
     match data_type {
-        DataType::List(element) => Ok(get_element_type(element.data_type(), level + 1)?),
-        DataType::LargeList(element) => {
-            Ok(get_element_type(element.data_type(), level + 1)?)
-        }
-        DataType::FixedSizeList(element, _) => {
-            Ok(get_element_type(element.data_type(), level + 1)?)
-        }
-        t => {
-            if level <= 2 {
-                Ok(t)
-            } else {
-                exec_err!(
-                    "Expected list, large_list or fixed_size_list, got {:?}",
-                    data_type
-                )
-            }
-        }
+        DataType::List(element) => Ok(element.data_type()),
+        DataType::LargeList(element) => Ok(element.data_type()),
+        DataType::FixedSizeList(element, _) => Ok(element.data_type()),
+        _ => exec_err!(
+            "Expected list, large_list or fixed_size_list, got {:?}",
+            data_type
+        ),
     }
 }

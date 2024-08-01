@@ -213,7 +213,7 @@ SELECT make_map(column1, column2, column3, column4) FROM t;
 query ?
 SELECT map(column5, column6) FROM t;
 ----
-{k1:1, k2:2}
+{k1: 1, k2: 2}
 {k3: 3}
 {k5: 5}
 
