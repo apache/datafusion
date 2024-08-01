@@ -93,7 +93,8 @@ const BUFFER_FLUSH_BYTES: usize = 1024000;
 #[derive(Default)]
 /// Factory struct used to create [ParquetFormat]
 pub struct ParquetFormatFactory {
-    options: Option<TableParquetOptions>,
+    /// inner options for parquet
+    pub options: Option<TableParquetOptions>,
 }
 
 impl ParquetFormatFactory {

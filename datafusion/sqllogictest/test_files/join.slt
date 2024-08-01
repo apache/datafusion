@@ -1109,3 +1109,25 @@ DROP TABLE t0;
 
 statement ok
 DROP TABLE t1;
+
+# Test SQLancer issue: https://github.com/apache/datafusion/issues/11704
+query II
+WITH
+    t1 AS (SELECT NULL::int AS a),
+    t2 AS (SELECT NULL::int AS a)
+SELECT * FROM
+  (SELECT * FROM t1 CROSS JOIN t2)
+WHERE t1.a == t2.a
+  AND t1.a + t2.a IS NULL;
+----
+
+# Similar to above test case, but without the equality predicate
+query II
+WITH
+    t1 AS (SELECT NULL::int AS a),
+    t2 AS (SELECT NULL::int AS a)
+SELECT * FROM
+  (SELECT * FROM t1 CROSS JOIN t2)
+WHERE t1.a + t2.a IS NULL;
+----
+NULL NULL
