@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn test_get_min_max_return_type_coerce_dictionary() -> Result<()> {
         let data_type =
-            DataType::Dictionary(Box::new(DataType::Utf8), Box::new((DataType::Int32)));
+            DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32));
         let result = get_min_max_result_type(&[data_type])?;
         assert_eq!(result, vec![DataType::Int32]);
         Ok(())

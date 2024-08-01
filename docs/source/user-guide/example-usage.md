@@ -60,6 +60,7 @@ library guide for more information on the SQL API.
 
 ```rust
 use datafusion::prelude::*;
+use datafusion::functions_aggregate::expr_fn::min;
 
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
@@ -148,6 +149,7 @@ async fn main() -> datafusion::error::Result<()> {
 
 ```rust
 use datafusion::prelude::*;
+use datafusion::functions_aggregate::expr_fn::min;
 
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {

@@ -146,6 +146,7 @@ impl Default for DataFrameWriteOptions {
 /// ```
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
+/// # use datafusion::functions_aggregate::expr_fn::min;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
@@ -409,6 +410,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion::functions_aggregate::expr_fn::min;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();

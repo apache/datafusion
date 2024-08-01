@@ -141,20 +141,6 @@ fn min_max_aggregate_data_type(input_type: &DataType) -> &DataType {
     }
 }
 
-fn min_max_signature() -> Signature {
-    let valid = STRINGS
-        .iter()
-        .chain(NUMERICS.iter())
-        .chain(TIMESTAMPS.iter())
-        .chain(DATES.iter())
-        .chain(TIMES.iter())
-        .chain(BINARYS.iter())
-        .chain(TIMES_INTERVALS.iter())
-        .cloned()
-        .collect::<Vec<_>>();
-    Signature::uniform(1, valid, Volatility::Immutable)
-}
-
 // MAX aggregate UDF
 #[derive(Debug)]
 pub struct Max {
@@ -166,7 +152,7 @@ impl Max {
     pub fn new() -> Self {
         Self {
             aliases: vec!["max".to_owned()],
-            signature: min_max_signature(),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -943,7 +929,7 @@ pub struct Min {
 impl Min {
     pub fn new() -> Self {
         Self {
-            signature: min_max_signature(),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec!["min".to_owned()],
         }
     }
@@ -1225,7 +1211,7 @@ impl Accumulator for SlidingMinAccumulator {
 // - amortized O(1) for pop
 
 /// ```
-/// # use datafusion_physical_expr::aggregate::moving_min_max::MovingMin;
+/// # use datafusion_functions_aggregate::min_max::MovingMin;
 /// let mut moving_min = MovingMin::<i32>::new();
 /// moving_min.push(2);
 /// moving_min.push(1);
@@ -1340,7 +1326,7 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
     }
 }
 /// ```
-/// # use datafusion_physical_expr::aggregate::moving_min_max::MovingMax;
+/// # use datafusion_functions_aggregate::min_max::MovingMax;
 /// let mut moving_max = MovingMax::<i32>::new();
 /// moving_max.push(2);
 /// moving_max.push(3);
@@ -1494,7 +1480,109 @@ pub fn min_distinct(expr: Expr) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::{
+        IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
+    };
     use std::sync::Arc;
+
+    #[test]
+    fn interval_min_max() {
+        // IntervalYearMonth
+        let b = IntervalYearMonthArray::from(vec![
+            IntervalYearMonthType::make_value(0, 1),
+            IntervalYearMonthType::make_value(5, 34),
+            IntervalYearMonthType::make_value(-2, 4),
+            IntervalYearMonthType::make_value(7, -4),
+            IntervalYearMonthType::make_value(0, 1),
+        ]);
+        let b: ArrayRef = Arc::new(b);
+
+        let mut min =
+            MinAccumulator::try_new(&DataType::Interval(IntervalUnit::YearMonth))
+                .unwrap();
+        min.update_batch(&[Arc::clone(&b)]).unwrap();
+        let min_res = min.evaluate().unwrap();
+        assert_eq!(
+            min_res,
+            ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                -2, 4
+            )))
+        );
+
+        let mut max =
+            MaxAccumulator::try_new(&DataType::Interval(IntervalUnit::YearMonth))
+                .unwrap();
+        max.update_batch(&[Arc::clone(&b)]).unwrap();
+        let max_res = max.evaluate().unwrap();
+        assert_eq!(
+            max_res,
+            ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                5, 34
+            )))
+        );
+
+        // IntervalDayTime
+        let b = IntervalDayTimeArray::from(vec![
+            IntervalDayTimeType::make_value(0, 0),
+            IntervalDayTimeType::make_value(5, 454000),
+            IntervalDayTimeType::make_value(-34, 0),
+            IntervalDayTimeType::make_value(7, -4000),
+            IntervalDayTimeType::make_value(1, 0),
+        ]);
+        let b: ArrayRef = Arc::new(b);
+
+        let mut min =
+            MinAccumulator::try_new(&DataType::Interval(IntervalUnit::DayTime)).unwrap();
+        min.update_batch(&[Arc::clone(&b)]).unwrap();
+        let min_res = min.evaluate().unwrap();
+        assert_eq!(
+            min_res,
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(-34, 0)))
+        );
+
+        let mut max =
+            MaxAccumulator::try_new(&DataType::Interval(IntervalUnit::DayTime)).unwrap();
+        max.update_batch(&[Arc::clone(&b)]).unwrap();
+        let max_res = max.evaluate().unwrap();
+        assert_eq!(
+            max_res,
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(7, -4000)))
+        );
+
+        // IntervalMonthDayNano
+        let b = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(1, 0, 0),
+            IntervalMonthDayNanoType::make_value(344, 34, -43_000_000_000),
+            IntervalMonthDayNanoType::make_value(-593, -33, 13_000_000_000),
+            IntervalMonthDayNanoType::make_value(5, 2, 493_000_000_000),
+            IntervalMonthDayNanoType::make_value(1, 0, 0),
+        ]);
+        let b: ArrayRef = Arc::new(b);
+
+        let mut min =
+            MinAccumulator::try_new(&DataType::Interval(IntervalUnit::MonthDayNano))
+                .unwrap();
+        min.update_batch(&[Arc::clone(&b)]).unwrap();
+        let min_res = min.evaluate().unwrap();
+        assert_eq!(
+            min_res,
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(-593, -33, 13_000_000_000)
+            ))
+        );
+
+        let mut max =
+            MaxAccumulator::try_new(&DataType::Interval(IntervalUnit::MonthDayNano))
+                .unwrap();
+        max.update_batch(&[Arc::clone(&b)]).unwrap();
+        let max_res = max.evaluate().unwrap();
+        assert_eq!(
+            max_res,
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(344, 34, -43_000_000_000)
+            ))
+        );
+    }
 
     #[test]
     fn float_min_max_with_nans() {
