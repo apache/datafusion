@@ -42,10 +42,10 @@ impl ArrowBytesViewSet {
 
     /// Inserts each value from `values` into the set
     pub fn insert(&mut self, values: &ArrayRef) {
-        fn make_payload_fn(_value: Option<&[u8]>) {}
+        fn make_payload_fn(_value: Option<&[u8]>, _hash: u64) {}
         fn observe_payload_fn(_payload: ()) {}
         self.0
-            .insert_if_new(values, make_payload_fn, observe_payload_fn);
+            .insert_if_new(&[], values, make_payload_fn, observe_payload_fn);
     }
 
     /// Return the contents of this map and replace it with a new empty map with
@@ -192,11 +192,12 @@ where
     /// with valid values from `values`, not for the `NULL` value.
     pub fn insert_if_new<MP, OP>(
         &mut self,
+        batch_hashes: &[u64],
         values: &ArrayRef,
         make_payload_fn: MP,
         observe_payload_fn: OP,
     ) where
-        MP: FnMut(Option<&[u8]>) -> V,
+        MP: FnMut(Option<&[u8]>, u64) -> V,
         OP: FnMut(V),
     {
         // Sanity check array type
@@ -204,6 +205,7 @@ where
             OutputType::BinaryView => {
                 assert!(matches!(values.data_type(), DataType::BinaryView));
                 self.insert_if_new_inner::<MP, OP, BinaryViewType>(
+                    batch_hashes,
                     values,
                     make_payload_fn,
                     observe_payload_fn,
@@ -212,6 +214,7 @@ where
             OutputType::Utf8View => {
                 assert!(matches!(values.data_type(), DataType::Utf8View));
                 self.insert_if_new_inner::<MP, OP, StringViewType>(
+                    batch_hashes,
                     values,
                     make_payload_fn,
                     observe_payload_fn,
@@ -231,22 +234,28 @@ where
     /// See comments on `insert_if_new` for more details
     fn insert_if_new_inner<MP, OP, B>(
         &mut self,
+        batch_hashes: &[u64],
         values: &ArrayRef,
         mut make_payload_fn: MP,
         mut observe_payload_fn: OP,
     ) where
-        MP: FnMut(Option<&[u8]>) -> V,
+        MP: FnMut(Option<&[u8]>, u64) -> V,
         OP: FnMut(V),
         B: ByteViewType,
     {
         // step 1: compute hashes
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(values.len(), 0);
-        create_hashes(&[values.clone()], &self.random_state, batch_hashes)
-            // hash is supported for all types and create_hashes only
-            // returns errors for unsupported types
-            .unwrap();
+        let batch_hashes = if batch_hashes.is_empty() {
+            let batch_hashes = &mut self.hashes_buffer;
+            batch_hashes.clear();
+            batch_hashes.resize(values.len(), 0);
+            create_hashes(&[values.clone()], &self.random_state, batch_hashes)
+                // hash is supported for all types and create_hashes only
+                // returns errors for unsupported types
+                .unwrap();
+            batch_hashes
+        } else {
+            batch_hashes
+        };
 
         // step 2: insert each value into the set, if not already present
         let values = values.as_byte_view::<B>();
@@ -260,7 +269,7 @@ where
                 let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
                     payload
                 } else {
-                    let payload = make_payload_fn(None);
+                    let payload = make_payload_fn(None, hash);
                     let null_index = self.builder.len();
                     self.builder.append_null();
                     self.null = Some((payload, null_index));
@@ -287,7 +296,7 @@ where
                 entry.payload
             } else {
                 // no existing value, make a new one.
-                let payload = make_payload_fn(Some(value));
+                let payload = make_payload_fn(Some(value), hash);
 
                 let inner_view_idx = self.builder.len();
                 let new_header = Entry {
@@ -632,8 +641,9 @@ mod tests {
             let mut seen_new_strings = vec![];
             let mut seen_indexes = vec![];
             self.map.insert_if_new(
+                &[],
                 &arr,
-                |s| {
+                |s, _hash| {
                     let value = s
                         .map(|s| String::from_utf8(s.to_vec()).expect("Non utf8 string"));
                     let index = next_index;

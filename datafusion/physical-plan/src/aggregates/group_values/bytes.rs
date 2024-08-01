@@ -140,7 +140,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
         let mut group_hashes = self
             .group_hashes
             .take()
-            .expect("Can not emit from empty rows");
+            .expect("Can not emit from empty rows for hashes");
 
         let group_values = match emit_to {
             EmitTo::All => {
@@ -161,12 +161,17 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
                     map_contents.slice(n, map_contents.len() - n);
 
                 let remaining_group_hashes = group_hashes.split_off(n);
-                let arr = Arc::new(UInt64Array::from(remaining_group_hashes)) as ArrayRef;
+                let hash_array =
+                    Arc::new(UInt64Array::from(remaining_group_hashes)) as ArrayRef;
 
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
                 // TODO: reuse hash value
-                self.intern(&[remaining_group_values], &mut group_indexes, Some(&arr))?;
+                self.intern(
+                    &[remaining_group_values],
+                    &mut group_indexes,
+                    Some(&hash_array),
+                )?;
 
                 // Verify that the group indexes were assigned in the correct order
                 assert_eq!(0, group_indexes[0]);
