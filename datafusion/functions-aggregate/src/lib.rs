@@ -112,9 +112,7 @@ pub mod expr_fn {
     pub use super::grouping::grouping;
     pub use super::median::median;
     pub use super::min_max::max;
-    pub use super::min_max::max_distinct;
     pub use super::min_max::min;
-    pub use super::min_max::min_distinct;
     pub use super::regr::regr_avgx;
     pub use super::regr::regr_avgy;
     pub use super::regr::regr_count;

@@ -291,10 +291,20 @@ mod tests {
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_functions_aggregate::expr_fn::{
-        count, count_distinct, max, max_distinct, min, sum,
-    };
+    use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};
+    use datafusion_functions_aggregate::min_max::max_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
+
+    fn max_distinct(expr: Expr) -> Expr {
+        Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            max_udaf(),
+            vec![expr],
+            true,
+            None,
+            None,
+            None,
+        ))
+    }
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(

@@ -25,7 +25,6 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use datafusion::physical_expr_common::aggregate::AggregateExprBuilder;
-use datafusion::physical_plan::udaf::create_aggregate_expr;
 use datafusion_functions_aggregate::min_max::max_udaf;
 use prost::Message;
 
@@ -910,22 +909,16 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         )),
         input,
     )?);
-    let aggr_expr = create_aggregate_expr(
-        &max_udaf(),
-        &[udf_expr.clone()],
-        &[],
-        &[],
-        &[],
-        &schema,
-        "max",
-        false,
-        false,
-    )?;
+    let aggr_expr = AggregateExprBuilder::new(max_udaf(), 
+    vec![udf_expr.clone() as Arc<dyn PhysicalExpr>])
+        .schema(schema.clone())
+        .name("max")
+        .build()?;
 
     let window = Arc::new(WindowAggExec::try_new(
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr.clone(),
-            &[col("author", &schema)?],
+            &[col("author", &schema.clone())?],
             &[],
             Arc::new(WindowFrame::new(None)),
         ))],
