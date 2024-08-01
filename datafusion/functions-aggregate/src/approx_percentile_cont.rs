@@ -487,8 +487,8 @@ mod tests {
             ApproxPercentileAccumulator::new_with_max_size(0.5, DataType::Float64, 100);
 
         accumulator.merge_digests(&[t1]);
-        assert_eq!(accumulator.digest.count(), 50_000.0);
+        assert_eq!(accumulator.digest.count(), 50_000);
         accumulator.merge_digests(&[t2]);
-        assert_eq!(accumulator.digest.count(), 100_000.0);
+        assert_eq!(accumulator.digest.count(), 100_000);
     }
 }
