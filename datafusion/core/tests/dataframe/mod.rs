@@ -1984,67 +1984,6 @@ async fn test_array_agg() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test23() -> Result<()> {
-    async fn query(ctx: &mut SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
-        // execute the query
-        ctx.sql(sql).await?.collect().await
-    }
-
-    fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext> {
-        // define a schema.
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Utf8, false),
-        ]));
-
-        // define data.
-        let batches = (0..array_len / batch_size)
-            .map(|i| {
-                let data1 = (0..batch_size)
-                    .into_iter()
-                    .map(|x| x as i64)
-                    .collect::<Vec<_>>();
-                let data2 = (0..batch_size)
-                    .into_iter()
-                    .map(|j| format!("a{j}"))
-                    .collect::<Vec<_>>();
-
-                RecordBatch::try_new(
-                    schema.clone(),
-                    vec![
-                        Arc::new(Int64Array::from(data1)),
-                        Arc::new(StringArray::from(data2)),
-                    ],
-                )
-                .unwrap()
-            })
-            .collect::<Vec<_>>();
-
-        // println!("batches: {:?}", batches);
-
-        let ctx = SessionContext::new();
-
-        // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-        let provider = MemTable::try_new(schema, vec![batches])?;
-        ctx.register_table("t", Arc::new(provider))?;
-
-        Ok(ctx)
-    }
-
-    let array_len = 2000000; // 2^19
-    let batch_size = array_len; // 2^12
-    let mut ctx = create_context(array_len, batch_size).unwrap();
-    let res = query(
-        &mut ctx,
-        "select a, b, count(*) from t group by a, b order by count(*) desc limit 10",
-    )
-    .await
-    .unwrap();
-    println!("res: {:?}", res);
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
     let ctx = SessionContext::new();
 
