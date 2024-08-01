@@ -21,7 +21,8 @@ use std::any::Any;
 
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    internal_err, plan_err, DataFusionError, ExprSchema, Result, ScalarValue,
+    arrow_datafusion_err, internal_err, plan_datafusion_err, plan_err, DataFusionError,
+    ExprSchema, Result, ScalarValue,
 };
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -139,7 +140,9 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     };
 
     val.parse().map_err(|e| match e {
-        arrow::error::ArrowError::ParseError(e) => plan_datafusion_error!(e),
-        e => arrow_datafusion_error!(e),
+        // If the data type cannot be parsed, return a Plan error to signal an
+        // error in the input rather than a more general ArrowError
+        arrow::error::ArrowError::ParseError(e) => plan_datafusion_err!("{e}"),
+        e => arrow_datafusion_err!(e),
     })
 }
