@@ -25,7 +25,7 @@ use arrow::{
     datatypes::{validate_decimal_precision, Decimal128Type, Int64Type},
 };
 use arrow_array::{Array, ArrowNativeTypeOp, BooleanArray, Decimal128Array};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION};
 use datafusion::{functions::math::round::round, physical_plan::ColumnarValue};
 use datafusion_common::{
     cast::as_generic_string_array, exec_err, internal_err, DataFusionError,
@@ -460,27 +460,41 @@ pub fn spark_decimal_div(
     };
     let left = left.as_primitive::<Decimal128Type>();
     let right = right.as_primitive::<Decimal128Type>();
-    let (_, s1) = get_precision_scale(left.data_type());
-    let (_, s2) = get_precision_scale(right.data_type());
+    let (p1, s1) = get_precision_scale(left.data_type());
+    let (p2, s2) = get_precision_scale(right.data_type());
 
-    let ten = BigInt::from(10);
     let l_exp = ((s2 + s3 + 1) as u32).saturating_sub(s1 as u32);
     let r_exp = (s1 as u32).saturating_sub((s2 + s3 + 1) as u32);
-    let l_mul = ten.pow(l_exp);
-    let r_mul = ten.pow(r_exp);
-    let five = BigInt::from(5);
-    let zero = BigInt::from(0);
-    let result: Decimal128Array = arrow::compute::kernels::arity::binary(left, right, |l, r| {
-        let l = BigInt::from(l) * &l_mul;
-        let r = BigInt::from(r) * &r_mul;
-        let div = if r.eq(&zero) { zero.clone() } else { &l / &r };
-        let res = if div.is_negative() {
-            div - &five
-        } else {
-            div + &five
-        } / &ten;
-        res.to_i128().unwrap_or(i128::MAX)
-    })?;
+    let result: Decimal128Array = if p1 as u32 + l_exp > DECIMAL128_MAX_PRECISION as u32
+        || p2 as u32 + r_exp > DECIMAL128_MAX_PRECISION as u32
+    {
+        let ten = BigInt::from(10);
+        let l_mul = ten.pow(l_exp);
+        let r_mul = ten.pow(r_exp);
+        let five = BigInt::from(5);
+        let zero = BigInt::from(0);
+        arrow::compute::kernels::arity::binary(left, right, |l, r| {
+            let l = BigInt::from(l) * &l_mul;
+            let r = BigInt::from(r) * &r_mul;
+            let div = if r.eq(&zero) { zero.clone() } else { &l / &r };
+            let res = if div.is_negative() {
+                div - &five
+            } else {
+                div + &five
+            } / &ten;
+            res.to_i128().unwrap_or(i128::MAX)
+        })?
+    } else {
+        let l_mul = 10_i128.pow(l_exp);
+        let r_mul = 10_i128.pow(r_exp);
+        arrow::compute::kernels::arity::binary(left, right, |l, r| {
+            let l = l * l_mul;
+            let r = r * r_mul;
+            let div = if r == 0 { 0 } else { l / r };
+            let res = if div.is_negative() { div - 5 } else { div + 5 } / 10;
+            res.to_i128().unwrap_or(i128::MAX)
+        })?
+    };
     let result = result.with_data_type(DataType::Decimal128(p3, s3));
     Ok(ColumnarValue::Array(Arc::new(result)))
 }
