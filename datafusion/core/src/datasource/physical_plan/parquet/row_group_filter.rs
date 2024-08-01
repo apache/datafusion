@@ -15,9 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::datasource::listing::FileRange;
+use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use arrow::{array::ArrayRef, datatypes::Schema};
 use arrow_array::BooleanArray;
 use datafusion_common::{Column, Result, ScalarValue};
+use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::data_type::Decimal;
 use parquet::schema::types::SchemaDescriptor;
@@ -29,11 +33,7 @@ use parquet::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::datasource::listing::FileRange;
-use crate::datasource::physical_plan::parquet::statistics::parquet_column;
-use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-
-use super::{ParquetAccessPlan, ParquetFileMetrics, StatisticsConverter};
+use super::{ParquetAccessPlan, ParquetFileMetrics};
 
 /// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
 ///
@@ -356,20 +356,24 @@ impl<'a> RowGroupPruningStatistics<'a> {
         &'a self,
         column: &'b Column,
     ) -> Result<StatisticsConverter<'a>> {
-        StatisticsConverter::try_new(&column.name, self.arrow_schema, self.parquet_schema)
+        Ok(StatisticsConverter::try_new(
+            &column.name,
+            self.arrow_schema,
+            self.parquet_schema,
+        )?)
     }
 }
 
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         self.statistics_converter(column)
-            .and_then(|c| c.row_group_mins(self.metadata_iter()))
+            .and_then(|c| Ok(c.row_group_mins(self.metadata_iter())?))
             .ok()
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
         self.statistics_converter(column)
-            .and_then(|c| c.row_group_maxes(self.metadata_iter()))
+            .and_then(|c| Ok(c.row_group_maxes(self.metadata_iter())?))
             .ok()
     }
 
@@ -379,7 +383,7 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         self.statistics_converter(column)
-            .and_then(|c| c.row_group_null_counts(self.metadata_iter()))
+            .and_then(|c| Ok(c.row_group_null_counts(self.metadata_iter())?))
             .ok()
             .map(|counts| Arc::new(counts) as ArrayRef)
     }
@@ -387,7 +391,7 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
         // row counts are the same for all columns in a row group
         self.statistics_converter(column)
-            .and_then(|c| c.row_group_row_counts(self.metadata_iter()))
+            .and_then(|c| Ok(c.row_group_row_counts(self.metadata_iter())?))
             .ok()
             .flatten()
             .map(|counts| Arc::new(counts) as ArrayRef)
