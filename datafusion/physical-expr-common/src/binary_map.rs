@@ -41,8 +41,12 @@ use std::sync::Arc;
 pub enum OutputType {
     /// `StringArray` or `LargeStringArray`
     Utf8,
+    /// `StringViewArray`
+    Utf8View,
     /// `BinaryArray` or `LargeBinaryArray`
     Binary,
+    /// `BinaryViewArray`
+    BinaryView,
 }
 
 /// HashSet optimized for storing string or binary values that can produce that
@@ -323,6 +327,7 @@ where
                     observe_payload_fn,
                 )
             }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         };
     }
 
@@ -527,6 +532,7 @@ where
                     GenericStringArray::new_unchecked(offsets, values, nulls)
                 })
             }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
     }
 
