@@ -321,7 +321,8 @@ impl From<DataFusionError> for io::Error {
 }
 
 impl DataFusionError {
-    const BACK_TRACE_SEP: &'static str = "\n\nbacktrace: ";
+    /// The separator between the error message and the backtrace
+    pub const BACK_TRACE_SEP: &'static str = "\n\nbacktrace: ";
 
     /// Get deepest underlying [`DataFusionError`]
     ///
