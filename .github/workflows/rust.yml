@@ -234,7 +234,7 @@ jobs:
           rust-version: stable
       - name: Run cargo doc
         run: |
-          export RUSTDOCFLAGS="-D warnings -A rustdoc::private-intra-doc-links"
+          export RUSTDOCFLAGS="-D warnings"
           cargo doc --document-private-items --no-deps --workspace
           cd datafusion-cli
           cargo doc --document-private-items --no-deps
