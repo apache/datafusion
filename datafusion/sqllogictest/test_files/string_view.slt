@@ -321,6 +321,40 @@ logical_plan
 02)--Filter: CAST(test.column2_utf8 AS Utf8View) = test.column1_utf8view
 03)----TableScan: test projection=[column1_utf8, column2_utf8, column1_utf8view]
 
+## Test distinct aggregates
+query III
+SELECT
+  COUNT(DISTINCT column1_utf8),
+  COUNT(DISTINCT column1_utf8view),
+  COUNT(DISTINCT column1_dict)
+FROM test;
+----
+3 3 3
+
+query III
+SELECT
+  COUNT(DISTINCT column1_utf8),
+  COUNT(DISTINCT column1_utf8view),
+  COUNT(DISTINCT column1_dict)
+FROM test
+GROUP BY column2_utf8view;
+----
+1 1 1
+1 1 1
+1 1 1
+
+
+query TT
+EXPLAIN SELECT
+  COUNT(DISTINCT column1_utf8),
+  COUNT(DISTINCT column1_utf8view),
+  COUNT(DISTINCT column1_dict)
+FROM test;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.column1_utf8), count(DISTINCT test.column1_utf8view), count(DISTINCT test.column1_dict)]]
+02)--TableScan: test projection=[column1_utf8, column1_utf8view, column1_dict]
+
 
 statement ok
 drop table test;
