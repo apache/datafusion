@@ -141,7 +141,7 @@ where
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        let values = values[0].as_primitive::<T>();
+        let values = values[0].as_primitive::<T>().clone();
 
         // Initializing state with starting values
         let initial_state =
@@ -164,11 +164,11 @@ where
                 let (dt, values_buf, original_nulls) = values.clone().into_parts();
                 let nulls_buf =
                     NullBuffer::union(original_nulls.as_ref(), Some(&filter_nulls));
-                &PrimitiveArray::<T>::new(values_buf, nulls_buf).with_data_type(dt)
+                PrimitiveArray::<T>::new(values_buf, nulls_buf).with_data_type(dt)
             }
         };
 
-        let state_values = compute::binary_mut(initial_state, values, |mut x, y| {
+        let state_values = compute::binary_mut(initial_state, &values, |mut x, y| {
             (self.prim_fn)(&mut x, y);
             x
         });
