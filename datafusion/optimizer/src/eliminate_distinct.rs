@@ -74,18 +74,6 @@ impl OptimizerRule for EliminateDistinct {
                 }
                 return Ok(Transformed::no(LogicalPlan::Distinct(Distinct::All(distinct))));
             }
-            LogicalPlan::Distinct(Distinct::On(distinct)) => {
-                let fields = distinct.schema.fields();
-                let all_fields = (0..fields.len()).collect::<Vec<_>>();
-                let func_deps = distinct.schema.functional_dependencies().clone();
-
-                for func_dep in func_deps.iter() {
-                    if func_dep.source_indices == all_fields {
-                        return Ok(Transformed::yes(distinct.input.as_ref().clone()));
-                    }
-                }
-                return Ok(Transformed::no(LogicalPlan::Distinct(Distinct::On(distinct))));
-            }
             _ => Ok(Transformed::no(plan)),
         }
     }
