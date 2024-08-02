@@ -745,7 +745,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 PlannerResult::Original(expr) => exprs = expr,
             }
         }
-        not_impl_err!("Unsupported map literal: {exprs:?}")
+        not_impl_err!("Unsupported MAP literal: {exprs:?}")
     }
 
     // Handles a call to struct(...) where the arguments are named. For example
