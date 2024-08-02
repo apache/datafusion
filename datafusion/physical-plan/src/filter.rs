@@ -380,11 +380,11 @@ impl Stream for FilterExecStream {
                 Some(Ok(batch)) => {
                     let timer = self.baseline_metrics.elapsed_compute().timer();
                     let filtered_batch = batch_filter(&batch, &self.predicate)?;
+                    timer.done();
                     // skip entirely filtered batches
                     if filtered_batch.num_rows() == 0 {
                         continue;
                     }
-                    timer.done();
                     poll = Poll::Ready(Some(Ok(filtered_batch)));
                     break;
                 }
