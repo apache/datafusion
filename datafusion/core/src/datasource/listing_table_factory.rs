@@ -52,7 +52,7 @@ impl TableProviderFactory for ListingTableFactory {
         state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
-        // TODO remove downcast_ref from here. Should file format factory be an extension to session state?
+        // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here. Should file format factory be an extension to session state?
         let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let file_format = session_state
             .get_file_format_factory(cmd.file_type.as_str())
