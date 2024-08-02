@@ -957,18 +957,22 @@ impl DefaultPhysicalPlanner {
                     multiunzip(agg_filter);
 
                 if group_expr.len() > 1 {
-                    let can_repartition = !groups.is_empty()
-                        && session_state.config().target_partitions() > 1
-                        && session_state.config().repartition_aggregations();
+                // if false {
+                    // let can_repartition = !groups.is_empty()
+                    //     && session_state.config().target_partitions() > 1
+                    //     && session_state.config().repartition_aggregations();
 
-                    let mode = if can_repartition {
-                        // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                        AggregateMode::SinglePartitioned
-                    } else {
-                        // construct a second aggregation, keeping the final column name equal to the
-                        // first aggregation and the expressions corresponding to the respective aggregate
-                        AggregateMode::Single
-                    };
+                    // let mode = if can_repartition {
+                    //     // construct a second aggregation with 'AggregateMode::FinalPartitioned'
+                    //     AggregateMode::SinglePartitioned
+                    // } else {
+                    //     // construct a second aggregation, keeping the final column name equal to the
+                    //     // first aggregation and the expressions corresponding to the respective aggregate
+                    //     AggregateMode::Single
+                    // };
+
+                    // We don't do pre-partition
+                    let mode = AggregateMode::Single;
 
                     let aggr = AggregateExec::try_new(
                         mode,

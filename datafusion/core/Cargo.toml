@@ -182,7 +182,7 @@ name = "math_query_sql"
 
 [[bench]]
 harness = false
-name = "reuse_hash"
+name = "high_cardinality"
 
 [[bench]]
 harness = false

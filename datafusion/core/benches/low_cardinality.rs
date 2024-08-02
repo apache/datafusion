@@ -45,14 +45,8 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
     // define data.
     let batches = (0..array_len / batch_size)
         .map(|_i| {
-            let data1 = (0..batch_size)
-                .into_iter()
-                .map(|x| (x % 2) as i64)
-                .collect::<Vec<_>>();
-            let data2 = (0..batch_size)
-                .into_iter()
-                .map(|j| format!("a{}", j % 2))
-                .collect::<Vec<_>>();
+            let data1 = (0..batch_size).into_iter().map(|x| (x % 4 > 1) as i64).collect::<Vec<_>>();	
+            let data2 = (0..batch_size).into_iter().map(|j| format!("a{}", (j % 2))).collect::<Vec<_>>();	
 
             RecordBatch::try_new(
                 schema.clone(),
@@ -91,3 +85,11 @@ criterion_group! {
     targets = criterion_benchmark
 }
 criterion_main!(benches);
+
+// single-multi-groupby-v2
+// Gnuplot not found, using plotters backend
+// benchmark               time:   [41.512 ms 41.931 ms 42.318 ms]
+//                         change: [-6.5657% -5.6393% -4.6452%] (p = 0.00 < 0.05)
+//                         Performance has improved.
+// Found 1 outliers among 10 measurements (10.00%)
+//   1 (10.00%) high mild

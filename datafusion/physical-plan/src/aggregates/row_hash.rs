@@ -580,6 +580,7 @@ impl GroupedHashAggregateStream {
                     | AggregateMode::SinglePartitioned
                         if !self.spill_state.is_stream_merging =>
                     {
+                    
                         acc.update_batch(
                             values,
                             group_indices,
@@ -658,6 +659,7 @@ impl GroupedHashAggregateStream {
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
+        // println!("output: {:?}", output);
         let batch = RecordBatch::try_new(schema, output)?;
         Ok(batch)
     }
