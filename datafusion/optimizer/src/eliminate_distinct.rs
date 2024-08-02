@@ -80,13 +80,13 @@ impl OptimizerRule for EliminateDistinct {
 #[cfg(test)]
 mod tests {
     use crate::eliminate_distinct::EliminateDistinct;
+    use crate::test::*;
     use datafusion_common::Result;
     use datafusion_expr::{
         col, logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan,
     };
-    use std::sync::Arc;
     use datafusion_functions_aggregate::sum::sum;
-    use crate::test::*;
+    use std::sync::Arc;
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(
