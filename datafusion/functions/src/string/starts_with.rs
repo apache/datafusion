@@ -29,40 +29,32 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use crate::utils::make_scalar_function;
 
 /// Returns true if string starts with prefix.
-/// starts_with('alphabet', 'alph') = TRUE
+/// starts_with('alphabet', 'alph') = t
 pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let bool_result = match (args[0].data_type(), args[1].data_type()) {
         (DataType::Utf8View, DataType::Utf8View) => {
             let left = args[0].as_string_view();
             let right = args[1].as_string_view();
 
-            let result = arrow::compute::kernels::comparison::starts_with(left, right)?;
-
-            result
+            arrow::compute::kernels::comparison::starts_with(left, right)?
         }
         (DataType::Utf8View, DataType::Utf8 | DataType::LargeUtf8) => {
             let left = args[0].as_string_view();
             let right = as_generic_string_array::<T>(args[1].as_ref())?;
 
-            let result = arrow::compute::kernels::comparison::starts_with(left, right)?;
-
-            result
+            arrow::compute::kernels::comparison::starts_with(left, right)?
         }
         (DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8View) => {
             let left = as_generic_string_array::<T>(args[0].as_ref())?;
             let right = args[1].as_string_view();
 
-            let result = arrow::compute::kernels::comparison::starts_with(left, right)?;
-
-            result
+            arrow::compute::kernels::comparison::starts_with(left, right)?
         }
         (DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8 | DataType::LargeUtf8) => {
             let left = as_generic_string_array::<T>(args[0].as_ref())?;
             let right = as_generic_string_array::<T>(args[1].as_ref())?;
 
-            let result = arrow::compute::kernels::comparison::starts_with(left, right)?;
-
-            result
+            arrow::compute::kernels::comparison::starts_with(left, right)?
         }
         _ => internal_err!("Unsupported data types for starts_with")?,
     };
