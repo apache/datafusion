@@ -136,9 +136,15 @@ impl Analyzer {
         // Note this is run before all other rules since it rewrites based on
         // the argument types (List or Scalar), and TypeCoercion may cast the
         // argument types from Scalar to List.
-        let expr_to_function: Arc<dyn AnalyzerRule + Send + Sync> =
-            Arc::new(ApplyFunctionRewrites::new(self.function_rewrites.clone()));
-        let rules = std::iter::once(&expr_to_function).chain(self.rules.iter());
+        let expr_to_function: Option<Arc<dyn AnalyzerRule + Send + Sync>> =
+            if self.function_rewrites.is_empty() {
+                None
+            } else {
+                Some(Arc::new(ApplyFunctionRewrites::new(
+                    self.function_rewrites.clone(),
+                )))
+            };
+        let rules = expr_to_function.iter().chain(self.rules.iter());
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in rules {
