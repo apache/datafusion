@@ -1158,9 +1158,9 @@ logical_plan
 07)----TableScan: t0 projection=[v0, v1]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(t1.v0 AS Float64)@6, v1@1)], filter=v1@1 + CAST(v0@0 AS Float64) > 0, projection=[v0@0, v1@1, v2@2, v3@3, v4@4, v0@7, v1@8]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(t1.v0 AS Float64)@6, v1@1)], filter=v1@1 + CAST(v0@0 AS Float64) > 0, projection=[v0@0, v1@1, v2@3, v3@4, v4@5, v0@7, v1@8]
 03)----CoalescePartitionsExec
-04)------ProjectionExec: expr=[v0@0 as v0, v1@1 as v1, v2@3 as v2, v3@4 as v3, v4@5 as v4, v0@2 as v0, CAST(v0@0 AS Float64) as CAST(t1.v0 AS Float64)]
+04)------ProjectionExec: expr=[v0@0 as v0, v1@1 as v1, v0@2 as v0, v2@3 as v2, v3@4 as v3, v4@5 as v4, CAST(v0@0 AS Float64) as CAST(t1.v0 AS Float64)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------CoalesceBatchesExec: target_batch_size=8192
 07)------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0), (v1@1, v1@1)], projection=[v0@0, v1@1, v0@2, v2@4, v3@5, v4@6]
