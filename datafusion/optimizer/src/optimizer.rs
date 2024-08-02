@@ -33,8 +33,8 @@ use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
-use crate::eliminate_distinct::EliminateDistinct;
 use crate::eliminate_cross_join::EliminateCrossJoin;
+use crate::eliminate_distinct::EliminateDistinct;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_group_by_constant::EliminateGroupByConstant;

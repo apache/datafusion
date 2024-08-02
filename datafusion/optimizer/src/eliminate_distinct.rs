@@ -26,7 +26,7 @@
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{Transformed};
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::{logical_plan::LogicalPlan, Distinct};
 
@@ -72,7 +72,9 @@ impl OptimizerRule for EliminateDistinct {
                         return Ok(Transformed::yes(distinct.inputs()[0].clone()));
                     }
                 }
-                return Ok(Transformed::no(LogicalPlan::Distinct(Distinct::All(distinct))));
+                Ok(Transformed::no(LogicalPlan::Distinct(Distinct::All(
+                    distinct,
+                ))))
             }
             _ => Ok(Transformed::no(plan)),
         }
@@ -122,7 +124,8 @@ mod tests {
             .build()?;
 
         // No aggregate / scan / limit
-        let expected = "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  TableScan: test";
+        let expected =
+            "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  TableScan: test";
         assert_optimized_plan_equal(&plan, expected)
     }
 }
