@@ -22,6 +22,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion_common::exec_err;
 use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
+use datafusion_expr::expr::create_function_physical_name;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
 use datafusion_expr::utils::AggregateOrderSensitivity;
@@ -67,7 +68,7 @@ pub fn create_aggregate_expr(
     sort_exprs: &[Expr],
     ordering_req: &[PhysicalSortExpr],
     schema: &Schema,
-    name: impl Into<String>,
+    name: Option<String>,
     ignore_nulls: bool,
     is_distinct: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
@@ -77,7 +78,9 @@ pub fn create_aggregate_expr(
     builder = builder.order_by(ordering_req.to_vec());
     builder = builder.logical_exprs(input_exprs.to_vec());
     builder = builder.schema(Arc::new(schema.clone()));
-    builder = builder.name(name);
+    if let Some(name) = name {
+        builder = builder.name(name);
+    }
 
     if ignore_nulls {
         builder = builder.ignore_nulls();
@@ -98,7 +101,7 @@ pub fn create_aggregate_expr_with_dfschema(
     sort_exprs: &[Expr],
     ordering_req: &[PhysicalSortExpr],
     dfschema: &DFSchema,
-    name: impl Into<String>,
+    name: Option<String>,
     ignore_nulls: bool,
     is_distinct: bool,
     is_reversed: bool,
@@ -111,7 +114,9 @@ pub fn create_aggregate_expr_with_dfschema(
     builder = builder.dfschema(dfschema.clone());
     let schema: Schema = dfschema.into();
     builder = builder.schema(Arc::new(schema));
-    builder = builder.name(name);
+    if let Some(name) = name {
+        builder = builder.name(name);
+    }
 
     if ignore_nulls {
         builder = builder.ignore_nulls();
@@ -137,7 +142,7 @@ pub struct AggregateExprBuilder {
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Logical expressions of the aggregate function, it will be deprecated in <https://github.com/apache/datafusion/issues/11359>
     logical_args: Vec<Expr>,
-    name: String,
+    name: Option<String>,
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// Datafusion Schema for the aggregate function
@@ -160,7 +165,7 @@ impl AggregateExprBuilder {
             fun,
             args,
             logical_args: vec![],
-            name: String::new(),
+            name: None,
             schema: Arc::new(Schema::empty()),
             dfschema: DFSchema::empty(),
             sort_exprs: vec![],
@@ -213,6 +218,19 @@ impl AggregateExprBuilder {
         )?;
 
         let data_type = fun.return_type(&input_exprs_types)?;
+        let name = match name {
+            None => create_function_physical_name(
+                fun.name(),
+                is_distinct,
+                &logical_args,
+                if sort_exprs.is_empty() {
+                    None
+                } else {
+                    Some(&sort_exprs)
+                },
+            )?,
+            Some(name) => name,
+        };
 
         Ok(Arc::new(AggregateFunctionExpr {
             fun: Arc::unwrap_or_clone(fun),
@@ -233,7 +251,7 @@ impl AggregateExprBuilder {
     }
 
     pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
+        self.name = Some(name.into());
         self
     }
 
@@ -680,7 +698,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             &self.sort_exprs,
             &self.ordering_req,
             &self.dfschema,
-            self.name(),
+            Some(self.name().to_string()),
             self.ignore_nulls,
             self.is_distinct,
             self.is_reversed,
@@ -721,7 +739,7 @@ impl AggregateExpr for AggregateFunctionExpr {
                     &reverse_sort_exprs,
                     &reverse_ordering_req,
                     &self.dfschema,
-                    name,
+                    Some(name),
                     self.ignore_nulls,
                     self.is_distinct,
                     !self.is_reversed,
