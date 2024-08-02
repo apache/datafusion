@@ -82,7 +82,11 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 for dep in input.schema().functional_dependencies().iter() {
                     // If distinct is exactly the same with a previous GROUP BY, we can
                     // simply remove it:
-                    if dep.source_indices[..field_count].iter().enumerate().all(|(idx, f_idx)| idx == *f_idx) {
+                    if dep.source_indices[..field_count]
+                        .iter()
+                        .enumerate()
+                        .all(|(idx, f_idx)| idx == *f_idx)
+                    {
                         return Ok(Transformed::yes(input.as_ref().clone()));
                     }
                 }
