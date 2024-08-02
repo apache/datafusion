@@ -714,7 +714,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 PlannerResult::Original(expr) => raw_expr = expr,
             }
         }
-        not_impl_err!("Unsupported dictionary literal: {raw_expr:?}")
+        not_impl_err!("Dictionary not supported by ExprPlanner: {raw_expr:?}")
     }
 
     fn try_plan_map_literal(
@@ -745,7 +745,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 PlannerResult::Original(expr) => exprs = expr,
             }
         }
-        not_impl_err!("Unsupported MAP literal: {exprs:?}")
+        not_impl_err!("MAP not supported by ExprPlanner: {exprs:?}")
     }
 
     // Handles a call to struct(...) where the arguments are named. For example
