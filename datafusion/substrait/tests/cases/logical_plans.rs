@@ -44,7 +44,7 @@ mod tests {
         let plan = from_substrait_plan(&ctx, &proto).await?;
 
         assert_eq!(
-            format!("{:?}", plan),
+            format!("{}", plan),
             "Projection: NOT DATA.a AS EXPR$0\
             \n  TableScan: DATA projection=[a, b, c, d, e, f]"
         );
@@ -70,7 +70,7 @@ mod tests {
         let plan = from_substrait_plan(&ctx, &proto).await?;
 
         assert_eq!(
-            format!("{:?}", plan),
+            format!("{}", plan),
             "Projection: sum(DATA.a) PARTITION BY [DATA.b] ORDER BY [DATA.c ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR\
             \n  WindowAggr: windowExpr=[[sum(DATA.a) PARTITION BY [DATA.b] ORDER BY [DATA.c ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]\
             \n    TableScan: DATA projection=[a, b, c, d, e, f]"
@@ -89,7 +89,7 @@ mod tests {
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
 
-        assert_eq!(format!("{:?}", &plan), "Values: (List([1, 2]))");
+        assert_eq!(format!("{}", &plan), "Values: (List([1, 2]))");
 
         // Need to trigger execution to ensure that Arrow has validated the plan
         DataFrame::new(ctx.state(), plan).show().await?;

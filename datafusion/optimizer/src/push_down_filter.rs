@@ -3074,7 +3074,7 @@ Projection: a, b
         \n      Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r\
         \n        Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]\
         \n          TableScan: test1";
-        assert_eq!(format!("{plan:?}"), expected_before);
+        assert_eq!(format!("{plan}"), expected_before);
 
         let expected_after = "Projection: t.a, t.r\
         \n  SubqueryAlias: t\
@@ -3119,7 +3119,7 @@ Projection: a, b
         \n        Inner Join: test1.a = test2.a\
         \n          TableScan: test1\
         \n          TableScan: test2";
-        assert_eq!(format!("{plan:?}"), expected_before);
+        assert_eq!(format!("{plan}"), expected_before);
 
         let expected = "Projection: t.a, t.r\
         \n  SubqueryAlias: t\

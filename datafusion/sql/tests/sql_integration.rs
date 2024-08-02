@@ -149,7 +149,7 @@ fn parse_ident_normalization() {
         );
         if plan.is_ok() {
             let plan = plan.unwrap();
-            assert_eq!(expected, format!("OK({plan})"));
+            assert_eq!(expected, format!("Ok({plan})"));
         } else {
             assert_eq!(expected, plan.unwrap_err().strip_backtrace());
         }
