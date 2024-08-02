@@ -118,3 +118,12 @@ criterion_main!(benches);
 //                         Performance has regressed.
 // Found 1 outliers among 10 measurements (10.00%)
 //   1 (10.00%) high mild
+
+
+// Gnuplot not found, using plotters backend
+// Benchmarking benchmark: Warming up for 3.0000 s
+// Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.2s or enable flat sampling.
+// benchmark               time:   [150.22 ms 154.31 ms 158.06 ms]
+//                         change: [+254.76% +261.92% +270.28%] (p = 0.00 < 0.05)
+//                         Performance has regressed.
+// Found 1 outliers among 10 measurements (10.00%)
