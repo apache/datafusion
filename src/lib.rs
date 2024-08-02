@@ -20,6 +20,7 @@ mod error;
 mod if_expr;
 
 mod kernels;
+mod regexp;
 pub mod scalar_funcs;
 pub mod spark_hash;
 mod temporal;
@@ -30,6 +31,7 @@ mod xxhash64;
 pub use cast::{spark_cast, Cast};
 pub use error::{SparkError, SparkResult};
 pub use if_expr::IfExpr;
+pub use regexp::RLike;
 pub use temporal::{DateTruncExpr, HourExpr, MinuteExpr, SecondExpr, TimestampTruncExpr};
 
 /// Spark supports three evaluation modes when evaluating expressions, which affect
