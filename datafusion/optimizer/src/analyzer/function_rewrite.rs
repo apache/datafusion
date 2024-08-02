@@ -85,11 +85,6 @@ impl AnalyzerRule for ApplyFunctionRewrites {
     }
 
     fn analyze(&self, plan: LogicalPlan, options: &ConfigOptions) -> Result<LogicalPlan> {
-        if self.function_rewrites.is_empty() {
-            // No need to walk the plan tree since there's nothing to rewrite
-            return Ok(plan);
-        }
-
         plan.transform_up_with_subqueries(|plan| self.rewrite_plan(plan, options))
             .map(|res| res.data)
     }
