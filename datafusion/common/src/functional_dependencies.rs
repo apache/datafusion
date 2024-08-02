@@ -527,21 +527,20 @@ pub fn aggregate_functional_dependencies(
     // When we have a GROUP BY key, we can guarantee uniqueness after
     // aggregation:
     if !group_by_expr_names.is_empty() {
-        let source_indices = (0..group_by_expr_names.len()).collect::<Vec<_>>();
+        let count = group_by_expr_names.len();
         let nullable = source_indices
             .iter()
             .any(|idx| aggr_fields[*idx].is_nullable());
-        // If `source_indices` is not already a determinant in the existing `aggregate_func_dependencies`.
+        // If GROUP BY expressions do not already act as a determinant:
         if !aggregate_func_dependencies.iter().any(|item| {
-            // `item.source_indices` is a subset of the `source_indices`. In this case, we shouldn't add
-            // `source_indices` as `item.source_indices` defines this relation already.
-            item.source_indices
-                .iter()
-                .all(|idx| source_indices.contains(idx))
+            // If `item.source_indices` is a subset of GROUP BY expressions, we shouldn't add
+            // them since `item.source_indices` defines this relation already.
+            item.source_indices.iter().all(|idx| idx < count)
         }) {
             // Add a new functional dependency associated with the whole table:
             aggregate_func_dependencies.push(
-                // Use nullable property of the group by expression
+                // Use nullable property of the GROUP BY expression:
+                let source_indices = (0..count).collect::<Vec<_>>();
                 FunctionalDependence::new(source_indices, target_indices, nullable)
                     .with_mode(Dependency::Single),
             );
