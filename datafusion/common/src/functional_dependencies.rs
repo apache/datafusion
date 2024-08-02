@@ -537,9 +537,8 @@ pub fn aggregate_functional_dependencies(
             // If `item.source_indices` is a subset of GROUP BY expressions, we shouldn't add
             // them since `item.source_indices` defines this relation already.
 
-            // This simple count comparison is working well because
-            // GROUP BY statement comes here as a prefix
-            // It is guaranteed that group by indices would cover the range: [0..count]
+            // The following simple comparison is working well because
+            // GROUP BY expressions come here as a prefix.
             item.source_indices.iter().all(|idx| idx < &count)
         }) {
             // Add a new functional dependency associated with the whole table:
