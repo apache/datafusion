@@ -68,7 +68,7 @@ impl OptimizerRule for EliminateDistinct {
 
         for func_dep in func_deps.iter() {
             if func_dep.source_indices == all_fields {
-                return Ok(Transformed::yes(distinct.inputs()[0].clone()));
+                return Ok(Transformed::yes(distinct.as_ref().clone()));
             }
         }
         Ok(Transformed::no(LogicalPlan::Distinct(Distinct::All(
@@ -85,7 +85,7 @@ mod tests {
         col, logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan,
     };
     use std::sync::Arc;
-
+    use datafusion_functions_aggregate::sum::sum;
     use crate::test::*;
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -105,7 +105,7 @@ mod tests {
             .distinct()?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[]]\n  TableScan: test";
+        let expected = "Projection: test.c\n  Aggregate: groupBy=[[test.c]], aggr=[[]]\n    TableScan: test";
         assert_optimized_plan_equal(&plan, expected)
     }
 
@@ -119,7 +119,7 @@ mod tests {
             .build()?;
 
         let expected =
-            "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  TableScan: test";
+            "Projection: test.a, test.b\n  Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n    TableScan: test";
         assert_optimized_plan_equal(&plan, expected)
     }
 
@@ -139,13 +139,13 @@ mod tests {
     fn do_not_eliminate_distinct_with_aggr() -> Result<()> {
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a"), col("b"), col("c")], Vec::<Expr>::new())?
+            .aggregate(vec![col("a"), col("b"), col("c")], vec![sum(col("c"))])?
             .project(vec![col("a"), col("b")])?
             .distinct()?
             .build()?;
 
         let expected =
-            "Distinct:\n  Projection: test.a, test.b\n    Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[]]\n      TableScan: test";
+            "Distinct:\n  Projection: test.a, test.b\n    Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[sum(test.c)]]\n      TableScan: test";
         assert_optimized_plan_equal(&plan, expected)
     }
 }
