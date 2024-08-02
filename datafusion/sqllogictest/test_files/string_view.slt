@@ -321,6 +321,7 @@ logical_plan
 02)--Filter: CAST(test.column2_utf8 AS Utf8View) = test.column1_utf8view
 03)----TableScan: test projection=[column1_utf8, column2_utf8, column1_utf8view]
 
+<<<<<<< HEAD
 ## Test distinct aggregates
 query III
 SELECT
@@ -355,6 +356,17 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.column1_utf8), count(DISTINCT test.column1_utf8view), count(DISTINCT test.column1_dict)]]
 02)--TableScan: test projection=[column1_utf8, column1_utf8view, column1_dict]
 
+=======
+query TT
+EXPLAIN SELECT
+  STARTS_WITH(column1_utf8view, 'foo') as c,
+  STARTS_WITH(column1_utf8view, column2_utf8view) as c2
+FROM test;
+----
+logical_plan
+01)Projection: starts_with(CAST(test.column1_utf8view AS Utf8), Utf8("foo")) AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
+>>>>>>> 222263c15 (simplify string view handling)
 
 statement ok
 drop table test;

@@ -18,10 +18,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, OffsetSizeTrait};
+use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
-use datafusion_common::{cast::as_generic_string_array, internal_err, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -29,37 +29,10 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use crate::utils::make_scalar_function;
 
 /// Returns true if string starts with prefix.
-/// starts_with('alphabet', 'alph') = t
-pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let bool_result = match (args[0].data_type(), args[1].data_type()) {
-        (DataType::Utf8View, DataType::Utf8View) => {
-            let left = args[0].as_string_view();
-            let right = args[1].as_string_view();
-
-            arrow::compute::kernels::comparison::starts_with(left, right)?
-        }
-        (DataType::Utf8View, DataType::Utf8 | DataType::LargeUtf8) => {
-            let left = args[0].as_string_view();
-            let right = as_generic_string_array::<T>(args[1].as_ref())?;
-
-            arrow::compute::kernels::comparison::starts_with(left, right)?
-        }
-        (DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8View) => {
-            let left = as_generic_string_array::<T>(args[0].as_ref())?;
-            let right = args[1].as_string_view();
-
-            arrow::compute::kernels::comparison::starts_with(left, right)?
-        }
-        (DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8 | DataType::LargeUtf8) => {
-            let left = as_generic_string_array::<T>(args[0].as_ref())?;
-            let right = as_generic_string_array::<T>(args[1].as_ref())?;
-
-            arrow::compute::kernels::comparison::starts_with(left, right)?
-        }
-        _ => internal_err!("Unsupported data types for starts_with")?,
-    };
-
-    Ok(Arc::new(bool_result) as ArrayRef)
+/// starts_with('alphabet', 'alph') = 't'
+pub fn starts_with(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let result = arrow::compute::kernels::comparison::starts_with(&args[0], &args[1])?;
+    Ok(Arc::new(result) as ArrayRef)
 }
 
 #[derive(Debug)]
@@ -75,19 +48,15 @@ impl Default for StartsWithFunc {
 
 impl StartsWithFunc {
     pub fn new() -> Self {
-        use DataType::*;
-
-        let string_types = vec![Utf8, LargeUtf8, Utf8View];
-        let mut type_signatures = vec![];
-
-        for left in &string_types {
-            for right in &string_types {
-                type_signatures.push(Exact(vec![left.clone(), right.clone()]));
-            }
-        }
-
         Self {
-            signature: Signature::one_of(type_signatures, Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    Exact(vec![DataType::Utf8View, DataType::Utf8View]),
+                    Exact(vec![DataType::Utf8, DataType::Utf8]),
+                    Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -111,9 +80,9 @@ impl ScalarUDFImpl for StartsWithFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(starts_with::<i32>, vec![])(args),
-            DataType::LargeUtf8 => make_scalar_function(starts_with::<i64>, vec![])(args),
-            DataType::Utf8View => make_scalar_function(starts_with::<i32>, vec![])(args),
+            DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
+                make_scalar_function(starts_with, vec![])(args)
+            }
             _ => internal_err!("Unsupported data types for starts_with")?,
         }
     }
