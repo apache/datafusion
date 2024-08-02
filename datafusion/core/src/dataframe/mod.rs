@@ -2549,7 +2549,7 @@ mod tests {
         \n    TableScan: a\
         \n  Projection: b.c1, b.c2\
         \n    TableScan: b";
-        assert_eq!(expected_plan, format!("{:?}", join.logical_plan()));
+        assert_eq!(expected_plan, format!("{}", join.logical_plan()));
 
         Ok(())
     }
@@ -2568,7 +2568,7 @@ mod tests {
         let expected_plan = "CrossJoin:\
         \n  TableScan: a projection=[c1], full_filters=[Boolean(NULL)]\
         \n  TableScan: b projection=[c1]";
-        assert_eq!(expected_plan, format!("{:?}", join.into_optimized_plan()?));
+        assert_eq!(expected_plan, format!("{}", join.into_optimized_plan()?));
 
         // JOIN ON expression must be boolean type
         let join = left.join_on(right, JoinType::Inner, Some(lit("TRUE")))?;
@@ -2910,7 +2910,7 @@ mod tests {
         \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
-            format!("{:?}", df_with_column.logical_plan())
+            format!("{}", df_with_column.logical_plan())
         );
 
         assert_eq!(
@@ -2923,7 +2923,7 @@ mod tests {
         \n          TableScan: aggregate_test_100 projection=[c1]\
         \n        SubqueryAlias: t2\
         \n          TableScan: aggregate_test_100 projection=[c1]",
-            format!("{:?}", df_with_column.clone().into_optimized_plan()?)
+            format!("{}", df_with_column.clone().into_optimized_plan()?)
         );
 
         let df_results = df_with_column.collect().await?;
@@ -3105,7 +3105,7 @@ mod tests {
         \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
-                   format!("{:?}", df_renamed.logical_plan())
+                   format!("{}", df_renamed.logical_plan())
         );
 
         assert_eq!("\
@@ -3117,7 +3117,7 @@ mod tests {
         \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]\
         \n        SubqueryAlias: t2\
         \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]",
-                   format!("{:?}", df_renamed.clone().into_optimized_plan()?)
+                   format!("{}", df_renamed.clone().into_optimized_plan()?)
         );
 
         let df_results = df_renamed.collect().await?;
@@ -3302,7 +3302,7 @@ mod tests {
 
         assert_eq!(
             "TableScan: ?table? projection=[c2, c3, sum]",
-            format!("{:?}", cached_df.clone().into_optimized_plan()?)
+            format!("{}", cached_df.clone().into_optimized_plan()?)
         );
 
         let df_results = df.collect().await?;
