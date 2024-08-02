@@ -266,9 +266,10 @@ impl Signature {
         }
     }
 
-    pub fn numeric(num: usize, volatility: Volatility) -> Self {
+    /// A specified number of numeric arguments
+    pub fn numeric(arg_count: usize, volatility: Volatility) -> Self {
         Self {
-            type_signature: TypeSignature::Numeric(num),
+            type_signature: TypeSignature::Numeric(arg_count),
             volatility,
         }
     }
