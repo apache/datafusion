@@ -528,6 +528,7 @@ pub fn aggregate_functional_dependencies(
     // aggregation:
     if !group_by_expr_names.is_empty() {
         let count = group_by_expr_names.len();
+        let source_indices = (0..count).collect::<Vec<_>>();
         let nullable = source_indices
             .iter()
             .any(|idx| aggr_fields[*idx].is_nullable());
@@ -535,12 +536,16 @@ pub fn aggregate_functional_dependencies(
         if !aggregate_func_dependencies.iter().any(|item| {
             // If `item.source_indices` is a subset of GROUP BY expressions, we shouldn't add
             // them since `item.source_indices` defines this relation already.
-            item.source_indices.iter().all(|idx| idx < count)
+
+            // This simple count comparison is working well because
+            // GROUP BY statement comes here as a prefix
+            // It is guaranteed that group by indices would cover the range: [0..count]
+            item.source_indices.iter().all(|idx| idx < &count)
         }) {
             // Add a new functional dependency associated with the whole table:
+            // Use nullable property of the GROUP BY expression:
             aggregate_func_dependencies.push(
                 // Use nullable property of the GROUP BY expression:
-                let source_indices = (0..count).collect::<Vec<_>>();
                 FunctionalDependence::new(source_indices, target_indices, nullable)
                     .with_mode(Dependency::Single),
             );
