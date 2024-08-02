@@ -1349,6 +1349,17 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             Expr::Negative(inner) => Transformed::yes(distribute_negation(*inner)),
 
             //
+            // Rules for Associativity
+            //
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: op @ (Operator::Plus | Operator::Multiply),
+                right,
+            }) if can_rearrange_literals(&left, op, &right) => {
+                Transformed::yes(rearrange_literals(*left, op, *right))
+            }
+
+            //
             // Rules for Case
             //
 
@@ -3186,6 +3197,27 @@ mod tests {
         assert_eq!(
             simplify(col("c1").not_eq(lit("foo"))),
             col("c1").not_eq(lit("foo")),
+        );
+    }
+
+    #[test]
+    fn simplify_associative() {
+        // i + 1 + 2 => i + 3
+        assert_eq!(simplify(col("c3") + lit(1) + lit(2)), (col("c3") + lit(3)));
+
+        // (i + 1) + 2 => i + 3
+        assert_eq!(
+            simplify((col("c3") + lit(1)) + lit(2)),
+            (col("c3") + lit(3))
+        );
+
+        // i * 2 * 3 => i * 6
+        assert_eq!(simplify(col("c3") * lit(2) * lit(3)), (col("c3") * lit(6)));
+
+        // (i * 2) * 3 => i * 6
+        assert_eq!(
+            simplify((col("c3") * lit(2)) * lit(3)),
+            (col("c3") * lit(6))
         );
     }
 
