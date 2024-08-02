@@ -33,7 +33,7 @@ use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
-use crate::eliminate_aggregate::EliminateAggregate;
+use crate::eliminate_distinct::EliminateDistinct;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
@@ -258,7 +258,7 @@ impl Optimizer {
             Arc::new(RewriteDisjunctivePredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
-            Arc::new(EliminateAggregate::new()),
+            Arc::new(EliminateDistinct::new()),
             Arc::new(EliminateCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
