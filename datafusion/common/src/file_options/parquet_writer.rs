@@ -175,6 +175,7 @@ impl ParquetOptions {
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
             bloom_filter_on_read: _, // reads not used for writer props
+            schema_force_string_view: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -379,7 +380,7 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    use crate::config::{ColumnOptions, ParquetOptions};
+    use crate::config::{ParquetColumnOptions, ParquetOptions};
 
     use super::*;
 
@@ -388,8 +389,8 @@ mod tests {
     /// Take the column defaults provided in [`ParquetOptions`], and generate a non-default col config.
     fn column_options_with_non_defaults(
         src_col_defaults: &ParquetOptions,
-    ) -> ColumnOptions {
-        ColumnOptions {
+    ) -> ParquetColumnOptions {
+        ParquetColumnOptions {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
             statistics_enabled: Some("none".into()),
@@ -440,16 +441,17 @@ mod tests {
             maximum_buffered_record_batches_per_stream: defaults
                 .maximum_buffered_record_batches_per_stream,
             bloom_filter_on_read: defaults.bloom_filter_on_read,
+            schema_force_string_view: defaults.schema_force_string_view,
         }
     }
 
     fn extract_column_options(
         props: &WriterProperties,
         col: ColumnPath,
-    ) -> ColumnOptions {
+    ) -> ParquetColumnOptions {
         let bloom_filter_default_props = props.bloom_filter_properties(&col);
 
-        ColumnOptions {
+        ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
             encoding: props.encoding(&col).map(|s| s.to_string()),
             dictionary_enabled: Some(props.dictionary_enabled(&col)),
@@ -540,6 +542,8 @@ mod tests {
                 maximum_buffered_record_batches_per_stream: global_options_defaults
                     .maximum_buffered_record_batches_per_stream,
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
+                schema_force_string_view: global_options_defaults
+                    .schema_force_string_view,
             },
             column_specific_options,
             key_value_metadata,

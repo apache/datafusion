@@ -66,7 +66,7 @@ use parking_lot::Mutex;
 /// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 /// As the key is a hash value, we need to check possible hash collisions in the probe stage
 /// During this stage it might be the case that a row is contained the same hashmap value,
-/// but the values don't match. Those are checked in the [`equal_rows_arr`](crate::joins::hash_join::equal_rows_arr) method.
+/// but the values don't match. Those are checked in the `equal_rows_arr` method.
 ///
 /// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
 ///

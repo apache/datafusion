@@ -249,6 +249,14 @@ impl AggregateUDF {
     pub fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         self.inner.simplify()
     }
+
+    /// Returns true if the function is max, false if the function is min
+    /// None in all other cases, used in certain optimizations or
+    /// or aggregate
+    ///
+    pub fn is_descending(&self) -> Option<bool> {
+        self.inner.is_descending()
+    }
 }
 
 impl<F> From<F> for AggregateUDF
@@ -343,12 +351,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Return the fields used to store the intermediate state of this accumulator.
     ///
-    /// # Arguments:
-    /// 1. `name`: the name of the expression (e.g. AVG, SUM, etc)
-    /// 2. `value_type`: Aggregate function output returned by [`Self::return_type`] if defined, otherwise
-    ///    it is equivalent to the data type of the first arguments
-    /// 3. `ordering_fields`: the fields used to order the input arguments, if any.
-    ///    Empty if no ordering expression is provided.
+    /// args:  [`StateFieldsArgs`] contains arguments passed to the
+    /// aggregate function's accumulator.
     ///
     /// # Notes:
     ///
@@ -535,6 +539,16 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         self.name().hash(hasher);
         self.signature().hash(hasher);
         hasher.finish()
+    }
+
+    /// If this function is max, return true
+    /// if the function is min, return false
+    /// otherwise return None (the default)
+    ///
+    ///
+    /// Note: this is used to use special aggregate implementations in certain conditions
+    fn is_descending(&self) -> Option<bool> {
+        None
     }
 }
 

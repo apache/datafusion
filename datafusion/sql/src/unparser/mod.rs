@@ -29,6 +29,8 @@ pub use plan::plan_to_sql;
 use self::dialect::{DefaultDialect, Dialect};
 pub mod dialect;
 
+pub use expr::Unparsed;
+
 /// Convert a DataFusion [`Expr`] to [`sqlparser::ast::Expr`]
 ///
 /// See [`expr_to_sql`] for background. `Unparser` allows greater control of

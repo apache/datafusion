@@ -440,14 +440,14 @@ impl AggregateUDFImpl for LastValue {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         let StateFieldsArgs {
             name,
-            input_type,
+            input_types,
             return_type: _,
             ordering_fields,
             is_distinct: _,
         } = args;
         let mut fields = vec![Field::new(
             format_state_name(name, "last_value"),
-            input_type.clone(),
+            input_types[0].clone(),
             true,
         )];
         fields.extend(ordering_fields.to_vec());
