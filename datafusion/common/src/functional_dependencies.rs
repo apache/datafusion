@@ -524,22 +524,28 @@ pub fn aggregate_functional_dependencies(
         }
     }
 
-    // If we have a single GROUP BY key, we can guarantee uniqueness after
+    // When we have a GROUP BY key, we can guarantee uniqueness after
     // aggregation:
-    if group_by_expr_names.len() == 1 {
-        // If `source_indices` contain 0, delete this functional dependency
-        // as it will be added anyway with mode `Dependency::Single`:
-        aggregate_func_dependencies.retain(|item| !item.source_indices.contains(&0));
-        // Add a new functional dependency associated with the whole table:
-        aggregate_func_dependencies.push(
-            // Use nullable property of the group by expression
-            FunctionalDependence::new(
-                vec![0],
-                target_indices,
-                aggr_fields[0].is_nullable(),
-            )
-            .with_mode(Dependency::Single),
-        );
+    if !group_by_expr_names.is_empty() {
+        let source_indices = (0..group_by_expr_names.len()).collect::<Vec<_>>();
+        let nullable = source_indices
+            .iter()
+            .any(|idx| aggr_fields[*idx].is_nullable());
+        // If `source_indices` is not already a determinant in the existing `aggregate_func_dependencies`.
+        if !aggregate_func_dependencies.iter().any(|item| {
+            // `item.source_indices` is a subset of the `source_indices`. In this case, we shouldn't add
+            // `source_indices` as `item.source_indices` defines this relation already.
+            item.source_indices
+                .iter()
+                .all(|idx| source_indices.contains(idx))
+        }) {
+            // Add a new functional dependency associated with the whole table:
+            aggregate_func_dependencies.push(
+                // Use nullable property of the group by expression
+                FunctionalDependence::new(source_indices, target_indices, nullable)
+                    .with_mode(Dependency::Single),
+            );
+        }
     }
     FunctionalDependencies::new(aggregate_func_dependencies)
 }

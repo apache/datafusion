@@ -18,23 +18,25 @@
 //! Optimizer rule to replaces redundant aggregations on a plan.
 //! This saves time in planning and executing the query.
 
-use std::ops::Deref;
 use crate::optimizer::ApplyOrder;
-use datafusion_common::{Result};
-use datafusion_common::display::{ToStringifiedPlan};
-use datafusion_common::tree_node::TreeNode;
-use datafusion_expr::{logical_plan::{LogicalPlan}, Aggregate, Join, Distinct};
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::tree_node::TreeNode;
+use datafusion_common::Result;
+use datafusion_expr::{logical_plan::LogicalPlan, Aggregate, Distinct, Join};
+use std::ops::Deref;
 
 #[derive(Default)]
-pub struct EliminateAggregate{
+pub struct EliminateAggregate {
     group_bys: Vec<LogicalPlan>,
 }
 
 impl EliminateAggregate {
     #[allow(missing_docs)]
     pub fn new() -> Self {
-        Self {group_bys: Vec::new()}
+        Self {
+            group_bys: Vec::new(),
+        }
     }
 }
 
@@ -68,11 +70,11 @@ impl OptimizerRule for EliminateAggregate {
 
                 for func_dep in func_deps.iter() {
                     if func_dep.source_indices == all_fields {
-                        return Ok(Some(distinct.inputs()[0].clone()))
+                        return Ok(Some(distinct.inputs()[0].clone()));
                     }
                 }
-                return Ok(None)
-            },
+                return Ok(None);
+            }
             LogicalPlan::Distinct(Distinct::On(distinct)) => {
                 let fields = distinct.schema.fields();
                 let all_fields = (0..fields.len()).collect::<Vec<_>>();
@@ -80,24 +82,14 @@ impl OptimizerRule for EliminateAggregate {
 
                 for func_dep in func_deps.iter() {
                     if func_dep.source_indices == all_fields {
-                        return Ok(Some(distinct.input.as_ref().clone()))
+                        return Ok(Some(distinct.input.as_ref().clone()));
                     }
                 }
-                return Ok(None)
-            },
-            LogicalPlan::Aggregate(Aggregate {
-                ..
-            }) => {
-                Ok(None)
-            },
-            LogicalPlan::Join(Join {
-               ..
-            }) => {
-                Ok(None)
+                return Ok(None);
             }
-            _ => {
-                Ok(None)
-            },
+            LogicalPlan::Aggregate(Aggregate { .. }) => Ok(None),
+            LogicalPlan::Join(Join { .. }) => Ok(None),
+            _ => Ok(None),
         }
     }
 
@@ -113,7 +105,7 @@ impl OptimizerRule for EliminateAggregate {
 #[cfg(test)]
 mod tests {
     use crate::eliminate_aggregate::EliminateAggregate;
-    use datafusion_common::{Result};
+    use datafusion_common::Result;
     use datafusion_expr::{
         col, logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan,
     };
@@ -122,7 +114,11 @@ mod tests {
     use crate::test::*;
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq(Arc::new(EliminateAggregate::new()), plan.clone(), expected)
+        assert_optimized_plan_eq(
+            Arc::new(EliminateAggregate::new()),
+            plan.clone(),
+            expected,
+        )
     }
 
     #[test]
@@ -152,5 +148,4 @@ mod tests {
         let expected = "Distinct:\n  Projection: test.a, test.b\n    Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n      TableScan: test";
         assert_optimized_plan_equal(&plan, expected)
     }
-
 }
