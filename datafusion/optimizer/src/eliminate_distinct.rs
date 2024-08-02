@@ -16,10 +16,8 @@
 // under the License.
 
 //! Optimizer rule to replaces redundant aggregations on a plan.
-//! This reduces redundant Aggregations in PyhsicalPlan.
 //!
 //! This optimizer changes this kind of query
-//!
 //! SELECT DISTINCT c3 FROM aggregate_test_100 GROUP BY c3 LIMIT 5;
 //! to this
 //! SELECT c3 FROM aggregate_test_100 GROUP BY c3 LIMIT 5;
