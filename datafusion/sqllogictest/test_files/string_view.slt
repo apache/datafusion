@@ -364,7 +364,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(CAST(test.column1_utf8view AS Utf8), Utf8("foo")) AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: starts_with(test.column1_utf8view, Utf8View("foo")) AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 >>>>>>> 222263c15 (simplify string view handling)
 
