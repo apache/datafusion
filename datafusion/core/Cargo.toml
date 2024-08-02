@@ -186,6 +186,10 @@ name = "reuse_hash"
 
 [[bench]]
 harness = false
+name = "low_cardinality"
+
+[[bench]]
+harness = false
 name = "filter_query_sql"
 
 [[bench]]
