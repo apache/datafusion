@@ -64,14 +64,7 @@ fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarV
     let can_evaluate_to_const = can_evaluate_to_const(args);
     let key = get_first_array_ref(&args[0])?;
     let value = get_first_array_ref(&args[1])?;
-    if can_evaluate_to_const {
-        make_map_batch_internal(key, value, can_evaluate_to_const)
-    } else {
-        match data_type {
-            DataType::LargeList(..) => make_map_array_internal::<i64>(key, value),
-            _ => make_map_array_internal::<i32>(key, value),
-        }
-    }
+    make_map_batch_internal(key, value, can_evaluate_to_const, data_type)
 }
 
 fn get_first_array_ref(
@@ -92,6 +85,7 @@ fn make_map_batch_internal(
     keys: ArrayRef,
     values: ArrayRef,
     can_evaluate_to_const: bool,
+    data_type: DataType,
 ) -> datafusion_common::Result<ColumnarValue> {
     if keys.null_count() > 0 {
         return exec_err!("map key cannot be null");
@@ -99,6 +93,14 @@ fn make_map_batch_internal(
 
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
+    }
+
+    if !can_evaluate_to_const {
+        return if let DataType::LargeList(..) = data_type {
+            make_map_array_internal::<i64>(keys, values)
+        } else {
+            make_map_array_internal::<i32>(keys, values)
+        };
     }
 
     let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
@@ -138,80 +140,6 @@ fn make_map_batch_internal(
     } else {
         ColumnarValue::Array(map_array)
     })
-}
-
-fn make_map_array_internal<O: OffsetSizeTrait>(
-    keys: ArrayRef,
-    values: ArrayRef,
-) -> datafusion_common::Result<ColumnarValue> {
-    let mut offset_buffer = vec![O::usize_as(0)];
-    let mut running_offset = O::usize_as(0);
-
-    let keys = keys
-        .as_list::<O>()
-        .iter()
-        .flatten()
-        .map(|x| match x.data_type() {
-            // To handle [[1,2,3]]
-            DataType::List(_) => x.as_list::<i32>().value(0),
-            DataType::LargeList(_) => x.as_list::<i64>().value(0),
-            _ => x,
-        })
-        .collect::<Vec<_>>();
-    let values = values
-        .as_list::<O>()
-        .iter()
-        .flatten()
-        .map(|x| match x.data_type() {
-            DataType::List(_) => x.as_list::<i32>().value(0),
-            DataType::LargeList(_) => x.as_list::<i64>().value(0),
-            _ => x,
-        })
-        .collect::<Vec<_>>();
-
-    let mut key_array_vec = vec![];
-    let mut value_array_vec = vec![];
-    for (k, v) in keys.iter().zip(values.iter()) {
-        running_offset = running_offset.add(O::usize_as(k.len()));
-        offset_buffer.push(running_offset);
-        key_array_vec.push(k.as_ref());
-        value_array_vec.push(v.as_ref());
-    }
-
-    // concatenate all the arrays
-    let flattened_keys = arrow::compute::concat(key_array_vec.as_ref()).unwrap();
-    let flattened_values = arrow::compute::concat(value_array_vec.as_ref()).unwrap();
-
-    let fields = vec![
-        Arc::new(Field::new("key", flattened_keys.data_type().clone(), false)),
-        Arc::new(Field::new(
-            "value",
-            flattened_values.data_type().clone(),
-            true,
-        )),
-    ];
-
-    let struct_data = ArrayData::builder(DataType::Struct(fields.into()))
-        .len(flattened_keys.len())
-        .add_child_data(flattened_keys.to_data())
-        .add_child_data(flattened_values.to_data())
-        .build()
-        .unwrap();
-
-    let map_data = ArrayData::builder(DataType::Map(
-        Arc::new(Field::new(
-            "entries",
-            struct_data.data_type().clone(),
-            false,
-        )),
-        false,
-    ))
-    .len(keys.len())
-    .add_child_data(struct_data)
-    .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()))
-    .build()
-    .unwrap();
-    Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
 }
 
 #[derive(Debug)]
@@ -297,4 +225,129 @@ fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType
             data_type
         ),
     }
+}
+
+/// Helper function to create MapArray from array of values to support arrays for Map scalar function
+///
+/// ``` text
+/// Format of input KEYS and VALUES column
+///         keys                        values
+/// +---------------------+       +---------------------+
+/// | +-----------------+ |       | +-----------------+ |
+/// | | [k11, k12, k13] | |       | | [v11, v12, v13] | |
+/// | +-----------------+ |       | +-----------------+ |
+/// |                     |       |                     |
+/// | +-----------------+ |       | +-----------------+ |
+/// | | [k21, k22, k23] | |       | | [v21, v22, v23] | |
+/// | +-----------------+ |       | +-----------------+ |
+/// |                     |       |                     |
+/// | +-----------------+ |       | +-----------------+ |
+/// | |[k31, k32, k33]  | |       | |[v31, v32, v33]  | |
+/// | +-----------------+ |       | +-----------------+ |
+/// +---------------------+       +---------------------+
+/// ```
+/// Flattened keys and values array to user create `StructArray`,
+/// which serves as inner child for `MapArray`
+///
+/// ``` text
+/// Flattened           Flattened
+/// Keys                Values
+/// +-----------+      +-----------+
+/// | +-------+ |      | +-------+ |
+/// | |  k11  | |      | |  v11  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k12  | |      | |  v12  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k13  | |      | |  v13  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k21  | |      | |  v21  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k22  | |      | |  v22  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k23  | |      | |  v23  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k31  | |      | |  v31  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k32  | |      | |  v32  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k33  | |      | |  v33  | |
+/// | +-------+ |      | +-------+ |
+/// +-----------+      +-----------+
+/// ```text
+
+fn make_map_array_internal<O: OffsetSizeTrait>(
+    keys: ArrayRef,
+    values: ArrayRef,
+) -> datafusion_common::Result<ColumnarValue> {
+    let mut offset_buffer = vec![O::usize_as(0)];
+    let mut running_offset = O::usize_as(0);
+
+    let keys = collect_array_ref::<O>(keys);
+    let values = collect_array_ref::<O>(values);
+
+    let mut key_array_vec = vec![];
+    let mut value_array_vec = vec![];
+    for (k, v) in keys.iter().zip(values.iter()) {
+        running_offset = running_offset.add(O::usize_as(k.len()));
+        offset_buffer.push(running_offset);
+        key_array_vec.push(k.as_ref());
+        value_array_vec.push(v.as_ref());
+    }
+
+    // concatenate all the arrays
+    let flattened_keys = arrow::compute::concat(key_array_vec.as_ref()).unwrap();
+    let flattened_values = arrow::compute::concat(value_array_vec.as_ref()).unwrap();
+
+    let fields = vec![
+        Arc::new(Field::new("key", flattened_keys.data_type().clone(), false)),
+        Arc::new(Field::new(
+            "value",
+            flattened_values.data_type().clone(),
+            true,
+        )),
+    ];
+
+    let struct_data = ArrayData::builder(DataType::Struct(fields.into()))
+        .len(flattened_keys.len())
+        .add_child_data(flattened_keys.to_data())
+        .add_child_data(flattened_values.to_data())
+        .build()
+        .unwrap();
+
+    let map_data = ArrayData::builder(DataType::Map(
+        Arc::new(Field::new(
+            "entries",
+            struct_data.data_type().clone(),
+            false,
+        )),
+        false,
+    ))
+    .len(keys.len())
+    .add_child_data(struct_data)
+    .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()))
+    .build()
+    .unwrap();
+    Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
+}
+
+pub fn collect_array_ref<O: OffsetSizeTrait>(a: ArrayRef) -> Vec<ArrayRef> {
+    a.as_list::<O>()
+        .iter()
+        .flatten()
+        .map(|x| match x.data_type() {
+            // if an element is a list
+            // [[1,2,3]] -> [1,2,3]
+            DataType::List(_) => x.as_list::<i32>().value(0),
+            DataType::LargeList(_) => x.as_list::<i64>().value(0),
+            _ => x,
+        })
+        .collect::<Vec<_>>()
 }
