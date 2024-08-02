@@ -399,7 +399,7 @@ pub struct Max {
 
 impl std::fmt::Debug for Max {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("Min")
+        f.debug_struct("Max")
             .field("name", &self.name())
             .field("signature", &self.signature)
             .finish()
