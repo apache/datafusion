@@ -44,11 +44,9 @@ macro_rules! create_func {
             /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
             #[allow(non_upper_case_globals)]
             static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<crate::AggregateUDF>> =
-            std::sync::OnceLock::new();
+                std::sync::OnceLock::new();
 
-            /// AggregateFunction that returns a [AggregateUDF] for [$UDAF]
-            ///
-            /// [AggregateUDF]: crate::AggregateUDF
+            #[doc = concat!("AggregateFunction that returns a [AggregateUDF](crate::AggregateUDF) for [`", stringify!($UDAF), "`]")]
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<crate::AggregateUDF> {
                 [< STATIC_ $UDAF >]
                     .get_or_init(|| {
