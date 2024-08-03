@@ -335,7 +335,7 @@ SELECT MAP {'a':1, 'b':2, 'c':3 }['a'] FROM t;
 1
 1
 
-# TODO: support parsing an empty map
+# TODO(https://github.com/sqlparser-rs/sqlparser-rs/pull/1361): support parsing an empty map. Enable this after upgrading sqlparser-rs.
 # query ?
 # SELECT MAP {};
 # ----
@@ -442,19 +442,19 @@ SELECT MAP { 'a': 1, 2: 3 };
 ----
 {a: 1, 2: 3}
 
-# TODO: fix accessing map with non-string key
+# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
 # query ?
 # SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[1];
 # ----
 # a
 
-# TODO: fix accessing map with non-string key
+# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
 # query ?
 # SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {1:'a', 2:'b'}];
 # ----
 # 1
 
-# TODO: fix accessing map with non-string key
+# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
 # query ?
 # SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
 # ----
