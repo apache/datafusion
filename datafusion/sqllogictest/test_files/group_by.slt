@@ -2013,19 +2013,21 @@ logical_plan
 07)--------SubqueryAlias: r
 08)----------TableScan: tab0 projection=[col0, col1]
 physical_plan
-01)SortExec: expr=[col0@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[col0@0 as col0, last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST]@3 as last_col1]
-03)----AggregateExec: mode=Single, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST]]
-04)------CoalescePartitionsExec
-05)--------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
+01)SortPreservingMergeExec: [col0@0 ASC NULLS LAST]
+02)--SortExec: expr=[col0@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[col0@0 as col0, last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST]@3 as last_col1]
+04)------AggregateExec: mode=SinglePartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST]]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
+07)------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
 08)--------------CoalesceBatchesExec: target_batch_size=8192
-09)----------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
-10)------------------MemoryExec: partitions=1, partition_sizes=[3]
-11)--------------CoalesceBatchesExec: target_batch_size=8192
-12)----------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
-13)------------------MemoryExec: partitions=1, partition_sizes=[3]
+09)----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
+10)------------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
+12)----------------------MemoryExec: partitions=1, partition_sizes=[3]
+13)------------------CoalesceBatchesExec: target_batch_size=8192
+14)--------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
+15)----------------------MemoryExec: partitions=1, partition_sizes=[3]
 
 # Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
@@ -3352,9 +3354,9 @@ physical_plan
 01)SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
 02)--SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[sn@0 as sn, amount@1 as amount, 2 * CAST(sn@0 AS Int64) as Int64(2) * s.sn]
-04)------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-05)--------AggregateExec: mode=Single, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
-06)----------CoalescePartitionsExec
+04)------AggregateExec: mode=SinglePartitioned, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
+05)--------CoalesceBatchesExec: target_batch_size=4
+06)----------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
 07)------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
 
 query IRI
@@ -3416,15 +3418,17 @@ logical_plan
 08)----------SubqueryAlias: r
 09)------------TableScan: sales_global_with_pk projection=[sn, amount]
 physical_plan
-01)SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[sn@0 as sn, sum(l.amount)@2 as sum(l.amount), amount@1 as amount]
-03)----AggregateExec: mode=Single, gby=[sn@1 as sn, amount@2 as amount], aggr=[sum(l.amount)]
-04)------CoalescePartitionsExec
-05)--------ProjectionExec: expr=[amount@1 as amount, sn@2 as sn, amount@3 as amount]
-06)----------NestedLoopJoinExec: join_type=Inner, filter=sn@0 >= sn@1
-07)------------CoalescePartitionsExec
-08)--------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
-09)------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+01)SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
+02)--SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[sn@0 as sn, sum(l.amount)@2 as sum(l.amount), amount@1 as amount]
+04)------AggregateExec: mode=SinglePartitioned, gby=[sn@1 as sn, amount@2 as amount], aggr=[sum(l.amount)]
+05)--------CoalesceBatchesExec: target_batch_size=4
+06)----------RepartitionExec: partitioning=Hash([sn@1, amount@2], 8), input_partitions=8
+07)------------ProjectionExec: expr=[amount@1 as amount, sn@2 as sn, amount@3 as amount]
+08)--------------NestedLoopJoinExec: join_type=Inner, filter=sn@0 >= sn@1
+09)----------------CoalescePartitionsExec
+10)------------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+11)----------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
 
 query IRR
 SELECT r.sn, SUM(l.amount), r.amount
@@ -3561,13 +3565,17 @@ logical_plan
 07)------------SubqueryAlias: l
 08)--------------TableScan: sales_global_with_pk projection=[zip_code, country, sn, ts, currency, amount]
 physical_plan
-01)SortExec: expr=[sn@2 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount]
-03)----AggregateExec: mode=Single, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]
-04)------ProjectionExec: expr=[zip_code@0 as zip_code, country@1 as country, sn@2 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@6 as sum_amount]
-05)--------BoundedWindowAggExec: wdw=[sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)), is_causal: false }], mode=[Sorted]
-06)----------CoalescePartitionsExec
-07)------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+01)SortPreservingMergeExec: [sn@2 ASC NULLS LAST]
+02)--SortExec: expr=[sn@2 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount]
+04)------AggregateExec: mode=SinglePartitioned, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]
+05)--------CoalesceBatchesExec: target_batch_size=4
+06)----------RepartitionExec: partitioning=Hash([sn@2, zip_code@0, country@1, ts@3, currency@4, amount@5, sum_amount@6], 8), input_partitions=8
+07)------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+08)--------------ProjectionExec: expr=[zip_code@0 as zip_code, country@1 as country, sn@2 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@6 as sum_amount]
+09)----------------BoundedWindowAggExec: wdw=[sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)), is_causal: false }], mode=[Sorted]
+10)------------------CoalescePartitionsExec
+11)--------------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
 
 
 query ITIPTRR
@@ -3899,8 +3907,12 @@ logical_plan
 01)Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 02)--TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
-01)AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
+01)AggregateExec: mode=SinglePartitioned, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
+02)--SortExec: expr=[c@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----CoalesceBatchesExec: target_batch_size=2
+04)------RepartitionExec: partitioning=Hash([c@1, b@0], 8), input_partitions=8
+05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
 
 # drop table multiple_ordered_table_with_pk
 statement ok
@@ -3935,8 +3947,12 @@ logical_plan
 01)Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 02)--TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
-01)AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
+01)AggregateExec: mode=SinglePartitioned, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
+02)--SortExec: expr=[c@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----CoalesceBatchesExec: target_batch_size=2
+04)------RepartitionExec: partitioning=Hash([c@1, b@0], 8), input_partitions=8
+05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
 
 statement ok
 set datafusion.execution.target_partitions = 1;
@@ -4174,10 +4190,11 @@ physical_plan
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=8
 05)--------AggregateExec: mode=Partial, gby=[y@0 as y], aggr=[sum(alias1), MAX(alias1)]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-07)------------AggregateExec: mode=Single, gby=[y@1 as y, __common_expr_1@0 as alias1], aggr=[]
-08)--------------ProjectionExec: expr=[CAST(x@0 AS Float64) as __common_expr_1, y@1 as y]
-09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+06)----------AggregateExec: mode=SinglePartitioned, gby=[y@1 as y, __common_expr_1@0 as alias1], aggr=[]
+07)------------CoalesceBatchesExec: target_batch_size=2
+08)--------------RepartitionExec: partitioning=Hash([y@1, __common_expr_1@0], 8), input_partitions=1
+09)----------------ProjectionExec: expr=[CAST(x@0 AS Float64) as __common_expr_1, y@1 as y]
+10)------------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # create an unbounded table that contains ordered timestamp.
 statement ok
@@ -4383,9 +4400,11 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=2
 06)----------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
 07)------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[count(alias1), MIN(alias1), sum(alias2), MAX(alias3)]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-09)----------------AggregateExec: mode=Single, gby=[c1@0 as c1, c2@1 as alias1], aggr=[alias2, alias3]
-10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], has_header=true
+08)--------------AggregateExec: mode=SinglePartitioned, gby=[c1@0 as c1, c2@1 as alias1], aggr=[alias2, alias3]
+09)----------------CoalesceBatchesExec: target_batch_size=2
+10)------------------RepartitionExec: partitioning=Hash([c1@0, c2@1], 8), input_partitions=8
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+12)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], has_header=true
 
 # Use PostgreSQL dialect
 statement ok
