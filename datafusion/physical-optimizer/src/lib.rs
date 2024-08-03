@@ -18,6 +18,7 @@
 #![deny(clippy::clone_on_ref_ptr)]
 
 pub mod aggregate_statistics;
+pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod limited_distinct_aggregation;
 mod optimizer;

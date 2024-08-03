@@ -21,14 +21,19 @@
 //! "Repartition" or "Sortedness"
 //!
 //! [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
+
+mod aggregate_statistics_test;
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
-pub mod enforce_distribution;
+mod enforce_distribution_test;
+mod enforce_sorting_test;
 pub mod join_selection;
 pub mod limit_pushdown;
+mod limited_distinct_aggregation_test;
 pub mod optimizer;
 pub mod projection_pushdown;
 pub mod pruning;
+mod replace_with_order_preserving_variants_test;
 pub mod sanity_checker;
 #[cfg(test)]
 pub mod test_utils;

@@ -32,6 +32,7 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
@@ -42,5 +43,6 @@ datafusion-physical-plan = { workspace = true }
 itertools = { workspace = true }
 
 [dev-dependencies]
-datafusion = { workspace = true }
+arrow-schema = { workspace = true }
+rstest = { workspace = true }
 tokio = { workspace = true }

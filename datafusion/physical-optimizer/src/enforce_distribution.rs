@@ -24,26 +24,28 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::config::ConfigOptions;
-use crate::error::Result;
-use crate::physical_optimizer::utils::{
+use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
     is_sort_preserving_merge,
 };
-use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use crate::physical_plan::joins::{
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Result;
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateMode, PhysicalGroupBy,
+};
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
-use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::tree_node::PlanContext;
-use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
-use crate::physical_plan::windows::WindowAggExec;
-use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::tree_node::PlanContext;
+use datafusion_physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
+use datafusion_physical_plan::windows::WindowAggExec;
+use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
-use arrow::compute::SortOptions;
+use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
@@ -54,8 +56,8 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use crate::output_requirements::OutputRequirementExec;
+use crate::PhysicalOptimizerRule;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -269,9 +271,10 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 /// 4) If the current plan is Projection, transform the requirements to the columns before the Projection and push down requirements
 /// 5) For other types of operators, by default, pushdown the parent requirements to children.
 ///
-fn adjust_input_keys_ordering(
+pub fn adjust_input_keys_ordering(
     mut requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
+    // TODO: make this function private when https://github.com/apache/datafusion/issues/11502 is resolved
     let plan = requirements.plan.clone();
 
     if let Some(HashJoinExec {
@@ -590,9 +593,10 @@ fn shift_right_required(
 /// The Bottom-Up approach will be useful in future if we plan to support storage partition-wised Joins.
 /// In that case, the datasources/tables might be pre-partitioned and we can't adjust the key ordering of the datasources
 /// and then can't apply the Top-Down reordering process.
-pub(crate) fn reorder_join_keys_to_inputs(
+pub fn reorder_join_keys_to_inputs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    // TODO: make this function pub crate once https://github.com/apache/datafusion/issues/11502 is resolved
     let plan_any = plan.as_any();
     if let Some(HashJoinExec {
         left,
@@ -1035,10 +1039,11 @@ fn replace_order_preserving_variants(
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
 /// exchange operators in other places.
-fn ensure_distribution(
+pub fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
 ) -> Result<Transformed<DistributionContext>> {
+    // TODO: make this function private once https://github.com/apache/datafusion/issues/11502 is resolved
     let dist_context = update_children(dist_context)?;
 
     if dist_context.plan.children().is_empty() {

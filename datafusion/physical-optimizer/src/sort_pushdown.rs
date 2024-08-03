@@ -52,7 +52,8 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
     }
 }
 
-pub(crate) fn pushdown_sorts(
+// TODO: make this function pub crate once https://github.com/apache/datafusion/issues/11502 is resolved
+pub fn pushdown_sorts(
     mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;

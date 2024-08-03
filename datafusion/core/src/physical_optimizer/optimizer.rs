@@ -22,17 +22,17 @@ use std::sync::Arc;
 
 use super::projection_pushdown::ProjectionPushdown;
 use super::update_aggr_exprs::OptimizeAggregateOrder;
-use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
-use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
-use crate::physical_optimizer::enforce_sorting::EnforceSorting;
 use crate::physical_optimizer::join_selection::JoinSelection;
 use crate::physical_optimizer::limit_pushdown::LimitPushdown;
-use crate::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::physical_optimizer::output_requirements::OutputRequirements;
 use crate::physical_optimizer::sanity_checker::SanityCheckPlan;
 use crate::physical_optimizer::topk_aggregation::TopKAggregation;
+use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
+use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
+use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
+use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 
 /// A rule-based physical optimizer.
 #[derive(Clone)]
