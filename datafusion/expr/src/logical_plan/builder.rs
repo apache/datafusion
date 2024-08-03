@@ -1616,13 +1616,10 @@ pub fn get_unnested_list_column_recursive(
             }
             return get_unnested_list_column_recursive(field.data_type(), depth - 1);
         }
-        _ => {
-            return internal_err!(
-                "trying to unnest on invalid data type {:?}",
-                data_type
-            );
-        }
+        _ => {}
     };
+
+    internal_err!("trying to unnest on invalid data type {:?}", data_type)
 }
 
 fn get_unnested_columns_inferred(
@@ -1630,24 +1627,17 @@ fn get_unnested_columns_inferred(
     data_type: &DataType,
 ) -> Result<ColumnUnnestType> {
     match data_type {
-        DataType::List(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => {
-            return Ok(ColumnUnnestType::List(vec![ColumnUnnestList {
+        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
+            Ok(ColumnUnnestType::List(vec![ColumnUnnestList {
                 output_column: Column::from_name(col_name),
                 depth: 1,
-            }]));
+            }]))
         }
-        DataType::Struct(fields) => {
-            return Ok(ColumnUnnestType::Struct);
-        }
+        DataType::Struct(_) => Ok(ColumnUnnestType::Struct),
         _ => {
-            return internal_err!(
-                "trying to unnest on invalid data type {:?}",
-                data_type
-            );
+            internal_err!("trying to unnest on invalid data type {:?}", data_type)
         }
-    };
+    }
 }
 
 // TODO: make me recursive
@@ -1740,7 +1730,7 @@ pub fn unnest_with_options(
         .map(|(index, (original_qualifier, original_field))| {
             match column_by_original_index.get(&index) {
                 Some((column_to_unnest, unnest_type)) => {
-                    let mut inferred_unnest_type = *unnest_type;
+                    let mut inferred_unnest_type = unnest_type.clone();
                     if let ColumnUnnestType::Inferred = unnest_type {
                         inferred_unnest_type = get_unnested_columns_inferred(
                             &column_to_unnest.name,
@@ -1783,7 +1773,7 @@ pub fn unnest_with_options(
                                     .flatten()
                                     .collect::<Vec<_>>()
                             }
-                            _ => internal_err!("Invalid unnest type"),
+                            _ => return internal_err!("Invalid unnest type"),
                         };
                     // new columns dependent on the same original index
                     dependency_indices

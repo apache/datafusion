@@ -483,11 +483,16 @@ pub(crate) fn transform_bottom_unnest(
 // write test for recursive_transform_unnest
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, ops::Add, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        ops::Add,
+        str::FromStr,
+        sync::Arc,
+    };
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
-    use datafusion_common::{DFSchema, Result};
+    use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{col, lit, unnest, EmptyRelation, LogicalPlan};
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
@@ -549,7 +554,7 @@ mod tests {
         let original_expr = unnest(unnest(col("3d_col")))
             .add(unnest(unnest(col("3d_col"))))
             .add(col("i64_col"));
-        let mut memo = HashSet::new();
+        let mut memo = HashMap::new();
         let transformed_exprs = transform_bottom_unnest(
             &input,
             &mut unnest_placeholder_columns,
@@ -566,7 +571,7 @@ mod tests {
         );
         // memoization only contains 1 transformation
         assert_eq!(memo.len(), 1);
-        assert!(memo.get(&col("3d_col")).is_some());
+        assert!(memo.get(&Column::from_name("3d_col")).is_some());
         assert_eq!(
             unnest_placeholder_columns,
             vec!["unnest_placeholder(3d_col)"]
@@ -598,7 +603,7 @@ mod tests {
         // memoization still contains 1 transformation
         // and the previous transformation is reused
         assert_eq!(memo.len(), 1);
-        assert!(memo.get(&col("3d_col")).is_some());
+        assert!(memo.get(&Column::from_name("3d_col")).is_some());
         assert_eq!(
             unnest_placeholder_columns,
             vec!["unnest_placeholder(3d_col)"]
@@ -635,7 +640,8 @@ mod tests {
         // memoization still contains 1 transformation
         // and the previous transformation is reused
         assert_eq!(memo.len(), 2);
-        assert!(memo.get(&col("struct_arr_col")).is_some());
+
+        assert!(memo.get(&Column::from_name("struct_arr_col")).is_some());
         assert_eq!(
             unnest_placeholder_columns,
             vec![
@@ -690,7 +696,7 @@ mod tests {
         let original_expr = unnest(unnest(col("3d_col")))
             .add(unnest(unnest(col("3d_col"))))
             .add(col("i64_col"));
-        let mut memo = HashSet::new();
+        let mut memo = HashMap::new();
         let transformed_exprs = transform_bottom_unnest(
             &input,
             &mut unnest_placeholder_columns,
@@ -707,7 +713,7 @@ mod tests {
         );
         // memoization only contains 1 transformation
         assert_eq!(memo.len(), 1);
-        assert!(memo.get(&col("3d_col")).is_some());
+        assert!(memo.get(&Column::from_name("3d_col")).is_some());
         assert_eq!(
             unnest_placeholder_columns,
             vec!["unnest_placeholder(3d_col)"]
@@ -739,7 +745,7 @@ mod tests {
         // memoization still contains 1 transformation
         // and the previous transformation is reused
         assert_eq!(memo.len(), 1);
-        assert!(memo.get(&col("3d_col")).is_some());
+        assert!(memo.get(&Column::from_name("3d_col")).is_some());
         assert_eq!(
             unnest_placeholder_columns,
             vec!["unnest_placeholder(3d_col)"]
@@ -790,7 +796,7 @@ mod tests {
         let mut unnest_placeholder_columns = vec![];
         let mut inner_projection_exprs = vec![];
 
-        let mut memo = HashSet::new();
+        let mut memo = HashMap::new();
         // unnest(struct_col)
         let original_expr = unnest(col("struct_col"));
         let transformed_exprs = transform_bottom_unnest(

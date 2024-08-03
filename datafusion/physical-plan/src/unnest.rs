@@ -42,14 +42,12 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::builder::UnnestList;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
-use itertools::Itertools;
 use log::trace;
 
 /// Unnest the given columns (either with type struct or list)
@@ -80,7 +78,7 @@ impl UnnestExec {
     /// Create a new [UnnestExec].
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        list_column_indices: Vec<usize>,
+        list_column_indices: Vec<ListUnnest>,
         struct_column_indices: Vec<usize>,
         schema: SchemaRef,
         options: UnnestOptions,
@@ -343,6 +341,7 @@ fn flatten_struct_cols(
     Ok(RecordBatch::try_new(Arc::clone(schema), columns_expanded)?)
 }
 
+#[derive(Debug, Clone)]
 pub struct ListUnnest {
     index_in_input_schema: usize,
     depth: usize,
@@ -410,8 +409,8 @@ fn build_batch(
                             depth,
                         },
                     )| {
-                        acc.entry(index_in_input_schema)
-                            .or_insert_with(vec![])
+                        acc.entry(*index_in_input_schema)
+                            .or_insert(vec![])
                             .push(flattened_array);
                         acc
                     },
@@ -617,7 +616,6 @@ fn unnest_list_array(
     capacity: usize,
     depth: usize,
 ) -> Result<ArrayRef> {
-    let st = list_array.as_list();
     let values = list_array.values();
     let mut take_indicies_builder = PrimitiveArray::<Int64Type>::builder(capacity);
     for row in 0..list_array.len() {
@@ -712,12 +710,12 @@ fn create_take_indicies(
 ///
 fn flatten_list_cols_from_indices(
     batch: &RecordBatch,
-    unnested_list_arrays: HashMap<usize, Vec<ArrayRef>>,
+    mut unnested_list_arrays: HashMap<usize, Vec<ArrayRef>>,
     indices: &PrimitiveArray<Int64Type>,
 ) -> Result<Vec<Arc<dyn Array>>> {
     let arrays = batch
         .columns()
-        .into_iter()
+        .iter()
         .enumerate()
         .map(
             |(col_idx, arr)| match unnested_list_arrays.remove(&col_idx) {
@@ -726,6 +724,7 @@ fn flatten_list_cols_from_indices(
             },
         )
         .collect::<Result<Vec<_>>>()?
+        .into_iter()
         .flatten()
         .collect::<Vec<_>>();
     Ok(arrays)
