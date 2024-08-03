@@ -388,9 +388,9 @@ async fn udaf_as_window_func() -> Result<()> {
     context.register_udaf(my_acc);
 
     let sql = "SELECT a, MY_ACC(b) OVER(PARTITION BY a) FROM my_table";
-    let expected = r#"Projection: my_table.a, my_acc(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-  WindowAggr: windowExpr=[[my_acc(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-    TableScan: my_table"#;
+    let expected = "Projection: my_table.a, \"my_acc(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\"\
+    \n  WindowAggr: windowExpr=[[my_acc(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+    \n    TableScan: my_table";
 
     let dataframe = context.sql(sql).await.unwrap();
     assert_eq!(format!("{:?}", dataframe.logical_plan()), expected);
