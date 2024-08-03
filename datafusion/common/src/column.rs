@@ -18,6 +18,7 @@
 //! Column
 
 use arrow_schema::{Field, FieldRef};
+use std::borrow::Cow;
 
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
@@ -153,6 +154,17 @@ impl Column {
                 )
             }
             None => quote_identifier(&self.name).to_string(),
+        }
+    }
+
+    fn quoted_flat_name_if_contain_dot(&self) -> String {
+        match &self.relation {
+            Some(r) => format!(
+                "{}.{}",
+                table_reference_to_quoted_string(r),
+                quoted_if_contain_dot(&self.name)
+            ),
+            None => quoted_if_contain_dot(&self.name).to_string(),
         }
     }
 
@@ -328,6 +340,37 @@ impl Column {
     }
 }
 
+fn quoted_if_contain_dot(s: &str) -> Cow<str> {
+    if s.contains(".") {
+        Cow::Owned(format!("\"{}\"", s.replace('"', "\"\"")))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
+fn table_reference_to_quoted_string(table_ref: &TableReference) -> String {
+    match table_ref {
+        TableReference::Bare { table } => quoted_if_contain_dot(table).to_string(),
+        TableReference::Partial { schema, table } => {
+            format!(
+                "{}.{}",
+                quoted_if_contain_dot(schema),
+                quoted_if_contain_dot(table)
+            )
+        }
+        TableReference::Full {
+            catalog,
+            schema,
+            table,
+        } => format!(
+            "{}.{}.{}",
+            quoted_if_contain_dot(catalog),
+            quoted_if_contain_dot(schema),
+            quoted_if_contain_dot(table)
+        ),
+    }
+}
+
 impl From<&str> for Column {
     fn from(c: &str) -> Self {
         Self::from_qualified_name(c)
@@ -372,7 +415,7 @@ impl FromStr for Column {
 
 impl fmt::Display for Column {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.quoted_flat_name())
+        write!(f, "{}", self.quoted_flat_name_if_contain_dot())
     }
 }
 
@@ -462,5 +505,9 @@ mod tests {
         assert_eq!(col.to_string(), "t1.a");
         let col = Column::new(TableReference::none(), "t1.a");
         assert_eq!(col.to_string(), r#""t1.a""#);
+        let col = Column::new(Some(TableReference::full("a.b", "c.d", "e.f")), "g.h");
+        assert_eq!(col.to_string(), r#""a.b"."c.d"."e.f"."g.h""#);
+        let col = Column::new(TableReference::none(), "max(a)");
+        assert_eq!(col.to_string(), "max(a)")
     }
 }

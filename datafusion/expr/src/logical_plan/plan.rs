@@ -3528,7 +3528,8 @@ digraph {
             .build()
             .unwrap();
 
-        let expected = "Projection: t.\"max(id)\"\n  Filter: t.state = Utf8(\"CO\")\n    TableScan: t";
+        let expected =
+            "Projection: t.max(id)\n  Filter: t.state = Utf8(\"CO\")\n    TableScan: t";
         let actual = format!("{}", plan.display_indent());
         assert_eq!(expected.to_string(), actual);
 
