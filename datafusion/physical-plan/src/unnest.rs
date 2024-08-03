@@ -65,7 +65,7 @@ pub struct UnnestExec {
     /// The schema once the unnest is applied
     schema: SchemaRef,
     /// indices of the list-typed columns in the input schema
-    list_column_indices: Vec<UnnestList>,
+    list_column_indices: Vec<ListUnnest>,
     /// indices of the struct-typed columns in the input schema
     struct_column_indices: Vec<usize>,
     /// Options
@@ -152,7 +152,6 @@ impl ExecutionPlan for UnnestExec {
             Arc::clone(&children[0]),
             self.list_column_indices.clone(),
             self.struct_column_indices.clone(),
-            self.transformed_col.clone(),
             Arc::clone(&self.schema),
             self.options.clone(),
         )))

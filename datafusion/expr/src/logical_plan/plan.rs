@@ -17,12 +17,6 @@
 
 //! Logical plan types
 
-use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-
-use super::builder::UnnestList;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
@@ -40,6 +34,10 @@ use crate::{
     CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
     TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
+use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
@@ -1865,7 +1863,8 @@ impl LogicalPlan {
                         let input_columns = plan.schema().columns();
                         let list_type_columns = list_col_indices
                             .iter()
-                            .map(|i| &input_columns[*i])
+                            //TODO: fixme: add depth
+                            .map(|(i,_)| &input_columns[*i])
                             .collect::<Vec<&Column>>();
                         let struct_type_columns = struct_col_indices
                             .iter()
@@ -2878,11 +2877,18 @@ pub enum Partitioning {
     DistributeBy(Vec<Expr>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ColumnUnnestType {
     List(Vec<ColumnUnnestList>),
+    // for struct, there can only be one unnest performed on one column at a time
     Struct,
+    // Infer the unnest type based on column schema
+    // If column is a list column, the unnest depth will be 1
+    // This value is to support sugar syntax of old api (unnest(columns1,columns2))
+    Inferred,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ColumnUnnestList {
     pub output_column: Column,
     pub depth: usize,
@@ -2895,13 +2901,13 @@ pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// Columns to run unnest on, can be a list of (List/Struct) columns
-    pub exec_columns: HashMap<Column, ColumnUnnestType>,
+    pub exec_columns: Vec<(Column, ColumnUnnestType)>,
     /// refer to the indices(in the input schema) of columns
     /// that have type list to run unnest on
-    pub list_type_columns: HashSet<usize, Vec<ColumnUnnestList>>,
+    pub list_type_columns: Vec<(usize, ColumnUnnestList)>,
     /// refer to the indices (in the input schema) of columns
     /// that have type struct to run unnest on
-    pub struct_type_columns: HashSet<usize>,
+    pub struct_type_columns: Vec<usize>,
     /// Having items aligned with the output columns
     /// representing which column in the input schema each output column depends on
     pub dependency_indices: Vec<usize>,
