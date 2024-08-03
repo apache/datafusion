@@ -20,6 +20,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_array::{Int64Array, StringArray};
+use arrow_schema::SchemaRef;
 use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
@@ -35,22 +36,17 @@ async fn query(ctx: &mut SessionContext, sql: &str) {
     criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
 
-fn create_context_for_high_cardinality(array_len: usize, batch_size: usize) -> Result<SessionContext> {
-    // define a schema.
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, false),
-        Field::new("b", DataType::Utf8, false),
-    ]));
-
-    // define data.
-    let batches = (0..array_len / batch_size)
+fn high_cardinality_batches(
+    array_len: usize,
+    batch_size: usize,
+    schema: SchemaRef,
+) -> Vec<RecordBatch> {
+    (0..array_len / batch_size)
         .map(|i| {
             let data1 = (0..batch_size)
-                .into_iter()
                 .map(|j| (batch_size * i + j) as i64)
                 .collect::<Vec<_>>();
             let data2 = (0..batch_size)
-                .into_iter()
                 .map(|j| format!("a{}", (batch_size * i + j)))
                 .collect::<Vec<_>>();
 
@@ -63,33 +59,20 @@ fn create_context_for_high_cardinality(array_len: usize, batch_size: usize) -> R
             )
             .unwrap()
         })
-        .collect::<Vec<_>>();
-
-    let ctx = SessionContext::new();
-
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider = MemTable::try_new(schema, vec![batches])?;
-    ctx.register_table("t", Arc::new(provider))?;
-
-    Ok(ctx)
+        .collect::<Vec<_>>()
 }
 
-fn create_context_for_low_cardinality(array_len: usize, batch_size: usize) -> Result<SessionContext> {
-    // define a schema.
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, false),
-        Field::new("b", DataType::Utf8, false),
-    ]));
-
-    // define data.
-    let batches = (0..array_len / batch_size)
+fn low_cardinality_batches(
+    array_len: usize,
+    batch_size: usize,
+    schema: SchemaRef,
+) -> Vec<RecordBatch> {
+    (0..array_len / batch_size)
         .map(|i| {
             let data1 = (0..batch_size)
-                .into_iter()
                 .map(|j| ((batch_size * i + j) % 4 > 1) as i64)
                 .collect::<Vec<_>>();
             let data2 = (0..batch_size)
-                .into_iter()
                 .map(|j| format!("a{}", ((batch_size * i + j) % 2)))
                 .collect::<Vec<_>>();
 
@@ -102,8 +85,13 @@ fn create_context_for_low_cardinality(array_len: usize, batch_size: usize) -> Re
             )
             .unwrap()
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+}
 
+fn create_context(
+    batches: Vec<RecordBatch>,
+    schema: SchemaRef,
+) -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
@@ -116,14 +104,20 @@ fn create_context_for_low_cardinality(array_len: usize, batch_size: usize) -> Re
 fn criterion_benchmark(c: &mut Criterion) {
     let array_len = 2000000; // 2M rows
     let batch_size = 8192;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
 
     c.bench_function("benchmark high cardinality", |b| {
-        let mut ctx = create_context_for_high_cardinality(array_len, batch_size).unwrap();
+        let batches = high_cardinality_batches(array_len, batch_size, Arc::clone(&schema));
+        let mut ctx = create_context(batches, Arc::clone(&schema)).unwrap();
         b.iter(|| block_on(query(&mut ctx, "select a, b, count(*) from t group by a, b order by count(*) desc limit 10")))
     });
 
     c.bench_function("benchmark low cardinality", |b| {
-        let mut ctx = create_context_for_low_cardinality(array_len, batch_size).unwrap();
+        let batches = low_cardinality_batches(array_len, batch_size, Arc::clone(&schema));
+        let mut ctx = create_context(batches, Arc::clone(&schema)).unwrap();
         b.iter(|| block_on(query(&mut ctx, "select a, b, count(*) from t group by a, b order by count(*) desc limit 10")))
     });
 }

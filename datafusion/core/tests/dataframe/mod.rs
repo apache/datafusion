@@ -2382,11 +2382,9 @@ async fn test_low_cardinality_multi_groupby() -> Result<()> {
         let batches = (0..array_len / batch_size)
             .map(|i| {
                 let data1 = (0..batch_size)
-                    .into_iter()
                     .map(|j| ((batch_size * i + j) % 4 > 1) as i64)
                     .collect::<Vec<_>>();
                 let data2 = (0..batch_size)
-                    .into_iter()
                     .map(|j| format!("a{}", ((batch_size * i + j) % 2)))
                     .collect::<Vec<_>>();
 
@@ -2440,11 +2438,9 @@ async fn test_high_cardinality_multi_groupby() -> Result<()> {
         let batches = (0..array_len / batch_size)
             .map(|i| {
                 let data1 = (0..batch_size)
-                    .into_iter()
                     .map(|j| (batch_size * i + j) as i64)
                     .collect::<Vec<_>>();
                 let data2 = (0..batch_size)
-                    .into_iter()
                     .map(|j| format!("a{}", (batch_size * i + j)))
                     .collect::<Vec<_>>();
 
