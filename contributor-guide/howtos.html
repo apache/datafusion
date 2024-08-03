@@ -608,7 +608,7 @@ users to enable or disable the new module as desired.</p></li>
 <p>Below is a checklist of what you need to do to add a new aggregate function to DataFusion:</p>
 <ul class="simple">
 <li><p>Add the actual implementation of an <code class="docutils literal notranslate"><span class="pre">Accumulator</span></code> and <code class="docutils literal notranslate"><span class="pre">AggregateExpr</span></code>:</p></li>
-<li><p>In <a class="reference download internal" download="" href="../_downloads/f9718f9b04809de030b1693c73858f19/aggregate_function.rs"><span class="xref download myst">datafusion/expr/src</span></a>, add:</p>
+<li><p>In <a class="reference internal" href="#../../../datafusion/expr/src/aggregate_function.rs"><span class="xref myst">datafusion/expr/src</span></a>, add:</p>
 <ul>
 <li><p>a new variant to <code class="docutils literal notranslate"><span class="pre">AggregateFunction</span></code></p></li>
 <li><p>a new entry to <code class="docutils literal notranslate"><span class="pre">FromStr</span></code> with the name of the function as called by SQL</p></li>
