@@ -18,17 +18,15 @@
 use std::sync::Arc;
 
 use super::utils::add_sort_above;
-use crate::physical_optimizer::utils::{
-    is_limit, is_sort_preserving_merge, is_union, is_window,
-};
-use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::joins::utils::calculate_join_output_ordering;
-use crate::physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
-use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::tree_node::PlanContext;
-use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use crate::utils::{is_limit, is_sort_preserving_merge, is_union, is_window};
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::joins::utils::calculate_join_output_ordering;
+use datafusion_physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::tree_node::PlanContext;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{plan_err, JoinSide, Result};

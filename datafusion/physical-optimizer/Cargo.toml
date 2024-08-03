@@ -34,5 +34,13 @@ workspace = true
 [dependencies]
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+itertools = { workspace = true }
+
+[dev-dependencies]
+datafusion = { workspace = true }
+tokio = { workspace = true }

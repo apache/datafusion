@@ -22,10 +22,10 @@
 use std::sync::Arc;
 
 use super::utils::{is_repartition, is_sort_preserving_merge};
-use crate::error::Result;
-use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort};
-use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::utils::{is_coalesce_partitions, is_sort};
+use datafusion_common::Result;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;

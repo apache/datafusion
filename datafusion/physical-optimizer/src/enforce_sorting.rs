@@ -37,27 +37,25 @@
 
 use std::sync::Arc;
 
-use super::utils::{add_sort_above, add_sort_above_with_check};
-use crate::config::ConfigOptions;
-use crate::error::Result;
-use crate::physical_optimizer::replace_with_order_preserving_variants::{
+use crate::sort_pushdown::{assign_initial_requirements, pushdown_sorts, SortPushDown};
+
+use crate::replace_with_order_preserving_variants::{
     replace_with_order_preserving_variants, OrderPreservationContext,
 };
-use crate::physical_optimizer::sort_pushdown::{
-    assign_initial_requirements, pushdown_sorts, SortPushDown,
+use crate::utils::{
+    add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_limit,
+    is_repartition, is_sort, is_sort_preserving_merge, is_union, is_window,
 };
-use crate::physical_optimizer::utils::{
-    is_coalesce_partitions, is_limit, is_repartition, is_sort, is_sort_preserving_merge,
-    is_union, is_window,
-};
-use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::tree_node::PlanContext;
-use crate::physical_plan::windows::{
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Result;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::tree_node::PlanContext;
+use datafusion_physical_plan::windows::{
     get_best_fitting_window, BoundedWindowAggExec, WindowAggExec,
 };
-use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
+use datafusion_physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -66,7 +64,7 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use crate::PhysicalOptimizerRule;
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the

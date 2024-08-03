@@ -1410,7 +1410,10 @@ version = "40.0.0"
 dependencies = [
  "datafusion-common",
  "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-functions-aggregate",
  "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
  "datafusion-physical-plan",
 ]
 

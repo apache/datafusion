@@ -17,7 +17,13 @@
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
+pub mod aggregate_statistics;
+pub mod enforce_sorting;
+pub mod limited_distinct_aggregation;
 mod optimizer;
 pub mod output_requirements;
+pub mod replace_with_order_preserving_variants;
+pub mod sort_pushdown;
+mod utils;
 
 pub use optimizer::PhysicalOptimizerRule;

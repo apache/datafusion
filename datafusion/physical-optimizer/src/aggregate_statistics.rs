@@ -18,17 +18,17 @@
 //! Utilizing exact statistics from sources to avoid scanning data
 use std::sync::Arc;
 
-use crate::config::ConfigOptions;
-use crate::error::Result;
-use crate::physical_plan::aggregates::AggregateExec;
-use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics};
-use crate::scalar::ScalarValue;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::Result;
+use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics};
 
+use crate::PhysicalOptimizerRule;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 
@@ -301,17 +301,17 @@ fn is_max(agg_expr: &dyn AggregateExpr) -> bool {
 pub(crate) mod tests {
     use super::*;
 
-    use crate::logical_expr::Operator;
-    use crate::physical_plan::aggregates::PhysicalGroupBy;
-    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use crate::physical_plan::common;
-    use crate::physical_plan::filter::FilterExec;
-    use crate::physical_plan::memory::MemoryExec;
-    use crate::prelude::SessionContext;
+    use datafusion::prelude::SessionContext;
+    use datafusion_expr::Operator;
+    use datafusion_physical_plan::aggregates::PhysicalGroupBy;
+    use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion_physical_plan::common;
+    use datafusion_physical_plan::filter::FilterExec;
+    use datafusion_physical_plan::memory::MemoryExec;
 
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
+    use datafusion_common::arrow::array::Int32Array;
+    use datafusion_common::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_int64_array;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::cast;
