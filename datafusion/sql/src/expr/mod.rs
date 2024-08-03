@@ -26,8 +26,8 @@ use sqlparser::ast::{
 };
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
-    Result, ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
@@ -723,13 +723,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let mut exprs: Vec<_> = entries.into_iter()
-            .flat_map(|entry| {
-                vec![entry.key, entry.value].into_iter()
-            })
-            .map(|expr| {
-                self.sql_expr_to_logical_expr(*expr, schema, planner_context)
-            })
+        let mut exprs: Vec<_> = entries
+            .into_iter()
+            .flat_map(|entry| vec![entry.key, entry.value].into_iter())
+            .map(|expr| self.sql_expr_to_logical_expr(*expr, schema, planner_context))
             .collect::<Result<Vec<_>>>()?;
         for planner in self.context_provider.get_expr_planners() {
             match planner.plan_make_map(exprs)? {
