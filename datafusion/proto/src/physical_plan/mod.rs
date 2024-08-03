@@ -35,7 +35,7 @@ use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
-use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
+use datafusion::physical_plan::aggregates::AggregateMode;
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -477,30 +477,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             ExprType::AggregateExpr(agg_node) => {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema, extension_codec)).collect::<Result<Vec<_>>>()?;
-                                let ordering_req: Vec<PhysicalSortExpr> = agg_node.ordering_req.iter()
+                                let _ordering_req: Vec<PhysicalSortExpr> = agg_node.ordering_req.iter()
                                     .map(|e| parse_physical_sort_expr(e, registry, &physical_schema, extension_codec)).collect::<Result<Vec<_>>>()?;
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
-                                        AggregateFunction::AggrFunction(i) => {
-                                            let aggr_function = protobuf::AggregateFunction::try_from(*i)
-                                                .map_err(
-                                                    |_| {
-                                                        proto_error(format!(
-                                                            "Received an unknown aggregate function: {i}"
-                                                        ))
-                                                    },
-                                                )?;
-
-                                            create_aggregate_expr(
-                                                &aggr_function.into(),
-                                                agg_node.distinct,
-                                                input_phy_expr.as_slice(),
-                                                &ordering_req,
-                                                &physical_schema,
-                                                name.to_string(),
-                                                agg_node.ignore_nulls,
-                                            )
-                                        }
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
                                             let agg_udf = match &agg_node.fun_definition {
                                                 Some(buf) => extension_codec.try_decode_udaf(udaf_name, buf)?,

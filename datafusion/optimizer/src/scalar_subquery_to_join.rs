@@ -394,7 +394,9 @@ mod tests {
 
     use arrow::datatypes::DataType;
     use datafusion_expr::test::function_stub::sum;
-    use datafusion_expr::{col, lit, max, min, out_ref_col, scalar_subquery, Between};
+
+    use datafusion_expr::{col, lit, out_ref_col, scalar_subquery, Between};
+    use datafusion_functions_aggregate::min_max::{max, min};
 
     /// Test multiple correlated subqueries
     #[test]

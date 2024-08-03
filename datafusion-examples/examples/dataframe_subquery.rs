@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;
+use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
 use datafusion::test_util::arrow_test_data;
 use datafusion_common::ScalarValue;
