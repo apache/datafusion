@@ -745,7 +745,7 @@ impl OptimizerRule for PushDownFilter {
                     let mut accum: HashSet<Column> = HashSet::new();
                     expr_to_columns(&predicate, &mut accum)?;
 
-                    if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                    if unnest.exec_columns.iter().any(|(c, _)| accum.contains(c)) {
                         unnest_predicates.push(predicate);
                     } else {
                         non_unnest_predicates.push(predicate);

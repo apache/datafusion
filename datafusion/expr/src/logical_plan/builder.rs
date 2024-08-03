@@ -2201,7 +2201,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Unnest: lists[test_table.strings] structs[]\
+        Unnest: lists[test_table.strings|depth=1] structs[]\
         \n  TableScan: test_table";
         assert_eq!(expected, format!("{plan:?}"));
 
@@ -2237,8 +2237,8 @@ mod tests {
 
         let expected = "\
         Unnest: lists[] structs[test_table.struct_singular]\
-        \n  Unnest: lists[test_table.structs] structs[]\
-        \n    Unnest: lists[test_table.strings] structs[]\
+        \n  Unnest: lists[test_table.structs|depth=1] structs[]\
+        \n    Unnest: lists[test_table.strings|depth=1] structs[]\
         \n      TableScan: test_table";
         assert_eq!(expected, format!("{plan:?}"));
 
@@ -2246,27 +2246,18 @@ mod tests {
         let field = plan.schema().field_with_name(None, "structs").unwrap();
         assert!(matches!(field.data_type(), DataType::Struct(_)));
 
-        // Unnesting multiple fields at the same time
+        // Unnesting multiple fields at the same time, using infer syntax
         let cols = vec!["strings", "structs", "struct_singular"]
             .into_iter()
-            .map(|c| match c {
-                "struct_singular" => (Column::from(c), ColumnUnnestType::Struct),
-                _ => (
-                    Column::from(c),
-                    ColumnUnnestType::List(vec![ColumnUnnestList {
-                        output_column: Column::from(c),
-                        // TODO: try planning with depth > 1
-                        depth: 1,
-                    }]),
-                ),
-            })
+            .map(|c| (Column::from(c), ColumnUnnestType::Inferred))
             .collect();
+
         let plan = nested_table_scan("test_table")?
             .unnest_columns_with_options(cols, UnnestOptions::default())?
             .build()?;
 
         let expected = "\
-        Unnest: lists[] structs[test_table.struct_singular]\
+        Unnest: lists[test_table.strings|depth=1, test_table.structs|depth=1] structs[test_table.struct_singular]\
         \n  TableScan: test_table";
         assert_eq!(expected, format!("{plan:?}"));
 

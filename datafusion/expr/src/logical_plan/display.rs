@@ -648,8 +648,14 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 let list_type_columns = list_col_indices
                     .iter()
                     // TODO: fix me
-                    .map(|(i, _)| &input_columns[*i])
-                    .collect::<Vec<&Column>>();
+                    .map(|(i, unnest_info)| {
+                        format!(
+                            "{}|depth={:?}",
+                            &input_columns[*i].to_string(),
+                            unnest_info.depth
+                        )
+                    })
+                    .collect::<Vec<String>>();
                 let struct_type_columns = struct_col_indices
                     .iter()
                     .map(|i| &input_columns[*i])
