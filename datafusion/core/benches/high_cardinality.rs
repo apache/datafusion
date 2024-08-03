@@ -44,14 +44,14 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
 
     // define data.
     let batches = (0..array_len / batch_size)
-        .map(|_i| {
+        .map(|i| {
             let data1 = (0..batch_size)
                 .into_iter()
-                .map(|x| x as i64)
+                .map(|j| (batch_size * i + j) as i64)
                 .collect::<Vec<_>>();
             let data2 = (0..batch_size)
                 .into_iter()
-                .map(|j| format!("a{j}"))
+                .map(|j| format!("a{}", (batch_size * i + j)))
                 .collect::<Vec<_>>();
 
             RecordBatch::try_new(
@@ -76,7 +76,7 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
 
 fn criterion_benchmark(c: &mut Criterion) {
     let array_len = 2000000; // 2M rows
-    let batch_size = array_len;
+    let batch_size = 8192;
 
     c.bench_function("benchmark", |b| {
         let mut ctx = create_context(array_len, batch_size).unwrap();
@@ -91,39 +91,3 @@ criterion_group! {
     targets = criterion_benchmark
 }
 criterion_main!(benches);
-
-// Previous result
-// reuse-hash
-// benchmark               time:   [2.5999 s 6.3132 s 11.062 s]
-// Found 1 outliers among 10 measurements (10.00%)
-
-// main
-// benchmark               time:   [4.1404 s 8.4601 s 13.226 s]
-
-// Latest reuslt
-// single-multi-groupby
-// Gnuplot not found, using plotters backend
-// benchmark               time:   [82.970 ms 98.723 ms 111.32 ms]
-//                         change: [-99.328% -98.932% -97.777%] (p = 0.00 < 0.05)
-//                         Performance has improved.
-// Found 2 outliers among 10 measurements (20.00%)
-//   2 (20.00%) high mild
-
-// main (I guess this improves because of the change Check hashes first during probing the aggr hash table #11718, but I didn't verify)
-// Gnuplot not found, using plotters backend
-// Benchmarking benchmark: Warming up for 3.0000 s
-// Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 23.3s.
-// benchmark               time:   [660.82 ms 1.3354 s 2.1247 s]
-//                         change: [+675.04% +1377.8% +2344.1%] (p = 0.00 < 0.05)
-//                         Performance has regressed.
-// Found 1 outliers among 10 measurements (10.00%)
-//   1 (10.00%) high mild
-
-
-// Gnuplot not found, using plotters backend
-// Benchmarking benchmark: Warming up for 3.0000 s
-// Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.2s or enable flat sampling.
-// benchmark               time:   [150.22 ms 154.31 ms 158.06 ms]
-//                         change: [+254.76% +261.92% +270.28%] (p = 0.00 < 0.05)
-//                         Performance has regressed.
-// Found 1 outliers among 10 measurements (10.00%)

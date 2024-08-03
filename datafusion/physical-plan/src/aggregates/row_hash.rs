@@ -580,7 +580,6 @@ impl GroupedHashAggregateStream {
                     | AggregateMode::SinglePartitioned
                         if !self.spill_state.is_stream_merging =>
                     {
-                    
                         acc.update_batch(
                             values,
                             group_indices,
