@@ -570,6 +570,12 @@ jobs:
           # your code or some crate in the dependency tree has a higher MSRV
           # (Min Supported Rust Version) than the one specified in the
           # `rust-version` key of `Cargo.toml`.
+          #
+          # To reproduce: 
+          # 1. Install the version of Rust that is failing. Example: 
+          #    rustup install 1.76.0
+          # 2. Run the command that failed with that version. Example:
+          #    cargo +1.76.0 check -p datafusion
           # 
           # To resolve, either:
           # 1. Change your code to use older Rust features, 
