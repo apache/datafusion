@@ -32,13 +32,13 @@ use datafusion::physical_plan::{collect, InputOrderMode};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_expr::type_coercion::aggregates::coerce_types;
 use datafusion_expr::type_coercion::functions::data_types_with_aggregate_udf;
 use datafusion_expr::{
-    AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition,
+    BuiltInWindowFunction, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -361,14 +361,14 @@ fn get_random_function(
     window_fn_map.insert(
         "min",
         (
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
+            WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "max",
         (
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![arg.clone()],
         ),
     );
@@ -465,16 +465,7 @@ fn get_random_function(
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
     let (window_fn, args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
     let mut args = args.clone();
-    if let WindowFunctionDefinition::AggregateFunction(f) = window_fn {
-        if !args.is_empty() {
-            // Do type coercion first argument
-            let a = args[0].clone();
-            let dt = a.data_type(schema.as_ref()).unwrap();
-            let sig = f.signature();
-            let coerced = coerce_types(f, &[dt], &sig).unwrap();
-            args[0] = cast(a, schema, coerced[0].clone()).unwrap();
-        }
-    } else if let WindowFunctionDefinition::AggregateUDF(udf) = window_fn {
+    if let WindowFunctionDefinition::AggregateUDF(udf) = window_fn {
         if !args.is_empty() {
             // Do type coercion first argument
             let a = args[0].clone();

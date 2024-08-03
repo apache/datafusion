@@ -31,11 +31,6 @@ mod try_cast;
 mod unknown_column;
 
 /// Module with some convenient methods used in expression building
-pub mod helpers {
-    pub use crate::aggregate::min_max::{max, min};
-}
-pub use crate::aggregate::build_in::create_aggregate_expr;
-pub use crate::aggregate::min_max::{Max, MaxAccumulator, Min, MinAccumulator};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::window::cume_dist::{cume_dist, CumeDist};
 pub use crate::window::lead_lag::{lag, lead, WindowShift};

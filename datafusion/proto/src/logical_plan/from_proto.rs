@@ -22,11 +22,13 @@ use datafusion_common::{
     exec_datafusion_err, internal_err, plan_datafusion_err, Result, ScalarValue,
     TableReference, UnnestOptions,
 };
+use datafusion_expr::expr::Unnest;
+use datafusion_expr::expr::{Alias, Placeholder};
+use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::{
-    expr::{self, Alias, InList, Placeholder, Sort, Unnest, WindowFunction},
+    expr::{self, InList, Sort, WindowFunction},
     logical_plan::{PlanType, StringifiedPlan},
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr,
-    ExprFunctionExt, GroupingSet,
+    Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -136,15 +138,6 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
     }
 }
 
-impl From<protobuf::AggregateFunction> for AggregateFunction {
-    fn from(agg_fun: protobuf::AggregateFunction) -> Self {
-        match agg_fun {
-            protobuf::AggregateFunction::Min => Self::Min,
-            protobuf::AggregateFunction::Max => Self::Max,
-        }
-    }
-}
-
 impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
         match built_in_function {
@@ -231,12 +224,6 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
     }
 }
 
-pub fn parse_i32_to_aggregate_function(value: &i32) -> Result<AggregateFunction, Error> {
-    protobuf::AggregateFunction::try_from(*value)
-        .map(|a| a.into())
-        .map_err(|_| Error::unknown("AggregateFunction", *value))
-}
-
 pub fn parse_expr(
     proto: &protobuf::LogicalExprNode,
     registry: &dyn FunctionRegistry,
@@ -297,24 +284,6 @@ pub fn parse_expr(
 
             // TODO: support proto for null treatment
             match window_function {
-                window_expr_node::WindowFunction::AggrFunction(i) => {
-                    let aggr_function = parse_i32_to_aggregate_function(i)?;
-
-                    Expr::WindowFunction(WindowFunction::new(
-                        expr::WindowFunctionDefinition::AggregateFunction(aggr_function),
-                        vec![parse_required_expr(
-                            expr.expr.as_deref(),
-                            registry,
-                            "expr",
-                            codec,
-                        )?],
-                    ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .build()
-                    .map_err(Error::DataFusionError)
-                }
                 window_expr_node::WindowFunction::BuiltInFunction(i) => {
                     let built_in_function = protobuf::BuiltInWindowFunction::try_from(*i)
                         .map_err(|_| Error::unknown("BuiltInWindowFunction", *i))?
@@ -378,19 +347,6 @@ pub fn parse_expr(
                     .map_err(Error::DataFusionError)
                 }
             }
-        }
-        ExprType::AggregateExpr(expr) => {
-            let fun = parse_i32_to_aggregate_function(&expr.aggr_function)?;
-
-            Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                fun,
-                parse_exprs(&expr.expr, registry, codec)?,
-                expr.distinct,
-                parse_optional_expr(expr.filter.as_deref(), registry, codec)?
-                    .map(Box::new),
-                parse_vec_expr(&expr.order_by, registry, codec)?,
-                None,
-            )))
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
             parse_required_expr(alias.expr.as_deref(), registry, "expr", codec)?,
