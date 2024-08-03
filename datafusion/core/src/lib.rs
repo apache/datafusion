@@ -52,6 +52,7 @@
 //! ```rust
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
+//! # use datafusion::functions_aggregate::expr_fn::min;
 //! # use datafusion::arrow::record_batch::RecordBatch;
 //!
 //! # #[tokio::main]

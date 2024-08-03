@@ -48,7 +48,6 @@ use datafusion::common::{
 };
 use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
-use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
     AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
     InSubquery, Sort, WindowFunction,
@@ -767,37 +766,6 @@ pub fn to_substrait_agg_measure(
     match expr {
         Expr::AggregateFunction(expr::AggregateFunction { func_def, args, distinct, filter, order_by, null_treatment: _, }) => {
             match func_def {
-                AggregateFunctionDefinition::BuiltIn (fun) => {
-                    let sorts = if let Some(order_by) = order_by {
-                        order_by.iter().map(|expr| to_substrait_sort_field(ctx, expr, schema, extensions)).collect::<Result<Vec<_>>>()?
-                    } else {
-                        vec![]
-                    };
-                    let mut arguments: Vec<FunctionArgument> = vec![];
-                    for arg in args {
-                        arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(ctx, arg, schema, 0, extensions)?)) });
-                    }
-                    let function_anchor = extensions.register_function(fun.to_string());
-                    Ok(Measure {
-                        measure: Some(AggregateFunction {
-                            function_reference: function_anchor,
-                            arguments,
-                            sorts,
-                            output_type: None,
-                            invocation: match distinct {
-                                true => AggregationInvocation::Distinct as i32,
-                                false => AggregationInvocation::All as i32,
-                            },
-                            phase: AggregationPhase::Unspecified as i32,
-                            args: vec![],
-                            options: vec![],
-                        }),
-                        filter: match filter {
-                            Some(f) => Some(to_substrait_rex(ctx, f, schema, 0, extensions)?),
-                            None => None
-                        }
-                    })
-                }
                 AggregateFunctionDefinition::UDF(fun) => {
                     let sorts = if let Some(order_by) = order_by {
                         order_by.iter().map(|expr| to_substrait_sort_field(ctx, expr, schema, extensions)).collect::<Result<Vec<_>>>()?

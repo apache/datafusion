@@ -24,8 +24,8 @@ use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, InListExpr, IsNotNullExpr,
-    IsNullExpr, Literal, Max, Min, NegativeExpr, NotExpr, NthValue, Ntile, Rank,
-    RankType, RowNumber, TryCastExpr, WindowShift,
+    IsNullExpr, Literal, NegativeExpr, NotExpr, NthValue, Ntile, Rank, RankType,
+    RowNumber, TryCastExpr, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -60,7 +60,7 @@ pub fn serialize_physical_aggr_expr(
         let name = a.fun().name().to_string();
         let mut buf = Vec::new();
         codec.try_encode_udaf(a.fun(), &mut buf)?;
-        return Ok(protobuf::PhysicalExprNode {
+        Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                 protobuf::PhysicalAggregateExprNode {
                     aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
@@ -71,35 +71,15 @@ pub fn serialize_physical_aggr_expr(
                     fun_definition: (!buf.is_empty()).then_some(buf)
                 },
             )),
-        });
+        })
+    } else {
+        unreachable!("No other types exists besides AggergationFunctionExpr");
     }
-
-    let AggrFn {
-        inner: aggr_function,
-        distinct,
-    } = aggr_expr_to_aggr_fn(aggr_expr.as_ref())?;
-
-    Ok(protobuf::PhysicalExprNode {
-        expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
-            protobuf::PhysicalAggregateExprNode {
-                aggregate_function: Some(
-                    physical_aggregate_expr_node::AggregateFunction::AggrFunction(
-                        aggr_function as i32,
-                    ),
-                ),
-                expr: expressions,
-                ordering_req,
-                distinct,
-                ignore_nulls: false,
-                fun_definition: None,
-            },
-        )),
-    })
 }
 
 fn serialize_physical_window_aggr_expr(
     aggr_expr: &dyn AggregateExpr,
-    window_frame: &WindowFrame,
+    _window_frame: &WindowFrame,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<(physical_window_expr_node::WindowFunction, Option<Vec<u8>>)> {
     if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
@@ -119,23 +99,7 @@ fn serialize_physical_window_aggr_expr(
             (!buf.is_empty()).then_some(buf),
         ))
     } else {
-        let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(aggr_expr)?;
-        if distinct {
-            return not_impl_err!(
-                "Distinct aggregate functions not supported in window expressions"
-            );
-        }
-
-        if !window_frame.start_bound.is_unbounded() {
-            return Err(DataFusionError::Internal(format!(
-                "Unbounded start bound in WindowFrame = {window_frame}"
-            )));
-        }
-
-        Ok((
-            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32),
-            None,
-        ))
+        unreachable!("No other types exists besides AggergationFunctionExpr");
     }
 }
 
@@ -249,29 +213,6 @@ pub fn serialize_physical_window_expr(
         window_function: Some(window_function),
         name: window_expr.name().to_string(),
         fun_definition,
-    })
-}
-
-struct AggrFn {
-    inner: protobuf::AggregateFunction,
-    distinct: bool,
-}
-
-fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
-    let aggr_expr = expr.as_any();
-
-    // TODO: remove Min and Max
-    let inner = if aggr_expr.downcast_ref::<Min>().is_some() {
-        protobuf::AggregateFunction::Min
-    } else if aggr_expr.downcast_ref::<Max>().is_some() {
-        protobuf::AggregateFunction::Max
-    } else {
-        return not_impl_err!("Aggregate function not supported: {expr:?}");
-    };
-
-    Ok(AggrFn {
-        inner,
-        distinct: false,
     })
 }
 
