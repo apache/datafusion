@@ -35,7 +35,46 @@ async fn query(ctx: &mut SessionContext, sql: &str) {
     criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
 
-fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext> {
+fn create_context_for_high_cardinality(array_len: usize, batch_size: usize) -> Result<SessionContext> {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+
+    // define data.
+    let batches = (0..array_len / batch_size)
+        .map(|i| {
+            let data1 = (0..batch_size)
+                .into_iter()
+                .map(|j| (batch_size * i + j) as i64)
+                .collect::<Vec<_>>();
+            let data2 = (0..batch_size)
+                .into_iter()
+                .map(|j| format!("a{}", (batch_size * i + j)))
+                .collect::<Vec<_>>();
+
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(data1)),
+                    Arc::new(StringArray::from(data2)),
+                ],
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let provider = MemTable::try_new(schema, vec![batches])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    Ok(ctx)
+}
+
+fn create_context_for_low_cardinality(array_len: usize, batch_size: usize) -> Result<SessionContext> {
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int64, false),
@@ -78,8 +117,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     let array_len = 2000000; // 2M rows
     let batch_size = 8192;
 
-    c.bench_function("benchmark", |b| {
-        let mut ctx = create_context(array_len, batch_size).unwrap();
+    c.bench_function("benchmark high cardinality", |b| {
+        let mut ctx = create_context_for_high_cardinality(array_len, batch_size).unwrap();
+        b.iter(|| block_on(query(&mut ctx, "select a, b, count(*) from t group by a, b order by count(*) desc limit 10")))
+    });
+
+    c.bench_function("benchmark low cardinality", |b| {
+        let mut ctx = create_context_for_low_cardinality(array_len, batch_size).unwrap();
         b.iter(|| block_on(query(&mut ctx, "select a, b, count(*) from t group by a, b order by count(*) desc limit 10")))
     });
 }

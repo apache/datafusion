@@ -182,11 +182,7 @@ name = "math_query_sql"
 
 [[bench]]
 harness = false
-name = "high_cardinality"
-
-[[bench]]
-harness = false
-name = "low_cardinality"
+name = "multi_groupby"
 
 [[bench]]
 harness = false
