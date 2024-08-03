@@ -25,7 +25,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
-/// For example, `max(x)` is written to `col("MAX(x)")`
+/// For example, `max(x)` is written to `col("max(x)")`
 pub fn rewrite_sort_cols_by_aggs(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
