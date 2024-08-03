@@ -176,7 +176,6 @@ EXPLAIN VERBOSE SELECT a, b, c FROM simple_explain_test
 initial_logical_plan
 01)Projection: simple_explain_test.a, simple_explain_test.b, simple_explain_test.c
 02)--TableScan: simple_explain_test
-logical_plan after apply_function_rewrites SAME TEXT AS ABOVE
 logical_plan after inline_table_scan SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
 logical_plan after count_wildcard_rule SAME TEXT AS ABOVE
