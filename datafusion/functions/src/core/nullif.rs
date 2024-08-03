@@ -124,7 +124,7 @@ fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             let lhs_s = lhs.to_scalar()?;
             let lhs_a = lhs.to_array_of_size(rhs.len())?;
             let array = nullif(
-                // nullif in arrow-select dodes not support Datum, so we need to convert to array
+                // nullif in arrow-select does not support Datum, so we need to convert to array
                 lhs_a.as_ref(),
                 &eq(&lhs_s, &rhs)?,
             )?;
