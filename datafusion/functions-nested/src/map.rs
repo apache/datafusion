@@ -303,8 +303,8 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     }
 
     // concatenate all the arrays
-    let flattened_keys = arrow::compute::concat(key_array_vec.as_ref()).unwrap();
-    let flattened_values = arrow::compute::concat(value_array_vec.as_ref()).unwrap();
+    let flattened_keys = arrow::compute::concat(key_array_vec.as_ref())?;
+    let flattened_values = arrow::compute::concat(value_array_vec.as_ref())?;
 
     let fields = vec![
         Arc::new(Field::new("key", flattened_keys.data_type().clone(), false)),
@@ -319,8 +319,7 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
         .len(flattened_keys.len())
         .add_child_data(flattened_keys.to_data())
         .add_child_data(flattened_values.to_data())
-        .build()
-        .unwrap();
+        .build()?;
 
     let map_data = ArrayData::builder(DataType::Map(
         Arc::new(Field::new(
@@ -333,8 +332,7 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     .len(keys.len())
     .add_child_data(struct_data)
     .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()))
-    .build()
-    .unwrap();
+    .build()?;
     Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
 }
 
