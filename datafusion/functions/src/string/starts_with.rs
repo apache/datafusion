@@ -51,6 +51,9 @@ impl StartsWithFunc {
         Self {
             signature: Signature::one_of(
                 vec![
+                     // Planner attempts coercion to the target type starting with the most preferred candidate.
+                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
+                    // If that fails, it proceeds to `(Utf8, Utf8)`.
                     Exact(vec![DataType::Utf8View, DataType::Utf8View]),
                     Exact(vec![DataType::Utf8, DataType::Utf8]),
                     Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
@@ -83,7 +86,7 @@ impl ScalarUDFImpl for StartsWithFunc {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
                 make_scalar_function(starts_with, vec![])(args)
             }
-            _ => internal_err!("Unsupported data types for starts_with")?,
+            _ => internal_err!("Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View")?,
         }
     }
 }
