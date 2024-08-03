@@ -379,3 +379,12 @@ select t.dt from dates t where arrow_cast('2024-01-01', 'Utf8View') < t.dt;
 
 statement ok
 drop table dates;
+
+statement ok
+create table temp as values ('value1', arrow_cast('one', 'Utf8View')), ('value1', arrow_cast('two', 'Utf8View'));
+
+query T
+select column2||'ff' from temp;
+----
+oneff
+twoff
