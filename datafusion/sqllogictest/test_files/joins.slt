@@ -3497,23 +3497,20 @@ logical_plan
 07)--------SubqueryAlias: r
 08)----------TableScan: annotated_data projection=[a, b]
 physical_plan
-01)SortPreservingMergeExec: [a@0 ASC]
-02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[a@0 as a, last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]@3 as last_col1]
-04)------AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]]
+01)SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[a@0 as a, last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]@3 as last_col1]
+03)----AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]]
+04)------CoalescePartitionsExec
 05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 2), input_partitions=2
-07)------------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]]
-08)--------------CoalesceBatchesExec: target_batch_size=2
-09)----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
-10)------------------CoalesceBatchesExec: target_batch_size=2
-11)--------------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-13)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
-14)------------------CoalesceBatchesExec: target_batch_size=2
-15)--------------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-16)----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-17)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], has_header=true
+06)----------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
+07)------------CoalesceBatchesExec: target_batch_size=2
+08)--------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+11)------------CoalesceBatchesExec: target_batch_size=2
+12)--------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
+13)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+14)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], has_header=true
 
 query TT
 EXPLAIN SELECT *

@@ -2381,8 +2381,8 @@ async fn test_low_cardinality() -> Result<()> {
         // define data.	
         let batches = (0..array_len / batch_size)	
             .map(|i| {	
-                let data1 = (0..batch_size).into_iter().map(|x| (x % 4 > 1) as i64).collect::<Vec<_>>();	
-                let data2 = (0..batch_size).into_iter().map(|j| format!("a{}", (j % 2))).collect::<Vec<_>>();	
+                let data1 = (0..batch_size).into_iter().map(|j| ((batch_size * i + j) % 4 > 1) as i64).collect::<Vec<_>>();	
+                let data2 = (0..batch_size).into_iter().map(|j| format!("a{}", ((batch_size * i + j) % 2))).collect::<Vec<_>>();	
 
                 RecordBatch::try_new(	
                     schema.clone(),	
@@ -2395,8 +2395,6 @@ async fn test_low_cardinality() -> Result<()> {
             })	
             .collect::<Vec<_>>();	
 
-        // println!("batches: {:?}", batches);	
-
         let ctx = SessionContext::new();	
 
         // declare a table in memory. In spark API, this corresponds to createDataFrame(...).	
@@ -2407,11 +2405,10 @@ async fn test_low_cardinality() -> Result<()> {
         Ok(ctx)	
     }	
 
-    let array_len = 2000000; // 2^19	
-    let batch_size = array_len; // 2^12	
+    let array_len = 2000000;
+    let batch_size = 8192;
     let mut ctx = create_context(array_len, batch_size).unwrap();	
-    let res = query(&mut ctx, "select a, b, count(*) from t group by a, b order by count(*) desc limit 10").await.unwrap();	
-    // println!("res: {:?}", res);	
+    let _ = query(&mut ctx, "select a, b, count(*) from t group by a, b order by count(*) desc limit 10").await.unwrap();	
     Ok(())	
 }
 
@@ -2432,8 +2429,8 @@ async fn test_high_cardinality() -> Result<()> {
         // define data.	
         let batches = (0..array_len / batch_size)	
             .map(|i| {	
-                let data1 = (0..batch_size).into_iter().map(|x| x as i64).collect::<Vec<_>>();	
-                let data2 = (0..batch_size).into_iter().map(|j| format!("a{}", j)).collect::<Vec<_>>();	
+                let data1 = (0..batch_size).into_iter().map(|j| (batch_size * i + j) as i64).collect::<Vec<_>>();	
+                let data2 = (0..batch_size).into_iter().map(|j| format!("a{}", (batch_size * i + j))).collect::<Vec<_>>();	
 
                 RecordBatch::try_new(	
                     schema.clone(),	
@@ -2446,8 +2443,6 @@ async fn test_high_cardinality() -> Result<()> {
             })	
             .collect::<Vec<_>>();	
 
-        // println!("batches: {:?}", batches);	
-
         let ctx = SessionContext::new();	
 
         // declare a table in memory. In spark API, this corresponds to createDataFrame(...).	
@@ -2458,10 +2453,9 @@ async fn test_high_cardinality() -> Result<()> {
         Ok(ctx)	
     }	
 
-    let array_len = 2000000; // 2^19	
-    let batch_size = array_len; // 2^12	
+    let array_len = 2000000; 
+    let batch_size = 8192;
     let mut ctx = create_context(array_len, batch_size).unwrap();	
-    let res = query(&mut ctx, "select a, b, count(*) from t group by a, b order by count(*) desc limit 10").await.unwrap();	
-    // println!("res: {:?}", res);	
+    let _ = query(&mut ctx, "select a, b, count(*) from t group by a, b order by count(*) desc limit 10").await.unwrap();	
     Ok(())	
 }

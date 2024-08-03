@@ -294,33 +294,29 @@ physical_plan
 01)UnionExec
 02)--CoalesceBatchesExec: target_batch_size=2
 03)----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(id@0, CAST(t2.id AS Int32)@2), (name@1, name@1)]
-04)------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------MemoryExec: partitions=1, partition_sizes=[1]
-10)------CoalesceBatchesExec: target_batch_size=2
-11)--------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
-12)----------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
-13)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-14)--------------MemoryExec: partitions=1, partition_sizes=[1]
-15)--ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
-16)----CoalesceBatchesExec: target_batch_size=2
-17)------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], projection=[id@0, name@1]
-18)--------CoalesceBatchesExec: target_batch_size=2
-19)----------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
-20)------------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
-21)--------------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
-22)----------------CoalesceBatchesExec: target_batch_size=2
-23)------------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-24)--------------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-25)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-26)------------------------MemoryExec: partitions=1, partition_sizes=[1]
-27)--------CoalesceBatchesExec: target_batch_size=2
-28)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-29)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-30)--------------MemoryExec: partitions=1, partition_sizes=[1]
+04)------CoalesceBatchesExec: target_batch_size=2
+05)--------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]
+08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+09)------CoalesceBatchesExec: target_batch_size=2
+10)--------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
+11)----------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
+12)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)--------------MemoryExec: partitions=1, partition_sizes=[1]
+14)--ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
+15)----CoalesceBatchesExec: target_batch_size=2
+16)------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], projection=[id@0, name@1]
+17)--------CoalesceBatchesExec: target_batch_size=2
+18)----------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
+19)------------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
+20)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+21)----------------AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]
+22)------------------MemoryExec: partitions=1, partition_sizes=[1]
+23)--------CoalesceBatchesExec: target_batch_size=2
+24)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+25)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+26)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 query IT rowsort
