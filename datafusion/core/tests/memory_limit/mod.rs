@@ -23,7 +23,6 @@ use arrow_array::{ArrayRef, DictionaryArray};
 use arrow_schema::SortOptions;
 use async_trait::async_trait;
 use datafusion::assert_batches_eq;
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion_execution::memory_pool::{
@@ -31,6 +30,7 @@ use datafusion_execution::memory_pool::{
 };
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use futures::StreamExt;
 use std::any::Any;
 use std::num::NonZeroUsize;

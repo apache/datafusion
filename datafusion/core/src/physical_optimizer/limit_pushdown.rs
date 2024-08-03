@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::ConfigOptions;

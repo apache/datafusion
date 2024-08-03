@@ -22,18 +22,21 @@
 //!
 //! [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
 
-mod aggregate_statistics_test;
+mod tests{
+    mod aggregate_statistics;
+    mod enforce_sorting_test;
+    mod enforce_distribution;
+    mod limited_distinct_aggregation;
+    mod replace_with_order_preserving_variants;
+
+}
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
-mod enforce_distribution_test;
-mod enforce_sorting_test;
 pub mod join_selection;
 pub mod limit_pushdown;
-mod limited_distinct_aggregation_test;
 pub mod optimizer;
 pub mod projection_pushdown;
 pub mod pruning;
-mod replace_with_order_preserving_variants_test;
 pub mod sanity_checker;
 #[cfg(test)]
 pub mod test_utils;
@@ -42,4 +45,9 @@ pub mod update_aggr_exprs;
 
 mod utils;
 
-pub use datafusion_physical_optimizer::*;
+pub use datafusion_physical_optimizer::{
+    aggregate_statistics, enforce_distribution, enforce_sorting,
+    limited_distinct_aggregation, output_requirements,
+    replace_with_order_preserving_variants,
+};
+

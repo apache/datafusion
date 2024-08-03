@@ -25,8 +25,8 @@ mod tests {
     use datafusion_physical_optimizer::PhysicalOptimizerRule;
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 
-    use crate::physical_optimizer::aggregate_statistics_test::tests::TestAggregate;
-    use crate::physical_optimizer::enforce_distribution_test::tests::{
+    use crate::physical_optimizer::tests::aggregate_statistics::tests::TestAggregate;
+    use crate::physical_optimizer::tests::enforce_distribution::tests::{
         parquet_exec_with_sort, schema, trim_plan_display,
     };
     use crate::prelude::SessionContext;
