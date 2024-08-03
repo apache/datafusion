@@ -674,9 +674,11 @@ impl LogicalPlan {
                 table_name,
                 source,
                 projection,
+                projection_deep,
                 projected_schema,
                 filters,
                 fetch,
+                ..
             }) => filters
                 .into_iter()
                 .map_until_stop_and_collect(f)?
@@ -685,6 +687,7 @@ impl LogicalPlan {
                         table_name,
                         source,
                         projection,
+                        projection_deep,
                         projected_schema,
                         filters,
                         fetch,

@@ -62,6 +62,7 @@ object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 pyo3 = { version = "0.21.0", optional = true }
 sqlparser = { workspace = true }
+log = "0.4.21"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 instant = { version = "0.1", features = ["wasm-bindgen"] }

@@ -705,6 +705,7 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::TableScan(TableScan {
                 source,
                 projection,
+                projection_deep,
                 filters,
                 fetch,
                 ..
@@ -715,7 +716,7 @@ impl DefaultPhysicalPlanner {
                 // referred to in the query
                 let filters = unnormalize_cols(filters.iter().cloned());
                 source
-                    .scan(session_state, projection.as_ref(), &filters, *fetch)
+                    .scan_deep(session_state, projection.as_ref(), projection_deep.as_ref(), &filters, *fetch)
                     .await?
             }
             LogicalPlan::Values(Values { values, schema }) => {

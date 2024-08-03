@@ -15,6 +15,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
+[profile.idea]
+inherits = "dev"
+opt-level = 0
+debug = 2
+split-debuginfo = "packed"
+strip = "none"
+debug-assertions = true
+overflow-checks = false
+incremental = true
+codegen-units = 256
+lto = "off"
+
 [workspace]
 exclude = ["datafusion-cli", "dev/depcheck"]
 members = [
