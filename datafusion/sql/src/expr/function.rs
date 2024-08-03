@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::str::FromStr;
-
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow_schema::DataType;
@@ -26,8 +24,7 @@ use datafusion_common::{
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{
-    expr, AggregateFunction, Expr, ExprFunctionExt, ExprSchemable, WindowFrame,
-    WindowFunctionDefinition,
+    expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
 };
 use datafusion_expr::{
     expr::{ScalarFunction, Unnest},
@@ -38,7 +35,6 @@ use sqlparser::ast::{
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
     NullTreatment, ObjectName, OrderByExpr, WindowType,
 };
-
 use strum::IntoEnumIterator;
 
 /// Suggest a valid function based on an invalid input function name
@@ -51,7 +47,6 @@ pub fn suggest_valid_function(
         // All aggregate functions and builtin window functions
         let mut funcs = Vec::new();
 
-        funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
         funcs.extend(ctx.udaf_names());
         funcs.extend(BuiltInWindowFunction::iter().map(|func| func.to_string()));
         funcs.extend(ctx.udwf_names());
@@ -62,7 +57,6 @@ pub fn suggest_valid_function(
         let mut funcs = Vec::new();
 
         funcs.extend(ctx.udf_names());
-        funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
         funcs.extend(ctx.udaf_names());
 
         funcs
@@ -324,31 +318,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
-                return match fun {
-                    WindowFunctionDefinition::AggregateFunction(aggregate_fun) => {
-                        let args =
-                            self.function_args_to_expr(args, schema, planner_context)?;
-
-                        Expr::WindowFunction(expr::WindowFunction::new(
-                            WindowFunctionDefinition::AggregateFunction(aggregate_fun),
-                            args,
-                        ))
-                        .partition_by(partition_by)
-                        .order_by(order_by)
-                        .window_frame(window_frame)
-                        .null_treatment(null_treatment)
-                        .build()
-                    }
-                    _ => Expr::WindowFunction(expr::WindowFunction::new(
-                        fun,
-                        self.function_args_to_expr(args, schema, planner_context)?,
-                    ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .null_treatment(null_treatment)
-                    .build(),
-                };
+                return Expr::WindowFunction(expr::WindowFunction::new(
+                    fun,
+                    self.function_args_to_expr(args, schema, planner_context)?,
+                ))
+                .partition_by(partition_by)
+                .order_by(order_by)
+                .window_frame(window_frame)
+                .null_treatment(null_treatment)
+                .build();
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
@@ -375,32 +353,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     null_treatment,
                 )));
             }
-
-            // next, aggregate built-ins
-            if let Ok(fun) = AggregateFunction::from_str(&name) {
-                let order_by = self.order_by_to_sort_expr(
-                    order_by,
-                    schema,
-                    planner_context,
-                    true,
-                    None,
-                )?;
-                let order_by = (!order_by.is_empty()).then_some(order_by);
-                let args = self.function_args_to_expr(args, schema, planner_context)?;
-                let filter: Option<Box<Expr>> = filter
-                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
-                    .transpose()?
-                    .map(Box::new);
-
-                return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun,
-                    args,
-                    distinct,
-                    filter,
-                    order_by,
-                    null_treatment,
-                )));
-            };
         }
 
         // Could not find the relevant function, so return an error

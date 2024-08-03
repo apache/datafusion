@@ -39,7 +39,6 @@ mod udaf;
 mod udf;
 mod udwf;
 
-pub mod aggregate_function;
 pub mod conditional_expressions;
 pub mod execution_props;
 pub mod expr;
@@ -64,7 +63,6 @@ pub mod window_function;
 pub mod window_state;
 
 pub use accumulator::Accumulator;
-pub use aggregate_function::AggregateFunction;
 pub use built_in_window_function::BuiltInWindowFunction;
 pub use columnar_value::ColumnarValue;
 pub use expr::{

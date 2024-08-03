@@ -26,9 +26,9 @@ use crate::function::{
     StateFieldsArgs,
 };
 use crate::{
-    aggregate_function, conditional_expressions::CaseBuilder, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF,
-    Signature, Volatility,
+    conditional_expressions::CaseBuilder, logical_plan::Subquery, AggregateUDF, Expr,
+    LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF, Signature,
+    Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -148,30 +148,6 @@ pub fn or(left: Expr, right: Expr) -> Expr {
 /// Return a new expression with a logical NOT
 pub fn not(expr: Expr) -> Expr {
     expr.not()
-}
-
-/// Create an expression to represent the min() aggregate function
-pub fn min(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Min,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
-}
-
-/// Create an expression to represent the max() aggregate function
-pub fn max(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new(
-        aggregate_function::AggregateFunction::Max,
-        vec![expr],
-        false,
-        None,
-        None,
-        None,
-    ))
 }
 
 /// Return a new expression with bitwise AND

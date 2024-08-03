@@ -42,7 +42,8 @@ use datafusion_sql::{
 
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
-    approx_median::approx_median_udaf, count::count_udaf,
+    approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
+    min_max::min_udaf,
 };
 use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
 use rstest::rstest;
@@ -2764,6 +2765,8 @@ fn logical_plan_with_dialect_and_options(
         .with_udaf(approx_median_udaf())
         .with_udaf(count_udaf())
         .with_udaf(avg_udaf())
+        .with_udaf(min_udaf())
+        .with_udaf(max_udaf())
         .with_udaf(grouping_udaf())
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
