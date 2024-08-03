@@ -326,7 +326,7 @@ impl Default for Min {
 impl Min {
     pub fn new() -> Self {
         Self {
-            aliases: vec!["min".to_string()],
+            aliases: vec!["MIN".to_string()],
             signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
@@ -338,7 +338,7 @@ impl AggregateUDFImpl for Min {
     }
 
     fn name(&self) -> &str {
-        "MIN"
+        "min"
     }
 
     fn signature(&self) -> &Signature {
@@ -413,7 +413,7 @@ impl Default for Max {
 impl Max {
     pub fn new() -> Self {
         Self {
-            aliases: vec!["max".to_string()],
+            aliases: vec!["MAX".to_string()],
             signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
@@ -425,7 +425,7 @@ impl AggregateUDFImpl for Max {
     }
 
     fn name(&self) -> &str {
-        "MAX"
+        "max"
     }
 
     fn signature(&self) -> &Signature {

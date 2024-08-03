@@ -1050,20 +1050,20 @@ fn select_aggregate_with_having_that_reuses_aggregate() {
                    FROM person
                    HAVING MAX(age) < 30";
     let expected = "Projection: MAX(person.age)\
-                        \n  Filter: MAX(person.age) < Int64(30)\
-                        \n    Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]\
+                        \n  Filter: max(person.age) < Int64(30)\
+                        \n    Aggregate: groupBy=[[]], aggr=[[max(person.age)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
 
 #[test]
 fn select_aggregate_with_having_with_aggregate_not_in_select() {
-    let sql = "SELECT MAX(age)
+    let sql = "SELECT max(age)
                    FROM person
-                   HAVING MAX(first_name) > 'M'";
-    let expected = "Projection: MAX(person.age)\
-                        \n  Filter: MAX(person.first_name) > Utf8(\"M\")\
-                        \n    Aggregate: groupBy=[[]], aggr=[[MAX(person.age), MAX(person.first_name)]]\
+                   HAVING max(first_name) > 'M'";
+    let expected = "Projection: max(person.age)\
+                        \n  Filter: max(person.first_name) > Utf8(\"M\")\
+                        \n    Aggregate: groupBy=[[]], aggr=[[max(person.age), max(person.first_name)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
@@ -1086,21 +1086,21 @@ fn select_aggregate_aliased_with_having_referencing_aggregate_by_its_alias() {
                    FROM person
                    HAVING max_age < 30";
     // FIXME: add test for having in execution
-    let expected = "Projection: MAX(person.age) AS max_age\
-                        \n  Filter: MAX(person.age) < Int64(30)\
-                        \n    Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]\
+    let expected = "Projection: max(person.age) AS max_age\
+                        \n  Filter: max(person.age) < Int64(30)\
+                        \n    Aggregate: groupBy=[[]], aggr=[[max(person.age)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
 
 #[test]
 fn select_aggregate_aliased_with_having_that_reuses_aggregate_but_not_by_its_alias() {
-    let sql = "SELECT MAX(age) as max_age
+    let sql = "SELECT max(age) as max_age
                    FROM person
-                   HAVING MAX(age) < 30";
-    let expected = "Projection: MAX(person.age) AS max_age\
-                        \n  Filter: MAX(person.age) < Int64(30)\
-                        \n    Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]\
+                   HAVING max(age) < 30";
+    let expected = "Projection: max(person.age) AS max_age\
+                        \n  Filter: max(person.age) < Int64(30)\
+                        \n    Aggregate: groupBy=[[]], aggr=[[max(person.age)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
@@ -1111,23 +1111,23 @@ fn select_aggregate_with_group_by_with_having() {
                    FROM person
                    GROUP BY first_name
                    HAVING first_name = 'M'";
-    let expected = "Projection: person.first_name, MAX(person.age)\
+    let expected = "Projection: person.first_name, max(person.age)\
                         \n  Filter: person.first_name = Utf8(\"M\")\
-                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age)]]\
+                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
 
 #[test]
 fn select_aggregate_with_group_by_with_having_and_where() {
-    let sql = "SELECT first_name, MAX(age)
+    let sql = "SELECT first_name, max(age)
                    FROM person
                    WHERE id > 5
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
-    let expected = "Projection: person.first_name, MAX(person.age)\
-                        \n  Filter: MAX(person.age) < Int64(100)\
-                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age)]]\
+    let expected = "Projection: person.first_name, max(person.age)\
+                        \n  Filter: max(person.age) < Int64(100)\
+                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]\
                         \n      Filter: person.id > Int64(5)\
                         \n        TableScan: person";
     quick_test(sql, expected);
@@ -1140,9 +1140,9 @@ fn select_aggregate_with_group_by_with_having_and_where_filtering_on_aggregate_c
                    WHERE id > 5 AND age > 18
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
-    let expected = "Projection: person.first_name, MAX(person.age)\
-                        \n  Filter: MAX(person.age) < Int64(100)\
-                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age)]]\
+    let expected = "Projection: person.first_name, max(person.age)\
+                        \n  Filter: max(person.age) < Int64(100)\
+                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]\
                         \n      Filter: person.id > Int64(5) AND person.age > Int64(18)\
                         \n        TableScan: person";
     quick_test(sql, expected);
@@ -1154,9 +1154,9 @@ fn select_aggregate_with_group_by_with_having_using_column_by_alias() {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 2 AND fn = 'M'";
-    let expected = "Projection: person.first_name AS fn, MAX(person.age)\
-                        \n  Filter: MAX(person.age) > Int64(2) AND person.first_name = Utf8(\"M\")\
-                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age)]]\
+    let expected = "Projection: person.first_name AS fn, max(person.age)\
+                        \n  Filter: max(person.age) > Int64(2) AND person.first_name = Utf8(\"M\")\
+                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
@@ -1169,8 +1169,8 @@ fn select_aggregate_with_group_by_with_having_using_columns_with_and_without_the
                    GROUP BY first_name
                    HAVING MAX(age) > 2 AND max_age < 5 AND first_name = 'M' AND fn = 'N'";
     let expected = "Projection: person.first_name AS fn, MAX(person.age) AS max_age\
-                        \n  Filter: MAX(person.age) > Int64(2) AND MAX(person.age) < Int64(5) AND person.first_name = Utf8(\"M\") AND person.first_name = Utf8(\"N\")\
-                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age)]]\
+                        \n  Filter: max(person.age) > Int64(2) AND MAX(person.age) < Int64(5) AND person.first_name = Utf8(\"M\") AND person.first_name = Utf8(\"N\")\
+                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
@@ -1181,9 +1181,9 @@ fn select_aggregate_with_group_by_with_having_that_reuses_aggregate() {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100";
-    let expected = "Projection: person.first_name, MAX(person.age)\
-                        \n  Filter: MAX(person.age) > Int64(100)\
-                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age)]]\
+    let expected = "Projection: person.first_name, max(person.age)\
+                        \n  Filter: max(person.age) > Int64(100)\
+                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
@@ -1196,7 +1196,7 @@ fn select_aggregate_with_group_by_with_having_referencing_column_not_in_group_by
                    HAVING MAX(age) > 10 AND last_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: HAVING clause references non-aggregate values: Expression person.last_name could not be resolved from available columns: person.first_name, MAX(person.age)",
+        "Error during planning: HAVING clause references non-aggregate values: Expression person.last_name could not be resolved from available columns: person.first_name, max(person.age)",
         err.strip_backtrace()
     );
 }

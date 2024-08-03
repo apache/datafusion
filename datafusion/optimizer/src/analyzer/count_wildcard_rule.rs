@@ -273,7 +273,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: count(Int64(1)) AS count(*) [count(*):Int64]\
-        \n  Aggregate: groupBy=[[]], aggr=[[MAX(count(Int64(1))) AS MAX(count(*))]] [MAX(count(*)):Int64;N]\
+        \n  Aggregate: groupBy=[[]], aggr=[[max(count(Int64(1))) AS max(count(*))]] [max(count(*)):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
     }

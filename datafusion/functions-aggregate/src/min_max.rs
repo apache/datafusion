@@ -92,7 +92,7 @@ pub struct Max {
 impl Max {
     pub fn new() -> Self {
         Self {
-            aliases: vec!["max".to_owned()],
+            aliases: vec!["MAX".to_owned()],
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
@@ -146,7 +146,7 @@ impl AggregateUDFImpl for Max {
     }
 
     fn name(&self) -> &str {
-        "MAX"
+        "max"
     }
 
     fn signature(&self) -> &Signature {
@@ -898,7 +898,7 @@ impl Min {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec!["min".to_owned()],
+            aliases: vec!["MIN".to_owned()],
         }
     }
 }
@@ -915,7 +915,7 @@ impl AggregateUDFImpl for Min {
     }
 
     fn name(&self) -> &str {
-        "MIN"
+        "min"
     }
 
     fn signature(&self) -> &Signature {
