@@ -360,7 +360,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Returns the user-defined schema name of the UDF given the arguments
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
-        let args_name = args.iter().map(Expr::schema_name).collect::<Result<Vec<_>>>()?;
+        let args_name = args
+            .iter()
+            .map(Expr::schema_name)
+            .collect::<Result<Vec<_>>>()?;
         // TODO: join with ", " to standardize the formatting of Vec<Expr>
         Ok(format!("{}({})", self.name(), args_name.join(",")))
     }

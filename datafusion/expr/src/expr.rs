@@ -1013,9 +1013,7 @@ impl Expr {
             Expr::Alias(Alias { name, .. }) => Ok(name.to_owned()),
             // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
             Expr::Cast(Cast { expr, data_type: _ }) => expr.schema_name(),
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                func.schema_name(args)
-            }
+            Expr::ScalarFunction(ScalarFunction { func, args }) => func.schema_name(args),
             Expr::Unnest(Unnest { expr }) => {
                 Ok(format!("unnest({})", expr.schema_name()?))
             }
@@ -2051,8 +2049,8 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         | Expr::Literal(_)
         | Expr::Placeholder(_)
         | Expr::OuterReferenceColumn(..)
-        | Expr::ScalarVariable(..) |
-        Expr::Wildcard { .. }=> write!(w, "{e}")?,
+        | Expr::ScalarVariable(..)
+        | Expr::Wildcard { .. } => write!(w, "{e}")?,
 
         Expr::Alias(Alias { name, .. }) => write!(w, "{name}")?,
         Expr::BinaryExpr(binary_expr) => {
