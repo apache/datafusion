@@ -26,7 +26,10 @@ use arrow_schema::DataType::{FixedSizeList, LargeList, List, Map, UInt64};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
+};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -41,7 +44,13 @@ make_udf_expr_and_func!(
 impl Cardinality {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![],
         }
     }
