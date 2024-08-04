@@ -385,11 +385,12 @@ query TT
 EXPLAIN SELECT
   STARTS_WITH(column1_utf8view, 'äöüß') as c1,
   STARTS_WITH(column1_utf8view, '') as c2,
-  STARTS_WITH(column1_utf8view, NULL) as c3
+  STARTS_WITH(column1_utf8view, NULL) as c3,
+  STARTS_WITH(NULL, column1_utf8view) as c4
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3
+01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
 02)--TableScan: test projection=[column1_utf8view]
 
 statement ok
