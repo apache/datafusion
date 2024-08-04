@@ -469,16 +469,16 @@ mod tests {
         assert_eq!(
             transformed_exprs,
             vec![
-                col("unnest(struct_col).field1"),
-                col("unnest(struct_col).field2"),
+                col("UNNEST(struct_col).field1"),
+                col("UNNEST(struct_col).field2"),
             ]
         );
-        assert_eq!(unnest_placeholder_columns, vec!["unnest(struct_col)"]);
+        assert_eq!(unnest_placeholder_columns, vec!["UNNEST(struct_col)"]);
         // still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
-            vec![col("struct_col").alias("unnest(struct_col)"),]
+            vec![col("struct_col").alias("UNNEST(struct_col)"),]
         );
 
         // unnest(array_col) + 1
@@ -491,12 +491,12 @@ mod tests {
         )?;
         assert_eq!(
             unnest_placeholder_columns,
-            vec!["unnest(struct_col)", "unnest(array_col)"]
+            vec!["UNNEST(struct_col)", "UNNEST(array_col)"]
         );
         // only transform the unnest children
         assert_eq!(
             transformed_exprs,
-            vec![col("unnest(array_col)").add(lit(1i64))]
+            vec![col("UNNEST(array_col)").add(lit(1i64))]
         );
 
         // keep appending to the current vector
@@ -505,8 +505,8 @@ mod tests {
         assert_eq!(
             inner_projection_exprs,
             vec![
-                col("struct_col").alias("unnest(struct_col)"),
-                col("array_col").alias("unnest(array_col)")
+                col("struct_col").alias("UNNEST(struct_col)"),
+                col("array_col").alias("UNNEST(array_col)")
             ]
         );
 
@@ -553,17 +553,17 @@ mod tests {
         // Only the inner most/ bottom most unnest is transformed
         assert_eq!(
             transformed_exprs,
-            vec![unnest(col("unnest(struct_col[matrix])"))]
+            vec![unnest(col("UNNEST(struct_col[matrix])"))]
         );
         assert_eq!(
             unnest_placeholder_columns,
-            vec!["unnest(struct_col[matrix])"]
+            vec!["UNNEST(struct_col[matrix])"]
         );
         assert_eq!(
             inner_projection_exprs,
             vec![col("struct_col")
                 .field("matrix")
-                .alias("unnest(struct_col[matrix])"),]
+                .alias("UNNEST(struct_col[matrix])"),]
         );
 
         Ok(())
