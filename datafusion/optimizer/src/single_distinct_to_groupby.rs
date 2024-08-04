@@ -39,7 +39,7 @@ use hashbrown::HashSet;
 /// single distinct to group by optimizer rule
 ///  ```text
 ///    Before:
-///    SELECT a, count(DINSTINCT b), sum(c)
+///    SELECT a, count(DISTINCT b), sum(c)
 ///    FROM t
 ///    GROUP BY a
 ///

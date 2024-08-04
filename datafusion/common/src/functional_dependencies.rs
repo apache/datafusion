@@ -524,22 +524,31 @@ pub fn aggregate_functional_dependencies(
         }
     }
 
-    // If we have a single GROUP BY key, we can guarantee uniqueness after
+    // When we have a GROUP BY key, we can guarantee uniqueness after
     // aggregation:
-    if group_by_expr_names.len() == 1 {
-        // If `source_indices` contain 0, delete this functional dependency
-        // as it will be added anyway with mode `Dependency::Single`:
-        aggregate_func_dependencies.retain(|item| !item.source_indices.contains(&0));
-        // Add a new functional dependency associated with the whole table:
-        aggregate_func_dependencies.push(
-            // Use nullable property of the group by expression
-            FunctionalDependence::new(
-                vec![0],
-                target_indices,
-                aggr_fields[0].is_nullable(),
-            )
-            .with_mode(Dependency::Single),
-        );
+    if !group_by_expr_names.is_empty() {
+        let count = group_by_expr_names.len();
+        let source_indices = (0..count).collect::<Vec<_>>();
+        let nullable = source_indices
+            .iter()
+            .any(|idx| aggr_fields[*idx].is_nullable());
+        // If GROUP BY expressions do not already act as a determinant:
+        if !aggregate_func_dependencies.iter().any(|item| {
+            // If `item.source_indices` is a subset of GROUP BY expressions, we shouldn't add
+            // them since `item.source_indices` defines this relation already.
+
+            // The following simple comparison is working well because
+            // GROUP BY expressions come here as a prefix.
+            item.source_indices.iter().all(|idx| idx < &count)
+        }) {
+            // Add a new functional dependency associated with the whole table:
+            // Use nullable property of the GROUP BY expression:
+            aggregate_func_dependencies.push(
+                // Use nullable property of the GROUP BY expression:
+                FunctionalDependence::new(source_indices, target_indices, nullable)
+                    .with_mode(Dependency::Single),
+            );
+        }
     }
     FunctionalDependencies::new(aggregate_func_dependencies)
 }
