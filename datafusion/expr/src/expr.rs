@@ -573,12 +573,6 @@ pub struct Cast {
     pub data_type: DataType,
 }
 
-impl fmt::Display for Cast {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "CAST({} AS {:?})", self.expr, self.data_type)
-    }
-}
-
 impl Cast {
     /// Create a new Cast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
@@ -2047,8 +2041,8 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
 fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
     match e {
         Expr::Alias(Alias { name, .. }) => write!(w, "{}", name)?,
-        Expr::Column(c) => write!(w, "{}", c.flat_name())?,
-        Expr::OuterReferenceColumn(_, c) => write!(w, "outer_ref({})", c.flat_name())?,
+        Expr::Column(c) => write!(w, "{c}")?,
+        Expr::OuterReferenceColumn(_, c) => write!(w, "outer_ref({c})")?,
         Expr::ScalarVariable(_, variable_names) => {
             write!(w, "{}", variable_names.join("."))?
         }
@@ -2119,12 +2113,8 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             }
             w.write_str("END")?;
         }
-        // Expr::Cast(c) => {
         Expr::Cast(Cast { expr, data_type: _ }) => {
             // CAST does not change the expression name
-
-            // TODO: display column
-            // write!(w, "{c}")?;
             write_name(w, expr)?;
         }
         Expr::TryCast(TryCast { expr, .. }) => {
