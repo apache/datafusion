@@ -141,7 +141,7 @@ pub fn split_files(
     let chunk_size = (partitioned_files.len() + n - 1) / n;
     partitioned_files
         .chunks_mut(chunk_size)
-        .map(|c| c.iter_mut().map(|p| mem::take(p)).collect())
+        .map(|c| c.iter_mut().map(mem::take).collect())
         .collect()
 }
 
