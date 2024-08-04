@@ -288,8 +288,9 @@ pub(crate) fn transform_bottom_unnest(
                          inner_projection_exprs: &mut Vec<Expr>|
      -> Result<Vec<Expr>> {
         let col = match expr_in_unnest {
-            Expr::Column(col) => col,
+            Expr::Column(col) => col.name(),
             _ => {
+                // TODO: this failed
                 return internal_err!("unnesting on non-column expr is not supported");
             }
         };
@@ -301,6 +302,7 @@ pub(crate) fn transform_bottom_unnest(
         let placeholder_name = format!("unnest_placeholder({})", col.name());
         let post_unnest_name =
             format!("unnest_placeholder({},depth={})", col.name(), level);
+        let placeholder_column = Column::from_name(placeholder_name.clone());
         let schema = input.schema();
 
         let (data_type, _) = expr_in_unnest.data_type_and_nullable(schema)?;
@@ -342,11 +344,11 @@ pub(crate) fn transform_bottom_unnest(
                 let post_unnest_column = Column::from_name(post_unnest_name);
                 match unnest_placeholder_columns
                     .iter_mut()
-                    .find(|(inner_col, _)| inner_col == col)
+                    .find(|(inner_col, _)| inner_col == &placeholder_column)
                 {
                     None => {
                         unnest_placeholder_columns.push((
-                            col.clone(),
+                            placeholder_column.clone(),
                             ColumnUnnestType::List(vec![ColumnUnnestList {
                                 output_column: post_unnest_column.clone(),
                                 depth: level,
@@ -355,10 +357,13 @@ pub(crate) fn transform_bottom_unnest(
                     }
                     Some((col, unnesting)) => match unnesting {
                         ColumnUnnestType::List(list) => {
-                            list.push(ColumnUnnestList {
+                            let unnesting = ColumnUnnestList {
                                 output_column: post_unnest_column.clone(),
                                 depth: level,
-                            });
+                            };
+                            if !list.contains(&unnesting) {
+                                list.push(unnesting);
+                            }
                         }
                         _ => {
                             return internal_err!("expr_in_unnest is a list type, while previous unnesting on this column is not a list type");
@@ -441,17 +446,12 @@ pub(crate) fn transform_bottom_unnest(
             if expr == *unnest_stack.last().unwrap() {
                 let most_inner = unnest_stack.first().unwrap();
                 if let Expr::Unnest(Unnest { expr: ref arg }) = most_inner {
-                    // this is (one of) the bottom most unnest expr
-                    let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
-                    if &expr == original_expr {
-                        return Ok(Transformed::no(expr));
-                    }
-
                     let depth = unnest_stack.len();
                     let struct_allowed = (&expr == original_expr) && depth == 1;
 
                     let mut transformed_exprs =
                         transform(depth, arg, struct_allowed, inner_projection_exprs)?;
+                    // TODO: if transformed_exprs has > 1 expr, handle it properly
                     return Ok(Transformed::new(
                         transformed_exprs.swap_remove(0),
                         true,
@@ -514,16 +514,24 @@ pub(crate) fn transform_bottom_unnest(
 // write test for recursive_transform_unnest
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, ops::Add, sync::Arc};
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
     use datafusion_common::{Column, DFSchema, Result};
-    use datafusion_expr::{col, lit, unnest, EmptyRelation, LogicalPlan};
+    use datafusion_expr::{
+        col, lit, unnest, ColumnUnnestType, EmptyRelation, LogicalPlan,
+    };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
 
     use crate::utils::{resolve_positions_to_exprs, transform_bottom_unnest};
+    fn column_unnests_eq(l: Vec<&str>, r: &[(Column, ColumnUnnestType)]) {
+        let formatted: Vec<String> =
+            r.iter().map(|i| format!("{}|{}", i.0, i.1)).collect();
+        assert_eq!(l, formatted)
+    }
+
     #[test]
     fn test_transform_bottom_unnest_recursive_memoization_struct() -> Result<()> {
         let three_d_dtype = ArrowDataType::List(Arc::new(Field::new(
@@ -598,10 +606,11 @@ mod tests {
         // memoization only contains 1 transformation
         assert_eq!(memo.len(), 1);
         assert!(memo.get(&Column::from_name("3d_col")).is_some());
-        assert_eq!(
-            unnest_placeholder_columns,
-            vec!["unnest_placeholder(3d_col)"]
+        column_unnests_eq(
+            vec!["unnest_placeholder(3d_col)"],
+            &unnest_placeholder_columns,
         );
+
         // still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
@@ -630,9 +639,9 @@ mod tests {
         // and the previous transformation is reused
         assert_eq!(memo.len(), 1);
         assert!(memo.get(&Column::from_name("3d_col")).is_some());
-        assert_eq!(
-            unnest_placeholder_columns,
-            vec!["unnest_placeholder(3d_col)"]
+        column_unnests_eq(
+            vec!["unnest_placeholder(3d_col)"],
+            &mut unnest_placeholder_columns,
         );
         // still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
@@ -668,12 +677,12 @@ mod tests {
         assert_eq!(memo.len(), 2);
 
         assert!(memo.get(&Column::from_name("struct_arr_col")).is_some());
-        assert_eq!(
-            unnest_placeholder_columns,
+        column_unnests_eq(
             vec![
                 "unnest_placeholder(3d_col)",
-                "unnest_placeholder(struct_arr_col)"
-            ]
+                "unnest_placeholder(struct_arr_col)",
+            ],
+            &mut unnest_placeholder_columns,
         );
         // still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
@@ -740,10 +749,11 @@ mod tests {
         // memoization only contains 1 transformation
         assert_eq!(memo.len(), 1);
         assert!(memo.get(&Column::from_name("3d_col")).is_some());
-        assert_eq!(
-            unnest_placeholder_columns,
-            vec!["unnest_placeholder(3d_col)"]
+        column_unnests_eq(
+            vec!["unnest_placeholder(3d_col)|List([unnest_placeholder(3d_col,depth=2)|depth=2])"],
+            &unnest_placeholder_columns,
         );
+
         // still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
@@ -769,12 +779,12 @@ mod tests {
             vec![col("unnest_placeholder(3d_col,depth=1)").alias("2d_col")]
         );
         // memoization still contains 1 transformation
-        // and the previous transformation is reused
+        // and the for the same column, depth = 1 needs to be performed aside from depth = 2
         assert_eq!(memo.len(), 1);
         assert!(memo.get(&Column::from_name("3d_col")).is_some());
-        assert_eq!(
-            unnest_placeholder_columns,
-            vec!["unnest_placeholder(3d_col)"]
+        column_unnests_eq(
+            vec!["unnest_placeholder(3d_col)|List([unnest_placeholder(3d_col,depth=2)|depth=2, unnest_placeholder(3d_col,depth=1)|depth=1])"],
+            &unnest_placeholder_columns,
         );
         // still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
@@ -839,7 +849,10 @@ mod tests {
                 col("unnest(struct_col).field2"),
             ]
         );
-        assert_eq!(unnest_placeholder_columns, vec!["unnest(struct_col)"]);
+        column_unnests_eq(
+            vec!["unnest_placeholder(struct_col)"],
+            &mut unnest_placeholder_columns,
+        );
         // still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
@@ -857,9 +870,12 @@ mod tests {
             &mut memo,
             &original_expr,
         )?;
-        assert_eq!(
-            unnest_placeholder_columns,
-            vec!["unnest(struct_col)", "unnest(array_col)"]
+        column_unnests_eq(
+            vec![
+                "unnest_placeholder(struct_col)",
+                "unnest_placeholder(array_col)",
+            ],
+            &mut unnest_placeholder_columns,
         );
         // only transform the unnest children
         assert_eq!(
@@ -925,10 +941,12 @@ mod tests {
             transformed_exprs,
             vec![unnest(col("unnest(struct_col[matrix])"))]
         );
-        assert_eq!(
-            unnest_placeholder_columns,
-            vec!["unnest(struct_col[matrix])"]
+
+        column_unnests_eq(
+            vec!["unnest_placeholder(struct_col[matrix])"],
+            &mut unnest_placeholder_columns,
         );
+
         assert_eq!(
             inner_projection_exprs,
             vec![col("struct_col")

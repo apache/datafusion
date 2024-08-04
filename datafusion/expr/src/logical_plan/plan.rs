@@ -2889,10 +2889,29 @@ pub enum ColumnUnnestType {
     Inferred,
 }
 
+impl fmt::Display for ColumnUnnestType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ColumnUnnestType::List(lists) => {
+                let list_strs: Vec<String> = lists.iter().map(|list| list.to_string()).collect();
+                write!(f, "List([{}])", list_strs.join(", "))
+            }
+            ColumnUnnestType::Struct => write!(f, "Struct"),
+            ColumnUnnestType::Inferred => write!(f, "Inferred"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ColumnUnnestList {
     pub output_column: Column,
     pub depth: usize,
+}
+
+impl fmt::Display for ColumnUnnestList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}|depth={}", self.output_column, self.depth)
+    }
 }
 
 /// Unnest a column that contains a nested list type. See
