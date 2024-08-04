@@ -1623,7 +1623,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (Some(name.clone()), expr.as_ref()),
-        Expr::AggregateFunction(_) => (None, e),
+        Expr::AggregateFunction(_) => (e.display_name().ok(), e),
         _ => (None, e),
     };
 
