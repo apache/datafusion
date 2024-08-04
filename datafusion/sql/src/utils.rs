@@ -19,6 +19,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::vec;
 
 use arrow_schema::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
@@ -26,14 +27,14 @@ use arrow_schema::{
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{
     exec_err, internal_err, plan_err, Column, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::builder::get_unnested_columns;
+use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
+use datafusion_expr::{ColumnUnnestList, ColumnUnnestType};
 use sqlparser::ast::Ident;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
@@ -276,7 +277,7 @@ pub(crate) fn normalize_ident(id: Ident) -> String {
 /// is done only for the bottom expression
 pub(crate) fn transform_bottom_unnest(
     input: &LogicalPlan,
-    unnest_placeholder_columns: &mut Vec<String>,
+    unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
     inner_projection_exprs: &mut Vec<Expr>,
     memo: &mut HashMap<Column, Vec<Column>>,
     original_expr: &Expr,
@@ -292,14 +293,7 @@ pub(crate) fn transform_bottom_unnest(
                 return internal_err!("unnesting on non-column expr is not supported");
             }
         };
-        let already_projected = memo.get(col);
-        let (already_projected, transformed_cols) = match memo.get_mut(col) {
-            Some(vec) => (true, vec),
-            _ => {
-                memo.insert(col.clone(), vec![]);
-                (false, memo.get_mut(col).unwrap())
-            }
-        };
+
         // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
         // inside unnest execution, each column inside the inner projection
         // will be transformed into new columns. Thus we need to keep track of these placeholding column names
@@ -307,41 +301,78 @@ pub(crate) fn transform_bottom_unnest(
         let placeholder_name = format!("unnest_placeholder({})", col.name());
         let post_unnest_name =
             format!("unnest_placeholder({},depth={})", col.name(), level);
-
-        // Add alias for the argument expression, to avoid naming conflicts
-        // with other expressions in the select list. For example: `select unnest(col1), col1 from t`.
-        // this extra projection is used to unnest transforming
-        if !already_projected {
-            inner_projection_exprs
-                .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
-
-            unnest_placeholder_columns.push(placeholder_name.clone());
-        }
-
         let schema = input.schema();
 
         let (data_type, _) = expr_in_unnest.data_type_and_nullable(schema)?;
-        if !struct_allowed {
-            if let DataType::Struct(_) = data_type {
-                return internal_err!("unnest on struct can only be applied at the root level of select expression");
+
+        match data_type {
+            DataType::Struct(inner_fields) => {
+                if !struct_allowed {
+                    return internal_err!("unnest on struct can only be applied at the root level of select expression");
+                }
+                inner_projection_exprs
+                    .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
+                unnest_placeholder_columns.push((
+                    Column::from_name(placeholder_name.clone()),
+                    ColumnUnnestType::Struct,
+                ));
+                return Ok(
+                    get_struct_unnested_columns(&placeholder_name, &inner_fields)
+                        .into_iter()
+                        .map(|c| Expr::Column(c))
+                        .collect(),
+                );
+            }
+            DataType::List(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::LargeList(field) => {
+                // TODO: this memo only needs to be a hashset
+                let (already_projected, transformed_cols) = match memo.get_mut(col) {
+                    Some(vec) => (true, vec),
+                    _ => {
+                        memo.insert(col.clone(), vec![]);
+                        (false, memo.get_mut(col).unwrap())
+                    }
+                };
+                if !already_projected {
+                    inner_projection_exprs
+                        .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
+                }
+
+                let post_unnest_column = Column::from_name(post_unnest_name);
+                match unnest_placeholder_columns
+                    .iter_mut()
+                    .find(|(inner_col, _)| inner_col == col)
+                {
+                    None => {
+                        unnest_placeholder_columns.push((
+                            col.clone(),
+                            ColumnUnnestType::List(vec![ColumnUnnestList {
+                                output_column: post_unnest_column.clone(),
+                                depth: level,
+                            }]),
+                        ));
+                    }
+                    Some((col, unnesting)) => match unnesting {
+                        ColumnUnnestType::List(list) => {
+                            list.push(ColumnUnnestList {
+                                output_column: post_unnest_column.clone(),
+                                depth: level,
+                            });
+                        }
+                        _ => {
+                            return internal_err!("expr_in_unnest is a list type, while previous unnesting on this column is not a list type");
+                        }
+                    },
+                }
+                return Ok(vec![Expr::Column(post_unnest_column)]);
+            }
+            _ => {
+                return internal_err!(
+                    "unnest on non-list or struct type is not supported"
+                );
             }
         }
-
-        // TODO: refactor get_unnested_columns or use a different function
-        // depth = 1 has no meaning here, just to provide enough argument
-        let outer_projection_columns =
-            get_unnested_columns(&post_unnest_name, &data_type, 1)?;
-        let expr = outer_projection_columns
-            .iter()
-            .map(|col| {
-                if !transformed_cols.contains(&col.0) {
-                    transformed_cols.push(col.0.clone());
-                }
-                Expr::Column(col.0.clone())
-            })
-            .collect::<Vec<_>>();
-
-        Ok(expr)
     };
     let latest_visited_unnest = RefCell::new(None);
     let exprs_under_unnest = RefCell::new(HashSet::new());
@@ -483,12 +514,7 @@ pub(crate) fn transform_bottom_unnest(
 // write test for recursive_transform_unnest
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{HashMap, HashSet},
-        ops::Add,
-        str::FromStr,
-        sync::Arc,
-    };
+    use std::{collections::HashMap, sync::Arc};
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;

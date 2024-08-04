@@ -44,6 +44,13 @@ AS VALUES
     (struct([2], 'b'), [[[3,4],[5]],[[null,6],null,[7,8]]], [struct([2],[[3],[4]])])
 ;
 
+query TT
+explain select unnest([1,2,3]);
+----
+1
+2
+3
+
 ## Basic unnest expression in select list
 query I
 select unnest([1,2,3]);

@@ -1640,6 +1640,16 @@ fn get_unnested_columns_inferred(
     }
 }
 
+pub fn get_struct_unnested_columns(
+    col_name: &String,
+    inner_fields: &Fields,
+) -> Vec<Column> {
+    inner_fields
+        .iter()
+        .map(|f| Column::from_name(format!("{}.{}", col_name, f.name())))
+        .collect()
+}
+
 // TODO: make me recursive
 // Based on data type, either struct or a variant of list
 // return a set of columns as the result of unnesting

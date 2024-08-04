@@ -51,7 +51,7 @@ use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
-use datafusion_expr::{case, is_null, lit};
+use datafusion_expr::{case, is_null, lit, ColumnUnnestType};
 use datafusion_expr::{
     max, min, utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
@@ -361,7 +361,10 @@ impl DataFrame {
         columns: &[&str],
         options: UnnestOptions,
     ) -> Result<DataFrame> {
-        let columns = columns.iter().map(|c| Column::from(*c)).collect();
+        let columns = columns
+            .iter()
+            .map(|c| (Column::from(*c), ColumnUnnestType::Inferred))
+            .collect();
         let plan = LogicalPlanBuilder::from(self.plan)
             .unnest_columns_with_options(columns, options)?
             .build()?;

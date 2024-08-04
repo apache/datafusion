@@ -421,7 +421,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // ```
         let mut intermediate_plan = unwrap_arc(input);
         let mut intermediate_select_exprs = group_expr;
-        let mut memo = HashSet::new();
+        let mut memo = HashMap::new();
 
         loop {
             let mut unnest_columns = vec![];

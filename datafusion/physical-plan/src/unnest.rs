@@ -343,8 +343,8 @@ fn flatten_struct_cols(
 
 #[derive(Debug, Clone)]
 pub struct ListUnnest {
-    index_in_input_schema: usize,
-    depth: usize,
+    pub index_in_input_schema: usize,
+    pub depth: usize,
 }
 
 /// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
@@ -841,10 +841,13 @@ mod tests {
             list_arr_ref,
             None,
         );
-        let b = length_recursive(&(Arc::new(nested_list_arr) as ArrayRef), 2)?;
         // [3, 0, 2]
         // if depth = 2, length should be 5
-        println!("{:?}", b);
+        verify_longest_length(
+            &[(Arc::new(nested_list_arr) as ArrayRef, 2)],
+            true,
+            vec![5, 7],
+        );
         Ok(())
     }
 
@@ -916,27 +919,51 @@ mod tests {
         // Test with single ListArray
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         let list_array = Arc::new(make_generic_array::<i32>()) as ArrayRef;
-        verify_longest_length(&[Arc::clone(&list_array)], false, vec![3, 0, 0, 1, 0, 2])?;
-        verify_longest_length(&[Arc::clone(&list_array)], true, vec![3, 0, 1, 1, 1, 2])?;
+        verify_longest_length(
+            &[(Arc::clone(&list_array), 1)],
+            false,
+            vec![3, 0, 0, 1, 0, 2],
+        )?;
+        verify_longest_length(
+            &[(Arc::clone(&list_array), 1)],
+            true,
+            vec![3, 0, 1, 1, 1, 2],
+        )?;
 
         // Test with single LargeListArray
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         let list_array = Arc::new(make_generic_array::<i64>()) as ArrayRef;
-        verify_longest_length(&[Arc::clone(&list_array)], false, vec![3, 0, 0, 1, 0, 2])?;
-        verify_longest_length(&[Arc::clone(&list_array)], true, vec![3, 0, 1, 1, 1, 2])?;
+        verify_longest_length(
+            &[(Arc::clone(&list_array), 1)],
+            false,
+            vec![3, 0, 0, 1, 0, 2],
+        )?;
+        verify_longest_length(
+            &[(Arc::clone(&list_array), 1)],
+            true,
+            vec![3, 0, 1, 1, 1, 2],
+        )?;
 
         // Test with single FixedSizeListArray
         //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
         let list_array = Arc::new(make_fixed_list()) as ArrayRef;
-        verify_longest_length(&[Arc::clone(&list_array)], false, vec![2, 0, 2, 0, 2, 2])?;
-        verify_longest_length(&[Arc::clone(&list_array)], true, vec![2, 1, 2, 1, 2, 2])?;
+        verify_longest_length(
+            &[(Arc::clone(&list_array), 1)],
+            false,
+            vec![2, 0, 2, 0, 2, 2],
+        )?;
+        verify_longest_length(
+            &[(Arc::clone(&list_array), 1)],
+            true,
+            vec![2, 1, 2, 1, 2, 2],
+        )?;
 
         // Test with multiple list arrays
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
         let list1 = Arc::new(make_generic_array::<i32>()) as ArrayRef;
         let list2 = Arc::new(make_fixed_list()) as ArrayRef;
-        let list_arrays = vec![Arc::clone(&list1), Arc::clone(&list2)];
+        let list_arrays = vec![(Arc::clone(&list1), 1), (Arc::clone(&list2), 1)];
         verify_longest_length(&list_arrays, false, vec![3, 0, 2, 1, 2, 2])?;
         verify_longest_length(&list_arrays, true, vec![3, 1, 2, 1, 2, 2])?;
 
