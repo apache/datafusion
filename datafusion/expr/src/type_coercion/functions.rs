@@ -574,7 +574,9 @@ fn coerced_from<'a>(
             Some(type_into.clone())
         }
         // We can go into a Utf8View from a Utf8 or LargeUtf8
-        (Utf8View, _) if matches!(type_from, Utf8 | LargeUtf8) => Some(type_into.clone()),
+        (Utf8View, _) if matches!(type_from, Utf8 | LargeUtf8 | Null) => {
+            Some(type_into.clone())
+        }
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
