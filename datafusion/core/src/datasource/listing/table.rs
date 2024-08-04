@@ -1038,7 +1038,7 @@ impl ListingTable {
                 );
                 Ok(statistics)
             }
-        };
+        }
     }
 }
 
