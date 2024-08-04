@@ -998,22 +998,24 @@ impl PartialOrd for Expr {
 }
 
 impl Expr {
-    /// Returns the name of this expression as it should appear in a schema. This name
-    /// will not include any CAST expressions.
-    // TODO: Deprecate it and use Display
-    pub fn display_name(&self) -> Result<String> {
-        create_name(self)
-    }
-
-    /// Returns the name for schema / field that is different from display
-    /// Most of the expressions are the same as display_name
+    /// Returns the name for schema / field that is different from Display
+    /// Most of the expressions are the same as Display
     /// Those are the main difference
-    /// 1. Alias
-    /// 2. Cast
+    /// 1. Alias, where excludes expression
+    /// 2. Cast / TryCast, where takes expression only
     pub fn schema_name(&self) -> Result<String> {
         let mut s = String::new();
 
         match self {
+            // The same as Display
+            Expr::Column(_)
+            | Expr::Literal(_)
+            | Expr::ScalarVariable(..)
+            | Expr::Sort(_)
+            | Expr::OuterReferenceColumn(..)
+            | Expr::Placeholder(_)
+            | Expr::Wildcard { .. } => write!(&mut s, "{self}")?,
+
             Expr::AggregateFunction(AggregateFunction {
                 func_def,
                 args,
@@ -1116,10 +1118,9 @@ impl Expr {
                 write!(&mut s, "END")?;
             }
             // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
-            Expr::Cast(Cast { expr, data_type: _ }) => {
+            Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
                 write!(&mut s, "{}", expr.schema_name()?)?
             }
-            Expr::Column(c) => write!(&mut s, "{c}")?,
             Expr::InList(InList {
                 expr,
                 list,
@@ -1189,7 +1190,13 @@ impl Expr {
             Expr::IsNotFalse(expr) => {
                 write!(&mut s, "{} IS NOT FALSE", expr.schema_name()?)?
             }
-            Expr::Like(Like { negated, expr, pattern, escape_char, case_insensitive }) => {
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
                 write!(
                     &mut s,
                     "{} {}{} {}",
@@ -1214,7 +1221,13 @@ impl Expr {
             Expr::ScalarSubquery(Subquery { subquery, .. }) => {
                 write!(&mut s, "{}", subquery.schema().field(0).name())?;
             }
-            Expr::SimilarTo(Like { negated, expr, pattern, escape_char, case_insensitive }) => {
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                ..
+            }) => {
                 write!(
                     &mut s,
                     "{} {} {}",
@@ -1269,8 +1282,6 @@ impl Expr {
 
                 write!(&mut s, " {window_frame}")?;
             }
-            // other exprs has no difference
-            _ => write!(&mut s, "{}", self.display_name()?)?,
         }
 
         Ok(s)
@@ -2277,64 +2288,6 @@ fn fmt_function(
     write!(f, "{}({}{})", fun, distinct_str, args.join(", "))
 }
 
-/// Returns a readable name of an expression based on the input schema.
-/// This function recursively transverses the expression for names such as "CAST(a > 2)".
-pub(crate) fn create_name(e: &Expr) -> Result<String> {
-    let mut s = String::new();
-    write_name(&mut s, e)?;
-    Ok(s)
-}
-
-fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
-    match e {
-        // Reuse Display trait
-        Expr::AggregateFunction(_)
-        | Expr::Between(_)
-        | Expr::BinaryExpr(_)
-        | Expr::Case(_)
-        | Expr::Column(_)
-        | Expr::Exists(_)
-        | Expr::GroupingSet(_)
-        | Expr::Literal(_)
-        | Expr::InList(_)
-        | Expr::IsFalse(_)
-        | Expr::IsNotFalse(_)
-        | Expr::IsTrue(_)
-        | Expr::IsNotTrue(_)
-        | Expr::IsUnknown(_)
-        | Expr::IsNotUnknown(_)
-        | Expr::IsNull(_)
-        | Expr::IsNotNull(_)
-        | Expr::InSubquery(_)
-        | Expr::Like(_)
-        | Expr::Negative(_)
-        | Expr::Not(_)
-        | Expr::OuterReferenceColumn(..)
-        | Expr::Placeholder(_)
-        | Expr::Unnest(_)
-        | Expr::ScalarSubquery(..)
-        | Expr::ScalarVariable(..)
-        | Expr::SimilarTo(_)
-        | Expr::Sort(..)
-        | Expr::Wildcard { .. }
-        | Expr::WindowFunction(_) => write!(w, "{e}")?,
-
-        Expr::Alias(Alias { name, .. }) => write!(w, "{name}")?,
-        Expr::Cast(Cast { expr, .. }) => {
-            // CAST does not change the expression name
-            write_name(w, expr)?;
-        }
-        Expr::TryCast(TryCast { expr, .. }) => {
-            // CAST does not change the expression name
-            write_name(w, expr)?;
-        }
-        Expr::ScalarFunction(fun) => {
-            w.write_str(fun.func.display_name(&fun.args)?.as_str())?;
-        }
-    };
-    Ok(())
-}
-
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
@@ -2350,7 +2303,6 @@ mod test {
         let expected = "CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
         assert_eq!(expected, expr.canonical_name());
         assert_eq!(expected, format!("{expr}"));
-        assert_eq!(expected, expr.display_name()?);
         Ok(())
     }
 

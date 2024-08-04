@@ -26,7 +26,6 @@ use arrow::datatypes::DataType;
 
 use datafusion_common::{not_impl_err, ExprSchema, Result};
 
-use crate::expr::create_name;
 use crate::interval_arithmetic::Interval;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
@@ -353,7 +352,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Returns the user-defined display name of the UDF given the arguments
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
+        let names: Vec<String> = args.iter().map(ToString::to_string).collect();
         // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
         Ok(format!("{}({})", self.name(), names.join(",")))
     }

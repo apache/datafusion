@@ -74,7 +74,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
         };
 
-        Ok(format!("{}[{}]", args[0].display_name()?, name))
+        Ok(format!("{}[{}]", args[0], name))
     }
 
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
