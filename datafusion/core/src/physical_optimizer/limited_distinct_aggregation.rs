@@ -193,10 +193,10 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
 mod tests {
 
     use super::*;
-    use crate::physical_optimizer::aggregate_statistics::tests::TestAggregate;
     use crate::physical_optimizer::enforce_distribution::tests::{
         parquet_exec_with_sort, schema, trim_plan_display,
     };
+    use crate::physical_optimizer::tests::aggregate_statistics::tests::TestAggregate;
     use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::collect;
     use crate::physical_plan::memory::MemoryExec;
