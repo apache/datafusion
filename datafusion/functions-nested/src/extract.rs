@@ -96,6 +96,10 @@ impl ScalarUDFImpl for ArrayElement {
         "array_element"
     }
 
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        self.schema_name(args)
+    }
+
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         Ok(format!(
             "{}[{}]",
@@ -251,6 +255,10 @@ impl ArraySlice {
 impl ScalarUDFImpl for ArraySlice {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        self.schema_name(args)
     }
 
     fn schema_name(&self, args: &[Expr]) -> Result<String> {

@@ -1859,6 +1859,10 @@ impl fmt::Display for Expr {
             Expr::ScalarFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
+            // TODO: use udf's display_name
+            // Expr::ScalarFunction(s) => {
+            //     write!(f, "{}", func.display_name(args).unwrap())
+            // }
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
@@ -2011,7 +2015,6 @@ fn fmt_function(
         false => args.iter().map(|arg| format!("{arg:?}")).collect(),
     };
 
-    // let args: Vec<String> = args.iter().map(|arg| format!("{:?}", arg)).collect();
     let distinct_str = match distinct {
         true => "DISTINCT ",
         false => "",

@@ -57,6 +57,10 @@ impl ScalarUDFImpl for GetFieldFunc {
         "get_field"
     }
 
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        self.schema_name(args)
+    }
+
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         if args.len() != 2 {
             return exec_err!(
