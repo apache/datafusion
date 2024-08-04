@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem;
 use std::sync::Arc;
 
 use super::listing::PartitionedFile;
@@ -29,7 +30,6 @@ use datafusion_common::ScalarValue;
 
 use futures::{Stream, StreamExt};
 use itertools::izip;
-use itertools::multiunzip;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files. Needed to read up to
@@ -99,33 +99,23 @@ pub async fn get_statistics_with_limit(
                 total_byte_size =
                     add_row_stats(file_stats.total_byte_size.clone(), total_byte_size);
 
-                (null_counts, max_values, min_values) = multiunzip(
-                    izip!(
-                        file_stats.column_statistics.clone().into_iter(),
-                        null_counts.into_iter(),
-                        max_values.into_iter(),
-                        min_values.into_iter()
-                    )
-                    .map(
-                        |(
-                            ColumnStatistics {
-                                null_count: file_nc,
-                                max_value: file_max,
-                                min_value: file_min,
-                                distinct_count: _,
-                            },
-                            null_count,
-                            max_value,
-                            min_value,
-                        )| {
-                            (
-                                add_row_stats(file_nc, null_count),
-                                set_max_if_greater(file_max, max_value),
-                                set_min_if_lesser(file_min, min_value),
-                            )
-                        },
-                    ),
-                );
+                for (file_col_stats, null_count, max_value, min_value) in izip!(
+                    file_stats.column_statistics.iter(),
+                    null_counts.iter_mut(),
+                    max_values.iter_mut(),
+                    min_values.iter_mut(),
+                ) {
+                    let ColumnStatistics {
+                        null_count: file_nc,
+                        max_value: file_max,
+                        min_value: file_min,
+                        distinct_count: _,
+                    } = file_col_stats;
+
+                    *null_count = add_row_stats(file_nc.clone(), null_count.clone());
+                    set_max_if_greater(file_max, max_value);
+                    set_min_if_lesser(file_min, min_value)
+                }
 
                 // If the number of rows exceeds the limit, we can stop processing
                 // files. This only applies when we know the number of rows. It also
@@ -242,45 +232,61 @@ fn min_max_aggregate_data_type(input_type: &DataType) -> &DataType {
 /// If the given value is numerically greater than the original maximum value,
 /// return the new maximum value with appropriate exactness information.
 fn set_max_if_greater(
-    max_nominee: Precision<ScalarValue>,
-    max_values: Precision<ScalarValue>,
-) -> Precision<ScalarValue> {
-    match (&max_values, &max_nominee) {
-        (Precision::Exact(val1), Precision::Exact(val2)) if val1 < val2 => max_nominee,
+    max_nominee: &Precision<ScalarValue>,
+    max_value: &mut Precision<ScalarValue>,
+) {
+    match (&max_value, max_nominee) {
+        (Precision::Exact(val1), Precision::Exact(val2)) if val1 < val2 => {
+            *max_value = max_nominee.clone();
+        }
         (Precision::Exact(val1), Precision::Inexact(val2))
         | (Precision::Inexact(val1), Precision::Inexact(val2))
         | (Precision::Inexact(val1), Precision::Exact(val2))
             if val1 < val2 =>
         {
-            max_nominee.to_inexact()
+            *max_value = max_nominee.clone().to_inexact();
         }
-        (Precision::Exact(_), Precision::Absent) => max_values.to_inexact(),
-        (Precision::Absent, Precision::Exact(_)) => max_nominee.to_inexact(),
-        (Precision::Absent, Precision::Inexact(_)) => max_nominee,
-        (Precision::Absent, Precision::Absent) => Precision::Absent,
-        _ => max_values,
+        (Precision::Exact(_), Precision::Absent) => {
+            let exact_max = mem::take(max_value);
+            *max_value = exact_max.to_inexact();
+        }
+        (Precision::Absent, Precision::Exact(_)) => {
+            *max_value = max_nominee.clone().to_inexact();
+        }
+        (Precision::Absent, Precision::Inexact(_)) => {
+            *max_value = max_nominee.clone();
+        }
+        _ => {}
     }
 }
 
 /// If the given value is numerically lesser than the original minimum value,
 /// return the new minimum value with appropriate exactness information.
 fn set_min_if_lesser(
-    min_nominee: Precision<ScalarValue>,
-    min_values: Precision<ScalarValue>,
-) -> Precision<ScalarValue> {
-    match (&min_values, &min_nominee) {
-        (Precision::Exact(val1), Precision::Exact(val2)) if val1 > val2 => min_nominee,
+    min_nominee: &Precision<ScalarValue>,
+    min_value: &mut Precision<ScalarValue>,
+) {
+    match (&min_value, min_nominee) {
+        (Precision::Exact(val1), Precision::Exact(val2)) if val1 > val2 => {
+            *min_value = min_nominee.clone();
+        }
         (Precision::Exact(val1), Precision::Inexact(val2))
         | (Precision::Inexact(val1), Precision::Inexact(val2))
         | (Precision::Inexact(val1), Precision::Exact(val2))
             if val1 > val2 =>
         {
-            min_nominee.to_inexact()
+            *min_value = min_nominee.clone().to_inexact();
         }
-        (Precision::Exact(_), Precision::Absent) => min_values.to_inexact(),
-        (Precision::Absent, Precision::Exact(_)) => min_nominee.to_inexact(),
-        (Precision::Absent, Precision::Inexact(_)) => min_nominee,
-        (Precision::Absent, Precision::Absent) => Precision::Absent,
-        _ => min_values,
+        (Precision::Exact(_), Precision::Absent) => {
+            let exact_min = mem::take(min_value);
+            *min_value = exact_min.to_inexact();
+        }
+        (Precision::Absent, Precision::Exact(_)) => {
+            *min_value = min_nominee.clone().to_inexact();
+        }
+        (Precision::Absent, Precision::Inexact(_)) => {
+            *min_value = min_nominee.clone();
+        }
+        _ => {}
     }
 }

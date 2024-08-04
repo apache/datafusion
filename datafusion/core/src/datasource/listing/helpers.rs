@@ -18,6 +18,7 @@
 //! Helper functions for the table implementation
 
 use std::collections::HashMap;
+use std::mem;
 use std::sync::Arc;
 
 use super::PartitionedFile;
@@ -139,8 +140,8 @@ pub fn split_files(
     // effectively this is div with rounding up instead of truncating
     let chunk_size = (partitioned_files.len() + n - 1) / n;
     partitioned_files
-        .chunks(chunk_size)
-        .map(|c| c.to_vec())
+        .chunks_mut(chunk_size)
+        .map(|c| c.iter_mut().map(|p| mem::take(p)).collect())
         .collect()
 }
 
