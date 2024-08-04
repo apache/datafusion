@@ -1082,7 +1082,12 @@ impl Expr {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(&mut s, "{} {op} {}", left.schema_name()?, right.schema_name()?)?;
+                write!(
+                    &mut s,
+                    "{} {op} {}",
+                    left.schema_name()?,
+                    right.schema_name()?
+                )?;
             }
             Expr::Case(Case {
                 expr,
@@ -1115,8 +1120,53 @@ impl Expr {
                 write!(&mut s, "{}", expr.schema_name()?)?
             }
             Expr::Column(c) => write!(&mut s, "{c}")?,
+            Expr::InList(InList {
+                expr,
+                list,
+                negated,
+            }) => {
+                let inlist_exprs = list
+                    .iter()
+                    .map(Self::schema_name)
+                    .collect::<Result<Vec<_>>>()?;
+                let inlist_name = inlist_exprs.join(", ");
+
+                if *negated {
+                    write!(&mut s, "{} NOT IN {}", expr.schema_name()?, inlist_name)?;
+                } else {
+                    write!(&mut s, "{} IN {}", expr.schema_name()?, inlist_name)?;
+                }
+            }
             Expr::Exists(Exists { negated: true, .. }) => write!(&mut s, "NOT EXISTS")?,
             Expr::Exists(Exists { negated: false, .. }) => write!(&mut s, "EXISTS")?,
+            Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+                let exprs_name = exprs
+                    .iter()
+                    .map(Self::schema_name)
+                    .collect::<Result<Vec<_>>>()?
+                    .join(", ");
+                write!(&mut s, "ROLLUP ({})", exprs_name)?;
+            }
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                write!(&mut s, "GROUPING SETS (")?;
+                for (_, exprs) in lists_of_exprs.iter().enumerate() {
+                    let exprs_name = exprs
+                        .iter()
+                        .map(Self::schema_name)
+                        .collect::<Result<Vec<_>>>()?
+                        .join(", ");
+                    write!(&mut s, "({})", exprs_name)?;
+                }
+                write!(&mut s, ")")?;
+            }
+            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+                let exprs_name = exprs
+                    .iter()
+                    .map(Self::schema_name)
+                    .collect::<Result<Vec<_>>>()?
+                    .join(", ");
+                write!(&mut s, "ROLLUP ({})", exprs_name)?;
+            }
             Expr::IsNull(expr) => write!(&mut s, "{} IS NULL", expr.schema_name()?)?,
             Expr::IsNotNull(expr) => {
                 write!(&mut s, "{} IS NOT NULL", expr.schema_name()?)?
@@ -1127,6 +1177,10 @@ impl Expr {
             Expr::IsNotUnknown(expr) => {
                 write!(&mut s, "{} IS NOT UNKNOWN", expr.schema_name()?)?
             }
+            Expr::InSubquery(InSubquery { negated: true, .. }) => {
+                write!(&mut s, "NOT IN")?
+            }
+            Expr::InSubquery(InSubquery { negated: false, .. }) => write!(&mut s, "IN")?,
             Expr::IsTrue(expr) => write!(&mut s, "{} IS TRUE", expr.schema_name()?)?,
             Expr::IsFalse(expr) => write!(&mut s, "{} IS FALSE", expr.schema_name()?)?,
             Expr::IsNotTrue(expr) => {
@@ -1142,6 +1196,48 @@ impl Expr {
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 write!(&mut s, "{}", func.schema_name(args)?)?
+            }
+            Expr::ScalarSubquery(Subquery { subquery, .. }) => {
+                write!(&mut s, "{}", subquery.schema().field(0).name())?;
+            }
+            Expr::WindowFunction(WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+                null_treatment,
+            }) => {
+                let args_name = args
+                    .iter()
+                    .map(Self::schema_name)
+                    .collect::<Result<Vec<_>>>()?;
+                // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
+                write!(&mut s, "{}({})", fun, args_name.join(","))?;
+
+                if let Some(null_treatment) = null_treatment {
+                    write!(&mut s, " {}", null_treatment)?;
+                }
+
+                if !partition_by.is_empty() {
+                    let partition_by_name = partition_by
+                        .iter()
+                        .map(Self::schema_name)
+                        .collect::<Result<Vec<_>>>()?
+                        .join(", ");
+                    write!(&mut s, " PARTITION BY [{}]", partition_by_name)?;
+                }
+
+                if !order_by.is_empty() {
+                    let order_by_name = order_by
+                        .iter()
+                        .map(Self::schema_name)
+                        .collect::<Result<Vec<_>>>()?
+                        .join(", ");
+                    write!(&mut s, " ORDER BY [{}]", order_by_name)?;
+                };
+
+                write!(&mut s, " {window_frame}")?;
             }
             // other exprs has no difference
             _ => write!(&mut s, "{}", self.display_name()?)?,
@@ -2182,6 +2278,8 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         | Expr::BinaryExpr(_)
         | Expr::Case(_)
         | Expr::Column(_)
+        | Expr::Exists(_)
+        | Expr::GroupingSet(_)
         | Expr::Literal(_)
         | Expr::InList(_)
         | Expr::IsFalse(_)
@@ -2192,14 +2290,17 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         | Expr::IsNotUnknown(_)
         | Expr::IsNull(_)
         | Expr::IsNotNull(_)
+        | Expr::InSubquery(_)
         | Expr::Negative(_)
         | Expr::Not(_)
         | Expr::OuterReferenceColumn(..)
         | Expr::Placeholder(_)
         | Expr::Unnest(_)
+        | Expr::ScalarSubquery(..)
         | Expr::ScalarVariable(..)
         | Expr::Sort(..)
-        | Expr::Wildcard { .. } => write!(w, "{e}")?,
+        | Expr::Wildcard { .. }
+        | Expr::WindowFunction(_) => write!(w, "{e}")?,
 
         Expr::Alias(Alias { name, .. }) => write!(w, "{name}")?,
         Expr::Like(Like {
@@ -2251,71 +2352,35 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             // CAST does not change the expression name
             write_name(w, expr)?;
         }
-        Expr::Exists(Exists { negated: true, .. }) => w.write_str("NOT EXISTS")?,
-        Expr::Exists(Exists { negated: false, .. }) => w.write_str("EXISTS")?,
-        Expr::InSubquery(InSubquery { negated: true, .. }) => w.write_str("NOT IN")?,
-        Expr::InSubquery(InSubquery { negated: false, .. }) => w.write_str("IN")?,
-        Expr::ScalarSubquery(subquery) => {
-            w.write_str(subquery.subquery.schema().field(0).name().as_str())?;
-        }
         Expr::ScalarFunction(fun) => {
             w.write_str(fun.func.display_name(&fun.args)?.as_str())?;
-        }
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            args,
-            window_frame,
-            partition_by,
-            order_by,
-            null_treatment,
-        }) => {
-            write_function_name(w, &fun.to_string(), false, args)?;
+        } // Expr::WindowFunction(WindowFunction {
+          //     fun,
+          //     args,
+          //     window_frame,
+          //     partition_by,
+          //     order_by,
+          //     null_treatment,
+          // }) => {
+          //     write_function_name(w, &fun.to_string(), false, args)?;
 
-            if let Some(nt) = null_treatment {
-                w.write_str(" ")?;
-                write!(w, "{}", nt)?;
-            }
-            if !partition_by.is_empty() {
-                w.write_str(" ")?;
-                write!(w, "PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
-            }
-            if !order_by.is_empty() {
-                w.write_str(" ")?;
-                write!(w, "ORDER BY [{}]", expr_vec_fmt!(order_by))?;
-            }
-            w.write_str(" ")?;
-            write!(w, "{window_frame}")?;
-        }
-        Expr::GroupingSet(grouping_set) => match grouping_set {
-            GroupingSet::Rollup(exprs) => {
-                write!(w, "ROLLUP (")?;
-                write_names(w, exprs.as_slice())?;
-                write!(w, ")")?;
-            }
-            GroupingSet::Cube(exprs) => {
-                write!(w, "CUBE (")?;
-                write_names(w, exprs.as_slice())?;
-                write!(w, ")")?;
-            }
-            GroupingSet::GroupingSets(lists_of_exprs) => {
-                write!(w, "GROUPING SETS (")?;
-                for (i, exprs) in lists_of_exprs.iter().enumerate() {
-                    if i != 0 {
-                        write!(w, ", ")?;
-                    }
-                    write!(w, "(")?;
-                    write_names(w, exprs.as_slice())?;
-                    write!(w, ")")?;
-                }
-                write!(w, ")")?;
-            }
-        },
+          //     if let Some(nt) = null_treatment {
+          //         w.write_str(" ")?;
+          //         write!(w, "{}", nt)?;
+          //     }
+          //     if !partition_by.is_empty() {
+          //         w.write_str(" ")?;
+          //         write!(w, "PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
+          //     }
+          //     if !order_by.is_empty() {
+          //         w.write_str(" ")?;
+          //         write!(w, "ORDER BY [{}]", expr_vec_fmt!(order_by))?;
+          //     }
+          //     w.write_str(" ")?;
+          //     write!(w, "{window_frame}")?;
+          // }
     };
     Ok(())
-}
-
-fn write_names<W: Write>(w: &mut W, exprs: &[Expr]) -> Result<()> {
-    exprs.iter().try_for_each(|e| write_name(w, e))
 }
 
 fn write_names_join<W: Write>(w: &mut W, exprs: &[Expr], sep: &str) -> Result<()> {
