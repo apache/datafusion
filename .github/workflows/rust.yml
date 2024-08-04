@@ -588,10 +588,10 @@ jobs:
           cargo msrv --verify --log-target stdout
       - name: Check datafusion-substrait
         working-directory: datafusion/substrait
-        run: cargo msrv --verify --log-target stdout
+        run: cargo msrv --output-format json --log-target stdout verify
       - name: Check datafusion-proto
         working-directory: datafusion/proto
-        run: cargo msrv --verify --log-target stdout
+        run: cargo msrv --output-format json --log-target stdout verify
       - name: Check datafusion-cli
         working-directory: datafusion-cli
-        run: cargo msrv --verify --log-target stdout
+        run: cargo msrv --output-format json --log-target stdout verify
