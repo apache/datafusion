@@ -978,10 +978,12 @@ impl ListingTable {
                     let statistics =
                         self.do_collect_statistics(ctx, &store, &part_file).await?;
                     part_file.statistics = Some(statistics.clone());
-                    Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
+                    Ok((part_file, statistics))
                 } else {
-                    Ok((part_file, Statistics::new_unknown(&self.file_schema)))
-                        as Result<(PartitionedFile, Statistics)>
+                    Ok((
+                        part_file,
+                        Arc::new(Statistics::new_unknown(&self.file_schema)),
+                    ))
                 }
             })
             .boxed()
@@ -1011,12 +1013,12 @@ impl ListingTable {
         ctx: &SessionState,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
-    ) -> Result<Statistics> {
+    ) -> Result<Arc<Statistics>> {
         let statistics_cache = self.collected_statistics.clone();
         return match statistics_cache
             .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
         {
-            Some(statistics) => Ok(statistics.as_ref().clone()),
+            Some(statistics) => Ok(statistics.clone()),
             None => {
                 let statistics = self
                     .options
@@ -1028,9 +1030,10 @@ impl ListingTable {
                         &part_file.object_meta,
                     )
                     .await?;
+                let statistics = Arc::new(statistics);
                 statistics_cache.put_with_extra(
                     &part_file.object_meta.location,
-                    statistics.clone().into(),
+                    statistics.clone(),
                     &part_file.object_meta,
                 );
                 Ok(statistics)
