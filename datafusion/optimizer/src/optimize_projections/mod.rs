@@ -1529,7 +1529,7 @@ mod tests {
         \n  TableScan: test2 projection=[c1]";
 
         let optimized_plan = optimize(plan)?;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(formatted_plan, expected);
 
         // make sure schema for join node include both join columns
@@ -1581,7 +1581,7 @@ mod tests {
         \n    TableScan: test2 projection=[c1]";
 
         let optimized_plan = optimize(plan)?;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(formatted_plan, expected);
 
         // make sure schema for join node include both join columns
@@ -1631,7 +1631,7 @@ mod tests {
         \n    TableScan: test2 projection=[a]";
 
         let optimized_plan = optimize(plan)?;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(formatted_plan, expected);
 
         // make sure schema for join node include both join columns

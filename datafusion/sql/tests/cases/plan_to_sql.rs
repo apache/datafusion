@@ -209,7 +209,7 @@ fn roundtrip_crossjoin() -> Result<()> {
         \n    TableScan: j1\
         \n    TableScan: j2";
 
-    assert_eq!(format!("{plan_roundtrip:?}"), expected);
+    assert_eq!(format!("{plan_roundtrip}"), expected);
 
     Ok(())
 }
@@ -420,7 +420,7 @@ fn test_unnest_logical_plan() -> Result<()> {
     \n    Projection: unnest_table.struct_col AS UNNEST(unnest_table.struct_col), unnest_table.array_col AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
     \n      TableScan: unnest_table";
 
-    assert_eq!(format!("{plan:?}"), expected);
+    assert_eq!(format!("{plan}"), expected);
 
     Ok(())
 }
