@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use super::listing::PartitionedFile;
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
@@ -35,7 +37,7 @@ use itertools::multiunzip;
 /// `ListingTable`. If it is false we only construct bare statistics and skip a potentially expensive
 ///  call to `multiunzip` for constructing file level summary statistics.
 pub async fn get_statistics_with_limit(
-    all_files: impl Stream<Item = Result<(PartitionedFile, Statistics)>>,
+    all_files: impl Stream<Item = Result<(PartitionedFile, Arc<Statistics>)>>,
     file_schema: SchemaRef,
     limit: Option<usize>,
     collect_stats: bool,
@@ -62,9 +64,11 @@ pub async fn get_statistics_with_limit(
         result_files.push(file);
 
         // First file, we set them directly from the file statistics.
-        num_rows = file_stats.num_rows;
-        total_byte_size = file_stats.total_byte_size;
-        for (index, file_column) in file_stats.column_statistics.into_iter().enumerate() {
+        num_rows = file_stats.num_rows.clone();
+        total_byte_size = file_stats.total_byte_size.clone();
+        for (index, file_column) in
+            file_stats.column_statistics.clone().into_iter().enumerate()
+        {
             null_counts[index] = file_column.null_count;
             max_values[index] = file_column.max_value;
             min_values[index] = file_column.min_value;
@@ -90,14 +94,14 @@ pub async fn get_statistics_with_limit(
                 // counts across all the files in question. If any file does not
                 // provide any information or provides an inexact value, we demote
                 // the statistic precision to inexact.
-                num_rows = add_row_stats(file_stats.num_rows, num_rows);
+                num_rows = add_row_stats(file_stats.num_rows.clone(), num_rows);
 
                 total_byte_size =
-                    add_row_stats(file_stats.total_byte_size, total_byte_size);
+                    add_row_stats(file_stats.total_byte_size.clone(), total_byte_size);
 
                 (null_counts, max_values, min_values) = multiunzip(
                     izip!(
-                        file_stats.column_statistics.into_iter(),
+                        file_stats.column_statistics.clone().into_iter(),
                         null_counts.into_iter(),
                         max_values.into_iter(),
                         min_values.into_iter()
