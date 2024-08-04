@@ -1150,7 +1150,7 @@ impl Expr {
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 write!(&mut s, "GROUPING SETS (")?;
-                for (_, exprs) in lists_of_exprs.iter().enumerate() {
+                for exprs in lists_of_exprs.iter() {
                     let exprs_name = exprs
                         .iter()
                         .map(Self::schema_name)
