@@ -38,7 +38,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
+    plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::NullTreatment;
 
@@ -1012,6 +1012,51 @@ impl Expr {
     /// 2. Cast
     pub fn schema_name(&self) -> Result<String> {
         match self {
+            Expr::AggregateFunction(AggregateFunction {
+                func_def,
+                args,
+                distinct,
+                filter,
+                order_by,
+                null_treatment,
+            }) => {
+                let mut s = String::new();
+
+                let args_name = args
+                    .iter()
+                    .map(Self::schema_name)
+                    .collect::<Result<Vec<_>>>()?;
+                // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
+                if *distinct {
+                    write!(
+                        &mut s,
+                        "{}(DISTINCT {})",
+                        func_def.name(),
+                        args_name.join(",")
+                    )?;
+                } else {
+                    write!(&mut s, "{}({})", func_def.name(), args_name.join(","))?;
+                }
+
+                if let Some(null_treatment) = null_treatment {
+                    write!(&mut s, " {}", null_treatment)?;
+                }
+
+                if let Some(filter) = filter {
+                    write!(&mut s, " FILTER (WHERE {})", filter.schema_name()?)?;
+                };
+
+                if let Some(order_by) = order_by {
+                    let order_by_name = order_by
+                        .iter()
+                        .map(Self::schema_name)
+                        .collect::<Result<Vec<_>>>()?
+                        .join(", ");
+                    write!(&mut s, " ORDER BY [{}]", order_by_name)?;
+                };
+
+                Ok(s)
+            }
             // expr is not shown since it is aliased
             Expr::Alias(Alias { name, .. }) => Ok(name.to_owned()),
             Expr::Between(Between {
@@ -1038,6 +1083,7 @@ impl Expr {
             }
             // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
             Expr::Cast(Cast { expr, data_type: _ }) => expr.schema_name(),
+            Expr::Column(c) => Ok(format!("{c}")),
             Expr::InList(InList {
                 expr,
                 list,
@@ -2102,7 +2148,8 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
 fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
     match e {
         // Reuse Display trait
-        Expr::Column(_)
+        Expr::AggregateFunction(_)
+        | Expr::Column(_)
         | Expr::Literal(_)
         | Expr::IsFalse(_)
         | Expr::IsNotFalse(_)
@@ -2117,6 +2164,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         | Expr::OuterReferenceColumn(..)
         | Expr::Placeholder(_)
         | Expr::ScalarVariable(..)
+        | Expr::Sort(..)
         | Expr::Wildcard { .. } => write!(w, "{e}")?,
 
         Expr::Alias(Alias { name, .. }) => write!(w, "{name}")?,
@@ -2234,25 +2282,6 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             w.write_str(" ")?;
             write!(w, "{window_frame}")?;
         }
-        Expr::AggregateFunction(AggregateFunction {
-            func_def,
-            distinct,
-            args,
-            filter,
-            order_by,
-            null_treatment,
-        }) => {
-            write_function_name(w, func_def.name(), *distinct, args)?;
-            if let Some(fe) = filter {
-                write!(w, " FILTER (WHERE {fe})")?;
-            };
-            if let Some(order_by) = order_by {
-                write!(w, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
-            };
-            if let Some(nt) = null_treatment {
-                write!(w, " {}", nt)?;
-            }
-        }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {
                 write!(w, "ROLLUP (")?;
@@ -2305,9 +2334,6 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             write_name(w, low)?;
             write!(w, " AND ")?;
             write_name(w, high)?;
-        }
-        Expr::Sort { .. } => {
-            return internal_err!("Create name does not support sort expression")
         }
     };
     Ok(())
