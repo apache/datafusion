@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utilizing exact statistics from sources to avoid scanning data
 #[cfg(test)]
 pub(crate) mod tests {
 
