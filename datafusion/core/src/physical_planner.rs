@@ -223,18 +223,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             create_function_physical_name(&fun.to_string(), false, args, Some(order_by))
         }
         Expr::AggregateFunction(AggregateFunction {
-            func: func_def,
+            func,
             distinct,
             args,
             filter: _,
             order_by,
             null_treatment: _,
-        }) => create_function_physical_name(
-            func_def.name(),
-            *distinct,
-            args,
-            order_by.as_ref(),
-        ),
+        }) => {
+            create_function_physical_name(func.name(), *distinct, args, order_by.as_ref())
+        }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(
                 "ROLLUP ({})",
