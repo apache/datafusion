@@ -558,7 +558,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(rel_type),
             }))
         }
-        _ => not_impl_err!("Unsupported operator: {plan:?}"),
+        _ => not_impl_err!("Unsupported operator: {plan}"),
     }
 }
 

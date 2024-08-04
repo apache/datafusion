@@ -116,7 +116,7 @@ pub fn assert_analyzed_plan_eq(
     let options = ConfigOptions::default();
     let analyzed_plan =
         Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
-    let formatted_plan = format!("{analyzed_plan:?}");
+    let formatted_plan = format!("{analyzed_plan}");
     assert_eq!(formatted_plan, expected);
 
     Ok(())
@@ -130,7 +130,7 @@ pub fn assert_analyzed_plan_ne(
     let options = ConfigOptions::default();
     let analyzed_plan =
         Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
-    let formatted_plan = format!("{analyzed_plan:?}");
+    let formatted_plan = format!("{analyzed_plan}");
     assert_ne!(formatted_plan, expected);
 
     Ok(())
@@ -178,7 +178,7 @@ pub fn assert_optimized_plan_eq(
 
     let optimizer = Optimizer::with_rules(vec![Arc::clone(&rule)]);
     let optimized_plan = optimizer.optimize(plan, &opt_context, observe)?;
-    let formatted_plan = format!("{optimized_plan:?}");
+    let formatted_plan = format!("{optimized_plan}");
     assert_eq!(formatted_plan, expected);
 
     Ok(())
@@ -205,7 +205,7 @@ pub fn assert_optimized_plan_with_rules(
     eq: bool,
 ) -> Result<()> {
     let optimized_plan = generate_optimized_plan_with_rules(rules, plan);
-    let formatted_plan = format!("{optimized_plan:?}");
+    let formatted_plan = format!("{optimized_plan}");
     if eq {
         assert_eq!(formatted_plan, expected);
     } else {
