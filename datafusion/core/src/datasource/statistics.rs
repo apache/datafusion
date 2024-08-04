@@ -29,7 +29,6 @@ use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
 
 use futures::{Stream, StreamExt};
-use itertools::izip;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files. Needed to read up to
@@ -50,9 +49,10 @@ pub async fn get_statistics_with_limit(
     // - zero for summations, and
     // - neutral element for extreme points.
     let size = file_schema.fields().len();
-    let mut null_counts: Vec<Precision<usize>> = vec![Precision::Absent; size];
-    let mut max_values: Vec<Precision<ScalarValue>> = vec![Precision::Absent; size];
-    let mut min_values: Vec<Precision<ScalarValue>> = vec![Precision::Absent; size];
+    let mut col_stats_set = vec![ColumnStatistics::default(); size];
+    // let mut null_counts: Vec<Precision<usize>> = vec![Precision::Absent; size];
+    // let mut max_values: Vec<Precision<ScalarValue>> = vec![Precision::Absent; size];
+    // let mut min_values: Vec<Precision<ScalarValue>> = vec![Precision::Absent; size];
     let mut num_rows = Precision::<usize>::Absent;
     let mut total_byte_size = Precision::<usize>::Absent;
 
@@ -69,9 +69,9 @@ pub async fn get_statistics_with_limit(
         for (index, file_column) in
             file_stats.column_statistics.clone().into_iter().enumerate()
         {
-            null_counts[index] = file_column.null_count;
-            max_values[index] = file_column.max_value;
-            min_values[index] = file_column.min_value;
+            col_stats_set[index].null_count = file_column.null_count;
+            col_stats_set[index].max_value = file_column.max_value;
+            col_stats_set[index].min_value = file_column.min_value;
         }
 
         // If the number of rows exceeds the limit, we can stop processing
@@ -99,12 +99,11 @@ pub async fn get_statistics_with_limit(
                 total_byte_size =
                     add_row_stats(file_stats.total_byte_size.clone(), total_byte_size);
 
-                for (file_col_stats, null_count, max_value, min_value) in izip!(
-                    file_stats.column_statistics.iter(),
-                    null_counts.iter_mut(),
-                    max_values.iter_mut(),
-                    min_values.iter_mut(),
-                ) {
+                for (file_col_stats, col_stats) in file_stats
+                    .column_statistics
+                    .iter()
+                    .zip(col_stats_set.iter_mut())
+                {
                     let ColumnStatistics {
                         null_count: file_nc,
                         max_value: file_max,
@@ -112,9 +111,10 @@ pub async fn get_statistics_with_limit(
                         distinct_count: _,
                     } = file_col_stats;
 
-                    *null_count = add_row_stats(file_nc.clone(), null_count.clone());
-                    set_max_if_greater(file_max, max_value);
-                    set_min_if_lesser(file_min, min_value)
+                    col_stats.null_count =
+                        add_row_stats(file_nc.clone(), col_stats.null_count.clone());
+                    set_max_if_greater(file_max, &mut col_stats.max_value);
+                    set_min_if_lesser(file_min, &mut col_stats.min_value)
                 }
 
                 // If the number of rows exceeds the limit, we can stop processing
@@ -133,7 +133,7 @@ pub async fn get_statistics_with_limit(
     let mut statistics = Statistics {
         num_rows,
         total_byte_size,
-        column_statistics: get_col_stats_vec(null_counts, max_values, min_values),
+        column_statistics: col_stats_set,
     };
     if all_files.next().await.is_some() {
         // If we still have files in the stream, it means that the limit kicked
@@ -174,21 +174,6 @@ fn add_row_stats(
         (lhs, Precision::Absent) => lhs.to_inexact(),
         (lhs, rhs) => lhs.add(rhs),
     }
-}
-
-pub(crate) fn get_col_stats_vec(
-    null_counts: Vec<Precision<usize>>,
-    max_values: Vec<Precision<ScalarValue>>,
-    min_values: Vec<Precision<ScalarValue>>,
-) -> Vec<ColumnStatistics> {
-    izip!(null_counts, max_values, min_values)
-        .map(|(null_count, max_value, min_value)| ColumnStatistics {
-            null_count,
-            max_value,
-            min_value,
-            distinct_count: Precision::Absent,
-        })
-        .collect()
 }
 
 pub(crate) fn get_col_stats(
