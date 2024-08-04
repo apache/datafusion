@@ -1000,7 +1000,7 @@ impl PartialOrd for Expr {
 impl Expr {
     /// Returns the name of this expression as it should appear in a schema. This name
     /// will not include any CAST expressions.
-    /// TODO: Deprecate it and use Display
+    // TODO: Deprecate it and use Display
     pub fn display_name(&self) -> Result<String> {
         create_name(self)
     }
