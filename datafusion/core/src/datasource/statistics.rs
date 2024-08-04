@@ -50,9 +50,6 @@ pub async fn get_statistics_with_limit(
     // - neutral element for extreme points.
     let size = file_schema.fields().len();
     let mut col_stats_set = vec![ColumnStatistics::default(); size];
-    // let mut null_counts: Vec<Precision<usize>> = vec![Precision::Absent; size];
-    // let mut max_values: Vec<Precision<ScalarValue>> = vec![Precision::Absent; size];
-    // let mut min_values: Vec<Precision<ScalarValue>> = vec![Precision::Absent; size];
     let mut num_rows = Precision::<usize>::Absent;
     let mut total_byte_size = Precision::<usize>::Absent;
 
