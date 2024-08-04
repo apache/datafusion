@@ -135,7 +135,7 @@ fn optimize_projections(
             let group_by_expr_existing = aggregate
                 .group_expr
                 .iter()
-                .map(|group_by_expr| group_by_expr.display_name())
+                .map(|group_by_expr| group_by_expr.schema_name())
                 .collect::<Result<Vec<_>>>()?;
 
             let new_group_bys = if let Some(simplest_groupby_indices) =

@@ -573,6 +573,12 @@ pub struct Cast {
     pub data_type: DataType,
 }
 
+impl fmt::Display for Cast {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "CAST({} AS {:?})", self.expr, self.data_type)
+    }
+}
+
 impl Cast {
     /// Create a new Cast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
@@ -1000,8 +1006,26 @@ impl PartialOrd for Expr {
 impl Expr {
     /// Returns the name of this expression as it should appear in a schema. This name
     /// will not include any CAST expressions.
+    /// TODO: Replace this with Display
     pub fn display_name(&self) -> Result<String> {
         create_name(self)
+    }
+
+    /// Returns the name for schema.
+    /// 1. Cast is not shown
+    /// 2. Alias doesn't contain expr
+    pub fn schema_name(&self) -> Result<String> {
+        match self {
+            Expr::Column(c) => Ok(format!("{c}")),
+            Expr::Alias(Alias { name, .. }) => {
+                Ok(name.to_owned())
+            }
+            Expr::Cast(Cast { expr, data_type: _ }) => {
+                expr.display_name()
+            }
+            _ => self.display_name()
+        }
+        
     }
 
     /// Returns a full and complete string representation of this expression.
@@ -1134,7 +1158,9 @@ impl Expr {
         match self {
             // call Expr::display_name() on a Expr::Sort will throw an error
             Expr::Sort(Sort { expr, .. }) => expr.name_for_alias(),
-            expr => expr.display_name(),
+            // TODO: we should use shema's name instead of display_name
+            // expr => expr.display_name(),
+            expr => expr.schema_name(),
         }
     }
 
@@ -1142,7 +1168,6 @@ impl Expr {
     /// alias if necessary.
     pub fn alias_if_changed(self, original_name: String) -> Result<Expr> {
         let new_name = self.name_for_alias()?;
-
         if new_name == original_name {
             return Ok(self);
         }
@@ -2100,9 +2125,14 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             }
             w.write_str("END")?;
         }
-        Expr::Cast(Cast { expr, .. }) => {
+        // Expr::Cast(c) => {
+        Expr::Cast(Cast { expr, data_type: _ }) => {
             // CAST does not change the expression name
+
+            // TODO: display column
+            // write!(w, "{c}")?;
             write_name(w, expr)?;
+
         }
         Expr::TryCast(TryCast { expr, .. }) => {
             // CAST does not change the expression name

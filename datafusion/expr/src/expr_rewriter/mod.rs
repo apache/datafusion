@@ -173,7 +173,7 @@ pub fn create_col_from_scalar_expr(
             name,
         )),
         _ => {
-            let scalar_column = scalar_expr.display_name()?;
+            let scalar_column = scalar_expr.schema_name()?;
             Ok(Column::new(
                 Some::<TableReference>(subqry_alias.into()),
                 scalar_column,

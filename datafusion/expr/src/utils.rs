@@ -798,7 +798,7 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             let (qualifier, field) = plan.schema().qualified_field_from_column(col)?;
             Ok(Expr::from(Column::from((qualifier, field))))
         }
-        _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
+        _ => Ok(Expr::Column(Column::from_name(expr.schema_name()?))),
     }
 }
 

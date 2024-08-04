@@ -329,7 +329,7 @@ pub(crate) fn transform_bottom_unnest(
             // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
             // inside unnest execution, each column inside the inner projection
             // will be transformed into new columns. Thus we need to keep track of these placeholding column names
-            let placeholder_name = unnest_expr.display_name()?;
+            let placeholder_name = unnest_expr.schema_name()?;
 
             unnest_placeholder_columns.push(placeholder_name.clone());
             // Add alias for the argument expression, to avoid naming conflicts
@@ -402,7 +402,7 @@ pub(crate) fn transform_bottom_unnest(
         } else {
             // We need to evaluate the expr in the inner projection,
             // outer projection just select its name
-            let column_name = transformed_expr.display_name()?;
+            let column_name = transformed_expr.schema_name()?;
             inner_projection_exprs.push(transformed_expr);
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }

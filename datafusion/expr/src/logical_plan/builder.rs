@@ -1298,7 +1298,7 @@ fn add_group_by_exprs_from_dependencies(
     // c1 + 1` produces an output field named `"c1 + 1"`
     let mut group_by_field_names = group_expr
         .iter()
-        .map(|e| e.display_name())
+        .map(|e| e.schema_name())
         .collect::<Result<Vec<_>>>()?;
 
     if let Some(target_indices) =
@@ -1306,7 +1306,7 @@ fn add_group_by_exprs_from_dependencies(
     {
         for idx in target_indices {
             let expr = Expr::Column(Column::from(schema.qualified_field(idx)));
-            let expr_name = expr.display_name()?;
+            let expr_name = expr.schema_name()?;
             if !group_by_field_names.contains(&expr_name) {
                 group_by_field_names.push(expr_name);
                 group_expr.push(expr);
@@ -1323,7 +1323,7 @@ pub(crate) fn validate_unique_names<'a>(
     let mut unique_names = HashMap::new();
 
     expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
-        let name = expr.display_name()?;
+        let name = expr.schema_name()?;
         match unique_names.get(&name) {
             None => {
                 unique_names.insert(name, (position, expr));
@@ -1456,7 +1456,9 @@ pub fn project(
                 input_schema,
                 None,
             )?),
-            _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
+            _ => {
+                projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+            }
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;
@@ -1557,7 +1559,7 @@ pub fn wrap_projection_for_join_if_necessary(
             if let Some(col) = key.try_as_col() {
                 Ok(col.clone())
             } else {
-                let name = key.display_name()?;
+                let name = key.schema_name()?;
                 Ok(Column::from_name(name))
             }
         })

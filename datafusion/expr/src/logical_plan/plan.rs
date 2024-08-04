@@ -2727,7 +2727,7 @@ fn calc_func_dependencies_for_aggregate(
     if !contains_grouping_set(group_expr) {
         let group_by_expr_names = group_expr
             .iter()
-            .map(|item| item.display_name())
+            .map(|item| item.schema_name())
             .collect::<Result<Vec<_>>>()?;
         let aggregate_func_dependencies = aggregate_functional_dependencies(
             input.schema(),

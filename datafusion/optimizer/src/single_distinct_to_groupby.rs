@@ -195,7 +195,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 }
                                 let arg = args.swap_remove(0);
 
-                                if group_fields_set.insert(arg.display_name()?) {
+                                if group_fields_set.insert(arg.schema_name()?) {
                                     inner_group_exprs
                                         .push(arg.alias(SINGLE_DISTINCT_ALIAS));
                                 }
