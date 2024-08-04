@@ -1189,6 +1189,20 @@ impl Expr {
             Expr::IsNotFalse(expr) => {
                 write!(&mut s, "{} IS NOT FALSE", expr.schema_name()?)?
             }
+            Expr::Like(Like { negated, expr, pattern, escape_char, case_insensitive }) => {
+                write!(
+                    &mut s,
+                    "{} {}{} {}",
+                    expr.schema_name()?,
+                    if *negated { "NOT " } else { "" },
+                    if *case_insensitive { "ILIKE" } else { "LIKE" },
+                    pattern.schema_name()?,
+                )?;
+
+                if let Some(char) = escape_char {
+                    write!(&mut s, " CHAR '{char}'")?;
+                }
+            }
             Expr::Negative(expr) => write!(&mut s, "(- {})", expr.schema_name()?)?,
             Expr::Not(expr) => write!(&mut s, "NOT {}", expr.schema_name()?)?,
             Expr::Unnest(Unnest { expr }) => {
@@ -1199,6 +1213,22 @@ impl Expr {
             }
             Expr::ScalarSubquery(Subquery { subquery, .. }) => {
                 write!(&mut s, "{}", subquery.schema().field(0).name())?;
+            }
+            Expr::SimilarTo(Like { negated, expr, pattern, escape_char, case_insensitive }) => {
+                write!(
+                    &mut s,
+                    "{} {} {}",
+                    expr.schema_name()?,
+                    if *negated {
+                        "NOT SIMILAR TO"
+                    } else {
+                        "SIMILAR TO"
+                    },
+                    pattern.schema_name()?,
+                )?;
+                if let Some(char) = escape_char {
+                    write!(&mut s, " CHAR '{char}'")?;
+                }
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -2247,21 +2277,6 @@ fn fmt_function(
     write!(f, "{}({}{})", fun, distinct_str, args.join(", "))
 }
 
-fn write_function_name<W: Write>(
-    w: &mut W,
-    fun: &str,
-    distinct: bool,
-    args: &[Expr],
-) -> Result<()> {
-    write!(w, "{}(", fun)?;
-    if distinct {
-        w.write_str("DISTINCT ")?;
-    }
-    write_names_join(w, args, ",")?;
-    w.write_str(")")?;
-    Ok(())
-}
-
 /// Returns a readable name of an expression based on the input schema.
 /// This function recursively transverses the expression for names such as "CAST(a > 2)".
 pub(crate) fn create_name(e: &Expr) -> Result<String> {
@@ -2291,6 +2306,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         | Expr::IsNull(_)
         | Expr::IsNotNull(_)
         | Expr::InSubquery(_)
+        | Expr::Like(_)
         | Expr::Negative(_)
         | Expr::Not(_)
         | Expr::OuterReferenceColumn(..)
@@ -2298,52 +2314,12 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         | Expr::Unnest(_)
         | Expr::ScalarSubquery(..)
         | Expr::ScalarVariable(..)
+        | Expr::SimilarTo(_)
         | Expr::Sort(..)
         | Expr::Wildcard { .. }
         | Expr::WindowFunction(_) => write!(w, "{e}")?,
 
         Expr::Alias(Alias { name, .. }) => write!(w, "{name}")?,
-        Expr::Like(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive,
-        }) => {
-            write!(
-                w,
-                "{} {}{} {}",
-                expr,
-                if *negated { "NOT " } else { "" },
-                if *case_insensitive { "ILIKE" } else { "LIKE" },
-                pattern,
-            )?;
-            if let Some(char) = escape_char {
-                write!(w, " CHAR '{char}'")?;
-            }
-        }
-        Expr::SimilarTo(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive: _,
-        }) => {
-            write!(
-                w,
-                "{} {} {}",
-                expr,
-                if *negated {
-                    "NOT SIMILAR TO"
-                } else {
-                    "SIMILAR TO"
-                },
-                pattern,
-            )?;
-            if let Some(char) = escape_char {
-                write!(w, " CHAR '{char}'")?;
-            }
-        }
         Expr::Cast(Cast { expr, .. }) => {
             // CAST does not change the expression name
             write_name(w, expr)?;
@@ -2354,44 +2330,8 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         }
         Expr::ScalarFunction(fun) => {
             w.write_str(fun.func.display_name(&fun.args)?.as_str())?;
-        } // Expr::WindowFunction(WindowFunction {
-          //     fun,
-          //     args,
-          //     window_frame,
-          //     partition_by,
-          //     order_by,
-          //     null_treatment,
-          // }) => {
-          //     write_function_name(w, &fun.to_string(), false, args)?;
-
-          //     if let Some(nt) = null_treatment {
-          //         w.write_str(" ")?;
-          //         write!(w, "{}", nt)?;
-          //     }
-          //     if !partition_by.is_empty() {
-          //         w.write_str(" ")?;
-          //         write!(w, "PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
-          //     }
-          //     if !order_by.is_empty() {
-          //         w.write_str(" ")?;
-          //         write!(w, "ORDER BY [{}]", expr_vec_fmt!(order_by))?;
-          //     }
-          //     w.write_str(" ")?;
-          //     write!(w, "{window_frame}")?;
-          // }
+        }
     };
-    Ok(())
-}
-
-fn write_names_join<W: Write>(w: &mut W, exprs: &[Expr], sep: &str) -> Result<()> {
-    let mut iter = exprs.iter();
-    if let Some(first_arg) = iter.next() {
-        write_name(w, first_arg)?;
-    }
-    for a in iter {
-        w.write_str(sep)?;
-        write_name(w, a)?;
-    }
     Ok(())
 }
 
