@@ -238,13 +238,16 @@ impl AggregateUDFImpl for Count {
                 Box::new(BytesDistinctCountAccumulator::<i32>::new(OutputType::Utf8))
             }
             DataType::Utf8View => {
-                Box::new(BytesViewDistinctCountAccumulator::new(OutputType::Utf8))
+                Box::new(BytesViewDistinctCountAccumulator::new(OutputType::Utf8View))
             }
             DataType::LargeUtf8 => {
                 Box::new(BytesDistinctCountAccumulator::<i64>::new(OutputType::Utf8))
             }
             DataType::Binary => Box::new(BytesDistinctCountAccumulator::<i32>::new(
                 OutputType::Binary,
+            )),
+            DataType::BinaryView => Box::new(BytesViewDistinctCountAccumulator::new(
+                OutputType::BinaryView,
             )),
             DataType::LargeBinary => Box::new(BytesDistinctCountAccumulator::<i64>::new(
                 OutputType::Binary,

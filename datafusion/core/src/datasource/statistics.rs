@@ -18,7 +18,7 @@
 use super::listing::PartitionedFile;
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
-use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
+use crate::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
 use arrow_schema::DataType;
 

@@ -323,16 +323,6 @@ impl TreeNode for Expr {
             )?
             .map_data(
                 |(new_args, new_filter, new_order_by)| match func_def {
-                    AggregateFunctionDefinition::BuiltIn(fun) => {
-                        Ok(Expr::AggregateFunction(AggregateFunction::new(
-                            fun,
-                            new_args,
-                            distinct,
-                            new_filter,
-                            new_order_by,
-                            null_treatment,
-                        )))
-                    }
                     AggregateFunctionDefinition::UDF(fun) => {
                         Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                             fun,

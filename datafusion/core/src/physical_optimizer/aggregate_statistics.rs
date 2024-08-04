@@ -272,39 +272,28 @@ fn is_non_distinct_count(agg_expr: &dyn AggregateExpr) -> bool {
             return true;
         }
     }
-
     false
 }
 
 // TODO: Move this check into AggregateUDFImpl
 // https://github.com/apache/datafusion/issues/11153
 fn is_min(agg_expr: &dyn AggregateExpr) -> bool {
-    if agg_expr.as_any().is::<expressions::Min>() {
-        return true;
-    }
-
     if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-        if agg_expr.fun().name() == "min" {
+        if agg_expr.fun().name().to_lowercase() == "min" {
             return true;
         }
     }
-
     false
 }
 
 // TODO: Move this check into AggregateUDFImpl
 // https://github.com/apache/datafusion/issues/11153
 fn is_max(agg_expr: &dyn AggregateExpr) -> bool {
-    if agg_expr.as_any().is::<expressions::Max>() {
-        return true;
-    }
-
     if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-        if agg_expr.fun().name() == "max" {
+        if agg_expr.fun().name().to_lowercase() == "max" {
             return true;
         }
     }
-
     false
 }
 

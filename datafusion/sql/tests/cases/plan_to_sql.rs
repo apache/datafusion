@@ -20,7 +20,7 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
-use datafusion_expr::test::function_stub::{count_udaf, sum_udaf};
+use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_udaf};
 use datafusion_expr::{col, table_scan};
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -381,7 +381,9 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             .parse_statement()?;
 
         let context = MockContextProvider::default()
-            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_udaf(max_udaf())
+            .with_udaf(min_udaf());
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel
             .sql_statement_to_plan(statement)
@@ -447,6 +449,30 @@ fn test_table_references_in_plan_to_sql() {
         "table",
         "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"",
     );
+}
+
+#[test]
+fn test_table_scan_with_no_projection_in_plan_to_sql() {
+    fn test(table_name: &str, expected_sql: &str) {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]);
+
+        let plan = table_scan(Some(table_name), &schema, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        let sql = plan_to_sql(&plan).unwrap();
+        assert_eq!(format!("{}", sql), expected_sql)
+    }
+
+    test(
+        "catalog.schema.table",
+        "SELECT * FROM catalog.\"schema\".\"table\"",
+    );
+    test("schema.table", "SELECT * FROM \"schema\".\"table\"");
+    test("table", "SELECT * FROM \"table\"");
 }
 
 #[test]

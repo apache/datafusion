@@ -414,8 +414,8 @@ pub struct RepartitionExec {
 struct RepartitionMetrics {
     /// Time in nanos to execute child operator and fetch batches
     fetch_time: metrics::Time,
-    /// Time in nanos to perform repartitioning
-    repart_time: metrics::Time,
+    /// Repartitioning elapsed time in nanos
+    repartition_time: metrics::Time,
     /// Time in nanos for sending resulting batches to channels.
     ///
     /// One metric per output partition.
@@ -433,8 +433,8 @@ impl RepartitionMetrics {
             MetricBuilder::new(metrics).subset_time("fetch_time", input_partition);
 
         // Time in nanos to perform repartitioning
-        let repart_time =
-            MetricBuilder::new(metrics).subset_time("repart_time", input_partition);
+        let repartition_time =
+            MetricBuilder::new(metrics).subset_time("repartition_time", input_partition);
 
         // Time in nanos for sending resulting batches to channels
         let send_time = (0..num_output_partitions)
@@ -449,7 +449,7 @@ impl RepartitionMetrics {
 
         Self {
             fetch_time,
-            repart_time,
+            repartition_time,
             send_time,
         }
     }
@@ -775,7 +775,7 @@ impl RepartitionExec {
         context: Arc<TaskContext>,
     ) -> Result<()> {
         let mut partitioner =
-            BatchPartitioner::try_new(partitioning, metrics.repart_time.clone())?;
+            BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
 
         // execute the child operator
         let timer = metrics.fetch_time.timer();

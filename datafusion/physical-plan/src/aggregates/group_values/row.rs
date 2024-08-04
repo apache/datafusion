@@ -122,10 +122,14 @@ impl GroupValues for GroupValuesRows {
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
-                // verify that a group that we are inserting with hash is
-                // actually the same key value as the group in
-                // existing_idx  (aka group_values @ row)
+                // Somewhat surprisingly, this closure can be called even if the
+                // hash doesn't match, so check the hash first with an integer
+                // comparison first avoid the more expensive comparison with
+                // group value. https://github.com/apache/datafusion/pull/11718
                 target_hash == *exist_hash
+                    // verify that the group that we are inserting with hash is
+                    // actually the same key value as the group in
+                    // existing_idx  (aka group_values @ row)
                     && group_rows.row(row) == group_values.row(*group_idx)
             });
 

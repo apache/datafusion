@@ -25,8 +25,10 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use datafusion::physical_expr_common::aggregate::AggregateExprBuilder;
+use datafusion_functions_aggregate::min_max::max_udaf;
 use prost::Message;
 
+use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
@@ -43,7 +45,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::aggregate::utils::down_cast_any_ref;
-use datafusion::physical_expr::expressions::{Literal, Max};
+use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -93,8 +95,6 @@ use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use datafusion_proto::protobuf;
-
-use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -911,11 +911,18 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         )),
         input,
     )?);
+    let aggr_expr = AggregateExprBuilder::new(
+        max_udaf(),
+        vec![udf_expr.clone() as Arc<dyn PhysicalExpr>],
+    )
+    .schema(schema.clone())
+    .name("max")
+    .build()?;
 
     let window = Arc::new(WindowAggExec::try_new(
         vec![Arc::new(PlainAggregateWindowExpr::new(
-            Arc::new(Max::new(udf_expr.clone(), "max", DataType::Int64)),
-            &[col("author", &schema)?],
+            aggr_expr.clone(),
+            &[col("author", &schema.clone())?],
             &[],
             Arc::new(WindowFrame::new(None)),
         ))],
@@ -926,7 +933,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new(vec![], vec![], vec![]),
-        vec![Arc::new(Max::new(udf_expr, "max", DataType::Int64))],
+        vec![aggr_expr.clone()],
         vec![None],
         window,
         schema.clone(),

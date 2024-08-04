@@ -198,14 +198,7 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                let nullability = args
-                    .iter()
-                    .map(|e| e.nullable(schema))
-                    .collect::<Result<Vec<_>>>()?;
                 match func_def {
-                    AggregateFunctionDefinition::BuiltIn(fun) => {
-                        fun.return_type(&data_types, &nullability)
-                    }
                     AggregateFunctionDefinition::UDF(fun) => {
                         let new_types = data_types_with_aggregate_udf(&data_types, fun)
                             .map_err(|err| {
@@ -338,7 +331,6 @@ impl ExprSchemable for Expr {
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
             Expr::AggregateFunction(AggregateFunction { func_def, .. }) => {
                 match func_def {
-                    AggregateFunctionDefinition::BuiltIn(fun) => fun.nullable(),
                     // TODO: UDF should be able to customize nullability
                     AggregateFunctionDefinition::UDF(udf) if udf.name() == "count" => {
                         Ok(false)

@@ -144,6 +144,7 @@ where
 ///
 /// ```
 /// use datafusion::prelude::*;
+/// # use datafusion::functions_aggregate::expr_fn::min;
 /// # use datafusion::{error::Result, assert_batches_eq};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {

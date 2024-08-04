@@ -145,15 +145,6 @@ pub fn parse_physical_window_expr(
 
     let fun = if let Some(window_func) = proto.window_function.as_ref() {
         match window_func {
-            protobuf::physical_window_expr_node::WindowFunction::AggrFunction(n) => {
-                let f = protobuf::AggregateFunction::try_from(*n).map_err(|_| {
-                    proto_error(format!(
-                        "Received an unknown window aggregate function: {n}"
-                    ))
-                })?;
-
-                WindowFunctionDefinition::AggregateFunction(f.into())
-            }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
                 let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
                     proto_error(format!(

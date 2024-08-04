@@ -21,7 +21,6 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    aggregates,
     expressions::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
@@ -104,23 +103,6 @@ pub fn create_window_expr(
     ignore_nulls: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunctionDefinition::AggregateFunction(fun) => {
-            let aggregate = aggregates::create_aggregate_expr(
-                fun,
-                false,
-                args,
-                &[],
-                input_schema,
-                name,
-                ignore_nulls,
-            )?;
-            window_expr_from_aggregate_expr(
-                partition_by,
-                order_by,
-                window_frame,
-                aggregate,
-            )
-        }
         WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
             Arc::new(BuiltInWindowExpr::new(
                 create_built_in_window_expr(fun, args, input_schema, name, ignore_nulls)?,

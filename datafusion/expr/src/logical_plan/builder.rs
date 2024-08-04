@@ -1531,7 +1531,12 @@ pub fn wrap_projection_for_join_if_necessary(
 
     let need_project = join_keys.iter().any(|key| !matches!(key, Expr::Column(_)));
     let plan = if need_project {
-        let mut projection = expand_wildcard(input_schema, &input, None)?;
+        // Include all columns from the input and extend them with the join keys
+        let mut projection = input_schema
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
         let join_key_items = alias_join_keys
             .iter()
             .flat_map(|expr| expr.try_as_col().is_none().then_some(expr))

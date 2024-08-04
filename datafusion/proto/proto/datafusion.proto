@@ -311,8 +311,6 @@ message LogicalExprNode {
     // binary expressions
     BinaryExprNode binary_expr = 4;
 
-    // aggregate expressions
-    AggregateExprNode aggregate_expr = 5;
 
     // null checks
     IsNull is_null_expr = 6;
@@ -466,51 +464,6 @@ message InListNode {
   bool negated = 3;
 }
 
-enum AggregateFunction {
-  MIN = 0;
-  MAX = 1;
-  // SUM = 2;
-  // AVG = 3;
-  // COUNT = 4;
-  // APPROX_DISTINCT = 5;
-  // ARRAY_AGG = 6;
-  // VARIANCE = 7;
-  // VARIANCE_POP = 8;
-  // COVARIANCE = 9;
-  // COVARIANCE_POP = 10;
-  // STDDEV = 11;
-  // STDDEV_POP = 12;
-  // CORRELATION = 13;
-  // APPROX_PERCENTILE_CONT = 14;
-  // APPROX_MEDIAN = 15;
-  // APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
-  // GROUPING = 17;
-  // MEDIAN = 18;
-  // BIT_AND = 19;
-  // BIT_OR = 20;
-  // BIT_XOR = 21;
-  //  BOOL_AND = 22;
-  //  BOOL_OR = 23;
-  // REGR_SLOPE = 26;
-  // REGR_INTERCEPT = 27;
-  // REGR_COUNT = 28;
-  // REGR_R2 = 29;
-  // REGR_AVGX = 30;
-  // REGR_AVGY = 31;
-  // REGR_SXX = 32;
-  // REGR_SYY = 33;
-  // REGR_SXY = 34;
-  // STRING_AGG = 35;
-  // NTH_VALUE_AGG = 36;
-}
-
-message AggregateExprNode {
-  AggregateFunction aggr_function = 1;
-  repeated LogicalExprNode expr = 2;
-  bool distinct = 3;
-  LogicalExprNode filter = 4;
-  repeated LogicalExprNode order_by = 5;
-}
 
 message AggregateUDFExprNode {
   string fun_name = 1;
@@ -543,7 +496,6 @@ enum BuiltInWindowFunction {
 
 message WindowExprNode {
   oneof window_function {
-    AggregateFunction aggr_function = 1;
     BuiltInWindowFunction built_in_function = 2;
     string udaf = 3;
     string udwf = 9;
@@ -853,7 +805,6 @@ message PhysicalScalarUdfNode {
 
 message PhysicalAggregateExprNode {
   oneof AggregateFunction {
-    AggregateFunction aggr_function = 1;
     string user_defined_aggr_function = 4;
   }
   repeated PhysicalExprNode expr = 2;
@@ -865,7 +816,6 @@ message PhysicalAggregateExprNode {
 
 message PhysicalWindowExprNode {
   oneof window_function {
-    AggregateFunction aggr_function = 1;
     BuiltInWindowFunction built_in_function = 2;
     string user_defined_aggr_function = 3;
   }
