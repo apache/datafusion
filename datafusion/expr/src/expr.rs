@@ -1038,8 +1038,15 @@ impl Expr {
             }
             // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
             Expr::Cast(Cast { expr, data_type: _ }) => expr.schema_name(),
-            Expr::InList(InList { expr, list, negated }) => {
-                let inlist_exprs = list.iter().map(Self::schema_name).collect::<Result<Vec<_>>>()?;
+            Expr::InList(InList {
+                expr,
+                list,
+                negated,
+            }) => {
+                let inlist_exprs = list
+                    .iter()
+                    .map(Self::schema_name)
+                    .collect::<Result<Vec<_>>>()?;
                 let inlist_name = inlist_exprs.join(", ");
 
                 if *negated {
