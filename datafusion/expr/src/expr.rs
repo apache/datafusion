@@ -1081,6 +1081,25 @@ impl Expr {
                     ))
                 }
             }
+            Expr::Case(Case { expr, when_then_expr, else_expr }) => {
+                let mut s = String::new();
+                write!(&mut s, "CASE ")?;
+
+                if let Some(e) = expr {
+                    write!(&mut s, "{} ", e.schema_name()?)?;
+                }
+
+                for (when, then) in when_then_expr {
+                    write!(&mut s, "WHEN {} THEN {} ", when.schema_name()?, then.schema_name()?)?;
+                }
+
+                if let Some(e) = else_expr {
+                    write!(&mut s, "ELSE {} ", e.schema_name()?)?;
+                }
+
+                write!(&mut s, "END")?;
+                Ok(s)
+            }
             // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
             Expr::Cast(Cast { expr, data_type: _ }) => expr.schema_name(),
             Expr::Column(c) => Ok(format!("{c}")),
@@ -2149,8 +2168,11 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
     match e {
         // Reuse Display trait
         Expr::AggregateFunction(_)
+        | Expr::Between(_)
+        | Expr::Case(_)
         | Expr::Column(_)
         | Expr::Literal(_)
+        | Expr::InList(_)
         | Expr::IsFalse(_)
         | Expr::IsNotFalse(_)
         | Expr::IsTrue(_)
@@ -2213,26 +2235,6 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             if let Some(char) = escape_char {
                 write!(w, " CHAR '{char}'")?;
             }
-        }
-        Expr::Case(case) => {
-            write!(w, "CASE ")?;
-            if let Some(e) = &case.expr {
-                write_name(w, e)?;
-                w.write_str(" ")?;
-            }
-            for (when, then) in &case.when_then_expr {
-                w.write_str("WHEN ")?;
-                write_name(w, when)?;
-                w.write_str(" THEN ")?;
-                write_name(w, then)?;
-                w.write_str(" ")?;
-            }
-            if let Some(e) = &case.else_expr {
-                w.write_str("ELSE ")?;
-                write_name(w, e)?;
-                w.write_str(" ")?;
-            }
-            w.write_str("END")?;
         }
         Expr::Cast(Cast { expr, .. }) => {
             // CAST does not change the expression name
@@ -2306,35 +2308,6 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
                 write!(w, ")")?;
             }
         },
-        Expr::InList(InList {
-            expr,
-            list,
-            negated,
-        }) => {
-            write_name(w, expr)?;
-            let list = list.iter().map(create_name);
-            if *negated {
-                write!(w, " NOT IN ({list:?})")?;
-            } else {
-                write!(w, " IN ({list:?})")?;
-            }
-        }
-        Expr::Between(Between {
-            expr,
-            negated,
-            low,
-            high,
-        }) => {
-            write_name(w, expr)?;
-            if *negated {
-                write!(w, " NOT BETWEEN ")?;
-            } else {
-                write!(w, " BETWEEN ")?;
-            }
-            write_name(w, low)?;
-            write!(w, " AND ")?;
-            write_name(w, high)?;
-        }
     };
     Ok(())
 }
