@@ -474,15 +474,6 @@ impl ExprSchemable for Expr {
                         .into(),
                 ))
             }
-            Expr::Cast(Cast { expr, data_type: _ }) => {
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                Ok((
-                    None,
-                    Field::new(expr.schema_name()?, data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
             _ => {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
                 Ok((

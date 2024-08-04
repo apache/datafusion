@@ -1012,7 +1012,7 @@ impl Expr {
             // expr is not shown since it is aliased
             Expr::Alias(Alias { name, .. }) => Ok(name.to_owned()),
             // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
-            Expr::Cast(Cast { expr, data_type: _ }) => expr.display_name(),
+            Expr::Cast(Cast { expr, data_type: _ }) => expr.schema_name(),
             // Most of the expr has no difference
             _ => self.display_name(),
         }
@@ -2113,7 +2113,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             }
             w.write_str("END")?;
         }
-        Expr::Cast(Cast { expr, data_type: _ }) => {
+        Expr::Cast(Cast { expr, .. }) => {
             // CAST does not change the expression name
             write_name(w, expr)?;
         }
