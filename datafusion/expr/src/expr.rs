@@ -627,22 +627,6 @@ impl Sort {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// Defines which implementation of an aggregate function DataFusion should call.
-pub enum AggregateFunctionDefinition {
-    /// Resolved to a user defined aggregate function
-    UDF(Arc<crate::AggregateUDF>),
-}
-
-impl AggregateFunctionDefinition {
-    /// Function's name for display
-    pub fn name(&self) -> &str {
-        match self {
-            AggregateFunctionDefinition::UDF(udf) => udf.name(),
-        }
-    }
-}
-
 /// Aggregate function
 ///
 /// See also  [`ExprFunctionExt`] to set these fields on `Expr`
@@ -651,7 +635,7 @@ impl AggregateFunctionDefinition {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
-    pub func_def: AggregateFunctionDefinition,
+    pub func: Arc<crate::AggregateUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
     /// Whether this is a DISTINCT aggregation or not
@@ -674,7 +658,7 @@ impl AggregateFunction {
         null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
-            func_def: AggregateFunctionDefinition::UDF(udf),
+            func: udf,
             args,
             distinct,
             filter,
@@ -1666,7 +1650,7 @@ impl Expr {
                 func.hash(hasher);
             }
             Expr::AggregateFunction(AggregateFunction {
-                func_def,
+                func: func_def,
                 args: _args,
                 distinct,
                 filter: _filter,
@@ -1870,7 +1854,7 @@ impl fmt::Display for Expr {
                 Ok(())
             }
             Expr::AggregateFunction(AggregateFunction {
-                func_def,
+                func: func_def,
                 distinct,
                 ref args,
                 filter,
@@ -2190,7 +2174,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             write!(w, "{window_frame}")?;
         }
         Expr::AggregateFunction(AggregateFunction {
-            func_def,
+            func: func_def,
             distinct,
             args,
             filter,

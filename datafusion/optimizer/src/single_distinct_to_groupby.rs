@@ -26,7 +26,6 @@ use datafusion_common::{
     internal_err, qualified_name, tree_node::Transformed, DataFusionError, Result,
 };
 use datafusion_expr::builder::project;
-use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{
     col,
     expr::AggregateFunction,
@@ -70,7 +69,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
     let mut aggregate_count = 0;
     for expr in aggr_expr {
         if let Expr::AggregateFunction(AggregateFunction {
-            func_def: AggregateFunctionDefinition::UDF(fun),
+            func,
             distinct,
             args,
             filter,
@@ -86,9 +85,9 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
                 for e in args {
                     fields_set.insert(e);
                 }
-            } else if fun.name() != "sum"
-                && fun.name().to_lowercase() != "min"
-                && fun.name().to_lowercase() != "max"
+            } else if func.name() != "sum"
+                && func.name().to_lowercase() != "min"
+                && func.name().to_lowercase() != "max"
             {
                 return Ok(false);
             }
@@ -184,7 +183,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .into_iter()
                     .map(|aggr_expr| match aggr_expr {
                         Expr::AggregateFunction(AggregateFunction {
-                            func_def: AggregateFunctionDefinition::UDF(udf),
+                            func,
                             mut args,
                             distinct,
                             ..
@@ -200,7 +199,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         .push(arg.alias(SINGLE_DISTINCT_ALIAS));
                                 }
                                 Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                    udf,
+                                    func,
                                     vec![col(SINGLE_DISTINCT_ALIAS)],
                                     false, // intentional to remove distinct here
                                     None,
@@ -213,7 +212,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 let alias_str = format!("alias{}", index);
                                 inner_aggr_exprs.push(
                                     Expr::AggregateFunction(AggregateFunction::new_udf(
-                                        Arc::clone(&udf),
+                                        Arc::clone(&func),
                                         args,
                                         false,
                                         None,
@@ -223,7 +222,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     .alias(&alias_str),
                                 );
                                 Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                    udf,
+                                    func,
                                     vec![col(&alias_str)],
                                     false,
                                     None,
