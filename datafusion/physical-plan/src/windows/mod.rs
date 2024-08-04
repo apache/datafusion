@@ -395,7 +395,6 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 }
 
-#[allow(clippy::needless_borrow)]
 pub(crate) fn calc_requirements<
     T: Borrow<Arc<dyn PhysicalExpr>>,
     S: Borrow<PhysicalSortExpr>,
@@ -413,7 +412,7 @@ pub(crate) fn calc_requirements<
         let PhysicalSortExpr { expr, options } = element.borrow();
         if !sort_reqs.iter().any(|e| e.expr.eq(expr)) {
             sort_reqs.push(PhysicalSortRequirement::new(
-                Arc::clone(&expr),
+                Arc::clone(expr),
                 Some(*options),
             ));
         }

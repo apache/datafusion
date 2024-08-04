@@ -117,8 +117,7 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let data_type =
-            acc_args.input_exprs[0].data_type(acc_args.schema)?;
+        let data_type = acc_args.input_exprs[0].data_type(acc_args.schema)?;
 
         if acc_args.is_distinct {
             return Ok(Box::new(DistinctArrayAggAccumulator::try_new(&data_type)?));

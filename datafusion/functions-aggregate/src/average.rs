@@ -93,8 +93,7 @@ impl AggregateUDFImpl for Avg {
         }
         use DataType::*;
         // instantiate specialized accumulator based for the type
-        let input_type =
-            acc_args.input_exprs[0].data_type(acc_args.schema)?;
+        let input_type = acc_args.input_exprs[0].data_type(acc_args.schema)?;
 
         match (&input_type, acc_args.data_type) {
             (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),

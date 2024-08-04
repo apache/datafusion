@@ -81,9 +81,7 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result,
-};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
     Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
