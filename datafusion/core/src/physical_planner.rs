@@ -213,7 +213,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::ScalarFunction(fun) => fun.func.display_name(&fun.args),
+        Expr::ScalarFunction(fun) => fun.func.schema_name(&fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
             args,

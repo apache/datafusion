@@ -154,6 +154,13 @@ impl ScalarUDF {
         self.inner.display_name(args)
     }
 
+    /// Returns this function's schema_name.
+    ///
+    /// See [`ScalarUDFImpl::schema_name`] for more details
+    pub fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        self.inner.schema_name(args)
+    }
+
     /// Returns the aliases for this function.
     ///
     /// See [`ScalarUDF::with_aliases`] for more details
@@ -345,10 +352,17 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn name(&self) -> &str;
 
     /// Returns the user-defined display name of the UDF given the arguments
-    ///
     fn display_name(&self, args: &[Expr]) -> Result<String> {
         let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
+        // TODO: join with ", " to standardize the formatting of Vec<Expr>
         Ok(format!("{}({})", self.name(), names.join(",")))
+    }
+
+    /// Returns the user-defined schema name of the UDF given the arguments
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        let args_name = args.iter().map(Expr::schema_name).collect::<Result<Vec<_>>>()?;
+        // TODO: join with ", " to standardize the formatting of Vec<Expr>
+        Ok(format!("{}({})", self.name(), args_name.join(",")))
     }
 
     /// Returns the function's [`Signature`] for information about what input

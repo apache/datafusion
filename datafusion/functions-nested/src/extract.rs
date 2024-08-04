@@ -96,7 +96,7 @@ impl ScalarUDFImpl for ArrayElement {
         "array_element"
     }
 
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
         Ok(format!(
             "{}[{}]",
             get_arg_name(args, 0),
@@ -253,7 +253,7 @@ impl ScalarUDFImpl for ArraySlice {
         self
     }
 
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
         Ok(format!(
             "{}[{}]",
             get_arg_name(args, 0),

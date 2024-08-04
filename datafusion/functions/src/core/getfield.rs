@@ -57,7 +57,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         "get_field"
     }
 
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
         if args.len() != 2 {
             return exec_err!(
                 "get_field function requires 2 arguments, got {}",
@@ -74,7 +74,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
         };
 
-        Ok(format!("{}[{}]", args[0].display_name()?, name))
+        Ok(format!("{}[{}]", args[0].schema_name()?, name))
     }
 
     fn signature(&self) -> &Signature {
