@@ -417,7 +417,7 @@ pub async fn from_substrait_rel(
                     }
                     // Ensure the expression has a unique display name, so that project's
                     // validate_unique_names doesn't fail
-                    let name = x.display_name()?;
+                    let name = x.schema_name()?;
                     let mut new_name = name.clone();
                     let mut i = 0;
                     while names.contains(&new_name) {

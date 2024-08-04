@@ -1006,26 +1006,22 @@ impl PartialOrd for Expr {
 impl Expr {
     /// Returns the name of this expression as it should appear in a schema. This name
     /// will not include any CAST expressions.
-    /// TODO: Replace this with Display
+    /// TODO: Deprecate it and use Display
     pub fn display_name(&self) -> Result<String> {
         create_name(self)
     }
 
-    /// Returns the name for schema.
-    /// 1. Cast is not shown
-    /// 2. Alias doesn't contain expr
+    /// Returns the name for schema / field that is different from display
     pub fn schema_name(&self) -> Result<String> {
         match self {
             Expr::Column(c) => Ok(format!("{c}")),
-            Expr::Alias(Alias { name, .. }) => {
-                Ok(name.to_owned())
-            }
-            Expr::Cast(Cast { expr, data_type: _ }) => {
-                expr.display_name()
-            }
-            _ => self.display_name()
+            // expr is not shown since it is aliased
+            Expr::Alias(Alias { name, .. }) => Ok(name.to_owned()),
+            // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
+            Expr::Cast(Cast { expr, data_type: _ }) => expr.display_name(),
+            // Most of the expr has no difference
+            _ => self.display_name(),
         }
-        
     }
 
     /// Returns a full and complete string representation of this expression.
@@ -1158,8 +1154,6 @@ impl Expr {
         match self {
             // call Expr::display_name() on a Expr::Sort will throw an error
             Expr::Sort(Sort { expr, .. }) => expr.name_for_alias(),
-            // TODO: we should use shema's name instead of display_name
-            // expr => expr.display_name(),
             expr => expr.schema_name(),
         }
     }
@@ -2132,7 +2126,6 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
             // TODO: display column
             // write!(w, "{c}")?;
             write_name(w, expr)?;
-
         }
         Expr::TryCast(TryCast { expr, .. }) => {
             // CAST does not change the expression name
@@ -2353,7 +2346,7 @@ mod test {
         assert_eq!(expected_canonical, format!("{expr}"));
         // note that CAST intentionally has a name that is different from its `Display`
         // representation. CAST does not change the name of expressions.
-        assert_eq!("Float32(1.23)", expr.display_name()?);
+        assert_eq!("Float32(1.23)", expr.schema_name()?);
         Ok(())
     }
 

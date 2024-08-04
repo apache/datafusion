@@ -475,14 +475,14 @@ mod test {
         let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
 
         let original_name = match &expr_from {
-            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
-            expr => expr.display_name(),
+            Expr::Sort(Sort { expr, .. }) => expr.schema_name(),
+            expr => expr.schema_name(),
         }
         .unwrap();
 
         let new_name = match &expr {
-            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
-            expr => expr.display_name(),
+            Expr::Sort(Sort { expr, .. }) => expr.schema_name(),
+            expr => expr.schema_name(),
         }
         .unwrap();
 

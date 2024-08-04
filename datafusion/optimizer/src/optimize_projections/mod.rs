@@ -1928,8 +1928,8 @@ mod tests {
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.b")],
         ));
-        let col1 = col(max1.display_name()?);
-        let col2 = col(max2.display_name()?);
+        let col1 = col(max1.schema_name()?);
+        let col2 = col(max2.schema_name()?);
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![max1])?

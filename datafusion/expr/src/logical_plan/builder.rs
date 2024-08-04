@@ -1456,9 +1456,7 @@ pub fn project(
                 input_schema,
                 None,
             )?),
-            _ => {
-                projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
-            }
+            _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;
