@@ -2040,13 +2040,15 @@ pub(crate) fn create_name(e: &Expr) -> Result<String> {
 
 fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
     match e {
+        // Reuse Display trait
+        Expr::Column(_)
+        | Expr::Literal(_)
+        | Expr::Placeholder(_)
+        | Expr::OuterReferenceColumn(..)
+        | Expr::ScalarVariable(..) |
+        Expr::Wildcard { .. }=> write!(w, "{e}")?,
+
         Expr::Alias(Alias { name, .. }) => write!(w, "{}", name)?,
-        Expr::Column(c) => write!(w, "{c}")?,
-        Expr::OuterReferenceColumn(_, c) => write!(w, "outer_ref({c})")?,
-        Expr::ScalarVariable(_, variable_names) => {
-            write!(w, "{}", variable_names.join("."))?
-        }
-        Expr::Literal(value) => write!(w, "{value:?}")?,
         Expr::BinaryExpr(binary_expr) => {
             write_name(w, binary_expr.left.as_ref())?;
             write!(w, " {} ", binary_expr.op)?;
@@ -2277,15 +2279,6 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         Expr::Sort { .. } => {
             return internal_err!("Create name does not support sort expression")
         }
-        Expr::Wildcard { qualifier } => match qualifier {
-            Some(qualifier) => {
-                return internal_err!(
-                    "Create name does not support qualified wildcard, got {qualifier}"
-                )
-            }
-            None => write!(w, "*")?,
-        },
-        Expr::Placeholder(Placeholder { id, .. }) => write!(w, "{}", id)?,
     };
     Ok(())
 }
