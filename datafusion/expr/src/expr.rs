@@ -1006,10 +1006,21 @@ impl Expr {
     }
 
     /// Returns the name for schema / field that is different from display
+    /// Most of the expressions are the same as display_name
+    /// Those are the main difference
+    /// 1. Alias
+    /// 2. Cast
     pub fn schema_name(&self) -> Result<String> {
         match self {
             // expr is not shown since it is aliased
             Expr::Alias(Alias { name, .. }) => Ok(name.to_owned()),
+            Expr::Between(Between { expr, negated, low, high }) => {
+                if *negated {
+                    Ok(format!("{} NOT BETWEEN {} AND {}", expr.schema_name()?, low.schema_name()?, high.schema_name()?))
+                } else {
+                    Ok(format!("{} BETWEEN {} AND {}", expr.schema_name()?, low.schema_name()?, high.schema_name()?))
+                }
+            }
             // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
             Expr::Cast(Cast { expr, data_type: _ }) => expr.schema_name(),
             Expr::Column(c) => Ok(format!("{c}")),
@@ -1026,10 +1037,10 @@ impl Expr {
             Expr::Negative(expr) => Ok(format!("(- {})", expr.schema_name()?)),
             Expr::Not(expr) => Ok(format!("NOT {}", expr.schema_name()?)),
             Expr::Unnest(Unnest { expr }) => {
-                Ok(format!("unnest({})", expr.schema_name()?))
+                Ok(format!("UNNEST({})", expr.schema_name()?))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => func.schema_name(args),
-            // Most of the expr has no difference
+            // other exprs has no difference
             _ => self.display_name(),
         }
     }

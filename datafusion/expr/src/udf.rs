@@ -354,7 +354,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Returns the user-defined display name of the UDF given the arguments
     fn display_name(&self, args: &[Expr]) -> Result<String> {
         let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
-        // TODO: join with ", " to standardize the formatting of Vec<Expr>
+        // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
         Ok(format!("{}({})", self.name(), names.join(",")))
     }
 
@@ -364,7 +364,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
             .iter()
             .map(Expr::schema_name)
             .collect::<Result<Vec<_>>>()?;
-        // TODO: join with ", " to standardize the formatting of Vec<Expr>
+        // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
         Ok(format!("{}({})", self.name(), args_name.join(",")))
     }
 
