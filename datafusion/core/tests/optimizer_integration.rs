@@ -81,14 +81,13 @@ fn timestamp_nano_ts_utc_predicates() {
     let sql = "SELECT col_int32
         FROM test
         WHERE col_ts_nano_utc < (now() - interval '1 hour')";
-    let plan = test_sql(sql).unwrap();
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
     let expected =
         "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
          \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
-    assert_eq!(expected, format!("{plan:?}"));
+    quick_test(sql, expected);
 }
 
 #[test]
@@ -117,7 +116,7 @@ fn concat_ws_literals() -> Result<()> {
 
 fn quick_test(sql: &str, expected_plan: &str) {
     let plan = test_sql(sql).unwrap();
-    assert_eq!(expected_plan, format!("{:?}", plan));
+    assert_eq!(expected_plan, format!("{}", plan));
 }
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {

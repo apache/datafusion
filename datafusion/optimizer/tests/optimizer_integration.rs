@@ -50,13 +50,13 @@ fn case_when() -> Result<()> {
     let expected =
         "Projection: CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END\
          \n  TableScan: test projection=[col_int32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
 
     let sql = "SELECT CASE WHEN col_uint32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
     let expected = "Projection: CASE WHEN test.col_uint32 > UInt32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_uint32 > Int64(0) THEN Int64(1) ELSE Int64(0) END\
                     \n  TableScan: test projection=[col_uint32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -78,7 +78,7 @@ fn subquery_filter_with_cast() -> Result<()> {
     \n        Projection: test.col_int32\
     \n          Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
     \n            TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -89,7 +89,7 @@ fn case_when_aggregate() -> Result<()> {
     let expected = "Projection: test.col_utf8, sum(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END) AS n\
                     \n  Aggregate: groupBy=[[test.col_utf8]], aggr=[[sum(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS sum(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END)]]\
                     \n    TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -100,7 +100,7 @@ fn unsigned_target_type() -> Result<()> {
     let expected = "Projection: test.col_utf8\
                     \n  Filter: test.col_uint32 > UInt32(0)\
                     \n    TableScan: test projection=[col_uint32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -111,7 +111,7 @@ fn distribute_by() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected = "Repartition: DistributeBy(test.col_utf8)\
     \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -128,7 +128,7 @@ fn semi_join_with_join_filter() -> Result<()> {
                     \n    SubqueryAlias: __correlated_sq_1\
                     \n      SubqueryAlias: t2\
                     \n        TableScan: test projection=[col_int32, col_uint32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -145,7 +145,7 @@ fn anti_join_with_join_filter() -> Result<()> {
     \n    SubqueryAlias: __correlated_sq_1\
     \n      SubqueryAlias: t2\
     \n        TableScan: test projection=[col_int32, col_uint32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -160,7 +160,7 @@ fn where_exists_distinct() -> Result<()> {
     \n    Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]\
     \n      SubqueryAlias: t2\
     \n        TableScan: test projection=[col_int32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -178,7 +178,7 @@ fn intersect() -> Result<()> {
     \n        TableScan: test projection=[col_int32, col_utf8]\
     \n      TableScan: test projection=[col_int32, col_utf8]\
     \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -192,7 +192,7 @@ fn between_date32_plus_interval() -> Result<()> {
         \n  Projection: \
         \n    Filter: test.col_date32 >= Date32(\"1998-03-18\") AND test.col_date32 <= Date32(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -206,7 +206,7 @@ fn between_date64_plus_interval() -> Result<()> {
         \n  Projection: \
         \n    Filter: test.col_date64 >= Date64(\"1998-03-18\") AND test.col_date64 <= Date64(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date64]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
 
@@ -216,7 +216,7 @@ fn propagate_empty_relation() {
     let plan = test_sql(sql).unwrap();
     // when children exist EmptyRelation, it will bottom-up propagate.
     let expected = "EmptyRelation";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn join_keys_in_subquery_alias() {
     \n      Filter: test.col_int32 IS NOT NULL\
     \n        TableScan: test projection=[col_int32]";
 
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
@@ -251,7 +251,7 @@ fn join_keys_in_subquery_alias_1() {
     \n        SubqueryAlias: c\
     \n          Filter: test.col_int32 IS NOT NULL\
     \n            TableScan: test projection=[col_int32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
@@ -262,7 +262,7 @@ fn push_down_filter_groupby_expr_contains_alias() {
     \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(Int64(1)) AS count(*)]]\
     \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
@@ -276,7 +276,7 @@ fn test_same_name_but_not_ambiguous() {
     \n      TableScan: test projection=[col_int32]\
     \n  SubqueryAlias: t2\
     \n    TableScan: test projection=[col_int32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn eliminate_nested_filters() {
         Filter: test.col_int32 > Int32(0)\
         \n  TableScan: test projection=[col_int32]";
 
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn eliminate_redundant_null_check_on_count() {
         Projection: test.col_int32, count(*) AS c\
         \n  Aggregate: groupBy=[[test.col_int32]], aggr=[[count(Int64(1)) AS count(*)]]\
         \n    TableScan: test projection=[col_int32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn test_propagate_empty_relation_inner_join_and_unions() {
         \n  TableScan: test projection=[col_int32]\
         \n  Filter: test.col_int32 < Int32(0)\
         \n    TableScan: test projection=[col_int32]";
-    assert_eq!(expected, format!("{plan:?}"));
+    assert_eq!(expected, format!("{plan}"));
 }
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {

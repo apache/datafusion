@@ -139,7 +139,7 @@ async fn scalar_udf() -> Result<()> {
         .build()?;
 
     assert_eq!(
-        format!("{plan:?}"),
+        format!("{plan}"),
         "Projection: t.a, t.b, my_add(t.a, t.b)\n  TableScan: t projection=[a, b]"
     );
 
@@ -393,7 +393,7 @@ async fn udaf_as_window_func() -> Result<()> {
     TableScan: my_table"#;
 
     let dataframe = context.sql(sql).await.unwrap();
-    assert_eq!(format!("{:?}", dataframe.logical_plan()), expected);
+    assert_eq!(format!("{}", dataframe.logical_plan()), expected);
     Ok(())
 }
 
@@ -1124,7 +1124,7 @@ async fn test_parameterized_scalar_udf() -> Result<()> {
         .build()?;
 
     assert_eq!(
-        format!("{plan:?}"),
+        format!("{plan}"),
         "Filter: t.text IS NOT NULL\n  Filter: regex_udf(t.text) AND regex_udf(t.text)\n    TableScan: t projection=[text]"
     );
 
