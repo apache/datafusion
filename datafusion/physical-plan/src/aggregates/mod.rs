@@ -55,9 +55,6 @@ mod row_hash;
 mod topk;
 mod topk_stream;
 
-pub use datafusion_expr::AggregateFunction;
-pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {

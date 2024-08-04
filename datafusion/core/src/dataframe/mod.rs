@@ -53,9 +53,11 @@ use datafusion_common::{
 };
 use datafusion_expr::{case, is_null, lit};
 use datafusion_expr::{
-    max, min, utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
+    utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
-use datafusion_functions_aggregate::expr_fn::{avg, count, median, stddev, sum};
+use datafusion_functions_aggregate::expr_fn::{
+    avg, count, max, median, min, stddev, sum,
+};
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
@@ -144,6 +146,7 @@ impl Default for DataFrameWriteOptions {
 /// ```
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
+/// # use datafusion::functions_aggregate::expr_fn::min;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
@@ -407,6 +410,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion::functions_aggregate::expr_fn::min;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();

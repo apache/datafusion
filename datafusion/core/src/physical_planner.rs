@@ -58,8 +58,8 @@ use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan,
-    ExecutionPlanProperties, InputOrderMode, Partitioning, PhysicalExpr, WindowExpr,
+    displayable, udaf, windows, AggregateExpr, ExecutionPlan, ExecutionPlanProperties,
+    InputOrderMode, Partitioning, PhysicalExpr, WindowExpr,
 };
 
 use arrow::compute::SortOptions;
@@ -1548,7 +1548,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
     logical_input_schema: &DFSchema,
-    physical_input_schema: &Schema,
+    _physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
     match e {
@@ -1576,32 +1576,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 == NullTreatment::IgnoreNulls;
 
             let (agg_expr, filter, order_by) = match func_def {
-                AggregateFunctionDefinition::BuiltIn(fun) => {
-                    let physical_sort_exprs = match order_by {
-                        Some(exprs) => Some(create_physical_sort_exprs(
-                            exprs,
-                            logical_input_schema,
-                            execution_props,
-                        )?),
-                        None => None,
-                    };
-                    let ordering_reqs: Vec<PhysicalSortExpr> =
-                        physical_sort_exprs.clone().unwrap_or(vec![]);
-                    let name = match name {
-                        None => physical_name(e)?,
-                        Some(name) => name,
-                    };
-                    let agg_expr = aggregates::create_aggregate_expr(
-                        fun,
-                        *distinct,
-                        &physical_args,
-                        &ordering_reqs,
-                        physical_input_schema,
-                        name,
-                        ignore_nulls,
-                    )?;
-                    (agg_expr, filter, physical_sort_exprs)
-                }
                 AggregateFunctionDefinition::UDF(fun) => {
                     let sort_exprs = order_by.clone().unwrap_or(vec![]);
                     let physical_sort_exprs = match order_by {

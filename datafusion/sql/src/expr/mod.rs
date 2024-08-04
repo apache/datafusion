@@ -21,8 +21,8 @@ use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::planner::RawDictionaryExpr;
 use datafusion_expr::planner::RawFieldAccessExpr;
 use sqlparser::ast::{
-    CastKind, DictionaryField, Expr as SQLExpr, StructField, Subscript, TrimWhereField,
-    Value,
+    CastKind, DictionaryField, Expr as SQLExpr, MapEntry, StructField, Subscript,
+    TrimWhereField, Value,
 };
 
 use datafusion_common::{
@@ -628,6 +628,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Dictionary(fields) => {
                 self.try_plan_dictionary_literal(fields, schema, planner_context)
             }
+            SQLExpr::Map(map) => {
+                self.try_plan_map_literal(map.entries, schema, planner_context)
+            }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
@@ -711,7 +714,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 PlannerResult::Original(expr) => raw_expr = expr,
             }
         }
-        not_impl_err!("Unsupported dictionary literal: {raw_expr:?}")
+        not_impl_err!("Dictionary not supported by ExprPlanner: {raw_expr:?}")
+    }
+
+    fn try_plan_map_literal(
+        &self,
+        entries: Vec<MapEntry>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let mut exprs: Vec<_> = entries
+            .into_iter()
+            .flat_map(|entry| vec![entry.key, entry.value].into_iter())
+            .map(|expr| self.sql_expr_to_logical_expr(*expr, schema, planner_context))
+            .collect::<Result<Vec<_>>>()?;
+        for planner in self.context_provider.get_expr_planners() {
+            match planner.plan_make_map(exprs)? {
+                PlannerResult::Planned(expr) => {
+                    return Ok(expr);
+                }
+                PlannerResult::Original(expr) => exprs = expr,
+            }
+        }
+        not_impl_err!("MAP not supported by ExprPlanner: {exprs:?}")
     }
 
     // Handles a call to struct(...) where the arguments are named. For example

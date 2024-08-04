@@ -28,8 +28,8 @@ use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::{
-    aggregate_function, built_in_window_function, udaf, BuiltInWindowFunction,
-    ExprSchemable, Operator, Signature, WindowFrame, WindowUDF,
+    built_in_window_function, udaf, BuiltInWindowFunction, ExprSchemable, Operator,
+    Signature, WindowFrame, WindowUDF,
 };
 use crate::{window_frame, Volatility};
 
@@ -631,7 +631,6 @@ impl Sort {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Defines which implementation of an aggregate function DataFusion should call.
 pub enum AggregateFunctionDefinition {
-    BuiltIn(aggregate_function::AggregateFunction),
     /// Resolved to a user defined aggregate function
     UDF(Arc<crate::AggregateUDF>),
 }
@@ -640,7 +639,6 @@ impl AggregateFunctionDefinition {
     /// Function's name for display
     pub fn name(&self) -> &str {
         match self {
-            AggregateFunctionDefinition::BuiltIn(fun) => fun.name(),
             AggregateFunctionDefinition::UDF(udf) => udf.name(),
         }
     }
@@ -667,24 +665,6 @@ pub struct AggregateFunction {
 }
 
 impl AggregateFunction {
-    pub fn new(
-        fun: aggregate_function::AggregateFunction,
-        args: Vec<Expr>,
-        distinct: bool,
-        filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Expr>>,
-        null_treatment: Option<NullTreatment>,
-    ) -> Self {
-        Self {
-            func_def: AggregateFunctionDefinition::BuiltIn(fun),
-            args,
-            distinct,
-            filter,
-            order_by,
-            null_treatment,
-        }
-    }
-
     /// Create a new AggregateFunction expression with a user-defined function (UDF)
     pub fn new_udf(
         udf: Arc<crate::AggregateUDF>,
@@ -710,7 +690,6 @@ impl AggregateFunction {
 /// Defines which implementation of an aggregate function DataFusion should call.
 pub enum WindowFunctionDefinition {
     /// A built in aggregate function that leverages an aggregate function
-    AggregateFunction(aggregate_function::AggregateFunction),
     /// A a built-in window function
     BuiltInWindowFunction(built_in_window_function::BuiltInWindowFunction),
     /// A user defined aggregate function
@@ -724,12 +703,9 @@ impl WindowFunctionDefinition {
     pub fn return_type(
         &self,
         input_expr_types: &[DataType],
-        input_expr_nullable: &[bool],
+        _input_expr_nullable: &[bool],
     ) -> Result<DataType> {
         match self {
-            WindowFunctionDefinition::AggregateFunction(fun) => {
-                fun.return_type(input_expr_types, input_expr_nullable)
-            }
             WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
                 fun.return_type(input_expr_types)
             }
@@ -743,7 +719,6 @@ impl WindowFunctionDefinition {
     /// the signatures supported by the function `fun`.
     pub fn signature(&self) -> Signature {
         match self {
-            WindowFunctionDefinition::AggregateFunction(fun) => fun.signature(),
             WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.signature(),
             WindowFunctionDefinition::AggregateUDF(fun) => fun.signature().clone(),
             WindowFunctionDefinition::WindowUDF(fun) => fun.signature().clone(),
@@ -755,7 +730,6 @@ impl WindowFunctionDefinition {
         match self {
             WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.name(),
             WindowFunctionDefinition::WindowUDF(fun) => fun.name(),
-            WindowFunctionDefinition::AggregateFunction(fun) => fun.name(),
             WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
         }
     }
@@ -764,21 +738,12 @@ impl WindowFunctionDefinition {
 impl fmt::Display for WindowFunctionDefinition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            WindowFunctionDefinition::AggregateFunction(fun) => {
-                std::fmt::Display::fmt(fun, f)
-            }
             WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
                 std::fmt::Display::fmt(fun, f)
             }
             WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Display::fmt(fun, f),
             WindowFunctionDefinition::WindowUDF(fun) => std::fmt::Display::fmt(fun, f),
         }
-    }
-}
-
-impl From<aggregate_function::AggregateFunction> for WindowFunctionDefinition {
-    fn from(value: aggregate_function::AggregateFunction) -> Self {
-        Self::AggregateFunction(value)
     }
 }
 
@@ -867,10 +832,6 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
         Some(WindowFunctionDefinition::BuiltInWindowFunction(
             built_in_function,
         ))
-    } else if let Ok(aggregate) =
-        aggregate_function::AggregateFunction::from_str(name.as_str())
-    {
-        Some(WindowFunctionDefinition::AggregateFunction(aggregate))
     } else {
         None
     }
@@ -2852,8 +2813,6 @@ mod test {
             "first_value",
             "last_value",
             "nth_value",
-            "min",
-            "max",
         ];
         for name in names {
             let fun = find_df_window_func(name).unwrap();
@@ -2870,18 +2829,6 @@ mod test {
 
     #[test]
     fn test_find_df_window_function() {
-        assert_eq!(
-            find_df_window_func("max"),
-            Some(WindowFunctionDefinition::AggregateFunction(
-                aggregate_function::AggregateFunction::Max
-            ))
-        );
-        assert_eq!(
-            find_df_window_func("min"),
-            Some(WindowFunctionDefinition::AggregateFunction(
-                aggregate_function::AggregateFunction::Min
-            ))
-        );
         assert_eq!(
             find_df_window_func("cume_dist"),
             Some(WindowFunctionDefinition::BuiltInWindowFunction(
