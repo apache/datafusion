@@ -1014,16 +1014,30 @@ impl Expr {
         match self {
             // expr is not shown since it is aliased
             Expr::Alias(Alias { name, .. }) => Ok(name.to_owned()),
-            Expr::Between(Between { expr, negated, low, high }) => {
+            Expr::Between(Between {
+                expr,
+                negated,
+                low,
+                high,
+            }) => {
                 if *negated {
-                    Ok(format!("{} NOT BETWEEN {} AND {}", expr.schema_name()?, low.schema_name()?, high.schema_name()?))
+                    Ok(format!(
+                        "{} NOT BETWEEN {} AND {}",
+                        expr.schema_name()?,
+                        low.schema_name()?,
+                        high.schema_name()?
+                    ))
                 } else {
-                    Ok(format!("{} BETWEEN {} AND {}", expr.schema_name()?, low.schema_name()?, high.schema_name()?))
+                    Ok(format!(
+                        "{} BETWEEN {} AND {}",
+                        expr.schema_name()?,
+                        low.schema_name()?,
+                        high.schema_name()?
+                    ))
                 }
             }
             // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
             Expr::Cast(Cast { expr, data_type: _ }) => expr.schema_name(),
-            Expr::Column(c) => Ok(format!("{c}")),
             Expr::IsNull(expr) => Ok(format!("{} IS NULL", expr.schema_name()?)),
             Expr::IsNotNull(expr) => Ok(format!("{} IS NOT NULL", expr.schema_name()?)),
             Expr::IsUnknown(expr) => Ok(format!("{} IS UNKNOWN", expr.schema_name()?)),
