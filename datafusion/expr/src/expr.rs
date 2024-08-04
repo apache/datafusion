@@ -1008,15 +1008,27 @@ impl Expr {
     /// Returns the name for schema / field that is different from display
     pub fn schema_name(&self) -> Result<String> {
         match self {
-            Expr::Column(c) => Ok(format!("{c}")),
             // expr is not shown since it is aliased
             Expr::Alias(Alias { name, .. }) => Ok(name.to_owned()),
             // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
             Expr::Cast(Cast { expr, data_type: _ }) => expr.schema_name(),
-            Expr::ScalarFunction(ScalarFunction { func, args }) => func.schema_name(args),
+            Expr::Column(c) => Ok(format!("{c}")),
+            Expr::IsNull(expr) => Ok(format!("{} IS NULL", expr.schema_name()?)),
+            Expr::IsNotNull(expr) => Ok(format!("{} IS NOT NULL", expr.schema_name()?)),
+            Expr::IsUnknown(expr) => Ok(format!("{} IS UNKNOWN", expr.schema_name()?)),
+            Expr::IsNotUnknown(expr) => {
+                Ok(format!("{} IS NOT UNKNOWN", expr.schema_name()?))
+            }
+            Expr::IsTrue(expr) => Ok(format!("{} IS TRUE", expr.schema_name()?)),
+            Expr::IsFalse(expr) => Ok(format!("{} IS FALSE", expr.schema_name()?)),
+            Expr::IsNotTrue(expr) => Ok(format!("{} IS NOT TRUE", expr.schema_name()?)),
+            Expr::IsNotFalse(expr) => Ok(format!("{} IS NOT FALSE", expr.schema_name()?)),
+            Expr::Negative(expr) => Ok(format!("(- {})", expr.schema_name()?)),
+            Expr::Not(expr) => Ok(format!("NOT {}", expr.schema_name()?)),
             Expr::Unnest(Unnest { expr }) => {
                 Ok(format!("unnest({})", expr.schema_name()?))
             }
+            Expr::ScalarFunction(ScalarFunction { func, args }) => func.schema_name(args),
             // Most of the expr has no difference
             _ => self.display_name(),
         }
@@ -2050,8 +2062,18 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         // Reuse Display trait
         Expr::Column(_)
         | Expr::Literal(_)
-        | Expr::Placeholder(_)
+        | Expr::IsFalse(_)
+        | Expr::IsNotFalse(_)
+        | Expr::IsTrue(_)
+        | Expr::IsNotTrue(_)
+        | Expr::IsUnknown(_)
+        | Expr::IsNotUnknown(_)
+        | Expr::IsNull(_)
+        | Expr::IsNotNull(_)
+        | Expr::Negative(_)
+        | Expr::Not(_)
         | Expr::OuterReferenceColumn(..)
+        | Expr::Placeholder(_)
         | Expr::ScalarVariable(..)
         | Expr::Wildcard { .. } => write!(w, "{e}")?,
 
@@ -2129,47 +2151,6 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         Expr::TryCast(TryCast { expr, .. }) => {
             // CAST does not change the expression name
             write_name(w, expr)?;
-        }
-        Expr::Not(expr) => {
-            w.write_str("NOT ")?;
-            write_name(w, expr)?;
-        }
-        Expr::Negative(expr) => {
-            w.write_str("(- ")?;
-            write_name(w, expr)?;
-            w.write_str(")")?;
-        }
-        Expr::IsNull(expr) => {
-            write_name(w, expr)?;
-            w.write_str(" IS NULL")?;
-        }
-        Expr::IsNotNull(expr) => {
-            write_name(w, expr)?;
-            w.write_str(" IS NOT NULL")?;
-        }
-        Expr::IsTrue(expr) => {
-            write_name(w, expr)?;
-            w.write_str(" IS TRUE")?;
-        }
-        Expr::IsFalse(expr) => {
-            write_name(w, expr)?;
-            w.write_str(" IS FALSE")?;
-        }
-        Expr::IsUnknown(expr) => {
-            write_name(w, expr)?;
-            w.write_str(" IS UNKNOWN")?;
-        }
-        Expr::IsNotTrue(expr) => {
-            write_name(w, expr)?;
-            w.write_str(" IS NOT TRUE")?;
-        }
-        Expr::IsNotFalse(expr) => {
-            write_name(w, expr)?;
-            w.write_str(" IS NOT FALSE")?;
-        }
-        Expr::IsNotUnknown(expr) => {
-            write_name(w, expr)?;
-            w.write_str(" IS NOT UNKNOWN")?;
         }
         Expr::Exists(Exists { negated: true, .. }) => w.write_str("NOT EXISTS")?,
         Expr::Exists(Exists { negated: false, .. }) => w.write_str("EXISTS")?,
