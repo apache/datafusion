@@ -585,7 +585,7 @@ jobs:
           # Please see the DataFusion Rust Version Compatibility Policy before
           # updating Cargo.toml. You may have to update the code instead. 
           # https://github.com/apache/datafusion/blob/main/README.md#rust-version-compatibility-policy
-          cargo msrv --verify --log-target stdout
+          cargo msrv --output-format json --log-target stdout verify
       - name: Check datafusion-substrait
         working-directory: datafusion/substrait
         run: cargo msrv --output-format json --log-target stdout verify
