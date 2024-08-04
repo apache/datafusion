@@ -1081,6 +1081,9 @@ impl Expr {
                     )?;
                 }
             }
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                write!(&mut s, "{} {op} {}", left.schema_name()?, right.schema_name()?)?;
+            }
             Expr::Case(Case {
                 expr,
                 when_then_expr,
@@ -1112,23 +1115,8 @@ impl Expr {
                 write!(&mut s, "{}", expr.schema_name()?)?
             }
             Expr::Column(c) => write!(&mut s, "{c}")?,
-            Expr::InList(InList {
-                expr,
-                list,
-                negated,
-            }) => {
-                let inlist_exprs = list
-                    .iter()
-                    .map(Self::schema_name)
-                    .collect::<Result<Vec<_>>>()?;
-                let inlist_name = inlist_exprs.join(", ");
-
-                if *negated {
-                    write!(&mut s, "{} NOT IN {}", expr.schema_name()?, inlist_name)?;
-                } else {
-                    write!(&mut s, "{} IN {}", expr.schema_name()?, inlist_name)?;
-                }
-            }
+            Expr::Exists(Exists { negated: true, .. }) => write!(&mut s, "NOT EXISTS")?,
+            Expr::Exists(Exists { negated: false, .. }) => write!(&mut s, "EXISTS")?,
             Expr::IsNull(expr) => write!(&mut s, "{} IS NULL", expr.schema_name()?)?,
             Expr::IsNotNull(expr) => {
                 write!(&mut s, "{} IS NOT NULL", expr.schema_name()?)?
@@ -2137,6 +2125,7 @@ impl fmt::Display for Expr {
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
             Expr::Unnest(Unnest { expr }) => {
+                // TODO: use Display instead of Debug
                 write!(f, "UNNEST({expr:?})")
             }
         }
@@ -2190,6 +2179,7 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         // Reuse Display trait
         Expr::AggregateFunction(_)
         | Expr::Between(_)
+        | Expr::BinaryExpr(_)
         | Expr::Case(_)
         | Expr::Column(_)
         | Expr::Literal(_)
@@ -2206,16 +2196,12 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         | Expr::Not(_)
         | Expr::OuterReferenceColumn(..)
         | Expr::Placeholder(_)
+        | Expr::Unnest(_)
         | Expr::ScalarVariable(..)
         | Expr::Sort(..)
         | Expr::Wildcard { .. } => write!(w, "{e}")?,
 
         Expr::Alias(Alias { name, .. }) => write!(w, "{name}")?,
-        Expr::BinaryExpr(binary_expr) => {
-            write_name(w, binary_expr.left.as_ref())?;
-            write!(w, " {} ", binary_expr.op)?;
-            write_name(w, binary_expr.right.as_ref())?;
-        }
         Expr::Like(Like {
             negated,
             expr,
@@ -2271,11 +2257,6 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         Expr::InSubquery(InSubquery { negated: false, .. }) => w.write_str("IN")?,
         Expr::ScalarSubquery(subquery) => {
             w.write_str(subquery.subquery.schema().field(0).name().as_str())?;
-        }
-        Expr::Unnest(Unnest { expr }) => {
-            w.write_str("unnest(")?;
-            write_name(w, expr)?;
-            w.write_str(")")?;
         }
         Expr::ScalarFunction(fun) => {
             w.write_str(fun.func.display_name(&fun.args)?.as_str())?;

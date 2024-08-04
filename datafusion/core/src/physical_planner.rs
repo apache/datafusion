@@ -1794,7 +1794,7 @@ pub fn create_window_expr(
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
-        _ => (e.display_name()?, e),
+        _ => (e.schema_name()?, e),
     };
     create_window_expr_with_name(e, name, logical_schema, execution_props)
 }
