@@ -3755,9 +3755,9 @@ mod tests {
                     | JoinType::Right
                     | JoinType::RightSemi
                     | JoinType::RightAnti => {
-                        (expected_resultset_records + batch_size - 1) / batch_size
+                        div_ceil(expected_resultset_records, batch_size)
                     }
-                    _ => (expected_resultset_records + batch_size - 1) / batch_size + 1,
+                    _ => div_ceil(expected_resultset_records, batch_size) + 1,
                 };
                 assert_eq!(
                     batches.len(),
