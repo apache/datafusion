@@ -133,7 +133,7 @@ impl AggregateUDFImpl for Median {
             };
         }
 
-        let dt = &acc_args.input_exprs[0].data_type(acc_args.dfschema.as_arrow())?;
+        let dt = &acc_args.input_exprs[0].data_type(acc_args.schema)?;
         downcast_integer! {
             dt => (helper, dt),
             DataType::Float16 => helper!(Float16Type, dt),

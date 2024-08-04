@@ -116,12 +116,12 @@ impl AggregateUDFImpl for NthValueAgg {
 
         let ordering_dtypes = ordering_req
             .iter()
-            .map(|e| e.expr.data_type(acc_args.dfschema.as_arrow()))
+            .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
         NthValueAccumulator::try_new(
             n,
-            &acc_args.input_exprs[0].data_type(acc_args.dfschema.as_arrow())?,
+            &acc_args.input_exprs[0].data_type(acc_args.schema)?,
             &ordering_dtypes,
             ordering_req,
         )

@@ -313,7 +313,6 @@ pub(crate) mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_int64_array;
-    use datafusion_common::ToDFSchema;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::cast;
     use datafusion_physical_expr::PhysicalExpr;
@@ -411,7 +410,7 @@ pub(crate) mod tests {
         // Return appropriate expr depending if COUNT is for col or table (*)
         pub(crate) fn count_expr(&self, schema: &Schema) -> Arc<dyn AggregateExpr> {
             AggregateExprBuilder::new(count_udaf(), vec![self.column()])
-                .dfschema(schema.clone().to_dfschema().unwrap())
+                .schema(Arc::new(schema.clone()))
                 .name(self.column_name())
                 .build()
                 .unwrap()

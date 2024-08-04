@@ -94,7 +94,7 @@ impl AggregateUDFImpl for Avg {
         use DataType::*;
         // instantiate specialized accumulator based for the type
         let input_type =
-            acc_args.input_exprs[0].data_type(acc_args.dfschema.as_arrow())?;
+            acc_args.input_exprs[0].data_type(acc_args.schema)?;
 
         match (&input_type, acc_args.data_type) {
             (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
@@ -157,7 +157,7 @@ impl AggregateUDFImpl for Avg {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         // instantiate specialized accumulator based for the type
-        let sum_data_type = &args.input_exprs[0].data_type(args.dfschema.as_arrow())?;
+        let sum_data_type = &args.input_exprs[0].data_type(args.schema)?;
 
         match (sum_data_type, args.data_type) {
             (Float64, Float64) => {

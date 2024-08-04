@@ -278,7 +278,7 @@ impl AggregateUDFImpl for ApproxDistinct {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let accumulator: Box<dyn Accumulator> =
-            match &acc_args.input_exprs[0].data_type(acc_args.dfschema.as_arrow())? {
+            match &acc_args.input_exprs[0].data_type(acc_args.schema)? {
                 // TODO u8, i8, u16, i16 shall really be done using bitmap, not HLL
                 // TODO support for boolean (trivial case)
                 // https://github.com/apache/datafusion/issues/1109

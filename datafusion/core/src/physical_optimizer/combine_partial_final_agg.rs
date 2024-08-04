@@ -174,7 +174,6 @@ mod tests {
     use crate::physical_plan::{displayable, Partitioning};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::ToDFSchema;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::expressions::col;
@@ -280,7 +279,7 @@ mod tests {
         schema: &Schema,
     ) -> Arc<dyn AggregateExpr> {
         AggregateExprBuilder::new(count_udaf(), vec![expr])
-            .dfschema(schema.clone().to_dfschema().unwrap())
+            .schema(schema.clone())
             .name(name)
             .build()
             .unwrap()

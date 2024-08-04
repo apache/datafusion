@@ -18,9 +18,9 @@
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
-use datafusion_common::{exec_err, ToDFSchema};
+use datafusion_common::exec_err;
 use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::type_coercion::aggregates::check_arg_count;
@@ -76,7 +76,7 @@ pub fn create_aggregate_expr(
     builder = builder.sort_exprs(sort_exprs.to_vec());
     builder = builder.order_by(ordering_req.to_vec());
     builder = builder.logical_exprs(input_exprs.to_vec());
-    builder = builder.dfschema(Arc::new(schema.clone()).to_dfschema()?);
+    builder = builder.schema(Arc::new(schema.clone()));
     builder = builder.name(name);
 
     if ignore_nulls {
@@ -108,7 +108,8 @@ pub fn create_aggregate_expr_with_dfschema(
     builder = builder.sort_exprs(sort_exprs.to_vec());
     builder = builder.order_by(ordering_req.to_vec());
     builder = builder.logical_exprs(input_exprs.to_vec());
-    builder = builder.dfschema(dfschema.clone());
+    let schema: Schema = dfschema.into();
+    builder = builder.schema(Arc::new(schema));
     builder = builder.name(name);
 
     if ignore_nulls {
@@ -136,6 +137,8 @@ pub struct AggregateExprBuilder {
     /// Logical expressions of the aggregate function, it will be deprecated in <https://github.com/apache/datafusion/issues/11359>
     logical_args: Vec<Expr>,
     name: String,
+    /// Arrow Schema for the aggregate function
+    schema: SchemaRef,
     /// Datafusion Schema for the aggregate function
     dfschema: DFSchema,
     /// The logical order by expressions, it will be deprecated in <https://github.com/apache/datafusion/issues/11359>
@@ -157,6 +160,7 @@ impl AggregateExprBuilder {
             args,
             logical_args: vec![],
             name: String::new(),
+            schema: Arc::new(Schema::empty()),
             dfschema: DFSchema::empty(),
             sort_exprs: vec![],
             ordering_req: vec![],
@@ -172,6 +176,7 @@ impl AggregateExprBuilder {
             args,
             logical_args,
             name,
+            schema,
             dfschema,
             sort_exprs,
             ordering_req,
@@ -189,7 +194,7 @@ impl AggregateExprBuilder {
         if !ordering_req.is_empty() {
             let ordering_types = ordering_req
                 .iter()
-                .map(|e| e.expr.data_type(dfschema.as_arrow()))
+                .map(|e| e.expr.data_type(&schema))
                 .collect::<Result<Vec<_>>>()?;
 
             ordering_fields = utils::ordering_fields(&ordering_req, &ordering_types);
@@ -197,7 +202,7 @@ impl AggregateExprBuilder {
 
         let input_exprs_types = args
             .iter()
-            .map(|arg| arg.data_type(dfschema.as_arrow()))
+            .map(|arg| arg.data_type(&schema))
             .collect::<Result<Vec<_>>>()?;
 
         check_arg_count(
@@ -214,6 +219,7 @@ impl AggregateExprBuilder {
             logical_args,
             data_type,
             name,
+            schema: Arc::unwrap_or_clone(schema),
             dfschema,
             sort_exprs,
             ordering_req,
@@ -227,6 +233,11 @@ impl AggregateExprBuilder {
 
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
+        self
+    }
+
+    pub fn schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = schema;
         self
     }
 
@@ -444,6 +455,7 @@ pub struct AggregateFunctionExpr {
     /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
+    schema: Schema,
     dfschema: DFSchema,
     // The logical order by expressions
     sort_exprs: Vec<Expr>,
@@ -509,6 +521,7 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let acc_args = AccumulatorArgs {
             data_type: &self.data_type,
+            schema: &self.schema,
             dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
@@ -524,6 +537,7 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
+            schema: &self.schema,
             dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
@@ -594,6 +608,7 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn groups_accumulator_supported(&self) -> bool {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
+            schema: &self.schema,
             dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,
@@ -608,6 +623,7 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
+            schema: &self.schema,
             dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             sort_exprs: &self.sort_exprs,

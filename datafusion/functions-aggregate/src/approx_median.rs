@@ -113,7 +113,7 @@ impl AggregateUDFImpl for ApproxMedian {
 
         Ok(Box::new(ApproxPercentileAccumulator::new(
             0.5_f64,
-            acc_args.input_exprs[0].data_type(acc_args.dfschema.as_arrow())?,
+            acc_args.input_exprs[0].data_type(acc_args.schema)?,
         )))
     }
 }

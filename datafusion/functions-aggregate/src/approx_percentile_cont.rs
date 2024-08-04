@@ -104,7 +104,7 @@ impl ApproxPercentileCont {
             None
         };
 
-        let accumulator: ApproxPercentileAccumulator = match &args.input_exprs[0].data_type(args.dfschema.as_arrow())? {
+        let accumulator: ApproxPercentileAccumulator = match &args.input_exprs[0].data_type(args.schema)? {
             t @ (DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32

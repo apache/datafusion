@@ -30,7 +30,7 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue, ToDFSchema};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{col, Expr, SortExpr};
 use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
@@ -127,7 +127,7 @@ pub fn create_window_expr(
                 .collect::<Vec<_>>();
 
             let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
-                .dfschema(Arc::new(input_schema.clone()).to_dfschema()?)
+                .schema(Arc::new(input_schema.clone()))
                 .name(name)
                 .order_by(order_by.to_vec())
                 .sort_exprs(sort_exprs)

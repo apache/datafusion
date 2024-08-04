@@ -124,7 +124,7 @@ impl AggregateUDFImpl for FirstValue {
 
         let ordering_dtypes = ordering_req
             .iter()
-            .map(|e| e.expr.data_type(acc_args.dfschema.as_arrow()))
+            .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
         // When requirement is empty, or it is signalled by outside caller that
@@ -423,7 +423,7 @@ impl AggregateUDFImpl for LastValue {
 
         let ordering_dtypes = ordering_req
             .iter()
-            .map(|e| e.expr.data_type(acc_args.dfschema.as_arrow()))
+            .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
         let requirement_satisfied = ordering_req.is_empty() || self.requirement_satisfied;

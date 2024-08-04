@@ -149,7 +149,7 @@ impl AggregateUDFImpl for Count {
         }
 
         let data_type =
-            &acc_args.input_exprs[0].data_type(acc_args.dfschema.as_arrow())?;
+            &acc_args.input_exprs[0].data_type(acc_args.schema)?;
         Ok(match data_type {
             // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
             DataType::Int8 => Box::new(

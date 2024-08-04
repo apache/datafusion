@@ -82,7 +82,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, ToDFSchema,
+    internal_err, not_impl_err, DataFusionError, Result,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -297,7 +297,7 @@ fn roundtrip_window() -> Result<()> {
             avg_udaf(),
             vec![cast(col("b", &schema)?, &schema, DataType::Float64)?],
         )
-        .dfschema(Arc::clone(&schema).to_dfschema()?)
+        .schema(Arc::clone(&schema))
         .name("avg(b)")
         .build()?,
         &[],
@@ -313,7 +313,7 @@ fn roundtrip_window() -> Result<()> {
 
     let args = vec![cast(col("a", &schema)?, &schema, DataType::Float64)?];
     let sum_expr = AggregateExprBuilder::new(sum_udaf(), args)
-        .dfschema(Arc::clone(&schema).to_dfschema()?)
+        .schema(Arc::clone(&schema))
         .name("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING")
         .build()?;
 
@@ -347,17 +347,17 @@ fn rountrip_aggregate() -> Result<()> {
         vec![(col("a", &schema)?, "unused".to_string())];
 
     let avg_expr = AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
-        .dfschema(Arc::clone(&schema).to_dfschema()?)
+        .schema(Arc::clone(&schema))
         .name("AVG(b)")
         .build()?;
     let nth_expr =
         AggregateExprBuilder::new(nth_value_udaf(), vec![col("b", &schema)?, lit(1u64)])
-            .dfschema(Arc::clone(&schema).to_dfschema()?)
+            .schema(Arc::clone(&schema))
             .name("NTH_VALUE(b, 1)")
             .build()?;
     let str_agg_expr =
         AggregateExprBuilder::new(string_agg_udaf(), vec![col("b", &schema)?, lit(1u64)])
-            .dfschema(Arc::clone(&schema).to_dfschema()?)
+            .schema(Arc::clone(&schema))
             .name("NTH_VALUE(b, 1)")
             .build()?;
 
@@ -397,7 +397,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
     let aggregates: Vec<Arc<dyn AggregateExpr>> =
         vec![
             AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
-                .dfschema(Arc::clone(&schema).to_dfschema()?)
+                .schema(Arc::clone(&schema))
                 .name("AVG(b)")
                 .build()?,
         ];
@@ -464,7 +464,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     let aggregates: Vec<Arc<dyn AggregateExpr>> =
         vec![
             AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
-                .dfschema(Arc::clone(&schema).to_dfschema()?)
+                .schema(Arc::clone(&schema))
                 .name("example_agg")
                 .build()?,
         ];
@@ -966,7 +966,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![Arc::new(Literal::new(ScalarValue::from(42)))];
 
     let aggr_expr = AggregateExprBuilder::new(Arc::clone(&udaf), aggr_args.clone())
-        .dfschema(Arc::clone(&schema).to_dfschema()?)
+        .schema(Arc::clone(&schema))
         .name("aggregate_udf")
         .build()?;
 
@@ -991,7 +991,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
     )?);
 
     let aggr_expr = AggregateExprBuilder::new(udaf, aggr_args.clone())
-        .dfschema(Arc::clone(&schema).to_dfschema()?)
+        .schema(Arc::clone(&schema))
         .name("aggregate_udf")
         .distinct()
         .ignore_nulls()
