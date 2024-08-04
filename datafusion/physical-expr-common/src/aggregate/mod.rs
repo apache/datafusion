@@ -79,7 +79,7 @@ pub fn create_aggregate_expr(
     builder = builder.logical_exprs(input_exprs.to_vec());
     builder = builder.schema(Arc::new(schema.clone()));
     if let Some(name) = name {
-        builder = builder.name(name);
+        builder = builder.alias(name);
     }
 
     if ignore_nulls {
@@ -101,7 +101,7 @@ pub fn create_aggregate_expr_with_dfschema(
     sort_exprs: &[Expr],
     ordering_req: &[PhysicalSortExpr],
     dfschema: &DFSchema,
-    name: Option<String>,
+    alias: Option<String>,
     ignore_nulls: bool,
     is_distinct: bool,
     is_reversed: bool,
@@ -114,8 +114,8 @@ pub fn create_aggregate_expr_with_dfschema(
     builder = builder.dfschema(dfschema.clone());
     let schema: Schema = dfschema.into();
     builder = builder.schema(Arc::new(schema));
-    if let Some(name) = name {
-        builder = builder.name(name);
+    if let Some(alias) = alias {
+        builder = builder.alias(alias);
     }
 
     if ignore_nulls {
@@ -142,7 +142,7 @@ pub struct AggregateExprBuilder {
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Logical expressions of the aggregate function, it will be deprecated in <https://github.com/apache/datafusion/issues/11359>
     logical_args: Vec<Expr>,
-    name: Option<String>,
+    alias: Option<String>,
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// Datafusion Schema for the aggregate function
@@ -165,7 +165,7 @@ impl AggregateExprBuilder {
             fun,
             args,
             logical_args: vec![],
-            name: None,
+            alias: None,
             schema: Arc::new(Schema::empty()),
             dfschema: DFSchema::empty(),
             sort_exprs: vec![],
@@ -181,7 +181,7 @@ impl AggregateExprBuilder {
             fun,
             args,
             logical_args,
-            name,
+            alias,
             schema,
             dfschema,
             sort_exprs,
@@ -218,7 +218,7 @@ impl AggregateExprBuilder {
         )?;
 
         let data_type = fun.return_type(&input_exprs_types)?;
-        let name = match name {
+        let name = match alias {
             None => create_function_physical_name(
                 fun.name(),
                 is_distinct,
@@ -229,7 +229,7 @@ impl AggregateExprBuilder {
                     Some(&sort_exprs)
                 },
             )?,
-            Some(name) => name,
+            Some(alias) => alias,
         };
 
         Ok(Arc::new(AggregateFunctionExpr {
@@ -250,8 +250,8 @@ impl AggregateExprBuilder {
         }))
     }
 
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+    pub fn alias(mut self, alias: impl Into<String>) -> Self {
+        self.alias = Some(alias.into());
         self
     }
 

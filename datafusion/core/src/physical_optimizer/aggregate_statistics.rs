@@ -411,7 +411,7 @@ pub(crate) mod tests {
         pub(crate) fn count_expr(&self, schema: &Schema) -> Arc<dyn AggregateExpr> {
             AggregateExprBuilder::new(count_udaf(), vec![self.column()])
                 .schema(Arc::new(schema.clone()))
-                .name(self.column_name())
+                .alias(self.column_name())
                 .build()
                 .unwrap()
         }
