@@ -2124,8 +2124,8 @@ impl fmt::Display for Expr {
             Expr::ScalarFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
-            // TODO: use udf's display_name
-            // Expr::ScalarFunction(s) => {
+            // TODO: use udf's display_name, need to fix the seperator issue, <https://github.com/apache/datafusion/issues/10364>
+            // Expr::ScalarFunction(ScalarFunction { func, args }) => {
             //     write!(f, "{}", func.display_name(args).unwrap())
             // }
             Expr::WindowFunction(WindowFunction {
@@ -2262,7 +2262,7 @@ impl fmt::Display for Expr {
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
             Expr::Unnest(Unnest { expr }) => {
-                // TODO: use Display instead of Debug
+                // TODO: use Display instead of Debug, there is non-unique expression name in projection issue.
                 write!(f, "UNNEST({expr:?})")
             }
         }
