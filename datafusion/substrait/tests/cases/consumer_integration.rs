@@ -357,7 +357,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: Decimal128(Some(10000),5,2) * sum(CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE Utf8(\"PROMO%\") THEN FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount ELSE Decimal128(Some(0),19,0) END) / sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount) AS PROMO_REVENUE\
         \n  Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE Utf8(\"PROMO%\") THEN FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount ELSE Decimal128(Some(0),19,0) END), sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount)]]\
         \n    Projection: CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE CAST(Utf8(\"PROMO%\") AS Utf8) THEN FILENAME_PLACEHOLDER_0.l_extendedprice * (CAST(Int32(1) AS Decimal128(19, 0)) - FILENAME_PLACEHOLDER_0.l_discount) ELSE Decimal128(Some(0),19,0) END, FILENAME_PLACEHOLDER_0.l_extendedprice * (CAST(Int32(1) AS Decimal128(19, 0)) - FILENAME_PLACEHOLDER_0.l_discount)\
