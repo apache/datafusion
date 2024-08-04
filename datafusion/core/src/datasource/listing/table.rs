@@ -1015,7 +1015,7 @@ impl ListingTable {
         part_file: &PartitionedFile,
     ) -> Result<Arc<Statistics>> {
         let statistics_cache = self.collected_statistics.clone();
-        return match statistics_cache
+        match statistics_cache
             .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
         {
             Some(statistics) => Ok(statistics.clone()),
