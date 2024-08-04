@@ -1011,6 +1011,8 @@ impl Expr {
     /// 1. Alias
     /// 2. Cast
     pub fn schema_name(&self) -> Result<String> {
+        let mut s = String::new();
+
         match self {
             Expr::AggregateFunction(AggregateFunction {
                 func_def,
@@ -1020,8 +1022,6 @@ impl Expr {
                 order_by,
                 null_treatment,
             }) => {
-                let mut s = String::new();
-
                 let args_name = args
                     .iter()
                     .map(Self::schema_name)
@@ -1054,11 +1054,9 @@ impl Expr {
                         .join(", ");
                     write!(&mut s, " ORDER BY [{}]", order_by_name)?;
                 };
-
-                Ok(s)
             }
             // expr is not shown since it is aliased
-            Expr::Alias(Alias { name, .. }) => Ok(name.to_owned()),
+            Expr::Alias(Alias { name, .. }) => write!(&mut s, "{name}")?,
             Expr::Between(Between {
                 expr,
                 negated,
@@ -1066,23 +1064,28 @@ impl Expr {
                 high,
             }) => {
                 if *negated {
-                    Ok(format!(
+                    write!(
+                        &mut s,
                         "{} NOT BETWEEN {} AND {}",
                         expr.schema_name()?,
                         low.schema_name()?,
                         high.schema_name()?
-                    ))
+                    )?;
                 } else {
-                    Ok(format!(
+                    write!(
+                        &mut s,
                         "{} BETWEEN {} AND {}",
                         expr.schema_name()?,
                         low.schema_name()?,
                         high.schema_name()?
-                    ))
+                    )?;
                 }
             }
-            Expr::Case(Case { expr, when_then_expr, else_expr }) => {
-                let mut s = String::new();
+            Expr::Case(Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            }) => {
                 write!(&mut s, "CASE ")?;
 
                 if let Some(e) = expr {
@@ -1090,7 +1093,12 @@ impl Expr {
                 }
 
                 for (when, then) in when_then_expr {
-                    write!(&mut s, "WHEN {} THEN {} ", when.schema_name()?, then.schema_name()?)?;
+                    write!(
+                        &mut s,
+                        "WHEN {} THEN {} ",
+                        when.schema_name()?,
+                        then.schema_name()?
+                    )?;
                 }
 
                 if let Some(e) = else_expr {
@@ -1098,11 +1106,12 @@ impl Expr {
                 }
 
                 write!(&mut s, "END")?;
-                Ok(s)
             }
             // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
-            Expr::Cast(Cast { expr, data_type: _ }) => expr.schema_name(),
-            Expr::Column(c) => Ok(format!("{c}")),
+            Expr::Cast(Cast { expr, data_type: _ }) => {
+                write!(&mut s, "{}", expr.schema_name()?)?
+            }
+            Expr::Column(c) => write!(&mut s, "{c}")?,
             Expr::InList(InList {
                 expr,
                 list,
@@ -1115,30 +1124,42 @@ impl Expr {
                 let inlist_name = inlist_exprs.join(", ");
 
                 if *negated {
-                    Ok(format!("{} NOT IN {}", expr.schema_name()?, inlist_name))
+                    write!(&mut s, "{} NOT IN {}", expr.schema_name()?, inlist_name)?;
                 } else {
-                    Ok(format!("{} IN {}", expr.schema_name()?, inlist_name))
+                    write!(&mut s, "{} IN {}", expr.schema_name()?, inlist_name)?;
                 }
             }
-            Expr::IsNull(expr) => Ok(format!("{} IS NULL", expr.schema_name()?)),
-            Expr::IsNotNull(expr) => Ok(format!("{} IS NOT NULL", expr.schema_name()?)),
-            Expr::IsUnknown(expr) => Ok(format!("{} IS UNKNOWN", expr.schema_name()?)),
+            Expr::IsNull(expr) => write!(&mut s, "{} IS NULL", expr.schema_name()?)?,
+            Expr::IsNotNull(expr) => {
+                write!(&mut s, "{} IS NOT NULL", expr.schema_name()?)?
+            }
+            Expr::IsUnknown(expr) => {
+                write!(&mut s, "{} IS UNKNOWN", expr.schema_name()?)?
+            }
             Expr::IsNotUnknown(expr) => {
-                Ok(format!("{} IS NOT UNKNOWN", expr.schema_name()?))
+                write!(&mut s, "{} IS NOT UNKNOWN", expr.schema_name()?)?
             }
-            Expr::IsTrue(expr) => Ok(format!("{} IS TRUE", expr.schema_name()?)),
-            Expr::IsFalse(expr) => Ok(format!("{} IS FALSE", expr.schema_name()?)),
-            Expr::IsNotTrue(expr) => Ok(format!("{} IS NOT TRUE", expr.schema_name()?)),
-            Expr::IsNotFalse(expr) => Ok(format!("{} IS NOT FALSE", expr.schema_name()?)),
-            Expr::Negative(expr) => Ok(format!("(- {})", expr.schema_name()?)),
-            Expr::Not(expr) => Ok(format!("NOT {}", expr.schema_name()?)),
+            Expr::IsTrue(expr) => write!(&mut s, "{} IS TRUE", expr.schema_name()?)?,
+            Expr::IsFalse(expr) => write!(&mut s, "{} IS FALSE", expr.schema_name()?)?,
+            Expr::IsNotTrue(expr) => {
+                write!(&mut s, "{} IS NOT TRUE", expr.schema_name()?)?
+            }
+            Expr::IsNotFalse(expr) => {
+                write!(&mut s, "{} IS NOT FALSE", expr.schema_name()?)?
+            }
+            Expr::Negative(expr) => write!(&mut s, "(- {})", expr.schema_name()?)?,
+            Expr::Not(expr) => write!(&mut s, "NOT {}", expr.schema_name()?)?,
             Expr::Unnest(Unnest { expr }) => {
-                Ok(format!("UNNEST({})", expr.schema_name()?))
+                write!(&mut s, "UNNEST({})", expr.schema_name()?)?
             }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => func.schema_name(args),
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                write!(&mut s, "{}", func.schema_name(args)?)?
+            }
             // other exprs has no difference
-            _ => self.display_name(),
+            _ => write!(&mut s, "{}", self.display_name()?)?,
         }
+
+        Ok(s)
     }
 
     /// Returns a full and complete string representation of this expression.
