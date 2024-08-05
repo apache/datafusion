@@ -644,7 +644,42 @@ SELECT t1.v2, t1.v0 FROM t2 NATURAL JOIN t1 WHERE (t1.v2 IS NULL);
 ----
 
 statement ok
+CREATE TABLE t3 (
+  id INT
+) as VALUES
+  (1),
+  (2),
+  (3)
+;
+
+statement ok
+CREATE TABLE t4 (
+  id TEXT
+) as VALUES
+  ('4'),
+  ('5'),
+  ('6')
+;
+
+# test type coersion for wildcard expansion
+query T rowsort
+(SELECT * FROM t3 ) UNION ALL (SELECT * FROM t4)
+----
+1
+2
+3
+4
+5
+6
+
+statement ok
 DROP TABLE t1;
 
 statement ok
 DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;
+
+statement ok
+DROP TABLE t4;

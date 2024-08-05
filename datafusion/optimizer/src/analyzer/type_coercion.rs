@@ -45,12 +45,9 @@ use datafusion_expr::type_coercion::other::{
 };
 use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator, ScalarUDF,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
-};
-
+use datafusion_expr::{is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not, AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator, ScalarUDF, WindowFrame, WindowFrameBound, WindowFrameUnits, Projection, Union};
+use datafusion_expr::builder::project_with_column_index;
+use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use crate::analyzer::AnalyzerRule;
 use crate::utils::NamePreserver;
 
@@ -122,6 +119,7 @@ fn analyze_internal(
     })?
     // coerce join expressions specially
     .map_data(|plan| expr_rewrite.coerce_joins(plan))?
+    .map_data(|plan| expr_rewrite.coerce_union(plan))?
     // recompute the schema after the expressions have been rewritten as the types may have changed
     .map_data(|plan| plan.recompute_schema())
 }
@@ -166,6 +164,38 @@ impl<'a> TypeCoercionRewriter<'a> {
             .transpose()?;
 
         Ok(LogicalPlan::Join(join))
+    }
+
+    /// Corece the union inputs after expanding the wildcard expressions
+    ///
+    /// Union inputs must have the same schema, so we coerce the expressions to match the schema
+    /// after expanding the wildcard expressions
+    fn coerce_union(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        let LogicalPlan::Union(union) = plan else {
+            return Ok(plan);
+        };
+
+        let inputs = union.inputs
+            .into_iter()
+            .map(|p| {
+                let plan = coerce_plan_expr_for_schema(&p, &union.schema)?;
+                match plan {
+                    LogicalPlan::Projection(Projection { expr, input, .. }) => {
+                        Ok(Arc::new(project_with_column_index(
+                            expr,
+                            input,
+                            Arc::clone(&union.schema),
+                        )?))
+                    }
+                    other_plan => Ok(Arc::new(other_plan)),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(LogicalPlan::Union(Union {
+            inputs,
+            schema: Arc::clone(&union.schema),
+        }))
     }
 
     fn coerce_join_filter(&self, expr: Expr) -> Result<Expr> {
