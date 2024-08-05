@@ -717,7 +717,10 @@ impl DataFrame {
                             {
                                 let column =
                                     batchs[0].column_by_name(field.name()).unwrap();
-                                if field.data_type().is_numeric() {
+                                
+                                if column.data_type().is_null() {
+                                    Arc::new(StringArray::from(vec!["null"]))
+                                } else if field.data_type().is_numeric() {
                                     cast(column, &DataType::Float64)?
                                 } else {
                                     cast(column, &DataType::Utf8)?
