@@ -4449,8 +4449,8 @@ fn plan_create_index() {
                 columns,
                 vec![col("name").sort(true, false), col("age").sort(false, true),]
             );
-            assert_eq!(unique, true);
-            assert_eq!(if_not_exists, true);
+            assert!(unique);
+            assert!(if_not_exists);
         }
         _ => panic!("wrong plan type"),
     }
