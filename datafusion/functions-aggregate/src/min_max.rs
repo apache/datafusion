@@ -306,6 +306,7 @@ macro_rules! typed_min_max_batch {
 macro_rules! min_max_batch {
     ($VALUES:expr, $OP:ident) => {{
         match $VALUES.data_type() {
+            DataType::Null => ScalarValue::Null,
             DataType::Decimal128(precision, scale) => {
                 typed_min_max_batch!(
                     $VALUES,
@@ -581,6 +582,7 @@ macro_rules! interval_min_max {
 macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
         Ok(match ($VALUE, $DELTA) {
+            (ScalarValue::Null, ScalarValue::Null) => ScalarValue::Null,
             (
                 lhs @ ScalarValue::Decimal128(lhsv, lhsp, lhss),
                 rhs @ ScalarValue::Decimal128(rhsv, rhsp, rhss)

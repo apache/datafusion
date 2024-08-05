@@ -5520,3 +5520,9 @@ set datafusion.explain.logical_plan_only = false;
 
 statement ok
 drop table employee_csv;
+
+# test null literal handling in supported aggregate functions
+query I??III?T
+select count(null), min(null), max(null), bit_and(NULL), bit_or(NULL), bit_xor(NULL), nth_value(NULL, 1), string_agg(NULL, ',');
+----
+0 NULL NULL NULL NULL NULL NULL NULL
