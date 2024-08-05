@@ -603,13 +603,13 @@ work with DataFrames.</p>
 <span class="w">    </span><span class="c1">// register the &quot;example&quot; table</span>
 <span class="w">    </span><span class="n">ctx</span><span class="p">.</span><span class="n">register_csv</span><span class="p">(</span><span class="s">&quot;example&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tests/data/example.csv&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 <span class="w">    </span><span class="c1">// create a plan to run a SQL query</span>
-<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT a, MIN(b) FROM example WHERE a &lt;= b GROUP BY a LIMIT 100&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT a, min(b) FROM example WHERE a &lt;= b GROUP BY a LIMIT 100&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 <span class="w">    </span><span class="c1">// execute the plan and collect the results as Vec&lt;RecordBatch&gt;</span>
 <span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">results</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">RecordBatch</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 <span class="w">    </span><span class="c1">// Use the assert_batches_eq macro to compare the results with expected output</span>
 <span class="w">    </span><span class="n">datafusion</span><span class="p">::</span><span class="n">assert_batches_eq</span><span class="o">!</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
 <span class="w">        </span><span class="s">&quot;+---+----------------+&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="s">&quot;| a | MIN(example.b) |&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;| a | min(example.b) |&quot;</span><span class="p">,</span>
 <span class="w">        </span><span class="s">&quot;+---+----------------+&quot;</span><span class="p">,</span>
 <span class="w">        </span><span class="s">&quot;| 1 | 2              |&quot;</span><span class="p">,</span>
 <span class="w">        </span><span class="s">&quot;+---+----------------+&quot;</span><span class="p">,</span>
@@ -805,7 +805,7 @@ statement.</p>
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.4.7.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 8.0.2.<br>
 </p>
     </div>
     
