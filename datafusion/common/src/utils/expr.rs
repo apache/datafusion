@@ -14,11 +14,11 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
-#![deny(clippy::clone_on_ref_ptr)]
 
-pub mod aggregate_statistics;
-mod optimizer;
-pub mod output_requirements;
+//! Expression utilities
 
-pub use optimizer::PhysicalOptimizerRule;
+use crate::ScalarValue;
+
+///  The value to which `COUNT(*)` is expanded to in
+///  `COUNT(<constant>)` expressions
+pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::Int64(Some(1));
