@@ -93,10 +93,10 @@ pub async fn get_statistics_with_limit(
                 // counts across all the files in question. If any file does not
                 // provide any information or provides an inexact value, we demote
                 // the statistic precision to inexact.
-                num_rows = add_row_stats(file_stats.num_rows.clone(), num_rows);
+                num_rows = add_row_stats(&file_stats.num_rows, &num_rows);
 
                 total_byte_size =
-                    add_row_stats(file_stats.total_byte_size.clone(), total_byte_size);
+                    add_row_stats(&file_stats.total_byte_size, &total_byte_size);
 
                 for (file_col_stats, col_stats) in file_stats
                     .column_statistics
@@ -110,8 +110,7 @@ pub async fn get_statistics_with_limit(
                         distinct_count: _,
                     } = file_col_stats;
 
-                    col_stats.null_count =
-                        add_row_stats(file_nc.clone(), col_stats.null_count.clone());
+                    col_stats.null_count = add_row_stats(file_nc, &col_stats.null_count);
                     set_max_if_greater(file_max, &mut col_stats.max_value);
                     set_min_if_lesser(file_min, &mut col_stats.min_value)
                 }
@@ -165,12 +164,12 @@ pub(crate) fn create_max_min_accs(
 }
 
 fn add_row_stats(
-    file_num_rows: Precision<usize>,
-    num_rows: Precision<usize>,
+    file_num_rows: &Precision<usize>,
+    num_rows: &Precision<usize>,
 ) -> Precision<usize> {
     match (file_num_rows, &num_rows) {
-        (Precision::Absent, _) => num_rows.to_inexact(),
-        (lhs, Precision::Absent) => lhs.to_inexact(),
+        (Precision::Absent, _) => num_rows.clone().to_inexact(),
+        (lhs, Precision::Absent) => lhs.clone().to_inexact(),
         (lhs, rhs) => lhs.add(rhs),
     }
 }
