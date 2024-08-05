@@ -56,11 +56,20 @@ mod topk;
 mod topk_stream;
 
 /// Hash aggregate modes
+///
+/// See [`Accumulator::state`] for background information on multi-phase
+/// aggregation and how these modes are used.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
-    /// Partial aggregate that can be applied in parallel across input partitions
+    /// Partial aggregate that can be applied in parallel across input
+    /// partitions.
+    ///
+    /// This is the first phase of a multi-phase aggregation.
     Partial,
-    /// Final aggregate that produces a single partition of output
+    /// Final aggregate that produces a single partition of output by combining
+    /// the output of multiple partial aggregates.
+    ///
+    /// This is the second phase of a multi-phase aggregation.
     Final,
     /// Final aggregate that works on pre-partitioned data.
     ///
@@ -72,12 +81,15 @@ pub enum AggregateMode {
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
+    ///
     /// This mode requires that the input is a single partition (like Final)
     Single,
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
-    /// This mode requires that the input is partitioned by group key (like FinalPartitioned)
+    ///
+    /// This mode requires that the input is partitioned by group key (like
+    /// FinalPartitioned)
     SinglePartitioned,
 }
 
@@ -2392,6 +2404,191 @@ mod tests {
             "+-----+-----+-------+----------+",
         ];
         assert_batches_sorted_eq!(expected, &output);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_skip_aggregation_after_first_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("val", DataType::Int32, true),
+        ]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+
+        let aggr_expr: Vec<Arc<dyn AggregateExpr>> =
+            vec![create_aggregate_expr_with_dfschema(
+                &count_udaf(),
+                &[col("val", &schema)?],
+                &[datafusion_expr::col("val")],
+                &[],
+                &[],
+                &df_schema,
+                "COUNT(val)",
+                false,
+                false,
+                false,
+            )?];
+
+        let input_data = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 3, 4])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+        ];
+
+        let input = Arc::new(MemoryExec::try_new(
+            &[input_data],
+            Arc::clone(&schema),
+            None,
+        )?);
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            schema,
+        )?);
+
+        let mut session_config = SessionConfig::default();
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+            ScalarValue::Int64(Some(2)),
+        );
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+            ScalarValue::Float64(Some(0.1)),
+        );
+
+        let ctx = TaskContext::default().with_session_config(session_config);
+        let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
+
+        let expected = [
+            "+-----+-------------------+",
+            "| key | COUNT(val)[count] |",
+            "+-----+-------------------+",
+            "| 1   | 1                 |",
+            "| 2   | 1                 |",
+            "| 3   | 1                 |",
+            "| 2   | 1                 |",
+            "| 3   | 1                 |",
+            "| 4   | 1                 |",
+            "+-----+-------------------+",
+        ];
+        assert_batches_eq!(expected, &output);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_skip_aggregation_after_threshold() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("val", DataType::Int32, true),
+        ]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+
+        let aggr_expr: Vec<Arc<dyn AggregateExpr>> =
+            vec![create_aggregate_expr_with_dfschema(
+                &count_udaf(),
+                &[col("val", &schema)?],
+                &[datafusion_expr::col("val")],
+                &[],
+                &[],
+                &df_schema,
+                "COUNT(val)",
+                false,
+                false,
+                false,
+            )?];
+
+        let input_data = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 3, 4])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 3, 4])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+        ];
+
+        let input = Arc::new(MemoryExec::try_new(
+            &[input_data],
+            Arc::clone(&schema),
+            None,
+        )?);
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            schema,
+        )?);
+
+        let mut session_config = SessionConfig::default();
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+            ScalarValue::Int64(Some(5)),
+        );
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+            ScalarValue::Float64(Some(0.1)),
+        );
+
+        let ctx = TaskContext::default().with_session_config(session_config);
+        let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
+
+        let expected = [
+            "+-----+-------------------+",
+            "| key | COUNT(val)[count] |",
+            "+-----+-------------------+",
+            "| 1   | 1                 |",
+            "| 2   | 2                 |",
+            "| 3   | 2                 |",
+            "| 4   | 1                 |",
+            "| 2   | 1                 |",
+            "| 3   | 1                 |",
+            "| 4   | 1                 |",
+            "+-----+-------------------+",
+        ];
+        assert_batches_eq!(expected, &output);
 
         Ok(())
     }
