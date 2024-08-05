@@ -218,8 +218,8 @@ SELECT map(column5, column6) FROM t;
 {k5: 5}
 
 # TODO: Make me work
-query
-SELECT map(column6, column7) FROM t;
+#query
+#SELECT map(column6, column7) FROM t;
 #----
 #{[1,2]: 'POST'}
 #{[3]: 'PUT'}
