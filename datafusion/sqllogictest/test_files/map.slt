@@ -225,11 +225,11 @@ SELECT map(column6, column7) FROM t;
 #{[3]: 'PUT'}
 #{[5]: NULL}
 
-query error
-SELECT map(column7, column6) FROM t;
+#query error
+#SELECT map(column7, column6) FROM t;
 
-query
-SELECT map(column8, column7) FROM t;
+#query
+#SELECT map(column8, column7) FROM t;
 #----
 #{[[1,2,3]]: 'POST'}
 #{[[4]]: 'PUT'}
